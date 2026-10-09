@@ -9,7 +9,7 @@ Permanent requirements: [MASTER_SPEC.md](MASTER_SPEC.md). Advance only after the
 | 3. Codex integration | Verified | Real task worker launch/resume/interrupt, persistent events and process identity, monitor; worker crash test |
 | 4. Autonomous orchestration | Verified | Goal-to-task planning, dependency scheduling, two-worker cap, leases, worktree isolation, evidence-based verification and uncertain-outcome recovery |
 | 5. Policies and controls | Verified for supported capabilities | Durable ALLOW/ASK/DENY and overrides, approvals bound to exact operations, policy audit, verified OS boundary and restricted capabilities, notifications |
-| 6. Production hardening | In progress | Concurrent/recovery/security/restore tests; private Tailscale deployment, service restart and VM reboot verification; operational docs |
+| 6. Production hardening | Partially verified; storage/reboot gates open | Concurrent/recovery/security/restore tests; private Tailscale deployment, service restart and VM reboot verification; operational docs |
 
 ## Ordered work
 
@@ -21,4 +21,13 @@ Permanent requirements: [MASTER_SPEC.md](MASTER_SPEC.md). Advance only after the
 
 ## Environment limits
 
-The editable repository is `/home/codex/projects/Linko-Bot-Manager`. This command environment is isolated from host process/service and VPN control. Host deployment and reboot acceptance cannot be inferred from repository files. No other repository or running infrastructure is to be modified.
+The repository is `/home/codex/projects/Linko-Bot-Manager`. Approved native execution provides actual VM runtime access. Private service, HTTPS and backups are deployed and tested. Full reboot acceptance remains unperformed to preserve unrelated sessions; storage is 99% full. See TASKS.md and docs/verification.md. No unrelated repository/process/remote-access configuration may be changed.
+
+## Local checkpoints
+
+- Stage 1: e4ef65d
+- Stage 2: 86f8452
+- Stage 3: d1f0a6a
+- Stage 4: fc3f6bf
+- Stage 5: cfe5427
+- Stage 6 partial hardening/deployment: next local checkpoint; identify using git log. Stage remains open until the external gates pass.

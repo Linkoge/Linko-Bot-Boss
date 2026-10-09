@@ -89,6 +89,7 @@ class Workers:
                 (execution_id, task_id, project["id"], project["agent_id"], "queued", time.time()),
             )
             self.db.event(conn, "worker.queued", {}, project["id"], task_id, execution_id)
+        self.tasks.sync(project["id"])
         job = asyncio.create_task(self._run(execution_id, task, project, previous))
         self.jobs[execution_id] = job
         job.add_done_callback(lambda _: self.jobs.pop(execution_id, None))
@@ -184,7 +185,9 @@ class Workers:
                         str(workspace.root),
                         workspace.branch,
                         git(workspace.root, "rev-parse", "HEAD"),
-                        git(workspace.root, "rev-parse", "HEAD"),
+                        (previous.get("base_commit") or previous["commit_ref"])
+                        if previous
+                        else git(workspace.root, "rev-parse", "HEAD"),
                         route["model"],
                         route["effort"],
                         execution_id,
@@ -282,6 +285,10 @@ class Workers:
     def finish(self, execution_id, task_id, status, output, error, start):
         with self.db.transaction() as conn:
             conn.execute(
+                "UPDATE approvals SET status='cancelled' WHERE execution_id=? AND status IN ('pending','approved')",
+                (execution_id,),
+            )
+            conn.execute(
                 "UPDATE executions SET status=?,output=?,error=?,finished_at=?,latency_ms=? WHERE id=?",
                 (status, output, error, time.time(), (time.monotonic() - start) * 1000, execution_id),
             )
@@ -298,6 +305,8 @@ class Workers:
             self.db.event(
                 conn, "worker.finished", {"status": status, "error": error}, task_id=task_id, execution_id=execution_id
             )
+
+        self.tasks.sync(self.tasks.get(task_id)["project_id"])
 
     async def interrupt(self, execution_id):
         execution = self.db.one("SELECT * FROM executions WHERE id=? AND task_id IS NOT NULL", (execution_id,))

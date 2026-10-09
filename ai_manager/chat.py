@@ -65,7 +65,9 @@ class Chat:
                 for k in ("id", "name", "description", "objective", "success_criteria", "status", "instructions")
             },
             "global_instructions": self.db.setting("global_instructions", ""),
-            "memory": {m["name"]: m["content"][:1600] for m in self.registry.memory(project_id)},
+            "memory": {
+                m["name"]: m["content"][:800] + "\n…\n" + m["content"][-1200:] for m in self.registry.memory(project_id)
+            },
             "tasks": [
                 {k: t[k] for k in ("id", "description", "status", "acceptance", "blocker")}
                 for t in Tasks(self.db).list(project_id)[:30]
@@ -134,7 +136,9 @@ class Chat:
             if self.action_handler:
 
                 async def action(params):
-                    return await self.action_handler(conversation["project_id"], params)
+                    return await self.action_handler(
+                        conversation["project_id"], {**params, "manager_execution_id": execution_id}
+                    )
 
                 self.server.tool_handlers[thread_id] = action
             queue = asyncio.Queue()
@@ -172,7 +176,15 @@ class Chat:
                     execution_id=execution_id,
                 )
             while True:
-                event = await asyncio.wait_for(queue.get(), 300)
+                try:
+                    event = await asyncio.wait_for(queue.get(), 300)
+                except TimeoutError:
+                    if (
+                        self.db.one("SELECT status FROM executions WHERE id=?", (execution_id,))["status"]
+                        == "awaiting_approval"
+                    ):
+                        continue
+                    raise
                 method, params = event["method"], event.get("params", {})
                 if method == "transport/lost":
                     raise CodexError("Connection lost; execution outcome is uncertain and was not retried")
@@ -225,6 +237,10 @@ class Chat:
 
     def _finish(self, execution_id, response_id, status, error, output, start):
         with self.db.transaction() as conn:
+            conn.execute(
+                "UPDATE approvals SET status='cancelled' WHERE execution_id=? AND status IN ('pending','approved')",
+                (execution_id,),
+            )
             conn.execute(
                 "UPDATE executions SET status=?,error=?,output=?,finished_at=?,latency_ms=? WHERE id=?",
                 (status, error, output, time.time(), (time.monotonic() - start) * 1000, execution_id),

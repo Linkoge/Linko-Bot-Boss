@@ -11,11 +11,18 @@ MEMORY_NAMES = ("PROJECT.md", "STATE.md", "TASKS.md", "DECISIONS.md", "HANDOFF.m
 
 def git(path: Path, *args: str) -> str:
     result = subprocess.run(
-        ["git", "-C", str(path), *args],
+        ["git", "-C", str(path), "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", *args],
         capture_output=True,
         text=True,
         timeout=15,
-        env={"PATH": "/usr/bin:/bin", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"},
+        env={
+            "PATH": "/usr/bin:/bin",
+            "GIT_OPTIONAL_LOCKS": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_CONFIG_GLOBAL": "/dev/null",
+            "GIT_CONFIG_SYSTEM": "/dev/null",
+            "GIT_CONFIG_NOSYSTEM": "1",
+        },
     )
     return result.stdout.strip() if result.returncode == 0 else ""
 
@@ -124,6 +131,9 @@ class Registry:
             if cursor.rowcount != 1:
                 raise ValueError("Project changed; refresh before editing")
             self.db.event(conn, "project.updated", changes, project_id)
+        from .memory import sync_project
+
+        sync_project(self.db, project_id)
         return self.get(project_id)
 
     def memory(self, project_id):

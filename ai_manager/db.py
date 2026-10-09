@@ -1,8 +1,9 @@
 import json
+import shutil
 import sqlite3
 import time
 import uuid
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 SCHEMA = """
@@ -79,11 +80,12 @@ class Database:
     def __init__(self, path: Path):
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
             if "base_commit" not in {r[1] for r in conn.execute("PRAGMA table_info(executions)")}:
                 conn.execute("ALTER TABLE executions ADD COLUMN base_commit TEXT")
+            conn.commit()
         self.path.chmod(0o600)
 
     def connect(self):
@@ -108,7 +110,7 @@ class Database:
             conn.close()
 
     def all(self, sql: str, params=()) -> list[dict]:
-        with self.connect() as conn:
+        with closing(self.connect()) as conn:
             return [dict(r) for r in conn.execute(sql, params).fetchall()]
 
     def one(self, sql: str, params=()) -> dict | None:
@@ -139,12 +141,16 @@ class Database:
         if destination.resolve() == self.path.resolve() or destination.exists():
             raise ValueError("Backup must use a new destination")
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if shutil.disk_usage(destination.parent).free < self.path.stat().st_size * 2 + 128 * 1024 * 1024:
+            raise ValueError("Insufficient storage for verified backup and 128MB reserve")
         destination.touch(mode=0o600, exist_ok=False)
         try:
-            with self.connect() as source, sqlite3.connect(destination) as target:
+            with closing(self.connect()) as source, closing(sqlite3.connect(destination)) as target:
                 source.backup(target)
                 if target.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                     raise RuntimeError("Backup integrity check failed")
+                if target.execute("PRAGMA foreign_key_check").fetchone():
+                    raise RuntimeError("Backup foreign key check failed")
         except BaseException:
             destination.unlink(missing_ok=True)
             raise
@@ -153,10 +159,12 @@ class Database:
     def restore(source: Path, destination: Path):
         if destination.exists() or Path(str(destination) + "-wal").exists():
             raise ValueError("Restore only to a fresh path while service is stopped")
-        with sqlite3.connect(f"file:{Path(source).resolve()}?mode=ro", uri=True) as original:
+        with closing(sqlite3.connect(f"{Path(source).resolve().as_uri()}?mode=ro", uri=True)) as original:
             if original.execute("PRAGMA integrity_check").fetchone()[0] != "ok":
                 raise ValueError("Invalid backup")
+            if original.execute("PRAGMA foreign_key_check").fetchone():
+                raise ValueError("Backup references missing records")
             destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             destination.touch(mode=0o600, exist_ok=False)
-            with sqlite3.connect(destination) as target:
+            with closing(sqlite3.connect(destination)) as target:
                 original.backup(target)

@@ -1,0 +1,10 @@
+[Unit]
+Description=AI Manager verified local database backup
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=@PYTHON@ @REPO@/scripts/backup_daily.py
+EnvironmentFile=-@HOME@/.config/linko-bot-manager.env
+UMask=0077
+NoNewPrivileges=yes

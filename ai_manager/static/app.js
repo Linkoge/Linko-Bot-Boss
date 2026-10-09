@@ -64,7 +64,7 @@ function renderDashboard(){
     const footer=element('div',undefined,'card-footer');footer.append(element('span',p.status,'badge'),element('span',`Priority ${p.priority}`));
     const controls=element('div');const open=element('button','Open');open.onclick=action(()=>selectProject(p.id));const edit=element('button','Edit');edit.onclick=()=>editProject(p);controls.append(open,edit);card.append(footer,controls);$('project-cards').append(card);
   }
-  $('recommendation').textContent=state.portfolio.recommendation;
+  $('recommendation').textContent=state.portfolio.storage?.low_space?`Storage needs attention: ${Math.round(state.portfolio.storage.free_bytes/1024/1024)} MB free. Workspace and backup guards may block work until storage is expanded or freed.`:state.portfolio.recommendation;
   $('accomplishments').replaceChildren();
   const checkpoints=state.portfolio.checkpoints.filter(c=>!state.project||c.project_id===state.project);
   if(!checkpoints.length)$('accomplishments').append(element('p','Verified checkpoints will appear here.','empty'));
@@ -84,6 +84,7 @@ function renderAgents(){
   if(!executions.length)$('agent-list').append(element('p','No execution history yet. Start a conversation to connect Codex.','empty'));
   for(const e of executions){const row=element('article',undefined,'agent-row');row.append(element('h3',`${e.agent_id} · ${projectName(e.project_id)}`));const meta=element('div',undefined,'row-meta');meta.append(element('span',e.status,`badge ${e.status}`),element('span',`${e.model||'Unassigned'} / ${e.effort||'default'}`),element('span',new Date(e.started_at*1000).toLocaleString()),element('span',e.finished_at?`${Math.round((e.finished_at-e.started_at))} seconds`:'Running'));row.append(meta);
     const details=element('details');details.append(element('summary','Output and execution details'),element('pre',e.output||e.error||'Waiting for output…'),element('small',`Thread: ${e.thread_id||'pending'} · Turn: ${e.turn_id||'pending'}`));row.append(details);
+    if(e.worktree){row.append(element('small',`Workspace: ${e.worktree} · Branch: ${e.branch||'pending'}`));const task=state.portfolio.tasks.find(t=>t.id===e.task_id);if(task?.status==='completed'){const download=element('a','Download verified patch');download.href=`/api/executions/${e.id}/patch`;download.className='result-link';row.append(download);const evidence=element('button','Verification evidence');evidence.onclick=action(async()=>{const records=await api(`/api/tasks/${e.task_id}/evidence`);editor('Verification evidence',[{name:'evidence',label:'Recorded independent checks',long:true,rows:12,value:records.map(r=>r.evidence).join('\n\n')}],async()=>{});});row.append(evidence);}}
     if(!e.finished_at){const stop=element('button','Interrupt');stop.onclick=action(async()=>{await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});notice('Interruption requested. Waiting for confirmation.');});row.append(stop);}$('agent-list').append(row);
   }
 }
@@ -110,6 +111,7 @@ function attachStream(execution,messageId,cursor=0){
   source.addEventListener('chat.delta',event=>{const data=JSON.parse(event.data);const content=document.querySelector(`[data-message="${messageId}"] .message-content`);if(content){if(content.textContent==='Connecting to Codex…')content.textContent='';content.textContent+=data.delta;}$('messages').scrollTop=$('messages').scrollHeight;});
   source.addEventListener('chat.finished',event=>{const data=JSON.parse(event.data);if(data.error)notice(data.error);});
   source.addEventListener('stream.end',action(async()=>{source.close();if(state.source!==source)return;state.source=null;state.execution=null;$('stop-chat').hidden=true;$('send').disabled=false;$('status-label').textContent='Ready to help';await loadHistory();await refresh();}));
+  source.addEventListener('stream.auth_expired',()=>{source.close();showAuth();});
   source.onerror=()=>{if(state.source===source)$('status-label').textContent='Reconnecting to saved stream…';};
 }
 function showView(view){state.view=view;document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>b.classList.toggle('active',b.dataset.view===view));}

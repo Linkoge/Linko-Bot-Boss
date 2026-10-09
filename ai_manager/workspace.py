@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import os
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -45,6 +46,15 @@ class Workspace:
         if not git(source, "rev-parse", "HEAD"):
             raise ValueError("Worker isolation requires a repository with a committed checkpoint")
         self.root.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        sizes = git(source, "ls-tree", "-r", "-l", "HEAD").splitlines()
+        total_bytes = sum(
+            int(parts[3]) for line in sizes if len(parts := line.split(maxsplit=4)) >= 4 and parts[3].isdigit()
+        )
+        estimated_bytes = total_bytes * 3 + 20 * 1024 * 1024
+        if shutil.disk_usage(self.root.parent).free < estimated_bytes + 128 * 1024 * 1024:
+            raise ValueError(
+                "Insufficient free storage for isolated workspace and 128MB reserve; free or expand storage before retry"
+            )
         # Standalone clone avoids shared mutable Git admin state and includes committed files only.
         subprocess.run(
             [
@@ -54,13 +64,23 @@ class Workspace:
                 "clone",
                 "--no-local",
                 "--no-hardlinks",
+                "--single-branch",
+                "--depth=1",
                 "--quiet",
-                str(source),
+                source.resolve().as_uri(),
                 str(self.root),
             ],
             check=True,
             capture_output=True,
             timeout=60,
+            env={
+                "PATH": "/usr/bin:/bin",
+                "GIT_CONFIG_GLOBAL": "/dev/null",
+                "GIT_CONFIG_SYSTEM": "/dev/null",
+                "GIT_CONFIG_NOSYSTEM": "1",
+                "GIT_LFS_SKIP_SMUDGE": "1",
+                "GIT_TERMINAL_PROMPT": "0",
+            },
         )
         subprocess.run(
             ["git", "-C", str(self.root), "-c", "core.hooksPath=/dev/null", "checkout", "-b", self.branch],

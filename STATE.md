@@ -1,5 +1,7 @@
 # Verified state
 
+Current: stages1–5 verified for supported capabilities; stage6 partially verified. Private service is live; full reboot/storage acceptance and initial owner setup remain open. Historical observations below retain the evidence available at each milestone.
+
 ## 2026-10-09 — Inventory
 
 - Empty target repository found with expected origin and unborn `main` branch.
@@ -63,3 +65,22 @@ Updated observation: approved execution provides host runtime access. Read-only 
 - Policy changes invalidate outstanding grants; approvals expire and are single-use; operation ledger blocks uncertain replay. Worker leases and concurrency include awaiting-approval tasks. Independent verification obeys the same action policies.
 - Merge/push/deploy/install/infrastructure/network/credential/external-service/communication/payment capabilities remain unavailable even if a UI policy says ALLOW. These limitations are displayed rather than falsely claimed as enforced unrestricted execution. Trusted Python/App Server run as the host owner, while model tools are brokered. Exact trust assumptions: docs/security.md.
 - No external notification or communication sent. Only existing subscription-backed inference used. Next: production hardening, private deployment, recovery/backup checks and operational documentation.
+
+
+## Stage 6 partial verified checkpoint
+
+- 31 backend tests, Ruff and JavaScript syntax checks passed. New hardening covers physical worker crash without replay, isolated concurrent clones/global cap, approval expiry, singleton service/secure cookies, low-storage guard, current human-readable task/handoff exports, scoped policy-controlled document retrieval, orphan planning/review recovery and verified patches that apply to the original baseline.
+- Latest desktop/mobile Playwright check passed without page errors or horizontal overflow. Scope includes secure setup/login, ten-project overview, project switching and memory.
+- Controlled failure of the actual dedicated manager service verified restart-on-failure: only its MainPID was killed, systemd replaced it, private HTTPS recovered, ten registry identities persisted, database integrity and foreign keys passed. No unrelated session was signaled.
+- Actual daily backup service produced an integrity-checked local SQLite backup. Restoration into a fresh disposable path preserved ten projects and passed integrity/foreign-key checks. Workspaces and Codex thread storage need separate protected backup for execution resumption.
+- Dedicated linko-bot-manager.service and linko-bot-manager-backup.timer enabled/active. User linger=yes. Secure cookies on; loopback127.0.0.1:8787; authenticated private HTTPS at https://codex-server.tail5ebb9d.ts.net:8787/. No real owner account created; owner must choose credentials privately.
+- Added only private Tailscale8787 using scoped sudo Serve command after ordinary daemon configuration was denied. Existing443/3000 preserved; no public Funnel configured. Correct-Origin invalid login returned401 rather than bypassing security. All seven existing tmux sessions and unrelated AI-Manager dirty documentation preserved.
+- Service boundary smoke initially exposed missing Codex on systemd default PATH; installer now detects and persists the absolute executable path. Real disposable coding/approval/test/independent-review acceptance repeated under NoNewPrivileges.
+- SQLite connection lifecycle hardened; native checkpoint documentation updates merge owner text with managed structured summaries under DB serialization. On-demand project reads, auth-expiring streams, low-space UI and downloadable verified patches added. No remote push or integration performed.
+
+### Gates still open
+
+- VM disk99% full, approximately445MB free: not enough capacity for large-project execution. Clone footprint checks and backups preserve128MB reserve. No unrelated files were removed. Owner-selected expansion/cleanup needed.
+- Actual VM reboot deliberately deferred because unrelated work is active; enabled units/linger alone do not verify reboot recovery. Coordinate a safe window and inspect recovery afterward.
+- Initial owner password/setup and trusted per-project verification commands are owner configuration. Scheduler defaults paused; no real project execution was automatically started.
+- Unsupported sensitive capabilities remain unavailable as documented in docs/security.md. Additional capability acceptance is future work, not claimed complete. Stage6 and the overall permanent specification remain open.

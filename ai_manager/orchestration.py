@@ -12,7 +12,7 @@ from .policies import Policies
 from .registry import git
 from .tasks import Tasks
 from .workers import WORKSPACE_TOOL
-from .workspace import Workspace
+from .workspace import Workspace, safe_file
 
 PLAN_SCHEMA = {
     "type": "object",
@@ -49,7 +49,7 @@ REVIEW_SCHEMA = {
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Perform explicitly delegated portfolio management actions. Can plan and queue a goal in an existing project, prioritize/pause/resume a project, run a limited task batch, or freeze adding projects. Do not invoke for brainstorming or unapproved proposals.",
+    "description": "Read a selected project document when context is needed, or perform explicitly delegated portfolio management actions: plan and queue a goal, prioritize/pause/resume a project, run a limited batch, show approvals, or freeze adding projects. Do not launch work for brainstorming or unapproved proposals.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -63,12 +63,14 @@ MANAGER_TOOL = {
                     "run_queue",
                     "freeze_projects",
                     "show_approvals",
+                    "read_document",
                 ],
             },
             "project_id": {"type": "string"},
             "goal": {"type": "string"},
             "limit": {"type": "integer"},
             "until": {"type": "string"},
+            "path": {"type": "string"},
         },
         "required": ["action"],
         "additionalProperties": False,
@@ -219,6 +221,7 @@ class Planner:
                     task_ids[index],
                 )
             self.db.event(conn, "plan.applied", {"plan_id": plan_id, "task_ids": task_ids}, project_id)
+        Tasks(self.db).sync(project_id)
         return {"plan_id": plan_id, "task_ids": task_ids, "status": "queued"}
 
     async def plan(self, project_id, goal, request_key):
@@ -416,7 +419,7 @@ class Verifier:
                     task_id,
                 )
             try:
-                self.registry.export_memory(task["project_id"])
+                self.tasks.sync(task["project_id"])
             except OSError:
                 with self.db.transaction() as conn:
                     self.db.event(conn, "memory.export_retry_required", {}, task["project_id"], task_id)
@@ -539,6 +542,30 @@ class Scheduler:
     def start(self):
         self.loop_job = asyncio.create_task(self.run())
 
+    def recover(self):
+        # These role turns have no task lease. Preserve uncertain output without replaying.
+        with self.db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT * FROM executions WHERE task_id IS NULL AND agent_id IN ('planning','verification','summarization') AND finished_at IS NULL"
+            ).fetchall()
+            for row in rows:
+                observed = bool(row["pid"] and process_start(row["pid"]) == row["process_start"])
+                error = f"Service restarted; process observed={observed}; inspect role output before retry"
+                conn.execute(
+                    "UPDATE executions SET status='blocked',error=?,finished_at=? WHERE id=?",
+                    (error, time.time(), row["id"]),
+                )
+                conn.execute(
+                    "UPDATE plans SET status='blocked' WHERE execution_id=? AND status!='applied'", (row["id"],)
+                )
+                self.db.event(
+                    conn,
+                    "orchestration.recovery_required",
+                    {"process_observed": observed},
+                    row["project_id"],
+                    execution_id=row["id"],
+                )
+
     async def close(self):
         if self.loop_job:
             self.loop_job.cancel()
@@ -557,7 +584,40 @@ class Scheduler:
         if selected_project and project_id != selected_project:
             raise ValueError("Select All Projects to authorize cross-project management")
         action = args["action"]
-        if action == "plan_goal":
+        if action == "read_document":
+            if not project_id or not args.get("path"):
+                raise ValueError("Select a project and provide a relative document path")
+            project = self.registry.get(project_id)
+            path = safe_file(self.registry.allowed_path(project["path"]), args["path"])
+            if not path.is_file() or path.stat().st_size > 100000:
+                raise ValueError("Read a project text document smaller than 100KB")
+            execution_id = params.get("manager_execution_id")
+            if not execution_id:
+                raise ValueError("Read must belong to an active manager conversation")
+            await Policies(self.db).authorize(
+                project_id,
+                None,
+                execution_id,
+                "read_files",
+                args,
+                params["callId"],
+                "Read selected project document: " + args["path"],
+            )
+            execution = self.db.one("SELECT finished_at FROM executions WHERE id=?", (execution_id,))
+            if not execution or execution["finished_at"]:
+                raise ValueError("Conversation was interrupted before reading")
+            # Revalidate after a possibly long owner-approval wait.
+            path = safe_file(self.registry.allowed_path(project["path"]), args["path"])
+            if not path.is_file() or path.stat().st_size > 100000:
+                raise ValueError("Read a project text document smaller than 100KB")
+            content = path.read_text(errors="replace")
+            result = {
+                "path": args["path"],
+                "content": content[:12000],
+                "truncated": len(content) > 12000,
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }
+        elif action == "plan_goal":
             if not project_id or not args.get("goal"):
                 raise ValueError("Select a project and specify the delegated goal")
             result = await self.planner.plan(project_id, args["goal"], params["callId"])

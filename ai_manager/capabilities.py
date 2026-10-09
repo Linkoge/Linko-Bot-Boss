@@ -20,6 +20,21 @@ class Capabilities:
         self.lock = asyncio.Lock()
 
     async def perform(self, args, call_id):
+        try:
+            return await self._perform(args, call_id)
+        except Exception as error:
+            with self.db.transaction() as conn:
+                self.db.event(
+                    conn,
+                    "capability.failed",
+                    {"operation": args.get("operation"), "error": str(error)[:2000]},
+                    self.project_id,
+                    self.task_id,
+                    self.execution_id,
+                )
+            raise
+
+    async def _perform(self, args, call_id):
         async with self.lock:
             operation = args["operation"]
             if operation not in {"list", "read", "write", "delete", "test", "commit"}:
@@ -47,6 +62,9 @@ class Capabilities:
             key = await self.policies.authorize(
                 self.project_id, self.task_id, self.execution_id, action, args, call_id, consequences
             )
+            current = self.db.one("SELECT status,lease_owner FROM tasks WHERE id=?", (self.task_id,))
+            if not current or current["status"] != "running" or current["lease_owner"] != self.execution_id:
+                raise ValueError("Task ownership changed before execution")
             if operation == "commit" and args["workspace_state"] != self.state_digest():
                 raise ValueError("Workspace changed since the exact commit approval")
             with self.db.transaction() as conn:

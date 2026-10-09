@@ -1,12 +1,13 @@
 import asyncio
 import fcntl
 import hmac
+import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -18,9 +19,10 @@ from .config import Settings
 from .db import Database
 from .orchestration import Planner, Scheduler, Verifier
 from .policies import Policies
-from .registry import Registry
+from .registry import Registry, git
 from .tasks import Tasks
 from .workers import Workers
+from .workspace import safe_file
 
 
 class LoginBody(BaseModel):
@@ -139,9 +141,10 @@ def create_app(settings: Settings | None = None, server=None):
         auth.bootstrap()
         chat.recover()
         workers.recover()
+        scheduler.recover()
         registry.discover()
         for project in registry.list():
-            registry.export_memory(project["id"])
+            tasks.sync(project["id"])
         with db.transaction() as conn:
             conn.execute("UPDATE approvals SET status='cancelled' WHERE status IN ('pending','approved')")
         settings.max_workers = db.setting("max_workers", settings.max_workers)
@@ -255,6 +258,7 @@ def create_app(settings: Settings | None = None, server=None):
     @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
     def portfolio():
         projects = registry.list()
+        storage = shutil.disk_usage(settings.data_dir)
         return {
             "projects": projects,
             "tasks": tasks.list(),
@@ -266,6 +270,11 @@ def create_app(settings: Settings | None = None, server=None):
             "automation_enabled": db.setting("scheduler_enabled", False),
             "approvals": db.all("SELECT * FROM approvals WHERE status='pending' ORDER BY created_at"),
             "notifications": db.all("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 30"),
+            "storage": {
+                "free_bytes": storage.free,
+                "total_bytes": storage.total,
+                "low_space": storage.free < 1024 * 1024 * 1024,
+            },
         }
 
     @app.post("/api/projects/discover", dependencies=[Depends(require_owner)])
@@ -350,6 +359,60 @@ def create_app(settings: Settings | None = None, server=None):
     def history(project_id: str | None = None, search: str = ""):
         return chat.history(project_id, search)
 
+    @app.get("/api/tasks/{task_id}/evidence", dependencies=[Depends(require_owner)])
+    def evidence(task_id: str):
+        tasks.get(task_id)
+        return db.all("SELECT * FROM verification_results WHERE task_id=? ORDER BY created_at DESC", (task_id,))
+
+    @app.get("/api/executions/{execution_id}/patch", dependencies=[Depends(require_owner)])
+    def download_patch(execution_id: str):
+        execution = db.one("SELECT * FROM executions WHERE id=? AND task_id IS NOT NULL", (execution_id,))
+        if not execution or not execution["worktree"] or tasks.get(execution["task_id"])["status"] != "completed":
+            raise HTTPException(409, "A patch is available only after verified completion")
+        root = Path(execution["worktree"])
+        if not root.resolve().is_relative_to((settings.data_dir / "workspaces").resolve()):
+            raise ValueError("Result is outside isolated storage")
+        baseline = execution.get("base_commit") or execution["commit_ref"]
+        changed = git(root, "diff", baseline, "--name-only", "-z").split("\0")
+        untracked = git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
+        for path in changed + untracked:
+            if path:
+                safe_file(root, path)
+        patch = git(root, "diff", "--binary", baseline, "--")
+        import subprocess
+
+        for path in untracked:
+            if path:
+                result = subprocess.run(
+                    [
+                        "git",
+                        "-C",
+                        str(root),
+                        "-c",
+                        "core.hooksPath=/dev/null",
+                        "diff",
+                        "--no-index",
+                        "--binary",
+                        "--",
+                        "/dev/null",
+                        path,
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                    env={
+                        "PATH": "/usr/bin:/bin",
+                        "GIT_CONFIG_GLOBAL": "/dev/null",
+                        "GIT_CONFIG_SYSTEM": "/dev/null",
+                        "GIT_CONFIG_NOSYSTEM": "1",
+                    },
+                )
+                patch += "\n" + result.stdout
+        return PlainTextResponse(
+            patch + "\n",
+            headers={"Content-Disposition": f'attachment; filename="ai-manager-{execution_id[:12]}.patch"'},
+        )
+
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
         return await chat.submit(body.project_id, body.content)
@@ -373,6 +436,9 @@ def create_app(settings: Settings | None = None, server=None):
         async def stream():
             nonlocal cursor
             while not await request.is_disconnected():
+                if not auth.session(request.cookies.get("ai_manager_session")):
+                    yield "event: stream.auth_expired\ndata: {}\n\n"
+                    return
                 rows = db.all(
                     "SELECT * FROM events WHERE execution_id=? AND seq>? ORDER BY seq LIMIT 100", (execution_id, cursor)
                 )

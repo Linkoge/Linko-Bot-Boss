@@ -45,6 +45,7 @@ class Tasks:
             )
             conn.executemany("INSERT INTO dependencies VALUES(?,?)", [(task_id, d) for d in dependencies])
             self.db.event(conn, "task.created", {"description": description}, project_id, task_id)
+        self.sync(project_id)
         return self.get(task_id)
 
     def get(self, task_id):
@@ -81,6 +82,7 @@ class Tasks:
                 row["project_id"],
                 task_id,
             )
+        self.sync(row["project_id"])
         return self.get(task_id)
 
     def claim(self, owner, max_workers=2, lease_seconds=90):
@@ -131,3 +133,12 @@ class Tasks:
                 )
                 self.db.event(conn, "task.recovery_required", {}, row["project_id"], row["id"])
             return len(rows)
+
+    def sync(self, project_id):
+        from .memory import sync_project
+
+        try:
+            sync_project(self.db, project_id)
+        except OSError:
+            with self.db.transaction() as conn:
+                self.db.event(conn, "memory.export_retry_required", {}, project_id)

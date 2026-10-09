@@ -1,0 +1,23 @@
+[Unit]
+Description=AI Manager persistent private portfolio service
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+ExecStart=@PYTHON@ -m ai_manager.cli serve
+Environment=PYTHONUNBUFFERED=1
+Environment=AI_MANAGER_CODEX=@CODEX@
+Environment=AI_MANAGER_ALLOWED_HOSTS=localhost,127.0.0.1,@HOST@
+Environment=AI_MANAGER_SECURE_COOKIE=1
+EnvironmentFile=-@HOME@/.config/linko-bot-manager.env
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

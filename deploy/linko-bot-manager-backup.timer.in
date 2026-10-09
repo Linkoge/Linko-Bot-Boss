@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily AI Manager database backup
+
+[Timer]
+OnCalendar=daily
+Persistent=yes
+RandomizedDelaySec=15m
+Unit=linko-bot-manager-backup.service
+
+[Install]
+WantedBy=timers.target

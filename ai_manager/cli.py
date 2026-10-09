@@ -23,6 +23,7 @@ def main():
     restore.add_argument("source", type=Path)
     restore.add_argument("destination", type=Path)
     commands.add_parser("setup-owner")
+    commands.add_parser("revoke-sessions")
     commands.add_parser("serve")
     args = parser.parse_args()
     settings = Settings()
@@ -55,6 +56,11 @@ def main():
             raise SystemExit("Passwords differ")
         Auth(db, settings).setup(username, password)
         print("Owner account created; web signup is disabled")
+    elif args.command == "revoke-sessions":
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM sessions")
+            db.event(conn, "owner.sessions_revoked", {})
+        print("All owner sessions revoked")
     elif args.command == "serve":
         import uvicorn
 
