@@ -25,6 +25,8 @@ def process_start(pid: int) -> str | None:
 def safe_config() -> dict:
     config = {
         "features.shell_tool": False,
+        "features.unified_exec": False,
+        "features.shell_snapshot": False,
         "features.code_mode": False,
         "features.multi_agent": False,
         "features.apps": False,

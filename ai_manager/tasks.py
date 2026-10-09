@@ -86,7 +86,9 @@ class Tasks:
     def claim(self, owner, max_workers=2, lease_seconds=90):
         with self.db.transaction() as conn:
             if (
-                conn.execute("SELECT count(*) FROM tasks WHERE status IN ('running','verifying')").fetchone()[0]
+                conn.execute(
+                    "SELECT count(*) FROM tasks WHERE status IN ('running','verifying','awaiting_approval')"
+                ).fetchone()[0]
                 >= max_workers
             ):
                 return None
@@ -94,7 +96,7 @@ class Tasks:
                 WHERE t.status='pending' AND p.status='active'
                 AND NOT EXISTS(SELECT 1 FROM dependencies d JOIN tasks prerequisite ON prerequisite.id=d.depends_on
                     WHERE d.task_id=t.id AND prerequisite.status!='completed')
-                AND NOT EXISTS(SELECT 1 FROM tasks active WHERE active.project_id=t.project_id AND active.status IN ('running','verifying'))
+                AND NOT EXISTS(SELECT 1 FROM tasks active WHERE active.project_id=t.project_id AND active.status IN ('running','verifying','awaiting_approval'))
                 ORDER BY p.priority DESC,t.priority DESC,t.created_at LIMIT 1""").fetchone()
             if not row:
                 return None
@@ -109,7 +111,7 @@ class Tasks:
     def heartbeat(self, task_id, owner, lease_seconds=90):
         with self.db.transaction() as conn:
             cursor = conn.execute(
-                "UPDATE tasks SET lease_until=? WHERE id=? AND lease_owner=? AND status IN ('running','verifying')",
+                "UPDATE tasks SET lease_until=? WHERE id=? AND lease_owner=? AND status IN ('running','verifying','awaiting_approval')",
                 (time.time() + lease_seconds, task_id, owner),
             )
             if cursor.rowcount != 1:
@@ -119,7 +121,8 @@ class Tasks:
         # Uncertain outcomes block instead of replaying operations.
         with self.db.transaction() as conn:
             rows = conn.execute(
-                "SELECT * FROM tasks WHERE status IN ('running','verifying') AND lease_until < ?", (time.time(),)
+                "SELECT * FROM tasks WHERE status IN ('running','verifying','awaiting_approval') AND lease_until < ?",
+                (time.time(),),
             ).fetchall()
             for row in rows:
                 conn.execute(

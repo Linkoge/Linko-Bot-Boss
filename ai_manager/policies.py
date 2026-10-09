@@ -1,0 +1,227 @@
+import asyncio
+import hashlib
+import json
+import time
+
+from .db import new_id
+
+DEFAULTS = {
+    "read_files": "ALLOW",
+    "edit_files": "ASK",
+    "run_tests": "ALLOW",
+    "install_dependencies": "ASK",
+    "create_commits": "ASK",
+    "merge_branches": "ASK",
+    "push_remote": "ASK",
+    "deploy": "ASK",
+    "delete_files": "ASK",
+    "modify_infrastructure": "DENY",
+    "change_network": "DENY",
+    "access_credentials": "DENY",
+    "start_services": "ASK",
+    "external_communications": "ASK",
+    "paid_services": "DENY",
+}
+SUPPORTED = {"read_files", "edit_files", "run_tests", "create_commits", "delete_files"}
+
+
+def operation_key(execution_id, call_id, action, arguments):
+    return hashlib.sha256(json.dumps([execution_id, call_id, action, arguments], sort_keys=True).encode()).hexdigest()
+
+
+class Policies:
+    def __init__(self, db):
+        self.db = db
+
+    def effective(self, project_id, action):
+        if action not in DEFAULTS:
+            raise ValueError("Unknown action category")
+        local = (
+            self.db.one("SELECT mode FROM policies WHERE scope=? AND action=?", (project_id, action))
+            if project_id
+            else None
+        )
+        global_policy = self.db.one("SELECT mode FROM policies WHERE scope='global' AND action=?", (action,))
+        return {
+            "action": action,
+            "mode": local["mode"] if local else global_policy["mode"] if global_policy else DEFAULTS[action],
+            "source": "project" if local else "global",
+            "available": action in SUPPORTED,
+            "epoch": self.db.setting("policy_epoch", 0),
+        }
+
+    def list(self, project_id=None):
+        return [self.effective(project_id, action) for action in DEFAULTS]
+
+    def set(self, project_id, action, mode, risk_accepted=False):
+        if action not in DEFAULTS or mode not in {"ALLOW", "ASK", "DENY", None}:
+            raise ValueError("Invalid action policy")
+        if mode == "ALLOW" and action not in SUPPORTED and not risk_accepted:
+            raise ValueError("Explicit risk acceptance is required; this action still has no executable capability")
+        scope = project_id or "global"
+        with self.db.transaction() as conn:
+            old = conn.execute("SELECT mode FROM policies WHERE scope=? AND action=?", (scope, action)).fetchone()
+            if mode:
+                conn.execute(
+                    "INSERT INTO policies VALUES(?,?,?) ON CONFLICT(scope,action) DO UPDATE SET mode=excluded.mode",
+                    (scope, action, mode),
+                )
+            else:
+                conn.execute("DELETE FROM policies WHERE scope=? AND action=?", (scope, action))
+            row = conn.execute("SELECT value FROM settings WHERE key='policy_epoch'").fetchone()
+            epoch = (json.loads(row["value"]) if row else 0) + 1
+            conn.execute(
+                "INSERT INTO settings VALUES('policy_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (json.dumps(epoch),),
+            )
+            conn.execute("UPDATE approvals SET status='invalidated' WHERE status IN ('pending','approved')")
+            self.db.event(
+                conn,
+                "policy.changed",
+                {
+                    "action": action,
+                    "old": old["mode"] if old else None,
+                    "mode": mode,
+                    "scope": scope,
+                    "epoch": epoch,
+                    "risk_accepted": risk_accepted,
+                },
+                project_id,
+            )
+        return self.effective(project_id, action)
+
+    async def authorize(
+        self, project_id, task_id, execution_id, action, arguments, call_id, consequences, resume_status="running"
+    ):
+        policy = self.effective(project_id, action)
+        if not policy["available"]:
+            raise ValueError("This action has no controlled execution capability; UI policy cannot enable it")
+        if policy["mode"] == "DENY":
+            with self.db.transaction() as conn:
+                self.db.event(conn, "policy.denied", {"action": action}, project_id, task_id, execution_id)
+            raise ValueError("Effective policy denies " + action)
+        key = operation_key(execution_id, call_id, action, arguments)
+        if policy["mode"] == "ALLOW":
+            return key
+        now, approval_id = time.time(), new_id()
+        with self.db.transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO approvals VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (
+                    approval_id,
+                    key,
+                    project_id,
+                    task_id,
+                    execution_id,
+                    action,
+                    json.dumps(arguments),
+                    "Effective policy requires owner approval",
+                    consequences,
+                    policy["epoch"],
+                    "pending",
+                    now,
+                    now + 900,
+                    None,
+                ),
+            )
+            row = conn.execute("SELECT * FROM approvals WHERE operation_key=?", (key,)).fetchone()
+            if row["status"] not in {"pending", "approved"}:
+                raise ValueError("This approval was already consumed, rejected or invalidated")
+            approval_id = row["id"]
+            conn.execute(
+                "UPDATE tasks SET status='awaiting_approval',revision=revision+1 WHERE id=? AND lease_owner=?",
+                (task_id, execution_id),
+            )
+            conn.execute("UPDATE executions SET status='awaiting_approval' WHERE id=?", (execution_id,))
+            conn.execute(
+                "INSERT OR IGNORE INTO notifications VALUES(?,?,?,?,?,?,?,?,?)",
+                (
+                    new_id(),
+                    "approval:" + approval_id,
+                    "approval",
+                    "Approval needed: " + action,
+                    consequences,
+                    project_id,
+                    task_id,
+                    None,
+                    now,
+                ),
+            )
+            self.db.event(
+                conn,
+                "approval.requested",
+                {
+                    "id": approval_id,
+                    "action": action,
+                    "affected_path": arguments.get("path"),
+                    "consequences": consequences,
+                },
+                project_id,
+                task_id,
+                execution_id,
+            )
+        try:
+            while True:
+                row = self.db.one("SELECT * FROM approvals WHERE id=?", (approval_id,))
+                if row["status"] == "approved":
+                    with self.db.transaction() as conn:
+                        if (
+                            self.effective(project_id, action)["mode"] == "DENY"
+                            or self.db.setting("policy_epoch", 0) != row["policy_epoch"]
+                        ):
+                            raise ValueError("Policy changed; approval is stale")
+                        cursor = conn.execute(
+                            "UPDATE approvals SET status='consumed' WHERE id=? AND status='approved' AND expires_at>?",
+                            (approval_id, time.time()),
+                        )
+                        if cursor.rowcount != 1:
+                            raise ValueError("Approval expired or already consumed")
+                        self.db.event(conn, "approval.consumed", {"id": approval_id}, project_id, task_id, execution_id)
+                    return key
+                if row["status"] != "pending":
+                    raise ValueError("Operation " + row["status"] + " by owner or policy change")
+                if row["expires_at"] < time.time():
+                    with self.db.transaction() as conn:
+                        conn.execute(
+                            "UPDATE approvals SET status='expired' WHERE id=? AND status='pending'", (approval_id,)
+                        )
+                    raise ValueError("Approval expired; operation did not execute")
+                await asyncio.sleep(0.2)
+        except asyncio.CancelledError:
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "UPDATE approvals SET status='cancelled' WHERE id=? AND status IN ('pending','approved')",
+                    (approval_id,),
+                )
+            raise
+        finally:
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "UPDATE tasks SET status=?,revision=revision+1 WHERE id=? AND status='awaiting_approval' AND lease_owner=?",
+                    (resume_status, task_id, execution_id),
+                )
+                conn.execute(
+                    "UPDATE executions SET status=? WHERE id=? AND status='awaiting_approval' AND finished_at IS NULL",
+                    (resume_status, execution_id),
+                )
+
+    def decide(self, approval_id, approve):
+        with self.db.transaction() as conn:
+            row = conn.execute("SELECT * FROM approvals WHERE id=?", (approval_id,)).fetchone()
+            if not row or row["status"] != "pending" or row["expires_at"] <= time.time():
+                raise ValueError("Approval is not pending or expired")
+            epoch = conn.execute("SELECT value FROM settings WHERE key='policy_epoch'").fetchone()
+            if (json.loads(epoch["value"]) if epoch else 0) != row["policy_epoch"]:
+                raise ValueError("Approval policy is stale")
+            conn.execute(
+                "UPDATE approvals SET status=?,decided_at=? WHERE id=?",
+                ("approved" if approve else "rejected", time.time(), approval_id),
+            )
+            self.db.event(
+                conn,
+                "approval.decided",
+                {"id": approval_id, "approved": approve},
+                row["project_id"],
+                row["task_id"],
+                row["execution_id"],
+            )

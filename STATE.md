@@ -53,3 +53,13 @@ Updated observation: approved execution provides host runtime access. Read-only 
 - Conversational manager_action supports explicit delegated planning, prioritization, safe-checkpoint pause, project resume, scoped completion batches and temporary freeze of new projects. Cross-project actions require All Projects context. Brainstorming stays conversational.
 - Automatic scheduler is owner-controlled, defaults paused, respects dependencies/priorities and two-worker cap. Verification requires owner-configured trusted commands; missing evidence blocks instead of claiming completion.
 - Next: Stage 5 exact-operation approvals, configurable policies, write/test/commit controls, notifications and documented enforcement boundaries.
+
+
+## Stage 5 verified checkpoint
+
+- Twenty-three tests and the desktop/mobile browser check passed. Policies, project overrides, approval center, exact operation preview, risk acceptance for unavailable capabilities, audit history and optional in-app daily summaries implemented.
+- Real coding acceptance passed in a disposable repository: worker read calculator.py, requested an exact ASK edit with its current hash, no change occurred before the simulated fixture-owner approval, approval was consumed, registered tests passed and independent reviewer approved completion. Original source still contained the original bug, demonstrating isolation. Script: scripts/smoke_coding.py.
+- Controlled read/edit/delete/test/isolated-commit capabilities are enforced in Python. Test commands run with verified bubblewrap mount/PID/network isolation, no host home/credentials, cleared environment, timeout and bounded output. File capabilities reject traversal, symlinks and known credential paths. Commit approvals bind workspace state; hooks/global Git config are disabled.
+- Policy changes invalidate outstanding grants; approvals expire and are single-use; operation ledger blocks uncertain replay. Worker leases and concurrency include awaiting-approval tasks. Independent verification obeys the same action policies.
+- Merge/push/deploy/install/infrastructure/network/credential/external-service/communication/payment capabilities remain unavailable even if a UI policy says ALLOW. These limitations are displayed rather than falsely claimed as enforced unrestricted execution. Trusted Python/App Server run as the host owner, while model tools are brokered. Exact trust assumptions: docs/security.md.
+- No external notification or communication sent. Only existing subscription-backed inference used. Next: production hardening, private deployment, recovery/backup checks and operational documentation.

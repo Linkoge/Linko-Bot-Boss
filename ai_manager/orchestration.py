@@ -8,6 +8,7 @@ from pathlib import Path
 from .chat import ROLES
 from .codex import AppServer, CodexError, process_start
 from .db import new_id
+from .policies import Policies
 from .registry import git
 from .tasks import Tasks
 from .workers import WORKSPACE_TOOL
@@ -276,8 +277,23 @@ class Verifier:
             )
             if cursor.rowcount != 1:
                 raise ValueError("Verification already claimed")
+        with self.db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO executions(id,task_id,project_id,agent_id,status,started_at) VALUES(?,?,?,'verification-controller','verifying',?)",
+                (lease, task_id, task["project_id"], time.time()),
+            )
         records, review_id = [], new_id()
         try:
+            await Policies(self.db).authorize(
+                task["project_id"],
+                task_id,
+                lease,
+                "run_tests",
+                {"commands": commands},
+                "verification-tests",
+                "Run registered independent verification in OS isolation",
+                resume_status="verifying",
+            )
             for argv in commands:
                 record = await workspace.isolated_test(argv)
                 records.append(record)
@@ -291,13 +307,23 @@ class Verifier:
                     args = json.loads(args)
                 if params["tool"] != "manager_workspace" or args["operation"] not in {"read", "list"}:
                     raise ValueError("Review capabilities permit read/list only")
+                await Policies(self.db).authorize(
+                    task["project_id"],
+                    task_id,
+                    lease,
+                    "read_files",
+                    args,
+                    params.get("callId", new_id()),
+                    "Independent read-only review of isolated project files",
+                    resume_status="verifying",
+                )
                 if args["operation"] == "read":
                     result = workspace.read_file(args["path"])
                     inspected.add(args["path"])
                     return result
                 return workspace.list_files(args.get("path", "."))
 
-            diff = git(workspace.root, "diff", "HEAD", "--")
+            diff = git(workspace.root, "diff", execution.get("base_commit") or execution["commit_ref"] or "HEAD", "--")
             review, review_id = await structured_turn(
                 self.db,
                 self.settings,
@@ -336,7 +362,7 @@ class Verifier:
                 "files": files,
                 "diff_sha256": hashlib.sha256(diff.encode()).hexdigest(),
                 "workspace": str(workspace.root),
-                "base_commit": execution["commit_ref"],
+                "base_commit": execution.get("base_commit") or execution["commit_ref"],
                 "review_execution_id": review_id,
             }
             now = time.time()
@@ -410,6 +436,18 @@ class Verifier:
             current = self.tasks.get(task_id)
             self.tasks.transition(task_id, "blocked", current["revision"], blocker=str(error))
             return False
+        finally:
+            current = self.tasks.get(task_id)
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "UPDATE executions SET status=?,error=?,finished_at=? WHERE id=?",
+                    (
+                        "completed" if current["status"] == "completed" else "blocked",
+                        current["blocker"],
+                        time.time(),
+                        lease,
+                    ),
+                )
 
 
 class Scheduler:
@@ -426,6 +464,29 @@ class Scheduler:
         self.reviews = {}
 
     async def tick(self):
+        if self.db.setting("daily_summaries", False):
+            day = datetime.now(timezone.utc).date().isoformat()
+            with self.db.transaction() as conn:
+                completed = conn.execute(
+                    "SELECT count(*) FROM tasks WHERE status='completed' AND updated_at>?", (time.time() - 86400,)
+                ).fetchone()[0]
+                blocked = conn.execute(
+                    "SELECT count(*) FROM tasks WHERE status IN ('blocked','awaiting_approval')"
+                ).fetchone()[0]
+                conn.execute(
+                    "INSERT OR IGNORE INTO notifications VALUES(?,?,?,?,?,?,?,?,?)",
+                    (
+                        new_id(),
+                        "daily:" + day,
+                        "daily_summary",
+                        "Daily project summary",
+                        f"{completed} tasks completed in the last day; {blocked} need attention",
+                        None,
+                        None,
+                        None,
+                        time.time(),
+                    ),
+                )
         for task in Tasks(self.db).list():
             if task["status"] == "verifying" and task["id"] not in self.reviews and task["lease_owner"] is None:
                 job = asyncio.create_task(self.verifier.verify(task["id"]))
@@ -533,7 +594,13 @@ class Scheduler:
             self.db.set_setting("freeze_projects_until", until.timestamp())
             result = {"new_projects_paused_until": until.isoformat()}
         elif action == "show_approvals":
-            result = {"tasks": [t for t in Tasks(self.db).list(project_id) if t["status"] == "awaiting_approval"]}
+            result = {
+                "approvals": self.db.all(
+                    "SELECT id,action,reason,consequences FROM approvals WHERE status='pending'"
+                    + (" AND project_id=?" if project_id else ""),
+                    (project_id,) if project_id else (),
+                )
+            }
         else:
             raise ValueError("Unsupported management action")
         with self.db.transaction() as conn:

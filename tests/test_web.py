@@ -149,3 +149,20 @@ def test_restart_retains_history_and_marks_uncertain(tmp_path):
     assert restarted.history()["messages"][0]["content"] == "Partial answer"
     assert restarted.history()["messages"][0]["status"] == "interrupted"
     assert db.one("SELECT status FROM executions WHERE id='uncertain'")["status"] == "interrupted"
+
+
+def test_policy_api_is_authenticated_and_audited(client):
+    browser, app, settings = client
+    assert browser.get("/api/policies").status_code == 401
+    sign_in(browser, app, settings)
+    assert len(browser.get("/api/policies").json()) == 15
+    assert browser.put("/api/policies/edit_files", json={"mode": "DENY"}).status_code == 200
+    assert next(p for p in browser.get("/api/policies").json() if p["action"] == "edit_files")["mode"] == "DENY"
+    assert browser.put("/api/policies/paid_services", json={"mode": "ALLOW"}).status_code == 409
+    assert (
+        browser.put("/api/policies/paid_services", json={"mode": "ALLOW", "risk_accepted": True}).json()["available"]
+        is False
+    )
+    assert browser.get("/api/approvals").json() == []
+    assert browser.post("/api/approvals/unknown/decision", json={"approve": True}).status_code == 409
+    assert any(e["kind"] == "policy.changed" for e in browser.get("/api/audit").json())

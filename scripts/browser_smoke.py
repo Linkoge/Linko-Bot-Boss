@@ -70,6 +70,12 @@ def main():
                 page.screenshot(path="/tmp/ai-manager-mobile.png", full_page=True)
                 page.locator('[data-view="memory"]').click()
                 assert page.locator("#memory-list .panel").count() >= 5
+                page.locator('[data-view="settings"]').click()
+                page.locator("#load-policies").click()
+                page.locator("#policy-list .route-row").first.wait_for()
+                assert page.locator("#policy-list .route-row").count() == 15
+                page.locator('[data-view="approvals"]').click()
+                assert "Nothing waiting" in page.locator("#approval-list").inner_text()
                 assert not errors, errors
                 print(
                     "Browser verified: secure setup, login, ten-project overview, project switching, memory, desktop and Android viewport; no page errors or horizontal overflow"

@@ -17,6 +17,7 @@ from .codex import AppServer, CodexError
 from .config import Settings
 from .db import Database
 from .orchestration import Planner, Scheduler, Verifier
+from .policies import Policies
 from .registry import Registry
 from .tasks import Tasks
 from .workers import Workers
@@ -102,6 +103,19 @@ class VerificationCommands(BaseModel):
     commands: list[list[str]] = Field(max_length=10)
 
 
+class PolicyBody(BaseModel):
+    mode: str | None
+    risk_accepted: bool = False
+
+
+class ApprovalBody(BaseModel):
+    approve: bool
+
+
+class NotificationSettings(BaseModel):
+    daily_summaries: bool
+
+
 def create_app(settings: Settings | None = None, server=None):
     settings = settings or Settings()
     settings.prepare()
@@ -112,6 +126,7 @@ def create_app(settings: Settings | None = None, server=None):
     planner, verifier = Planner(db, registry, settings), Verifier(db, registry, settings)
     scheduler = Scheduler(db, registry, settings, workers, verifier, planner)
     chat.action_handler = scheduler.manager_action
+    policies = Policies(db)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -125,6 +140,10 @@ def create_app(settings: Settings | None = None, server=None):
         chat.recover()
         workers.recover()
         registry.discover()
+        for project in registry.list():
+            registry.export_memory(project["id"])
+        with db.transaction() as conn:
+            conn.execute("UPDATE approvals SET status='cancelled' WHERE status IN ('pending','approved')")
         settings.max_workers = db.setting("max_workers", settings.max_workers)
         scheduler.start()
         try:
@@ -245,6 +264,8 @@ def create_app(settings: Settings | None = None, server=None):
             if sum(p["status"] == "active" for p in projects) > 3
             else "Continue the highest priority unblocked task",
             "automation_enabled": db.setting("scheduler_enabled", False),
+            "approvals": db.all("SELECT * FROM approvals WHERE status='pending' ORDER BY created_at"),
+            "notifications": db.all("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 30"),
         }
 
     @app.post("/api/projects/discover", dependencies=[Depends(require_owner)])
@@ -400,12 +421,47 @@ def create_app(settings: Settings | None = None, server=None):
             "scheduler_enabled": db.setting("scheduler_enabled", False),
             "scheduler_scope": db.setting("scheduler_scope", None),
             "scheduler_batch": db.setting("scheduler_batch", {}),
+            "daily_summaries": db.setting("daily_summaries", False),
         }
 
     @app.put("/api/settings/instructions", dependencies=[Depends(require_owner)])
     def global_instructions(body: InstructionsBody):
         db.set_setting("global_instructions", body.content)
         return {"updated": True}
+
+    @app.get("/api/policies", dependencies=[Depends(require_owner)])
+    def get_policies(project_id: str | None = None):
+        if project_id:
+            registry.get(project_id)
+        return policies.list(project_id)
+
+    @app.put("/api/policies/{action}", dependencies=[Depends(require_owner)])
+    def set_policy(action: str, body: PolicyBody, project_id: str | None = None):
+        if project_id:
+            registry.get(project_id)
+        return policies.set(project_id, action, body.mode, body.risk_accepted)
+
+    @app.get("/api/approvals", dependencies=[Depends(require_owner)])
+    def get_approvals():
+        return db.all("SELECT * FROM approvals ORDER BY created_at DESC LIMIT 100")
+
+    @app.post("/api/approvals/{approval_id}/decision", dependencies=[Depends(require_owner)])
+    def decide(approval_id: str, body: ApprovalBody):
+        policies.decide(approval_id, body.approve)
+        return {"decided": True}
+
+    @app.put("/api/settings/notifications", dependencies=[Depends(require_owner)])
+    def notification_settings(body: NotificationSettings):
+        db.set_setting("daily_summaries", body.daily_summaries)
+        return {"updated": True}
+
+    @app.post("/api/notifications/{notification_id}/read", dependencies=[Depends(require_owner)])
+    def read_notification(notification_id: str):
+        import time
+
+        with db.transaction() as conn:
+            conn.execute("UPDATE notifications SET read_at=? WHERE id=?", (time.time(), notification_id))
+        return {"read": True}
 
     @app.get("/api/audit", dependencies=[Depends(require_owner)])
     def audit(after: int = 0):

@@ -157,14 +157,25 @@ class Workspace:
             *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True
         )
         try:
-            output, _ = await asyncio.wait_for(process.communicate(), timeout)
+
+            async def bounded_output():
+                chunks, size = [], 0
+                while chunk := await process.stdout.read(65536):
+                    size += len(chunk)
+                    if size > 1024 * 1024:
+                        raise ValueError("Test output exceeded 1MB; command terminated")
+                    chunks.append(chunk)
+                await process.wait()
+                return b"".join(chunks)
+
+            output = await asyncio.wait_for(bounded_output(), timeout)
             return {
                 "argv": argv,
                 "exit_code": process.returncode,
                 "output": output.decode(errors="replace")[-20000:],
                 "sandbox": "bubblewrap/no-network/no-host-home",
             }
-        except (TimeoutError, asyncio.CancelledError):
+        except (TimeoutError, ValueError, asyncio.CancelledError):
             import signal
 
             try:

@@ -57,6 +57,17 @@ CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, request_key TEXT UNIQUE NO
 CREATE TABLE IF NOT EXISTS verification_results(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
  execution_id TEXT NOT NULL, passed INTEGER NOT NULL, evidence TEXT NOT NULL, created_at REAL NOT NULL);
 INSERT OR IGNORE INTO schema_version VALUES(2);
+CREATE TABLE IF NOT EXISTS policies(scope TEXT NOT NULL,action TEXT NOT NULL,mode TEXT NOT NULL CHECK(mode IN ('ALLOW','ASK','DENY')),PRIMARY KEY(scope,action));
+CREATE TABLE IF NOT EXISTS approvals(id TEXT PRIMARY KEY, operation_key TEXT UNIQUE NOT NULL,
+ project_id TEXT NOT NULL, task_id TEXT, execution_id TEXT NOT NULL, action TEXT NOT NULL,
+ arguments TEXT NOT NULL, reason TEXT NOT NULL, consequences TEXT NOT NULL, policy_epoch INTEGER NOT NULL,
+ status TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL, decided_at REAL);
+CREATE TABLE IF NOT EXISTS operations(operation_key TEXT PRIMARY KEY,execution_id TEXT NOT NULL,
+ action TEXT NOT NULL,state TEXT NOT NULL,result TEXT NOT NULL DEFAULT '',created_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY,dedupe_key TEXT UNIQUE NOT NULL,
+ kind TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,project_id TEXT,task_id TEXT,
+ read_at REAL,created_at REAL NOT NULL);
+INSERT OR IGNORE INTO schema_version VALUES(3);
 """
 
 
@@ -71,6 +82,8 @@ class Database:
         with self.connect() as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            if "base_commit" not in {r[1] for r in conn.execute("PRAGMA table_info(executions)")}:
+                conn.execute("ALTER TABLE executions ADD COLUMN base_commit TEXT")
         self.path.chmod(0o600)
 
     def connect(self):
