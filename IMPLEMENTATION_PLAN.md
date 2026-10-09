@@ -21,7 +21,7 @@ Permanent requirements: [MASTER_SPEC.md](MASTER_SPEC.md). Advance only after the
 
 ## Environment limits
 
-The repository is `/home/codex/projects/Linko-Bot-Manager`. Approved native execution provides actual VM runtime access. Private service, HTTPS and backups are deployed and tested. Full reboot acceptance remains unperformed to preserve unrelated sessions; storage is 99% full. See TASKS.md and docs/verification.md. No unrelated repository/process/remote-access configuration may be changed.
+The repository is `/home/codex/projects/Linko-Bot-Manager`. Approved native execution provides actual VM runtime access. Private service, HTTPS and backups are deployed and tested. Full reboot acceptance remains unperformed to preserve unrelated sessions; latest measured storage is98% full (~795MiB free), after owner-reported manual cleanup; the prior99% measurement remains historical. See TASKS.md and docs/verification.md. No unrelated repository/process/remote-access configuration may be changed.
 
 ## Local checkpoints
 
@@ -30,4 +30,8 @@ The repository is `/home/codex/projects/Linko-Bot-Manager`. Approved native exec
 - Stage 3: d1f0a6a
 - Stage 4: fc3f6bf
 - Stage 5: cfe5427
-- Stage 6 partial hardening/deployment: next local checkpoint; identify using git log. Stage remains open until the external gates pass.
+- Stage 6 partial hardening/deployment: 0ccfaa6ebd955efe02d6968301cb875c9b463e8f. Stage remains open until the external gates pass.
+
+## 2026-10-10 reboot preparation
+
+Documentation-only development checkpoint; all31 existing tests passed again. Service/startup, live integrity, 50 memory exports, empty production chat/thread stores and all existing backups inspected without restarting anything. Full inventory is in docs/inventory.md; post-reboot acceptance commands in docs/operations.md; checkpoint reference in HANDOFF.md. The owner plans to reboot; no reboot or service restart is authorized in this task. Stage6 remains partially verified until actual post-boot evidence and storage acceptance pass.

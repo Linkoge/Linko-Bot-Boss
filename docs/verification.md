@@ -25,3 +25,7 @@ The checked-in scripts/tests reproduce individual checks; actual model tests use
 - Dependency installation, merge/push/deploy and other unsupported sensitive actions remain unavailable. Their acceptance cannot be inferred from UI policy controls.
 
 First real orchestration review blocked because milestone audit evidence was absent from its input. The input was fixed to include persisted evidence; the verification gate was not weakened. The first disposable systemd coding check blocked because Codex was absent from default PATH; installation now persists the detected absolute binary path.
+
+## 2026-10-10 checkpoint rerun (no feature/service changes)
+
+Existing31tests passed in7.56s, Ruff and JavaScript syntax passed. Live read-only integrity/foreign-key checks passed; 50/50memory exports matched, tenprojects/twoblockedtasks persisted, production history/thread/worker/owner stores confirmed empty. All four earlier backups passed integrity/foreign-key checks. Fresh278528byte draft checkpoint snapshot restored into an unused offline path with all20 application tables row-for-row equal; canonical final snapshot follows Git receipt. No live manager restart, reboot, new model/browser turn or deletion performed. Existing TestClient/httpx deprecation warning is the only test warning. Actual new-boot acceptance remains unperformed.

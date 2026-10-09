@@ -2,6 +2,25 @@
 
 Current: stages1–5 verified for supported capabilities; stage6 partially verified. Private service is live; full reboot/storage acceptance and initial owner setup remain open. Historical observations below retain the evidence available at each milestone.
 
+## 2026-10-10 — Immediate pre-reboot checkpoint
+
+This section supersedes earlier environment observations; older sections are milestone history. No application code changed, no services restarted/stopped, no reboot performed and no disk consumers deleted during this task.
+
+- Repository /home/codex/projects/Linko-Bot-Manager; origin git@github.com:Linkoge/Linko-Bot-Manager.git; main; incoming HEAD 0ccfaa6ebd955efe02d6968301cb875c9b463e8f. Working tree was clean at entry. This checkpoint changes documentation only; resulting checkpoint hash is recorded in HANDOFF.md.
+- Confirmed filesystem /dev/vda2: 41,953,755,136 total bytes, 38,956,138,496 used, 833,515,520 available (approximately 795MiB / 834 decimal MB), 98% usage. Previous verified report was ~445MB/99%. Owner reports approximately800MB available and some files manually deleted; names and exact deletion history were not independently verified. No cleanup was performed by this task. Remaining space is still tight.
+- Live SQLite schema versions1/2/3 (current3), WAL, integrity ok, zero foreign-key errors. Ten projects, 50 memory rows/exports, two blocked tasks, one verified implementation checkpoint; all50 exports exist and match DB contents. No active manager-owned execution.
+- Production conversations/messages/executions/thread IDs/approvals/operations/owner/policy overrides are all zero. Empty stores are confirmed, not missing or recovered histories. Durable storage/restart behavior for those stores is covered by existing fixture tests and historical real-model smoke evidence; no production chat/thread content is claimed.
+- Effective global permission defaults remain in code; no overrides. Scheduler disabled by default, concurrency2; no model route override. Initial owner setup remains pending. Private auth-status endpoint returns setup_required=true and authenticated=false; real login cannot be verified until the owner supplies private credentials.
+- Dedicated manager service running/enabled, daily backup timer active/enabled, latest scheduled backup succeeded, user linger=yes. tailscaled active/enabled. Correct absolute Codex path and secure-cookie/private-host settings confirmed. Optional service environment file absent. Full non-secret runtime inventory is in docs/inventory.md.
+- All four existing dated backups passed integrity and foreign-key checks. Two oldest predate the outstanding tasks; latest two contain both. Fresh draft checkpoint backup278528bytes restored into an unused /tmp path; all20 application tables compared row-for-row equal, integrity ok, foreign keys clean, tenprojects/50memory/twotasks retained. Canonical final backup follows the Git receipt; paths/procedure in docs/inventory.md.
+- Existing 31 tests passed again (7.56s); Ruff and JavaScript syntax passed. One known Starlette TestClient/httpx deprecation warning; no failing test. No browser/LLM turn was repeated during this documentation-only task. Previous desktop/mobile and real chat/worker/planning/coding/review results remain historical verified evidence in docs/verification.md.
+- Confirmed pre-reboot boot ID e3a37e08-1b0b-4ac0-a923-8b6b97767873; boot since2026-10-08 17:26:16 local. New boot ID and post-boot health have not been verified. Previous controlled service-crash recovery passed; this task does not repeat it.
+- Dependency installation, merge/push/deployment, infrastructure/network/credential/external-service/communication/payment worker capabilities remain unavailable. Trusted backend uses same-user permissions; current model/test boundaries are documented in docs/security.md.
+
+### Current risks and next action
+
+Run the ten-step read-only post-reboot checklist in docs/operations.md after the owner reboots. Record actual outcomes and blockers; do not mark Stage6 complete from enabled units alone. Storage, unset owner login, same-VM backups, unavailable sensitive capabilities and untested full reboot remain open. Identified disk consumers are measurements, not safe deletion recommendations; see docs/inventory.md. No currently failing application test or additional reproduced feature bug was found during checkpoint work.
+
 ## 2026-10-09 — Inventory
 
 - Empty target repository found with expected origin and unborn `main` branch.

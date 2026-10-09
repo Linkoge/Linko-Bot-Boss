@@ -1,12 +1,18 @@
-# Outstanding work
+# Outstanding tasks — pre-reboot checkpoint, 2026-10-10
 
-Stages 1–5 have verified checkpoints for supported capabilities. Stage 6 is partially verified; see STATE.md and docs/verification.md.
+No new features are authorized during checkpoint preparation. After the owner reboots, resume with the read-only checklist in docs/operations.md. Stages 1–5 remain verified for supported capabilities; Stage 6 remains open.
 
-1. Resolve the actual VM storage gate before large-project execution. About 445MB was free on a 40GB disk; do not delete unrelated repositories, Docker volumes/images, backups or runtime files automatically. Expansion/cleanup needs an owner-selected resource plan.
-2. Coordinate a VM reboot acceptance window that preserves active sessions. After reboot, verify user service, private HTTPS, registry/conversation/checkpoint persistence, backup timer and uncertain-worker reconciliation. Linger and enabled units alone do not prove reboot acceptance.
-3. Owner chooses initial username/password using private CLI setup or one-use local bootstrap token. No credentials may be committed or printed by agents.
-4. Configure project objectives, trusted verification argv and desired policies through the UI. Test dependencies must be available in the isolated runtime; missing dependencies block verification.
-5. Design and verify additional controlled capabilities for dependency environments, branch integration, remote push and deployment before enabling them. Current unavailable actions remain visibly unavailable; never replace them with arbitrary shell access.
-6. Add owner-managed off-VM backup copies and capacity/retention choices. Current timer creates local verified backups without deleting older copies.
+| Priority | Task / durable ID | Dependencies and blocker | Acceptance criteria |
+| --- | --- | --- | --- |
+| P0 | Verify actual VM reboot recovery; e6f17f3b2859416b94412f01f642a882 | Owner performs reboot; this checkpoint is not reboot authorization. Currently blocked in DB. | Record new boot ID; manager/private HTTPS/backup timer recover; SQLite integrity, project IDs, memory and task states preserved; uncertain executions block without replay. Complete all ten post-reboot checks and record evidence before completing task. |
+| P0 | Resolve low storage; 9e43efbd36b645d4a5d3937769ba4739 | Owner selects cleanup/expansion resources. Manual deletions reported, filenames unknown. Currently blocked in DB. | Provide capacity for selected project clones, test environments and dated backups while preserving unrelated source/runtime data; record before/after df and resource changes. ~795MiB available at checkpoint remains a constraint. |
+| P1 | Initial owner account and login acceptance | No real owner account exists; privately chosen password required. Depends on working private HTTPS after boot. | Private CLI or token setup succeeds; owner signs in/out; no credentials in repository/logs. Do not invent credentials. |
+| P1 | Configure project objectives, trusted verification argv and policies | Owner's desired scope and available isolated dependencies. | Selected project has clear acceptance criteria, trusted commands and effective policy preview; a scoped task verifies independently. Scheduling stays paused until chosen. |
+| P1 | Protected off-VM backup and capacity/retention plan | Owner-selected storage destination and access; current backups are on the VM. | Restore from protected copy preserves DB/memory plus necessary workspaces/Codex thread storage; retention never silently removes required data. |
+| P2 | Controlled dependency environments | Separate design, scope and owner-approved resource plan; storage first. | Dependencies available in isolated tests without exposing manager credentials/home/network or arbitrary shell; capability policies and failure/recovery tests pass. |
+| P2 | Controlled Git integration/push and deployment | Reviewed capability design, scoped credentials/resources and exact approvals; dependency/workspace verification first. | Verified isolated results integrate only through explicit controlled operations, with non-idempotent outcomes audited and no uncertain replay. Remain unavailable until tested. |
+| P3 | TestClient dependency deprecation | Existing httpx/Starlette warning; no test failure. | Assess httpx2 compatibility during a future dependency maintenance task; 31 tests still pass. No dependency changes in this checkpoint. |
 
-No implementation stage should be reopened merely to regenerate already passing evidence. Continue from the first unresolved acceptance gate when its actual external conditions change.
+The two DB task blocker texts retain the original 99%-full/no-reboot-window observations. They are historical context, not current disk measurements. They remain blocked until actual acceptance evidence permits a deliberate state transition; do not rewrite them to imply success merely because a reboot is planned.
+
+Do not reopen verified stages without new evidence of failure. Never delete disk consumers, restart unrelated services, or merge/push/deploy as an incidental cleanup step.
