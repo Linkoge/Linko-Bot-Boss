@@ -144,6 +144,10 @@ class Workers:
                     # Worker statement is recorded as reported progress, never verified accomplishment.
                     result = {"recorded": True, "verified": False}
                     self.progress(project["id"], task["id"], summary)
+                    if self.registry.get(project["id"])["status"] == "paused":
+                        current = self.db.one("SELECT turn_id FROM executions WHERE id=?", (execution_id,))
+                        if current["turn_id"]:
+                            asyncio.create_task(server.interrupt(thread_id, current["turn_id"]))
                 else:
                     raise ValueError("Capability is not enabled")
                 with self.db.transaction() as conn:

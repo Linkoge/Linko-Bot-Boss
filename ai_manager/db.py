@@ -51,6 +51,12 @@ CREATE TABLE IF NOT EXISTS messages(
 CREATE INDEX IF NOT EXISTS tasks_queue ON tasks(status, priority, created_at);
 CREATE INDEX IF NOT EXISTS events_execution ON events(execution_id, seq);
 CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id,created_at);
+CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, request_key TEXT UNIQUE NOT NULL,
+ project_id TEXT NOT NULL REFERENCES projects(id), goal TEXT NOT NULL, status TEXT NOT NULL,
+ proposal TEXT NOT NULL DEFAULT '', execution_id TEXT, created_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS verification_results(id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
+ execution_id TEXT NOT NULL, passed INTEGER NOT NULL, evidence TEXT NOT NULL, created_at REAL NOT NULL);
+INSERT OR IGNORE INTO schema_version VALUES(2);
 """
 
 

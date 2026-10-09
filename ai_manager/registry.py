@@ -45,6 +45,8 @@ class Registry:
         existing = self.db.one("SELECT * FROM projects WHERE path=?", (str(path),))
         if existing:
             return existing
+        if self.db.setting("freeze_projects_until", 0) > time.time():
+            raise ValueError("New project registrations are paused by the owner")
         project_id, now = new_id(), time.time()
         with self.db.transaction() as conn:
             conn.execute(
@@ -84,7 +86,10 @@ class Registry:
             if depth > 3 or not path.is_dir() or path.is_symlink():
                 return
             if (path / ".git").exists():
-                found.append(self.add(path))
+                if self.db.setting("freeze_projects_until", 0) <= time.time() or self.db.one(
+                    "SELECT id FROM projects WHERE path=?", (str(path.resolve()),)
+                ):
+                    found.append(self.add(path))
                 return
             for child in sorted(path.iterdir()):
                 if not child.name.startswith(".") and child.name not in skip:

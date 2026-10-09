@@ -20,6 +20,7 @@ class Chat:
     def __init__(self, db: Database, registry: Registry, server: AppServer):
         self.db, self.registry, self.server = db, registry, server
         self.jobs = {}
+        self.action_handler = None
         self.workspace = db.path.parent / "chat-workspace"
         self.workspace.mkdir(exist_ok=True, mode=0o700)
 
@@ -121,9 +122,21 @@ class Chat:
     async def _run(self, execution_id, response_id, conversation, content, route):
         thread_id, output, now = None, "", time.monotonic()
         try:
+            from .orchestration import MANAGER_TOOL
+
             thread_id = await self.server.thread(
-                self.workspace, MANAGER_INSTRUCTIONS, conversation["thread_id"], route["model"]
+                self.workspace,
+                MANAGER_INSTRUCTIONS,
+                conversation["thread_id"],
+                route["model"],
+                dynamic_tools=[MANAGER_TOOL] if self.action_handler else None,
             )
+            if self.action_handler:
+
+                async def action(params):
+                    return await self.action_handler(conversation["project_id"], params)
+
+                self.server.tool_handlers[thread_id] = action
             queue = asyncio.Queue()
             self.server.queues[thread_id] = queue
             with self.db.transaction() as conn:
@@ -208,6 +221,7 @@ class Chat:
         finally:
             if thread_id:
                 self.server.queues.pop(thread_id, None)
+                self.server.tool_handlers.pop(thread_id, None)
 
     def _finish(self, execution_id, response_id, status, error, output, start):
         with self.db.transaction() as conn:

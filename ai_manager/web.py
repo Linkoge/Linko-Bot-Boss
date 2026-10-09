@@ -1,4 +1,5 @@
 import asyncio
+import fcntl
 import hmac
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -15,6 +16,7 @@ from .chat import ROLES, Chat
 from .codex import AppServer, CodexError
 from .config import Settings
 from .db import Database
+from .orchestration import Planner, Scheduler, Verifier
 from .registry import Registry
 from .tasks import Tasks
 from .workers import Workers
@@ -83,6 +85,23 @@ class ResumeBody(BaseModel):
     revision: int
 
 
+class GoalBody(BaseModel):
+    project_id: str
+    goal: str = Field(min_length=1, max_length=10000)
+    request_key: str = Field(min_length=8, max_length=100)
+
+
+class SchedulerBody(BaseModel):
+    enabled: bool
+    project_id: str | None = None
+    limit: int | None = Field(default=None, ge=1, le=100)
+    max_workers: int = Field(default=2, ge=1, le=8)
+
+
+class VerificationCommands(BaseModel):
+    commands: list[list[str]] = Field(max_length=10)
+
+
 def create_app(settings: Settings | None = None, server=None):
     settings = settings or Settings()
     settings.prepare()
@@ -90,22 +109,36 @@ def create_app(settings: Settings | None = None, server=None):
     registry, tasks, auth = Registry(db, settings.project_roots), Tasks(db), Auth(db, settings)
     chat = Chat(db, registry, server or AppServer(settings))
     workers = Workers(db, registry, settings)
+    planner, verifier = Planner(db, registry, settings), Verifier(db, registry, settings)
+    scheduler = Scheduler(db, registry, settings, workers, verifier, planner)
+    chat.action_handler = scheduler.manager_action
 
     @asynccontextmanager
     async def lifespan(app):
+        lock_file = (settings.data_dir / "manager.lock").open("a")
+        try:
+            fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            lock_file.close()
+            raise RuntimeError("Another manager instance owns this data directory")
         auth.bootstrap()
         chat.recover()
         workers.recover()
         registry.discover()
+        settings.max_workers = db.setting("max_workers", settings.max_workers)
+        scheduler.start()
         try:
             yield
         finally:
+            await scheduler.close()
             await workers.close()
             await chat.close()
+            lock_file.close()
 
     app = FastAPI(title="AI Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
     app.state.workers = workers
+    app.state.scheduler = scheduler
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
     @app.middleware("http")
@@ -211,7 +244,7 @@ def create_app(settings: Settings | None = None, server=None):
             "recommendation": "Focus on fewer active projects"
             if sum(p["status"] == "active" for p in projects) > 3
             else "Continue the highest priority unblocked task",
-            "automation_enabled": False,
+            "automation_enabled": db.setting("scheduler_enabled", False),
         }
 
     @app.post("/api/projects/discover", dependencies=[Depends(require_owner)])
@@ -250,6 +283,36 @@ def create_app(settings: Settings | None = None, server=None):
     @app.post("/api/tasks/{task_id}/start", dependencies=[Depends(require_owner)])
     async def start_task(task_id: str):
         return await workers.start(task_id)
+
+    @app.post("/api/goals", dependencies=[Depends(require_owner)])
+    async def goal(body: GoalBody):
+        return await planner.plan(body.project_id, body.goal, body.request_key)
+
+    @app.put("/api/scheduler", dependencies=[Depends(require_owner)])
+    def configure_scheduler(body: SchedulerBody):
+        if body.project_id:
+            registry.get(body.project_id)
+        db.set_setting("scheduler_scope", body.project_id)
+        db.set_setting("scheduler_batch", {"limit": body.limit, "task_ids": []})
+        db.set_setting("scheduler_enabled", body.enabled)
+        db.set_setting("max_workers", body.max_workers)
+        settings.max_workers = body.max_workers
+        return {"configured": True}
+
+    @app.get("/api/projects/{project_id}/verification", dependencies=[Depends(require_owner)])
+    def get_verification(project_id: str):
+        registry.get(project_id)
+        return {"commands": db.setting(f"verification_commands:{project_id}", [])}
+
+    @app.put("/api/projects/{project_id}/verification", dependencies=[Depends(require_owner)])
+    def verification_commands(project_id: str, body: VerificationCommands):
+        registry.get(project_id)
+        if any(
+            not command or len(command) > 30 or any(len(arg) > 1000 for arg in command) for command in body.commands
+        ):
+            raise ValueError("Invalid verification command")
+        db.set_setting(f"verification_commands:{project_id}", body.commands)
+        return {"updated": True, "sandbox": "No host home or network; system runtime and workspace only"}
 
     @app.post("/api/tasks/{task_id}/resume", dependencies=[Depends(require_owner)])
     async def resume_task(task_id: str, body: ResumeBody):
@@ -334,6 +397,9 @@ def create_app(settings: Settings | None = None, server=None):
             "global_instructions": db.setting("global_instructions", ""),
             "max_workers": settings.max_workers,
             "project_roots": [str(p) for p in settings.project_roots],
+            "scheduler_enabled": db.setting("scheduler_enabled", False),
+            "scheduler_scope": db.setting("scheduler_scope", None),
+            "scheduler_batch": db.setting("scheduler_batch", {}),
         }
 
     @app.put("/api/settings/instructions", dependencies=[Depends(require_owner)])

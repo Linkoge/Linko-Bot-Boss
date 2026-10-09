@@ -42,3 +42,14 @@ Updated observation: approved execution provides host runtime access. Read-only 
 - A fresh worker process resumed the same persisted thread and isolated workspace and read the expected marker again. Evidence: scripts/smoke_worker.py.
 - Logical agent, thread/turn, process start identity, branch/base commit, workspace, output, model/effort, usage, latency and errors persist. Two-worker cap and one active task per project enforced transactionally. Leases, interruption and restart recovery distinguish confirmed pause from unknown outcomes.
 - Start/resume/interrupt/cancel controls and monitor added. Clones use committed baselines; uncommitted source changes remain untouched. Capabilities initially permit read/list/progress only. Next: Stage 4 planning, scheduling and independent verification; policy-gated edit/test capabilities follow in Stage 5.
+
+
+## Stage 4 verified checkpoint
+
+- Eighteen tests passed: atomic/idempotent plans, dependency validation, scoped management actions, project registration freeze, portfolio priority and limited scheduling, sandbox test evidence and independent file inspection.
+- Real subscription end-to-end acceptance passed: planning role created one task, scheduler assigned it, worker read/checkpointed, existing unittest ran in bubblewrap, independent verification role inspected files and approved acceptance. Task completed with a durable verification record and checkpoint.
+- The first real review correctly blocked completion because the review input omitted persisted progress-checkpoint evidence. Added actual capability audit and workspace status; the rerun passed. Never weakened the verification gate.
+- Task completion, evidence, checkpoint and STATE memory update now commit atomically. Generated Markdown is a recoverable projection. Single-manager data-directory lock prevents a second service from disturbing live work.
+- Conversational manager_action supports explicit delegated planning, prioritization, safe-checkpoint pause, project resume, scoped completion batches and temporary freeze of new projects. Cross-project actions require All Projects context. Brainstorming stays conversational.
+- Automatic scheduler is owner-controlled, defaults paused, respects dependencies/priorities and two-worker cap. Verification requires owner-configured trusted commands; missing evidence blocks instead of claiming completion.
+- Next: Stage 5 exact-operation approvals, configurable policies, write/test/commit controls, notifications and documented enforcement boundaries.
