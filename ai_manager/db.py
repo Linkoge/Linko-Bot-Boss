@@ -1,10 +1,9 @@
-from contextlib import contextmanager
 import json
-from pathlib import Path
 import sqlite3
 import time
 import uuid
-
+from contextlib import contextmanager
+from pathlib import Path
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
@@ -99,8 +98,10 @@ class Database:
 
     @staticmethod
     def event(conn, kind: str, payload: dict, project_id=None, task_id=None, execution_id=None):
-        conn.execute("INSERT INTO events(kind,project_id,task_id,execution_id,payload,created_at) VALUES(?,?,?,?,?,?)",
-                     (kind, project_id, task_id, execution_id, json.dumps(payload), time.time()))
+        conn.execute(
+            "INSERT INTO events(kind,project_id,task_id,execution_id,payload,created_at) VALUES(?,?,?,?,?,?)",
+            (kind, project_id, task_id, execution_id, json.dumps(payload), time.time()),
+        )
 
     def setting(self, key: str, default=None):
         row = self.one("SELECT value FROM settings WHERE key=?", (key,))
@@ -108,7 +109,10 @@ class Database:
 
     def set_setting(self, key: str, value):
         with self.transaction() as conn:
-            conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (key, json.dumps(value)))
+            conn.execute(
+                "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, json.dumps(value)),
+            )
             self.event(conn, "settings.changed", {"key": key})
 
     def backup(self, destination: Path):

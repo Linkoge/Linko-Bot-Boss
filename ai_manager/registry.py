@@ -1,18 +1,22 @@
 import json
-from pathlib import Path
 import subprocess
 import time
+from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 from .db import Database, new_id
-
 
 MEMORY_NAMES = ("PROJECT.md", "STATE.md", "TASKS.md", "DECISIONS.md", "HANDOFF.md")
 
 
 def git(path: Path, *args: str) -> str:
-    result = subprocess.run(["git", "-C", str(path), *args], capture_output=True, text=True, timeout=15,
-                            env={"PATH": "/usr/bin:/bin", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"})
+    result = subprocess.run(
+        ["git", "-C", str(path), *args],
+        capture_output=True,
+        text=True,
+        timeout=15,
+        env={"PATH": "/usr/bin:/bin", "GIT_OPTIONAL_LOCKS": "0", "GIT_TERMINAL_PROMPT": "0"},
+    )
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
@@ -43,13 +47,30 @@ class Registry:
             return existing
         project_id, now = new_id(), time.time()
         with self.db.transaction() as conn:
-            conn.execute("INSERT INTO projects(id,name,path,repository,agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
-                         (project_id, name or path.name, str(path), safe_remote(git(path, "remote", "get-url", "origin")), f"project-{project_id[:12]}", now, now))
+            conn.execute(
+                "INSERT INTO projects(id,name,path,repository,agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                (
+                    project_id,
+                    name or path.name,
+                    str(path),
+                    safe_remote(git(path, "remote", "get-url", "origin")),
+                    f"project-{project_id[:12]}",
+                    now,
+                    now,
+                ),
+            )
             for filename in MEMORY_NAMES:
                 source = path / filename
                 # Existing files are read only; symlinks cannot bring private files into memory.
-                content = source.read_text(errors="replace")[:24000] if source.is_file() and not source.is_symlink() else f"# {filename[:-3].title()} — {name or path.name}\n\nNo verified information recorded yet.\n"
-                conn.execute("INSERT INTO memory(project_id,name,content,updated_at) VALUES(?,?,?,?)", (project_id, filename, content, now))
+                content = (
+                    source.read_text(errors="replace")[:24000]
+                    if source.is_file() and not source.is_symlink()
+                    else f"# {filename[:-3].title()} — {name or path.name}\n\nNo verified information recorded yet.\n"
+                )
+                conn.execute(
+                    "INSERT INTO memory(project_id,name,content,updated_at) VALUES(?,?,?,?)",
+                    (project_id, filename, content, now),
+                )
             self.db.event(conn, "project.registered", {"path": str(path)}, project_id)
         self.export_memory(project_id)
         return self.get(project_id)
@@ -58,6 +79,7 @@ class Registry:
         found = []
         # Bounded traversal skips dependencies, build artifacts and worktrees under hidden dirs.
         skip = {"node_modules", "build", "dist", "vendor", "__pycache__"}
+
         def visit(path, depth):
             if depth > 3 or not path.is_dir() or path.is_symlink():
                 return
@@ -67,6 +89,7 @@ class Registry:
             for child in sorted(path.iterdir()):
                 if not child.name.startswith(".") and child.name not in skip:
                     visit(child, depth + 1)
+
         for root in self.roots:
             if root.is_dir():
                 visit(root, 0)
@@ -89,8 +112,10 @@ class Registry:
             raise ValueError("Invalid project status")
         with self.db.transaction() as conn:
             assignments = ",".join(f"{key}=?" for key in changes)
-            cursor = conn.execute(f"UPDATE projects SET {assignments},revision=revision+1,updated_at=? WHERE id=? AND revision=?",
-                                  (*changes.values(), time.time(), project_id, revision))
+            cursor = conn.execute(
+                f"UPDATE projects SET {assignments},revision=revision+1,updated_at=? WHERE id=? AND revision=?",
+                (*changes.values(), time.time(), project_id, revision),
+            )
             if cursor.rowcount != 1:
                 raise ValueError("Project changed; refresh before editing")
             self.db.event(conn, "project.updated", changes, project_id)
@@ -104,8 +129,10 @@ class Registry:
         if name not in MEMORY_NAMES or len(content) > 100000:
             raise ValueError("Invalid memory document")
         with self.db.transaction() as conn:
-            cursor = conn.execute("UPDATE memory SET content=?,revision=revision+1,updated_at=? WHERE project_id=? AND name=? AND revision=?",
-                                  (content, time.time(), project_id, name, revision))
+            cursor = conn.execute(
+                "UPDATE memory SET content=?,revision=revision+1,updated_at=? WHERE project_id=? AND name=? AND revision=?",
+                (content, time.time(), project_id, name, revision),
+            )
             if cursor.rowcount != 1:
                 raise ValueError("Memory changed; refresh before editing")
             self.db.event(conn, "memory.updated", {"name": name, "revision": revision + 1}, project_id)
@@ -125,11 +152,17 @@ class Registry:
     def reconcile(self, project_id):
         project = self.get(project_id)
         path = self.allowed_path(project["path"])
-        result = {"head": git(path, "rev-parse", "HEAD"), "branch": git(path, "branch", "--show-current"),
-                  "changes": git(path, "status", "--porcelain"),
-                  "commits": git(path, "log", "-8", "--format=%h %s").splitlines(),
-                  "docs": [name for name in MEMORY_NAMES if (path / name).is_file()],
-                  "executions": self.db.all("SELECT id,pid,process_start,status,thread_id,turn_id FROM executions WHERE project_id=? AND finished_at IS NULL", (project_id,))}
+        result = {
+            "head": git(path, "rev-parse", "HEAD"),
+            "branch": git(path, "branch", "--show-current"),
+            "changes": git(path, "status", "--porcelain"),
+            "commits": git(path, "log", "-8", "--format=%h %s").splitlines(),
+            "docs": [name for name in MEMORY_NAMES if (path / name).is_file()],
+            "executions": self.db.all(
+                "SELECT id,pid,process_start,status,thread_id,turn_id FROM executions WHERE project_id=? AND finished_at IS NULL",
+                (project_id,),
+            ),
+        }
         # Observation only: a disconnected transport does not prove a process has exited.
         for execution in result["executions"]:
             execution["process_observed"] = bool(execution["pid"] and Path(f"/proc/{execution['pid']}").exists())
@@ -142,6 +175,15 @@ class Registry:
             raise ValueError("Verified checkpoints require evidence and summary")
         checkpoint_id = new_id()
         with self.db.transaction() as conn:
-            conn.execute("INSERT INTO checkpoints VALUES(?,?,?,?,?,?,?)", (checkpoint_id, project_id, task_id, commit_ref, summary, json.dumps(evidence), time.time()))
-            self.db.event(conn, "checkpoint.recorded", {"id": checkpoint_id, "summary": summary, "evidence": evidence}, project_id, task_id)
+            conn.execute(
+                "INSERT INTO checkpoints VALUES(?,?,?,?,?,?,?)",
+                (checkpoint_id, project_id, task_id, commit_ref, summary, json.dumps(evidence), time.time()),
+            )
+            self.db.event(
+                conn,
+                "checkpoint.recorded",
+                {"id": checkpoint_id, "summary": summary, "evidence": evidence},
+                project_id,
+                task_id,
+            )
         return checkpoint_id

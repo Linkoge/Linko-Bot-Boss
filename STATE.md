@@ -13,6 +13,8 @@
 
 Host service installation, private Tailscale exposure and reboot verification require access to the actual VM runtime. ChatGPT account model access must be tested through App Server, not assumed from the catalog or subscription description.
 
+Updated observation: approved execution provides host runtime access. Read-only checks confirmed user systemd running, existing tmux sessions intact, Tailscale Running/online (`codex-server.tail5ebb9d.ts.net`), port 8787 free. Existing private Serve ports 443 and 3000 route to Chatwoot and must be preserved. A minimal bubblewrap OS namespace probe succeeded. No network listener changed yet.
+
 ## Stage 1 verified checkpoint
 
 - Four foundation tests passed (Python 3.12.15): discovery/source preservation, stale revisions/path boundaries, competing durable task claims/dependencies/verification, restart and backup restore integrity.
@@ -20,3 +22,14 @@ Host service installation, private Tailscale exposure and reboot verification re
 - Private generated memory adapts existing documentation without modifying project source. SQLite remains authoritative; revision-checked memory edits and locked atomic Markdown exports prevent stale overwrite.
 - Structured tasks, dependencies, execution metadata, verification checkpoints and event log persisted. Expired leases block for manual/process reconciliation.
 - Stage 1 acceptance passed. Next: Stage 2 authentication, dashboard and verified App Server chat.
+
+## Stage 2 verified checkpoint
+
+- Nine backend tests passed, Ruff checks passed, JavaScript syntax check passed. Web tests require approved host execution because the sandbox stalls the test client's thread portal; two hung test runs were identified and stopped, leaving unrelated sessions intact.
+- Argon2id owner passwords; one-use local setup token; hashed expiring/revocable session tokens; HttpOnly/SameSite cookies; CSRF and origin/host checks; durable login throttling; restrictive CSP. No default password or public signup.
+- Responsive dashboard, project selector, scoped persistent history/search, durable SSE, settings for five validated model roles, registry and memory editing, task creation and execution monitor.
+- Real App Server initialized against Codex 0.161.0 using existing ChatGPT login. Catalog reported GPT-6.1 Sol and other installed models. Verified GPT-6.1 Sol/low through an actual completed streamed `MANAGER_READY` turn (~4.3s), then a new process resumed the same thread and completed `RESUME_READY`. Thread/turn IDs, output, latency and token usage persisted in isolated smoke-test DB.
+- Other catalog models/efforts are selectable but not claimed as inference-verified. No separate API key/provider introduced. Chat tools, connectors, plugins and automatic subagent effort disabled; unknown capability requests fail closed.
+- Context is bounded to selected summary/tasks/memory snippets; Codex native persistent compaction supported and lifecycle events recorded.
+- Playwright verified one-time owner setup/login, ten-project dashboard, project switching and memory. Desktop 1440×1000 and Android 393×851 screenshots inspected; no page errors/horizontal overflow.
+- Temporary loopback server started on 8787, awaiting owner setup. No private VPN route installed yet. Next: Stage 3 isolated task workers and control/recovery tests.

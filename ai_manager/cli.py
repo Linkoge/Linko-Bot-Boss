@@ -36,7 +36,9 @@ def main():
         print(json.dumps(registry.discover(), indent=2))
     elif args.command == "overview":
         for project in registry.list():
-            print(f"{project['id'][:8]}  {project['status']:8}  {project['priority']:3}  {project['name']}  {project['path']}")
+            print(
+                f"{project['id'][:8]}  {project['status']:8}  {project['priority']:3}  {project['name']}  {project['path']}"
+            )
     elif args.command == "add":
         print(json.dumps(registry.add(args.path), indent=2))
     elif args.command == "reconcile":
@@ -46,6 +48,7 @@ def main():
         print("Verified backup created")
     elif args.command == "setup-owner":
         from .auth import Auth
+
         username = input("Owner username: ").strip()
         password = getpass.getpass("Password (at least 12 characters): ")
         if password != getpass.getpass("Repeat password: "):
@@ -54,7 +57,10 @@ def main():
         print("Owner account created; web signup is disabled")
     elif args.command == "serve":
         import uvicorn
-        uvicorn.run("ai_manager.web:create_app", factory=True, host="127.0.0.1", port=8787, workers=1, proxy_headers=False)
+
+        uvicorn.run(
+            "ai_manager.web:create_app", factory=True, host="127.0.0.1", port=8787, workers=1, proxy_headers=False
+        )
 
 
 if __name__ == "__main__":

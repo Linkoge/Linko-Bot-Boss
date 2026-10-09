@@ -1,0 +1,322 @@
+import asyncio
+import hmac
+from contextlib import asynccontextmanager
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+from starlette.middleware.trustedhost import TrustedHostMiddleware
+
+from .auth import Auth
+from .chat import ROLES, Chat
+from .codex import AppServer, CodexError
+from .config import Settings
+from .db import Database
+from .registry import Registry
+from .tasks import Tasks
+
+
+class LoginBody(BaseModel):
+    username: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=1, max_length=1024)
+
+
+class SetupBody(LoginBody):
+    token: str = Field(min_length=20, max_length=100)
+
+
+class ProjectBody(BaseModel):
+    path: str = Field(max_length=4096)
+    name: str | None = Field(default=None, max_length=200)
+
+
+class ProjectUpdate(BaseModel):
+    revision: int
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = Field(default=None, max_length=5000)
+    objective: str | None = Field(default=None, max_length=5000)
+    success_criteria: str | None = Field(default=None, max_length=5000)
+    instructions: str | None = Field(default=None, max_length=10000)
+    priority: int | None = Field(default=None, ge=0, le=100)
+    status: str | None = None
+
+
+class MemoryBody(BaseModel):
+    revision: int
+    content: str = Field(max_length=100000)
+
+
+class TaskBody(BaseModel):
+    project_id: str
+    description: str = Field(min_length=1, max_length=10000)
+    acceptance: str = Field(min_length=1, max_length=10000)
+    priority: int = Field(default=50, ge=0, le=100)
+    dependencies: list[str] = Field(default_factory=list, max_length=50)
+    verification: str = Field(default="", max_length=5000)
+    permissions: list[str] = Field(default_factory=list, max_length=30)
+
+
+class MessageBody(BaseModel):
+    project_id: str | None = None
+    content: str = Field(min_length=1, max_length=24000)
+
+
+class RouteBody(BaseModel):
+    model: str
+    effort: str
+
+
+class InstructionsBody(BaseModel):
+    content: str = Field(max_length=10000)
+
+
+def create_app(settings: Settings | None = None, server=None):
+    settings = settings or Settings()
+    settings.prepare()
+    db = Database(settings.db_path)
+    registry, tasks, auth = Registry(db, settings.project_roots), Tasks(db), Auth(db, settings)
+    chat = Chat(db, registry, server or AppServer(settings))
+
+    @asynccontextmanager
+    async def lifespan(app):
+        auth.bootstrap()
+        chat.recover()
+        registry.discover()
+        try:
+            yield
+        finally:
+            await chat.close()
+
+    app = FastAPI(title="AI Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
+    app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
+
+    @app.middleware("http")
+    async def browser_security(request: Request, call_next):
+        if request.method not in {"GET", "HEAD", "OPTIONS"}:
+            origin = request.headers.get("origin")
+            if origin and urlsplit(origin).netloc != request.headers.get("host"):
+                return JSONResponse({"detail": "Origin rejected"}, status_code=403)
+            if request.url.path not in {"/api/login", "/api/setup"}:
+                session = auth.session(request.cookies.get("ai_manager_session"))
+                if not session:
+                    return JSONResponse({"detail": "Login required"}, status_code=401)
+                if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
+                    return JSONResponse({"detail": "CSRF token required"}, status_code=403)
+        response = await call_next(request)
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        )
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    def require_owner(request: Request):
+        session = auth.session(request.cookies.get("ai_manager_session"))
+        if not session:
+            raise HTTPException(401, "Login required")
+        return session
+
+    @app.exception_handler(ValueError)
+    async def invalid(request, error):
+        return JSONResponse({"detail": str(error)}, status_code=409)
+
+    @app.exception_handler(CodexError)
+    async def unavailable(request, error):
+        return JSONResponse({"detail": str(error)}, status_code=503)
+
+    @app.get("/api/auth-status")
+    def auth_status(request: Request):
+        session = auth.session(request.cookies.get("ai_manager_session"))
+        return {
+            "setup_required": not bool(db.one("SELECT id FROM owner")),
+            "authenticated": bool(session),
+            "csrf": session["csrf"] if session else None,
+        }
+
+    @app.post("/api/setup")
+    async def setup(body: SetupBody, request: Request):
+        # Bootstrap token checks are also throttled, with no remote password reset path.
+        import time
+
+        ip = request.client.host if request.client else "unknown"
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM login_attempts WHERE at < ?", (time.time() - 900,))
+            if conn.execute("SELECT count(*) FROM login_attempts").fetchone()[0] >= 10:
+                raise HTTPException(429, "Too many setup attempts")
+            conn.execute("INSERT INTO login_attempts VALUES(?,?)", (ip, time.time()))
+        await asyncio.to_thread(auth.setup, body.username, body.password, body.token)
+        return {"created": True}
+
+    @app.post("/api/login")
+    async def login(body: LoginBody, request: Request):
+        try:
+            token, csrf = await asyncio.to_thread(
+                auth.login, body.username, body.password, request.client.host if request.client else "unknown"
+            )
+        except ValueError as error:
+            raise HTTPException(429 if "Too many" in str(error) else 401, str(error)) from error
+        response = JSONResponse({"csrf": csrf})
+        response.set_cookie(
+            "ai_manager_session",
+            token,
+            httponly=True,
+            secure=settings.secure_cookie,
+            samesite="strict",
+            max_age=settings.session_seconds,
+            path="/",
+        )
+        return response
+
+    @app.post("/api/logout", dependencies=[Depends(require_owner)])
+    def logout(request: Request):
+        auth.logout(request.cookies.get("ai_manager_session"))
+        response = JSONResponse({"logged_out": True})
+        response.delete_cookie("ai_manager_session", path="/")
+        return response
+
+    @app.post("/api/sessions/revoke", dependencies=[Depends(require_owner)])
+    def revoke_sessions():
+        with db.transaction() as conn:
+            conn.execute("DELETE FROM sessions")
+            db.event(conn, "owner.sessions_revoked", {})
+        return {"revoked": True}
+
+    @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
+    def portfolio():
+        projects = registry.list()
+        return {
+            "projects": projects,
+            "tasks": tasks.list(),
+            "executions": db.all("SELECT * FROM executions ORDER BY started_at DESC LIMIT 50"),
+            "checkpoints": db.all("SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT 20"),
+            "recommendation": "Focus on fewer active projects"
+            if sum(p["status"] == "active" for p in projects) > 3
+            else "Continue the highest priority unblocked task",
+            "automation_enabled": False,
+        }
+
+    @app.post("/api/projects/discover", dependencies=[Depends(require_owner)])
+    def discover():
+        return registry.discover()
+
+    @app.post("/api/projects", dependencies=[Depends(require_owner)])
+    def add_project(body: ProjectBody):
+        return registry.add(body.path, body.name)
+
+    @app.patch("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
+    def update_project(project_id: str, body: ProjectUpdate):
+        return registry.update(project_id, body.revision, body.model_dump(exclude={"revision"}, exclude_none=True))
+
+    @app.get("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
+    def detail(project_id: str):
+        return {
+            "project": registry.get(project_id),
+            "memory": registry.memory(project_id),
+            "tasks": tasks.list(project_id),
+            "checkpoint": db.one(
+                "SELECT * FROM checkpoints WHERE project_id=? ORDER BY created_at DESC LIMIT 1", (project_id,)
+            ),
+            "observation": registry.reconcile(project_id),
+        }
+
+    @app.put("/api/projects/{project_id}/memory/{name}", dependencies=[Depends(require_owner)])
+    def update_memory(project_id: str, name: str, body: MemoryBody):
+        registry.update_memory(project_id, name, body.content, body.revision)
+        return {"updated": True}
+
+    @app.post("/api/tasks", dependencies=[Depends(require_owner)])
+    def add_task(body: TaskBody):
+        return tasks.add(**body.model_dump())
+
+    @app.get("/api/history", dependencies=[Depends(require_owner)])
+    def history(project_id: str | None = None, search: str = ""):
+        return chat.history(project_id, search)
+
+    @app.post("/api/chat", dependencies=[Depends(require_owner)])
+    async def submit(body: MessageBody):
+        return await chat.submit(body.project_id, body.content)
+
+    @app.post("/api/executions/{execution_id}/interrupt", dependencies=[Depends(require_owner)])
+    async def interrupt(execution_id: str):
+        await chat.interrupt(execution_id)
+        return {"requested": True}
+
+    @app.get("/api/executions/{execution_id}/events", dependencies=[Depends(require_owner)])
+    async def execution_events(execution_id: str, request: Request, after: int = 0):
+        if not db.one("SELECT id FROM executions WHERE id=?", (execution_id,)):
+            raise HTTPException(404, "Unknown execution")
+        header = request.headers.get("last-event-id", "0")
+        cursor = max(after, int(header) if header.isdecimal() else 0)
+
+        async def stream():
+            nonlocal cursor
+            while not await request.is_disconnected():
+                rows = db.all(
+                    "SELECT * FROM events WHERE execution_id=? AND seq>? ORDER BY seq LIMIT 100", (execution_id, cursor)
+                )
+                for row in rows:
+                    cursor = row["seq"]
+                    yield f"id: {cursor}\nevent: {row['kind']}\ndata: {row['payload']}\n\n"
+                execution = db.one("SELECT finished_at FROM executions WHERE id=?", (execution_id,))
+                if execution["finished_at"] and len(rows) < 100:
+                    yield "event: stream.end\ndata: {}\n\n"
+                    return
+                yield ": heartbeat\n\n"
+                await asyncio.sleep(0.5)
+
+        return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+
+    @app.get("/api/models", dependencies=[Depends(require_owner)])
+    async def models():
+        routes = await chat.routes()
+        return {
+            "models": chat.server.catalog,
+            "routes": routes,
+            "account_type": chat.server.account_type,
+            "catalog_is_entitlement_check": False,
+            "verified_usage": db.all(
+                "SELECT model,effort,status,latency_ms,usage FROM executions WHERE finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 30"
+            ),
+        }
+
+    @app.put("/api/models/{role}", dependencies=[Depends(require_owner)])
+    async def model_route(role: str, body: RouteBody):
+        if role not in ROLES:
+            raise ValueError("Unknown model role")
+        await chat.server.start()
+        route = chat.server.route(body.model, body.effort)
+        routes = db.setting("model_routes", {})
+        routes[role] = route
+        db.set_setting("model_routes", routes)
+        return route
+
+    @app.get("/api/settings", dependencies=[Depends(require_owner)])
+    def get_settings():
+        return {
+            "global_instructions": db.setting("global_instructions", ""),
+            "max_workers": settings.max_workers,
+            "project_roots": [str(p) for p in settings.project_roots],
+        }
+
+    @app.put("/api/settings/instructions", dependencies=[Depends(require_owner)])
+    def global_instructions(body: InstructionsBody):
+        db.set_setting("global_instructions", body.content)
+        return {"updated": True}
+
+    @app.get("/api/audit", dependencies=[Depends(require_owner)])
+    def audit(after: int = 0):
+        return db.all("SELECT * FROM events WHERE seq>? ORDER BY seq DESC LIMIT 100", (after,))
+
+    static = Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=static), name="static")
+
+    @app.get("/")
+    def index():
+        return FileResponse(static / "index.html")
+
+    return app
