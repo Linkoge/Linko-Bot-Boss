@@ -6,8 +6,8 @@ Permanent requirements: [MASTER_SPEC.md](MASTER_SPEC.md). Advance only after the
 | --- | --- | --- |
 | 1. Inventory and foundation | Verified | Real repository discovery, non-destructive registry CRUD, durable memory, reconciliation, transactional task state and restore tests; working CLI overview |
 | 2. Web interface and chat | Verified | Authenticated responsive UI; isolated persistent conversations; real App Server streamed chat; validated role model settings; disconnection/restart tests |
-| 3. Codex integration | In progress | Real task worker launch/resume/interrupt, persistent events and process identity, monitor; worker crash test |
-| 4. Autonomous orchestration | Pending | Goal-to-task planning, dependency scheduling, two-worker cap, leases, worktree isolation, evidence-based verification and uncertain-outcome recovery |
+| 3. Codex integration | Verified | Real task worker launch/resume/interrupt, persistent events and process identity, monitor; worker crash test |
+| 4. Autonomous orchestration | In progress | Goal-to-task planning, dependency scheduling, two-worker cap, leases, worktree isolation, evidence-based verification and uncertain-outcome recovery |
 | 5. Policies and controls | Pending | Durable ALLOW/ASK/DENY and overrides, approvals bound to exact operations, policy audit, verified OS boundary and restricted capabilities, notifications |
 | 6. Production hardening | Pending | Concurrent/recovery/security/restore tests; private Tailscale deployment, service restart and VM reboot verification; operational docs |
 

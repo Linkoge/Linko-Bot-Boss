@@ -58,6 +58,8 @@ class AppServer:
         self.config = safe_config()
         self.catalog = []
         self.account_type = None
+        self.tool_handlers = {}
+        self.tool_jobs = set()
 
     async def start(self):
         async with self.start_lock:
@@ -129,6 +131,11 @@ class AppServer:
             while line := await process.stdout.readline():
                 message = json.loads(line)
                 if "method" in message and "id" in message:
+                    if message["method"] == "item/tool/call":
+                        job = asyncio.create_task(self._tool_call(message))
+                        self.tool_jobs.add(job)
+                        job.add_done_callback(self.tool_jobs.discard)
+                        continue
                     # Unknown sensitive capabilities fail closed. Approval center added separately.
                     if message["method"] in {
                         "item/commandExecution/requestApproval",
@@ -179,7 +186,7 @@ class AppServer:
             raise ValueError("Unsupported reasoning effort; automatic subagent effort is disabled")
         return {"model": candidate["model"], "effort": effort}
 
-    async def thread(self, cwd, instructions, thread_id=None, model=None):
+    async def thread(self, cwd, instructions, thread_id=None, model=None, dynamic_tools=None):
         await self.start()
         params = {
             "cwd": str(cwd),
@@ -193,13 +200,28 @@ class AppServer:
         if thread_id:
             result = await self.request("thread/resume", {**params, "threadId": thread_id, "excludeTurns": True})
         else:
-            result = await self.request("thread/start", {**params, "ephemeral": False})
+            result = await self.request("thread/start", {**params, "ephemeral": False, "dynamicTools": dynamic_tools})
         return result["thread"]["id"]
+
+    async def _tool_call(self, message):
+        params = message.get("params", {})
+        handler = self.tool_handlers.get(params.get("threadId"))
+        try:
+            if not handler:
+                raise ValueError("No enabled capabilities for this thread")
+            content = await handler(params)
+            response = {"success": True, "contentItems": [{"type": "inputText", "text": json.dumps(content)}]}
+        except Exception as error:
+            response = {"success": False, "contentItems": [{"type": "inputText", "text": str(error)[:2000]}]}
+        await self.send({"id": message["id"], "result": response})
 
     async def interrupt(self, thread_id, turn_id):
         return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id})
 
     async def close(self):
+        for job in list(self.tool_jobs):
+            job.cancel()
+        await asyncio.gather(*list(self.tool_jobs), return_exceptions=True)
         if self.process and self.process.returncode is None:
             # Terminate only the dedicated process group this instance created.
             try:

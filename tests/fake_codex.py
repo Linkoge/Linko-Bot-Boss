@@ -24,7 +24,7 @@ class FakeServer(AppServer):
     async def start(self):
         pass
 
-    async def thread(self, cwd, instructions, thread_id=None, model=None):
+    async def thread(self, cwd, instructions, thread_id=None, model=None, dynamic_tools=None):
         return thread_id or f"thread-{len(self.prompts)}"
 
     async def request(self, method, params, timeout=30):

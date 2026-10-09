@@ -73,7 +73,11 @@ function renderDashboard(){
 function renderTasks(){
   const tasks=filteredTasks();$('task-count').textContent=tasks.filter(t=>!['completed','cancelled'].includes(t.status)).length;$('task-list').replaceChildren();
   if(!tasks.length)$('task-list').append(element('p','No queued tasks. Add a concrete goal and acceptance criteria.','empty'));
-  for(const t of tasks){const row=element('article',undefined,'task-row');row.append(element('h3',t.description));const meta=element('div',undefined,'row-meta');meta.append(element('span',t.status,`badge ${t.status}`),element('span',projectName(t.project_id)),element('span',`Priority ${t.priority}`),element('span',`#${t.id.slice(0,8)}`));row.append(meta,element('p',`Acceptance: ${t.acceptance}`));if(t.blocker)row.append(element('p',t.blocker));$('task-list').append(row);}
+  for(const t of tasks){const row=element('article',undefined,'task-row');row.append(element('h3',t.description));const meta=element('div',undefined,'row-meta');meta.append(element('span',t.status,`badge ${t.status}`),element('span',projectName(t.project_id)),element('span',`Priority ${t.priority}`),element('span',`#${t.id.slice(0,8)}`));row.append(meta,element('p',`Acceptance: ${t.acceptance}`));if(t.blocker)row.append(element('p',t.blocker));
+    if(t.status==='pending'){const start=element('button','Start read-only worker');start.onclick=action(async()=>{await api(`/api/tasks/${t.id}/start`,{method:'POST'});await refresh();notice('Worker started in an isolated workspace.');});row.append(start);}
+    if(['paused','blocked','failed'].includes(t.status)){const resume=element('button','Resume persisted worker');resume.onclick=action(async()=>{await api(`/api/tasks/${t.id}/resume`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();notice('Resuming the persisted thread and workspace.');});row.append(resume);}
+    if(['pending','paused','blocked','failed'].includes(t.status)){const cancel=element('button','Cancel task');cancel.onclick=action(async()=>{await api(`/api/tasks/${t.id}`,{method:'PATCH',body:JSON.stringify({revision:t.revision,status:'cancelled'})});await refresh();});row.append(cancel);}
+    $('task-list').append(row);}
 }
 function renderAgents(){
   $('agent-list').replaceChildren();const executions=filteredExecutions();

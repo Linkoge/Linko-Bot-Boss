@@ -33,3 +33,12 @@ Updated observation: approved execution provides host runtime access. Read-only 
 - Context is bounded to selected summary/tasks/memory snippets; Codex native persistent compaction supported and lifecycle events recorded.
 - Playwright verified one-time owner setup/login, ten-project dashboard, project switching and memory. Desktop 1440×1000 and Android 393×851 screenshots inspected; no page errors/horizontal overflow.
 - Temporary loopback server started on 8787, awaiting owner setup. No private VPN route installed yet. Next: Stage 3 isolated task workers and control/recovery tests.
+
+
+## Stage 3 verified checkpoint
+
+- Fourteen tests pass, including confirmed interruption versus uncertain transport loss, workspace preservation, secret/path/symlink denial and an OS command sandbox check. Standalone local Git clones provide workspace isolation without shared mutable Git admin state. Source repositories remain unchanged.
+- Real GPT-6.1 Sol/medium worker launched in a disposable repository, read README through the controlled manager_workspace capability, recorded reported progress and emitted persisted output. Completion moved the task to verifying, never directly to completed.
+- A fresh worker process resumed the same persisted thread and isolated workspace and read the expected marker again. Evidence: scripts/smoke_worker.py.
+- Logical agent, thread/turn, process start identity, branch/base commit, workspace, output, model/effort, usage, latency and errors persist. Two-worker cap and one active task per project enforced transactionally. Leases, interruption and restart recovery distinguish confirmed pause from unknown outcomes.
+- Start/resume/interrupt/cancel controls and monitor added. Clones use committed baselines; uncommitted source changes remain untouched. Capabilities initially permit read/list/progress only. Next: Stage 4 planning, scheduling and independent verification; policy-gated edit/test capabilities follow in Stage 5.

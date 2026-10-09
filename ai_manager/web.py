@@ -17,6 +17,7 @@ from .config import Settings
 from .db import Database
 from .registry import Registry
 from .tasks import Tasks
+from .workers import Workers
 
 
 class LoginBody(BaseModel):
@@ -73,25 +74,38 @@ class InstructionsBody(BaseModel):
     content: str = Field(max_length=10000)
 
 
+class TaskControl(BaseModel):
+    revision: int
+    status: str
+
+
+class ResumeBody(BaseModel):
+    revision: int
+
+
 def create_app(settings: Settings | None = None, server=None):
     settings = settings or Settings()
     settings.prepare()
     db = Database(settings.db_path)
     registry, tasks, auth = Registry(db, settings.project_roots), Tasks(db), Auth(db, settings)
     chat = Chat(db, registry, server or AppServer(settings))
+    workers = Workers(db, registry, settings)
 
     @asynccontextmanager
     async def lifespan(app):
         auth.bootstrap()
         chat.recover()
+        workers.recover()
         registry.discover()
         try:
             yield
         finally:
+            await workers.close()
             await chat.close()
 
     app = FastAPI(title="AI Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
+    app.state.workers = workers
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
     @app.middleware("http")
@@ -233,6 +247,21 @@ def create_app(settings: Settings | None = None, server=None):
     def add_task(body: TaskBody):
         return tasks.add(**body.model_dump())
 
+    @app.post("/api/tasks/{task_id}/start", dependencies=[Depends(require_owner)])
+    async def start_task(task_id: str):
+        return await workers.start(task_id)
+
+    @app.post("/api/tasks/{task_id}/resume", dependencies=[Depends(require_owner)])
+    async def resume_task(task_id: str, body: ResumeBody):
+        return await workers.resume(task_id, body.revision)
+
+    @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
+    def task_control(task_id: str, body: TaskControl):
+        task = tasks.get(task_id)
+        if task["status"] in {"running", "verifying"} or body.status not in {"pending", "paused", "cancelled"}:
+            raise ValueError("Use worker interruption controls for active work; completion requires verification")
+        return tasks.transition(task_id, body.status, body.revision)
+
     @app.get("/api/history", dependencies=[Depends(require_owner)])
     def history(project_id: str | None = None, search: str = ""):
         return chat.history(project_id, search)
@@ -243,7 +272,11 @@ def create_app(settings: Settings | None = None, server=None):
 
     @app.post("/api/executions/{execution_id}/interrupt", dependencies=[Depends(require_owner)])
     async def interrupt(execution_id: str):
-        await chat.interrupt(execution_id)
+        execution = db.one("SELECT task_id FROM executions WHERE id=?", (execution_id,))
+        if execution and execution["task_id"]:
+            await workers.interrupt(execution_id)
+        else:
+            await chat.interrupt(execution_id)
         return {"requested": True}
 
     @app.get("/api/executions/{execution_id}/events", dependencies=[Depends(require_owner)])
