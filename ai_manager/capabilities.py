@@ -122,12 +122,19 @@ class Capabilities:
                 commands = args["commands"]
                 if not commands:
                     raise ValueError("No owner-configured verification commands")
-                result = [
-                    await self.workspace.isolated_test(
-                        command["argv"], cwd=command["cwd"], writable=operation == "install"
-                    )
-                    for command in commands
-                ]
+                if operation == "test":
+                    from .verification_workspace import prepare_copy, run_checked
+
+                    testing = await asyncio.to_thread(prepare_copy, self.settings.data_dir, key, self.workspace)
+                    baseline = git(self.workspace.root, "rev-parse", "HEAD")
+                    result = [
+                        await run_checked(testing, command["argv"], command["cwd"], baseline) for command in commands
+                    ]
+                else:
+                    result = [
+                        await self.workspace.isolated_test(command["argv"], cwd=command["cwd"], writable=True)
+                        for command in commands
+                    ]
                 VerificationCommands(self.db, Registry(self.db, self.settings.project_roots)).assert_current(
                     self.project_id,
                     commands,

@@ -239,9 +239,10 @@ class Workspace:
                     "wall_seconds": timeout,
                 },
             }
-        except (TimeoutError, ValueError, asyncio.CancelledError):
+        finally:
             import signal
 
+            # Scope cleanup is required even when a test exits after spawning detached children.
             cleanup = await asyncio.create_subprocess_exec(
                 "systemctl",
                 "--user",
@@ -251,10 +252,18 @@ class Workspace:
                 stdout=asyncio.subprocess.DEVNULL,
                 stderr=asyncio.subprocess.DEVNULL,
             )
-            await cleanup.wait()
             try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+                await asyncio.wait_for(cleanup.wait(), 5)
+            except TimeoutError:
+                cleanup.kill()
+                await cleanup.wait()
+            if process.returncode is None:
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
             await process.wait()
-            raise
+            try:
+                await asyncio.wait_for(process.communicate(), 5)
+            except TimeoutError:
+                process._transport.close()

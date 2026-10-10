@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import shlex
+import shutil
 import time
 import tomllib
 from pathlib import Path
@@ -11,7 +12,9 @@ from pathlib import Path
 from .workspace import safe_file
 
 ENVIRONMENT = {
-    "id": "bubblewrap-v2",
+    "id": "bubblewrap-v3",
+    "verification_filesystem": "disposable-build-copy/input-hashes-checked",
+    "output_growth_limit_bytes": 536870912,
     "network": False,
     "host_home": False,
     "workspace": "/workspace",
@@ -429,3 +432,24 @@ class VerificationCommands:
             )
             self.db.event(conn, "verification.command_proposed", {"id": cid, "definition": definition}, project_id)
         return {"id": cid, **definition, "status": "discovered"}
+
+
+def recovery_identity(db, project_id, root):
+    """Change-triggered retry signal; never a substitute for completed-worker reconciliation."""
+    approved = db.all(
+        "SELECT id,decided_at FROM verification_commands WHERE project_id=? AND status='approved' ORDER BY id",
+        (project_id,),
+    )
+    raw_commands = db.setting(f"verification_commands:{project_id}", [])
+    runtimes = {argv[0]: shutil.which(argv[0], path="/usr/bin:/bin") for argv in raw_commands if argv}
+    artifacts = {}
+    for name in (".venv", "node_modules", ".npm-cache", "vendor"):
+        path = root / name
+        if path.exists() and not path.is_symlink():
+            stat = path.stat()
+            artifacts[name] = [stat.st_mtime_ns, stat.st_size]
+    return hashlib.sha256(
+        json.dumps(
+            [approved, raw_commands, runtimes, artifacts, db.setting("policy_epoch", 0)], sort_keys=True
+        ).encode()
+    ).hexdigest()

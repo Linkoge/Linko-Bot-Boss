@@ -474,6 +474,17 @@ def create_app(settings: Settings | None = None, server=None):
         await scheduler.tick()
         return result
 
+    @app.post("/api/tasks/{task_id}/integration/reconcile", dependencies=[Depends(require_owner)])
+    async def reconcile_integration(task_id: str, body: ResumeBody):
+        if not body.reconciled:
+            raise ValueError("Explicit owner reconciliation is required")
+        from .integration import Integrator
+
+        result = Integrator(db, registry, settings).reconcile(tasks.get(task_id), body.revision, body.reconciliation)
+        result["verification"] = verifier.retry(task_id, body.revision)
+        await scheduler.tick()
+        return result
+
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
     def task_control(task_id: str, body: TaskControl):
         task = tasks.get(task_id)
@@ -513,6 +524,7 @@ def create_app(settings: Settings | None = None, server=None):
             "verification": db.all(
                 "SELECT * FROM verification_results WHERE task_id=? ORDER BY created_at", (task_id,)
             ),
+            "integration": db.all("SELECT * FROM integration_results WHERE task_id=? ORDER BY created_at", (task_id,)),
         }
 
     @app.get("/api/executions/{execution_id}/patch", dependencies=[Depends(require_owner)])
@@ -637,6 +649,7 @@ def create_app(settings: Settings | None = None, server=None):
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():
         return {
+            "autonomy_upgrade_available": True,
             "global_instructions": db.setting("global_instructions", ""),
             "max_workers": settings.max_workers,
             "project_roots": [str(p) for p in settings.project_roots],

@@ -342,3 +342,288 @@ def test_authenticated_profiles_commands_and_integration_routes(client):
     assert (
         browser.put(f"/api/projects/{pid}/integration", json={"auto_merge": True}, headers=headers).status_code == 409
     )
+
+
+def test_profile_inherit_reversal_restores_global_tracking(worker_env):
+    settings, db, registry, project, source = worker_env
+    policy = Policies(db)
+    activate(policy, "high_autonomy")
+    activate(policy, "conservative", project["id"])
+    activate(policy, "inherit", project["id"])
+    assert policy.profile(project["id"]) == "high_autonomy"
+    activate(policy, "legacy")
+    assert policy.effective(project["id"], "edit_files")["mode"] == "ASK"
+    assert db.setting(f"autonomy_profile:{project['id']}") is None
+
+
+async def test_workspace_config_renewal_can_be_approved_without_source_changes(worker_env):
+    settings, db, registry, project, source = worker_env
+    (source / "pyproject.toml").write_text('[tool.pytest.ini_options]\naddopts="-q"\n')
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "commit",
+            "-qm",
+            "Configuration",
+        ],
+        check=True,
+    )
+    commands = VerificationCommands(db, registry)
+    commands.register(project["id"], [["python3", "-c", "print('pass')"]])
+    task = Tasks(db).add(project["id"], "Update configuration", "Verified updated configuration")
+    workers = Workers(db, registry, settings, FakeServer)
+    job = await workers.start(task["id"])
+    await workers.jobs[job["execution_id"]]
+    workspace = Workspace(settings.data_dir, job["execution_id"])
+    old = workspace.read_file("pyproject.toml")
+    workspace.write_file("pyproject.toml", '[tool.pytest.ini_options]\naddopts="-v"\n', old["sha256"])
+    verifier = Verifier(db, registry, settings, ReviewServer)
+    assert not await verifier.verify(task["id"])
+    candidate = commands.add_definition(
+        project["id"], ["python3", "-c", "print('pass')"], execution_id=job["execution_id"]
+    )
+    commands.decide(project["id"], [{"id": candidate["id"], "status": "approved"}])
+    blocked = Tasks(db).get(task["id"])
+    verifier.retry(task["id"], blocked["revision"])
+    assert await verifier.verify(task["id"])
+    assert (source / "pyproject.toml").read_text() == old["content"]
+    await workers.close()
+
+
+async def test_revocation_during_command_blocks_completion(worker_env, monkeypatch):
+    settings, db, registry, project, source = worker_env
+    commands = VerificationCommands(db, registry)
+    commands.register(project["id"], [["python3", "-c", "print('pass')"]])
+    command_id = commands.approved(project["id"])[0]["id"]
+    task = Tasks(db).add(project["id"], "Inspect", "Verified")
+    workers = Workers(db, registry, settings, FakeServer)
+    job = await workers.start(task["id"])
+    await workers.jobs[job["execution_id"]]
+    original = Workspace.isolated_test
+
+    async def revoke_after_running(self, *args, **kwargs):
+        record = await original(self, *args, **kwargs)
+        commands.decide(project["id"], [{"id": command_id, "status": "revoked"}])
+        return record
+
+    monkeypatch.setattr(Workspace, "isolated_test", revoke_after_running)
+    assert not await Verifier(db, registry, settings, ReviewServer).verify(task["id"])
+    blocked = Tasks(db).get(task["id"])
+    assert blocked["status"] == "blocked" and "revoked" in blocked["blocker"]
+    await workers.close()
+
+
+async def test_offline_provisioning_stays_isolated_and_approved(worker_env):
+    settings, db, registry, project, source = worker_env
+    (source / ".gitignore").write_text("offline-dependency.txt\n")
+    subprocess.run(["git", "-C", str(source), "add", "."], check=True)
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(source),
+            "-c",
+            "user.name=Fixture",
+            "-c",
+            "user.email=fixture@example.com",
+            "commit",
+            "-qm",
+            "Ignore fixture dependency artifact",
+        ],
+        check=True,
+    )
+    commands = VerificationCommands(db, registry)
+    commands.register(
+        project["id"],
+        [["python3", "-c", "from pathlib import Path; assert Path('offline-dependency.txt').read_text()=='provided'"]],
+    )
+    install = commands.add_definition(
+        project["id"],
+        [
+            "python3",
+            "-c",
+            "from pathlib import Path; assert not Path('/home/codex').exists(); Path('offline-dependency.txt').write_text('provided')",
+        ],
+        purpose="dependency",
+    )
+    commands.decide(project["id"], [{"id": install["id"], "status": "approved"}])
+    Policies(db).set(project["id"], "install_dependencies", "ALLOW")
+    task = Tasks(db).add(project["id"], "Provision fixture dependency", "Tests can read offline artifact")
+    workers = Workers(db, registry, settings, FakeServer)
+    job = await workers.start(task["id"])
+    await workers.jobs[job["execution_id"]]
+    assert await Verifier(db, registry, settings, ReviewServer).verify(task["id"])
+    assert not (source / "offline-dependency.txt").exists()
+    assert db.one("SELECT payload FROM events WHERE kind='verification.provisioned'")
+    await workers.close()
+
+
+def test_plan_schema_strict_object_keys():
+    from ai_manager.orchestration import PLAN_SCHEMA
+
+    def validate(node):
+        if node.get("type") == "object":
+            assert set(node["properties"]) == set(node["required"])
+            assert node["additionalProperties"] is False
+            for child in node["properties"].values():
+                validate(child)
+        if node.get("type") == "array":
+            validate(node["items"])
+
+    validate(PLAN_SCHEMA)
+
+
+@pytest.mark.parametrize(
+    "command,code",
+    [
+        (["python3", "-m", "linko_missing_dependency_fixture"], "missing_dependency"),
+        (["linko-unavailable-runtime-fixture"], "runtime_unavailable"),
+    ],
+)
+async def test_runtime_dependency_recovery_is_change_triggered_without_replay(worker_env, command, code):
+    settings, db, registry, project, source = worker_env
+    commands = VerificationCommands(db, registry)
+    commands.register(project["id"], [command])
+    task = Tasks(db).add(project["id"], "Inspect fixture", "Fixture verified")
+    workers = Workers(db, registry, settings, FakeServer)
+    job = await workers.start(task["id"])
+    await workers.jobs[job["execution_id"]]
+    verifier = Verifier(db, registry, settings, ReviewServer)
+    assert not await verifier.verify(task["id"])
+    blocked = Tasks(db).get(task["id"])
+    assert blocked["blocker_code"] == code and blocked["recovery_identity"]
+    scheduler = Scheduler(db, registry, settings, workers, verifier, Planner(db, registry, settings))
+    db.set_setting("scheduler_enabled", True)
+    for _ in range(3):
+        await scheduler.tick()
+    assert len(db.all("SELECT * FROM verification_results")) == 1
+    commands.register(project["id"], [["python3", "-c", "print('fixed runtime')"]])
+    await scheduler.tick()
+    await scheduler.tick()
+    await asyncio.gather(*list(scheduler.reviews.values()))
+    assert Tasks(db).get(task["id"])["status"] == "completed"
+    assert len(db.all("SELECT * FROM executions WHERE worktree IS NOT NULL")) == 1
+    await scheduler.close()
+    await workers.close()
+
+
+async def test_build_outputs_are_disposable_and_test_input_mutation_fails(worker_env):
+    settings, db, registry, project, source = worker_env
+    from ai_manager.verification_workspace import prepare_copy, run_checked
+
+    canonical = Workspace(settings.data_dir, "build-fixture")
+    canonical.prepare(source)
+    baseline = subprocess.check_output(["git", "-C", str(canonical.root), "rev-parse", "HEAD"], text=True).strip()
+    testing = prepare_copy(settings.data_dir, "disposable-build", canonical)
+    result = await run_checked(
+        testing,
+        [
+            "python3",
+            "-c",
+            "from pathlib import Path; Path('dist').mkdir(); Path('dist/artifact').write_text('built'); print('built')",
+        ],
+        ".",
+        baseline,
+    )
+    assert result["exit_code"] == 0 and result["input_files_unchanged"] and result["environment"] == "bubblewrap-v3"
+    assert not (canonical.root / "dist").exists()
+    with pytest.raises(ValueError, match="modified project inputs"):
+        await run_checked(
+            testing,
+            ["python3", "-c", "from pathlib import Path; Path('README.md').write_text('cheating')"],
+            ".",
+            baseline,
+        )
+    assert canonical.read_file("README.md")["content"].startswith("# Original")
+
+
+async def test_merge_acceptance_is_blocked_without_project_authorization(worker_env):
+    settings, db, registry, project, source = worker_env
+    task = Tasks(db).add(
+        project["id"],
+        "Merge verified fixture",
+        "Verified source merge",
+        kind="documentation",
+        verification_spec={"files": ["README.md"], "integration": "merge"},
+    )
+    activate(Policies(db), "high_autonomy", project["id"])
+    workers = Workers(db, registry, settings, FakeServer)
+    job = await workers.start(task["id"])
+    await workers.jobs[job["execution_id"]]
+    assert not await Verifier(db, registry, settings, ReviewServer).verify(task["id"])
+    blocked = Tasks(db).get(task["id"])
+    assert blocked["status"] == "blocked" and "target branch" in blocked["blocker"]
+    assert not db.one("SELECT id FROM checkpoints")
+    await workers.close()
+
+
+async def test_dirty_source_blocks_completion_then_explicit_reconciliation_can_retry(worker_env):
+    settings, db, registry, project, source = worker_env
+    task = Tasks(db).add(
+        project["id"],
+        "Merge verified fixture",
+        "Verified source merge",
+        kind="documentation",
+        verification_spec={"files": ["README.md"], "integration": "merge"},
+    )
+    activate(Policies(db), "high_autonomy", project["id"])
+    branch = subprocess.check_output(["git", "-C", str(source), "branch", "--show-current"], text=True).strip()
+    db.set_setting(
+        f"integration_policy:{project['id']}", {"auto_commit": True, "auto_merge": True, "target_branch": branch}
+    )
+    workers = Workers(db, registry, settings, FakeServer)
+    job = await workers.start(task["id"])
+    await workers.jobs[job["execution_id"]]
+    workspace = Workspace(settings.data_dir, job["execution_id"])
+    old = workspace.read_file("README.md")
+    workspace.write_file("README.md", "# Original\nVerified merge\n", old["sha256"])
+    (source / "owner-local-work.txt").write_text("preserve owner work")
+    verifier = Verifier(db, registry, settings, ReviewServer)
+    assert not await verifier.verify(task["id"])
+    blocked = Tasks(db).get(task["id"])
+    assert blocked["status"] == "blocked" and "blocked integration" in blocked["blocker"]
+    assert not db.one("SELECT id FROM checkpoints")
+    integrator = Integrator(db, registry, settings)
+    with pytest.raises(ValueError, match="local work"):
+        integrator.reconcile(blocked, blocked["revision"], "Inspected local source")
+    # Test owner resolves its fixture work without any agent reset/stash operation.
+    (source / "owner-local-work.txt").unlink()
+    assert (
+        integrator.reconcile(
+            blocked, blocked["revision"], "Fixture owner removed only its own temporary file; source HEAD unchanged"
+        )["status"]
+        == "reconciled_retry"
+    )
+    verifier.retry(task["id"], blocked["revision"])
+    assert await verifier.verify(task["id"])
+    assert Tasks(db).get(task["id"])["status"] == "completed"
+    assert len(db.all("SELECT * FROM integration_results")) == 2
+    assert "Verified merge" in (source / "README.md").read_text()
+    await workers.close()
+
+
+def test_integration_rejects_source_filters_and_ignored_overwrites(worker_env):
+    settings, db, registry, project, source = worker_env
+    workspace = Workspace(settings.data_dir, "source-security")
+    workspace.prepare(source)
+    baseline = subprocess.check_output(["git", "-C", str(workspace.root), "rev-parse", "HEAD"], text=True).strip()
+    config = source / ".git/config"
+    original = config.read_text()
+    config.write_text(original + '\n[filter "dangerous"]\n\tclean = execute-untrusted-code\n')
+    with pytest.raises(ValueError, match="includes/filters"):
+        Integrator.validate_source(source, workspace, baseline)
+    config.write_text(original)
+    (source / ".git/info/exclude").write_text("important.dat\n")
+    (source / "important.dat").write_text("owner data")
+    (workspace.root / "important.dat").write_text("incoming data")
+    subprocess.run(["git", "-C", str(workspace.root), "add", "important.dat"], check=True)
+    with pytest.raises(ValueError, match="overwrite existing untracked/ignored data"):
+        Integrator.validate_source(source, workspace, baseline)
+    assert (source / "important.dat").read_text() == "owner data"

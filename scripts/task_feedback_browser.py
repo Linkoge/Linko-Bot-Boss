@@ -47,6 +47,8 @@ def main():
             prerequisite["revision"],
             blocker="Owner must configure trusted project verification commands before completion",
         )
+        display_workspace = data / "workspaces" / "display-only"
+        (display_workspace / ".git").mkdir(parents=True)
         with db.transaction() as conn:
             conn.execute(
                 "INSERT INTO executions(id,task_id,project_id,agent_id,status,started_at,finished_at,worktree) VALUES(?,?,?,?,?,?,?,?)",
@@ -58,7 +60,7 @@ def main():
                     "verifying",
                     time.time(),
                     time.time(),
-                    str(project),
+                    str(display_workspace),
                 ),
             )
         for number in range(12):

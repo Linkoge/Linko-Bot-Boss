@@ -13,9 +13,11 @@ KINDS = {"code", "documentation", "research", "infrastructure", "investigation"}
 def validate_spec(kind, spec):
     if kind not in KINDS or not isinstance(spec, dict):
         raise ValueError("Invalid task verification strategy")
-    allowed = {"files", "sections", "allowed_paths", "evidence_file", "require_commands"}
+    allowed = {"files", "sections", "allowed_paths", "evidence_file", "require_commands", "integration"}
     if set(spec) - allowed:
         raise ValueError("Unknown verification specification field")
+    if spec.get("integration", "none") not in {"none", "commit", "merge"}:
+        raise ValueError("Invalid required integration")
     for key in ("files", "sections", "allowed_paths"):
         if key in spec and (not isinstance(spec[key], list) or not all(isinstance(x, str) and x for x in spec[key])):
             raise ValueError("Verification specification lists must contain nonempty strings")

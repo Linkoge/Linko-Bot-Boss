@@ -108,6 +108,7 @@ class Database:
                 ("verification_spec", "TEXT NOT NULL DEFAULT '{}'"),
                 ("verification_status", "TEXT NOT NULL DEFAULT 'unverified'"),
                 ("blocker_code", "TEXT NOT NULL DEFAULT ''"),
+                ("recovery_identity", "TEXT NOT NULL DEFAULT ''"),
             ):
                 if name not in task_columns:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
