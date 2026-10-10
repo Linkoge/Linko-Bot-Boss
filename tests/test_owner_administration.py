@@ -207,3 +207,28 @@ async def test_owner_chat_invokes_administration_and_appends_persistent_receipt(
     assert "no executable task" not in message and not Tasks(db).list()
     assert db.one("SELECT * FROM events WHERE kind='owner_admin.completed'")["execution_id"] == accepted["execution_id"]
     await chat.close()
+
+
+async def test_existing_chat_tool_upgrade_preserves_history_and_thread_reference(worker_env):
+    from fake_codex import FakeServer
+
+    from ai_manager.chat import Chat
+
+    settings, db, registry, project, source = worker_env
+    server = FakeServer(settings)
+    chat = Chat(db, registry, server)
+    chat.action_handler = lambda *args: None
+    conversation = chat.conversation(project["id"])
+    with db.transaction() as conn:
+        conn.execute("UPDATE conversations SET thread_id='old-manager-thread' WHERE id=?", (conversation["id"],))
+        conn.execute(
+            "INSERT INTO messages VALUES('retained',?,'user','Retained owner project context','completed',NULL,?)",
+            (conversation["id"], time.time() - 1),
+        )
+    request = await chat.submit(project["id"], "Explain current permissions", "conversation")
+    await chat.jobs[request["execution_id"]]
+    event = db.one("SELECT payload FROM events WHERE kind='chat.tool_schema_upgraded'")
+    assert json.loads(event["payload"])["previous_thread"] == "old-manager-thread"
+    assert db.one("SELECT content FROM messages WHERE id='retained'")["content"] == "Retained owner project context"
+    assert "Retained owner project context" in server.prompts[0]
+    await chat.close()
