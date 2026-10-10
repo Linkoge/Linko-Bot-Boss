@@ -240,7 +240,7 @@ class Chat:
             )
             if rollover:
                 history = self.db.all(
-                    "SELECT role,content FROM messages WHERE conversation_id=? AND execution_id!=? ORDER BY created_at DESC LIMIT 16",
+                    "SELECT role,content FROM messages WHERE conversation_id=? AND (execution_id IS NULL OR execution_id!=?) ORDER BY created_at DESC LIMIT 16",
                     (conversation["id"], execution_id),
                 )
                 prompt += (
