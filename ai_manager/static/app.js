@@ -11,7 +11,8 @@ async function api(path, options={}){
   if(!response.ok){if(response.status===401 && !path.includes('login'))showAuth();throw new Error(result.detail||'Request failed');}
   return result;
 }
-function action(fn){return async event=>{try{await fn(event);}catch(error){notice(error.message);}};}
+function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice('Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
+function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}${result.execution_id?' · Execution '+result.execution_id.slice(0,8):''}`);}
 function showAuth(){state.source?.close();$('app').hidden=true;$('auth-screen').hidden=false;}
 async function boot(){
   const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;
@@ -27,7 +28,7 @@ async function enter(){
   await refresh();await selectProject(state.project);
 }
 async function refresh(){
-  state.portfolio=await api('/api/portfolio');renderProjects();renderDashboard();renderTasks();renderAgents();renderApprovals();renderNotifications();
+  state.portfolio=await api('/api/portfolio');const scheduler=state.portfolio.scheduler;$('scheduler-status').textContent=scheduler?`${scheduler.enabled?'Enabled':'Paused'} · loop ${scheduler.running?'running':'stopped'} · scope ${projectName(scheduler.scope)} · maximum ${scheduler.max_workers} workers${scheduler.error?' · Error: '+scheduler.error:''}`:'Scheduler status unavailable';$('execution-status').textContent=$('scheduler-status').textContent;renderProjects();renderDashboard();renderTasks();renderAgents();renderApprovals();renderNotifications();
 }
 const displayName = p => p.display_name || p.name;
 function projectLabel(p){
@@ -96,7 +97,7 @@ function projectName(id){const p=state.portfolio.projects.find(p=>p.id===id);ret
 function renderDashboard(){
   const projects=state.portfolio.projects.filter(p=>!state.project||p.id===state.project),tasks=filteredTasks(),executions=filteredExecutions();
   $('stats').replaceChildren();
-  const values=[[projects.length,'Projects in view'],[executions.filter(e=>!e.finished_at).length,'Active responses / workers'],[tasks.filter(t=>t.status==='pending').length,'Tasks ready to plan'],[tasks.filter(t=>['blocked','awaiting_approval'].includes(t.status)).length,'Need your attention']];
+  const values=[[projects.length,'Projects in view'],[executions.filter(e=>!e.finished_at).length,'Active responses / workers'],[tasks.filter(t=>t.status==='pending').length,'Pending tasks'],[tasks.filter(t=>['blocked','awaiting_approval'].includes(t.status)).length,'Need your attention']];
   for(const [value,label] of values){const card=element('article',undefined,'stat');card.append(element('strong',String(value)),element('span',label));$('stats').append(card);}
   $('project-cards').replaceChildren();
   for(const p of projects){
@@ -113,17 +114,19 @@ function renderDashboard(){
 function renderTasks(){
   const tasks=filteredTasks();$('task-count').textContent=tasks.filter(t=>!['completed','cancelled'].includes(t.status)).length;$('task-list').replaceChildren();
   if(!tasks.length)$('task-list').append(element('p','No queued tasks. Add a concrete goal and acceptance criteria.','empty'));
-  for(const t of tasks){const row=element('article',undefined,'task-row');row.append(element('h3',t.description));const meta=element('div',undefined,'row-meta');meta.append(element('span',t.status,`badge ${t.status}`),element('span',projectName(t.project_id)),element('span',`Priority ${t.priority}`),element('span',`#${t.id.slice(0,8)}`));row.append(meta,element('p',`Acceptance: ${t.acceptance}`));if(t.blocker)row.append(element('p',t.blocker));
-    if(t.status==='pending'){const start=element('button','Start worker');start.onclick=action(async()=>{await api(`/api/tasks/${t.id}/start`,{method:'POST'});await refresh();notice('Worker started in an isolated workspace.');});row.append(start);}
-    if(['paused','blocked','failed'].includes(t.status)){const resume=element('button','Resume persisted worker');resume.onclick=action(async()=>{await api(`/api/tasks/${t.id}/resume`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();notice('Resuming the persisted thread and workspace.');});row.append(resume);}
-    if(['pending','paused','blocked','failed'].includes(t.status)){const cancel=element('button','Cancel task');cancel.onclick=action(async()=>{await api(`/api/tasks/${t.id}`,{method:'PATCH',body:JSON.stringify({revision:t.revision,status:'cancelled'})});await refresh();});row.append(cancel);}
-    $('task-list').append(row);}
+  for(const t of tasks){const row=element('article',undefined,'task-row');row.append(element('h3',t.description));const meta=element('div',undefined,'row-meta');meta.append(element('span',t.status,`badge ${t.status}`),element('span',projectName(t.project_id)),element('span',`Priority ${t.priority}`),element('span',`#${t.id.slice(0,8)}`));row.append(meta,element('p',`Acceptance: ${t.acceptance}`));if(t.blocker)row.append(element('p',t.blocker));if(t.readiness?.reason&&!t.blocker)row.append(element('p',t.readiness.reason));if(!t.readiness?.verification_configured)row.append(element('small','Trusted verification is not configured; completion will be blocked.'));
+    if(t.readiness?.verification_only&&t.status==='blocked'){const verify=element('button','Retry verification');verify.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/verify`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result);});row.append(verify);const configure=element('button','Configure verification');configure.onclick=action(async()=>{await selectProject(t.project_id);await configureVerification(t.project_id);});row.append(configure);}
+    if(t.status==='pending'){const start=element('button','Start worker');start.onclick=action(async()=>{notice('Requesting worker launch…');const result=await api(`/api/tasks/${t.id}/start`,{method:'POST'});await refresh();actionResult(result);});row.append(start);}
+    if(['paused','blocked','failed'].includes(t.status)&&t.readiness?.can_resume){const resume=element('button','Resume persisted worker');resume.onclick=action(async()=>{if(t.status==='blocked'){editor('Reconcile uncertain execution',[{name:'reconciliation',label:'Inspect saved thread, workspace and operation records first. Describe evidence establishing what ran and why continuing is safe.',long:true,required:true}],async values=>{const result=await api(`/api/tasks/${t.id}/resume`,{method:'POST',body:JSON.stringify({...values,revision:t.revision,reconciled:true})});actionResult(result);});return;}const result=await api(`/api/tasks/${t.id}/resume`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result);});row.append(resume);}
+    if(['paused','blocked','failed'].includes(t.status)&&t.readiness?.can_retry){const retry=element('button','Retry launch');retry.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/retry`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result);});row.append(retry);}
+    if(['pending','paused','blocked','failed'].includes(t.status)){const cancel=element('button','Cancel task');cancel.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}`,{method:'PATCH',body:JSON.stringify({revision:t.revision,status:'cancelled'})});await refresh();actionResult(result);});row.append(cancel);}
+    const inspect=element('button','Inspect execution records');inspect.onclick=action(async()=>{const records=await api(`/api/tasks/${t.id}/execution-records`);editor('Persisted task and execution records',[{name:'records',label:'Review task, thread, turn, workspace, operations, approvals and verification evidence',long:true,rows:14,value:JSON.stringify(records,null,2)}],async()=>{});});row.append(inspect);$('task-list').append(row);}
 }
 function renderAgents(){
   $('agent-list').replaceChildren();const executions=filteredExecutions();
   if(!executions.length)$('agent-list').append(element('p','No execution history yet. Start a conversation to connect Codex.','empty'));
   for(const e of executions){const row=element('article',undefined,'agent-row');row.append(element('h3',`${e.agent_id} · ${projectName(e.project_id)}`));const meta=element('div',undefined,'row-meta');meta.append(element('span',e.status,`badge ${e.status}`),element('span',`${e.model||'Unassigned'} / ${e.effort||'default'}`),element('span',new Date(e.started_at*1000).toLocaleString()),element('span',e.finished_at?`${Math.round((e.finished_at-e.started_at))} seconds`:'Running'));row.append(meta);
-    const details=element('details');details.append(element('summary','Output and execution details'),element('pre',e.output||e.error||'Waiting for output…'),element('small',`Thread: ${e.thread_id||'pending'} · Turn: ${e.turn_id||'pending'}`));row.append(details);
+    const details=element('details');details.append(element('summary','Output and execution details'),element('pre',e.output||'Waiting for output…'),element('small',`Thread: ${e.thread_id||'pending'} · Turn: ${e.turn_id||'pending'}`));row.append(details);if(e.error)row.append(element('p','Execution error: '+e.error));row.append(element('small',`Execution ${e.id} · PID ${e.pid||'launch pending'} · process start ${e.process_start||'pending'}`));
     if(e.worktree){row.append(element('small',`Workspace: ${e.worktree} · Branch: ${e.branch||'pending'}`));const task=state.portfolio.tasks.find(t=>t.id===e.task_id);if(task?.status==='completed'){const download=element('a','Download verified patch');download.href=`/api/executions/${e.id}/patch`;download.className='result-link';row.append(download);const evidence=element('button','Verification evidence');evidence.onclick=action(async()=>{const records=await api(`/api/tasks/${e.task_id}/evidence`);editor('Verification evidence',[{name:'evidence',label:'Recorded independent checks',long:true,rows:12,value:records.map(r=>r.evidence).join('\n\n')}],async()=>{});});row.append(evidence);}}
     if(!e.finished_at){const stop=element('button','Interrupt');stop.onclick=action(async()=>{await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});notice('Interruption requested. Waiting for confirmation.');});row.append(stop);}$('agent-list').append(row);
   }
@@ -158,7 +161,7 @@ function showView(view){state.view=view;if(view==='memory')loadMemory().catch(er
 function editor(title,fields,onSave){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}
-  $('editor-form').onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.target));try{await onSave(values);$('editor').close();await refresh();await selectProject(state.project);}catch(error){$('editor-error').textContent=error.message;}};$('editor').showModal();
+  $('editor-form').onsubmit=async event=>{event.preventDefault();const values=Object.fromEntries(new FormData(event.target));try{const result=await onSave(values);if(result)actionResult(result);$('editor').close();await refresh();await selectProject(state.project);}catch(error){$('editor-error').textContent=error.message;}};$('editor').showModal();
 }
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:['active','paused','archived','removed'].map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 function editMemory(m){const project=state.project;editor(`Edit ${m.name}`,[{name:'content',label:'Human-readable project memory',value:m.content,long:true,rows:12}],values=>api(`/api/projects/${project}/memory/${m.name}`,{method:'PUT',body:JSON.stringify({...values,revision:m.revision})}));}
@@ -168,7 +171,7 @@ $('chat-form').onsubmit=action(async event=>{
   if(!content||$('send').disabled||state.pending.has(project))return;
   state.pending.add(project);$('send').disabled=true;
   try{
-    await api('/api/chat',{method:'POST',body:JSON.stringify({project_id:project,content})});
+    await api('/api/chat',{method:'POST',body:JSON.stringify({project_id:project,content,mode:$('chat-mode').value})});
     state.drafts.set(project,'');
     if(selection===state.selection){$('message-input').value='';await loadHistory(selection);}
     await refresh();
@@ -191,8 +194,12 @@ boot().catch(error=>notice(error.message));
 
 
 $('plan-goal').onclick=()=>{if(!state.project){notice('Select a project to plan a goal.');return;}const project=state.project;editor('Plan a delegated goal',[{name:'goal',label:'What should the manager accomplish?',long:true,required:true}],values=>api('/api/goals',{method:'POST',body:JSON.stringify({...values,project_id:project,request_key:crypto.randomUUID()})}));};
-$('configure-scheduler').onclick=()=>editor('Autonomous scheduling',[{name:'enabled',label:'Scheduler',value:state.portfolio.automation_enabled?'true':'false',options:[['true','Enabled'],['false','Paused']]},{name:'project_id',label:'Project scope',value:state.project||'',options:[['','All Projects'],...state.portfolio.projects.map(p=>[p.id,projectLabel(p)])]},{name:'limit',label:'Number of successful completions (blank means continuous)',type:'number',min:1,max:100},{name:'max_workers',label:'Maximum concurrent workers',type:'number',value:2,min:1,max:8}],values=>api('/api/scheduler',{method:'PUT',body:JSON.stringify({enabled:values.enabled==='true',project_id:values.project_id||null,limit:values.limit?Number(values.limit):null,max_workers:Number(values.max_workers)})}));
-$('configure-verification').onclick=action(async()=>{if(!state.project){notice('Select a project first.');return;}const project=state.project,settings=await api(`/api/projects/${project}/verification`);editor('Trusted verification commands',[{name:'commands',label:'Commands as JSON arrays, for example [["python3","-m","unittest","discover","-v"]]',value:JSON.stringify(settings.commands,null,2),long:true,rows:8}],values=>api(`/api/projects/${project}/verification`,{method:'PUT',body:JSON.stringify({commands:JSON.parse(values.commands)})}));});
+$('configure-scheduler').onclick=()=>editor('Autonomous scheduling',[{name:'enabled',label:'Scheduler',value:state.portfolio.automation_enabled?'true':'false',options:[['true','Enabled'],['false','Paused']]},{name:'project_id',label:'Project scope',value:state.project||'',options:[['','All Projects'],...state.portfolio.projects.map(p=>[p.id,projectLabel(p)])]},{name:'limit',label:'Number of successful completions (blank means continuous)',type:'number',min:1,max:100},{name:'max_workers',label:'Maximum concurrent workers',type:'number',value:state.portfolio.scheduler?.max_workers||2,min:1,max:8}],values=>api('/api/scheduler',{method:'PUT',body:JSON.stringify({enabled:values.enabled==='true',project_id:values.project_id||null,limit:values.limit?Number(values.limit):null,max_workers:Number(values.max_workers)})}));
+async function configureVerification(project){
+  const settings=await api(`/api/projects/${project}/verification`);
+  editor('Owner-approved verification commands',[{name:'commands',label:'Explicitly approve the project’s documented test commands as JSON argument arrays. Tests run with system runtimes and /workspace only, without host home, installed home environments or network. Saving does not replay workers or unblock tasks automatically.',value:JSON.stringify(settings.commands,null,2),long:true,rows:8}],values=>api(`/api/projects/${project}/verification`,{method:'PUT',body:JSON.stringify({commands:JSON.parse(values.commands)})}));
+}
+$('configure-verification').onclick=action(async()=>{if(!state.project){notice('Select a project first.');return;}await configureVerification(state.project);});
 
 function renderApprovals(){
   const approvals=(state.portfolio.approvals||[]).filter(a=>!state.project||a.project_id===state.project);$('approval-count').textContent=approvals.length;$('approval-list').replaceChildren();

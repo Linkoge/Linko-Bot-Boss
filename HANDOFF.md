@@ -68,3 +68,14 @@ After post-boot checks, update actual STATE/plan evidence and next-task prioriti
 ## Documentation checkpoint reference
 
 **Complete development checkpoint: bd6a5c6455174b8bec6afaa9b5d853f601940b7b** (main, documentation only). Its parent implementation checkpoint is0ccfaa6ebd955efe02d6968301cb875c9b463e8f. This reference is recorded in a separate documentation receipt commit; the receipt records this hash and final backup verification evidence in existing documentation only; no implementation/configuration changes. Run `git log -2 --oneline` / `git rev-parse HEAD` to identify that later receipt HEAD. No commit is required to contain its own hash. No push was performed.
+
+
+## Current handoff — execution reliability, 2026-10-10
+
+Read docs/execution-reliability.md and the latest STATE/TASKS/DECISIONS sections first; older pre-reboot/empty-history/low-disk passages above are historical. Real fixture task 4961242df6d14bf49f9018933f593fb3 completed through Codex, exact ASK approval, bubblewrap unittest, independent file review, dashboard and manager restart. 48 tests plus Ruff/JS/Chromium checks passed. The dedicated production service runs corrected code (PID 675325), after a verified 101769216-byte pre-deployment backup; histories, task dispositions, grants/policies/settings and authentication were preserved.
+
+No production tasks were completed or requeued. 5db40e44 and 5b9a10fd remain verification-blocked; c78c0078/8589648a/ae1ba454 wait on their chain. Reboot/storage originals remain cancelled; actual boot changed and storage is now healthy. No duplicate investigation exists. Production projects still have no trusted verification commands. Owner must select adequate commands and resolve the isolated uv/dependency runtime before retrying verification. Existing host/browser task acceptance also exceeds broker capabilities. Do not equate registering a syntax check with satisfying that acceptance.
+
+Use task-adjacent Configure verification → explicit owner argv registration → Retry verification for confirmed completed worker output. Use Resume only for interrupted saved threads and require evidence for uncertain outcomes. Inspect execution records exposes task/thread/turn/workspace/operations/approvals/tests; generic requeue cannot bypass history. Scheduler enablement/scope/budget remains the autonomy gate.
+
+Private artifacts: ~/.local/share/linko-bot-manager/reliability-evidence-20261010; backup: backups/manager-execution-reliability-20261010.sqlite3. Isolated fixture DBs/screenshots/logs and owner-approved operation receipts stay outside Git. All original production events retained. No unrelated infrastructure/settings or security changes. No remote push.

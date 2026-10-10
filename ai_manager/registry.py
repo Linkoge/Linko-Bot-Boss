@@ -4,6 +4,7 @@ import time
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
+from .codex import process_start
 from .db import Database, new_id
 
 MEMORY_NAMES = ("PROJECT.md", "STATE.md", "TASKS.md", "DECISIONS.md", "HANDOFF.md")
@@ -195,7 +196,11 @@ class Registry:
         }
         # Observation only: a disconnected transport does not prove a process has exited.
         for execution in result["executions"]:
-            execution["process_observed"] = bool(execution["pid"] and Path(f"/proc/{execution['pid']}").exists())
+            execution["process_observed"] = bool(
+                execution["pid"]
+                and execution["process_start"]
+                and process_start(execution["pid"]) == execution["process_start"]
+            )
         with self.db.transaction() as conn:
             self.db.event(conn, "project.reconciled", result, project_id)
         return result

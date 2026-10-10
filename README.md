@@ -48,3 +48,12 @@ For local HTTP development, set `AI_MANAGER_SECURE_COOKIE=0`; production private
 Daily SQLite backups include authoritative memory and history. Back up isolated workspaces and Codex thread storage separately for resumable execution. Restore to a new path, never overwrite a live database, and revoke old sessions after restoration. No remote backup transfer is enabled.
 
 Implementation references: [official App Server protocol](https://learn.chatgpt.com/docs/app-server), [Codex configuration](https://learn.chatgpt.com/docs/config-file/config-reference), [FastAPI streaming](https://fastapi.tiangolo.com/advanced/custom-response/), [Argon2 password handling](https://argon2-cffi.readthedocs.io/en/stable/howto.html). Installed generated schemas govern RPC fields when documentation differs.
+
+Execution controls now distinguish a queued launch, a resumed interrupted thread,
+a safe pre-thread launch retry, and independent verification of existing output.
+Choose Conversation for discussion or Execute to create a persistent plan in the
+selected project; scheduling follows the configured enablement, scope and budget.
+Configure trusted argv through Settings or beside a verification-blocked task,
+then explicitly Retry verification. Home-installed environments are not exposed
+inside the verification sandbox. See [execution reliability evidence and remaining
+project setup](docs/execution-reliability.md).

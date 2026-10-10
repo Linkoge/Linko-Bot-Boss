@@ -117,3 +117,14 @@ Updated observation: approved execution provides host runtime access. Read-only 
 - Actual VM reboot deliberately deferred because unrelated work is active; enabled units/linger alone do not verify reboot recovery. Coordinate a safe window and inspect recovery afterward.
 - Initial owner password/setup and trusted per-project verification commands are owner configuration. Scheduler defaults paused; no real project execution was automatically started.
 - Unsupported sensitive capabilities remain unavailable as documented in docs/security.md. Additional capability acceptance is future work, not claimed complete. Stage6 and the overall permanent specification remain open.
+
+
+## Execution reliability — 2026-10-10 (current evidence)
+
+A real isolated task completed browser → persistent planning → scheduler → Codex → exact owner-approved edit → bubblewrap tests → independent reviewer → completed dashboard → manager restart. Task 4961242df6d14bf49f9018933f593fb3; worker 650160c740a241d6a452b7469a9961c2; reviewer 248295415c1f4579be31100639ca38ff. 48 pytest tests, Ruff, JavaScript syntax, existing desktop/mobile browser smoke and new actual control checks passed.
+
+Root causes: missing trusted verification stalled completed worker output and dependencies; Resume replayed worker turns rather than verification; Start announced success before process/turn confirmation; scheduler repeatedly reconciled ineligible tasks; existing worker capability scope cannot perform arbitrary host/browser investigations. Focused corrections and evidence are in docs/execution-reliability.md. Conversation and Execute modes now have separate enforced behavior; scheduler settings and policies remain authoritative.
+
+Production is active after a verified backup and dedicated-service restart (PID 675325), with original tasks/history/approvals/policies/authentication preserved. All ten production projects still lack owner-configured verification commands. Actual isolated uv verification fails because the sandbox excludes home-installed uv/dependencies; no security weakening or arbitrary command registration. The accepted fixture used its explicitly approved documented unittest command.
+
+Current boot ec59df2b-f599-4ae8-8d9e-ad50791e441a differs from the old boot; 171 GiB available/18% used and 7.8 GiB RAM supersede old storage measurements. Original reboot/storage tasks remain cancelled; five requested investigation tasks retain their actual blocked/pending dispositions. No duplicate investigation or uncertain replay was created. Historical sections above describe earlier observations; this section and docs/execution-reliability.md govern current execution status.

@@ -29,3 +29,20 @@ First real orchestration review blocked because milestone audit evidence was abs
 ## 2026-10-10 checkpoint rerun (no feature/service changes)
 
 Existing31tests passed in7.56s, Ruff and JavaScript syntax passed. Live read-only integrity/foreign-key checks passed; 50/50memory exports matched, tenprojects/twoblockedtasks persisted, production history/thread/worker/owner stores confirmed empty. All four earlier backups passed integrity/foreign-key checks. Fresh278528byte draft checkpoint snapshot restored into an unused offline path with all20 application tables row-for-row equal; canonical final snapshot follows Git receipt. No live manager restart, reboot, new model/browser turn or deletion performed. Existing TestClient/httpx deprecation warning is the only test warning. Actual new-boot acceptance remains unperformed.
+
+## Execution reliability acceptance — 2026-10-10 (supersedes old runtime observations)
+
+48 pytest tests, Ruff and JavaScript syntax passed. Existing desktop/mobile
+Chromium smoke and new positive/blocked/failed/already-running Start/Resume/Cancel
+controls passed. Real isolated task 4961242df6d14bf49f9018933f593fb3 completed
+browser delegation, persistent planning, scheduler dispatch, actual Codex worker,
+exact owner-approved reversible edit, registered bubblewrap unittest, independent
+Codex file review, completed dashboard and manager restart persistence. Source and
+tests preserved; no policy weakening. Production rollout preserved original
+records. See docs/execution-reliability.md for exact identities/private evidence.
+
+Production verification commands remain unconfigured. Actual feasibility probe
+of documented uv tests fails inside bubblewrap because uv/home dependencies are
+absent; node syntax alone is insufficient acceptance. Current boot changed and
+storage is 171 GiB available/18% used; owner account/history now exist. Cancelled
+original tasks and blocked/pending investigation chains remain preserved.

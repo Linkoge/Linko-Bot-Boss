@@ -1,9 +1,11 @@
 import asyncio
 import fcntl
 import hmac
+import logging
 import shutil
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -68,6 +70,7 @@ class TaskBody(BaseModel):
 class MessageBody(BaseModel):
     project_id: str | None = None
     content: str = Field(min_length=1, max_length=24000)
+    mode: Literal["auto", "conversation", "execute"] = "auto"
 
 
 class RouteBody(BaseModel):
@@ -86,6 +89,8 @@ class TaskControl(BaseModel):
 
 class ResumeBody(BaseModel):
     revision: int
+    reconciled: bool = False
+    reconciliation: str = Field(default="", max_length=3000)
 
 
 class GoalBody(BaseModel):
@@ -128,6 +133,7 @@ def create_app(settings: Settings | None = None, server=None):
     planner, verifier = Planner(db, registry, settings), Verifier(db, registry, settings)
     scheduler = Scheduler(db, registry, settings, workers, verifier, planner)
     chat.action_handler = scheduler.manager_action
+    chat.receipt_provider = scheduler.receipts
     policies = Policies(db)
 
     @asynccontextmanager
@@ -192,11 +198,13 @@ def create_app(settings: Settings | None = None, server=None):
 
     @app.exception_handler(ValueError)
     async def invalid(request, error):
-        return JSONResponse({"detail": str(error)}, status_code=409)
+        logging.getLogger(__name__).warning("action.rejected path=%s reason=%s", request.url.path, str(error))
+        return JSONResponse({"result": "rejected", "detail": str(error), "message": str(error)}, status_code=409)
 
     @app.exception_handler(CodexError)
     async def unavailable(request, error):
-        return JSONResponse({"detail": str(error)}, status_code=503)
+        logging.getLogger(__name__).error("action.failed path=%s reason=%s", request.url.path, str(error))
+        return JSONResponse({"result": "failed", "detail": str(error), "message": str(error)}, status_code=503)
 
     @app.get("/api/auth-status")
     def auth_status(request: Request):
@@ -261,13 +269,14 @@ def create_app(settings: Settings | None = None, server=None):
         storage = shutil.disk_usage(settings.data_dir)
         return {
             "projects": projects,
-            "tasks": tasks.list(),
+            "tasks": [{**task, "readiness": workers.readiness(task["id"])} for task in tasks.list()],
             "executions": db.all("SELECT * FROM executions ORDER BY started_at DESC LIMIT 50"),
             "checkpoints": db.all("SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT 20"),
             "recommendation": "Focus on fewer active projects"
             if sum(p["status"] == "active" for p in projects) > 3
             else "Continue the highest priority unblocked task",
             "automation_enabled": db.setting("scheduler_enabled", False),
+            "scheduler": scheduler.snapshot(),
             "approvals": db.all("SELECT * FROM approvals WHERE status='pending' ORDER BY created_at"),
             "notifications": db.all("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 30"),
             "storage": {
@@ -316,7 +325,14 @@ def create_app(settings: Settings | None = None, server=None):
 
     @app.post("/api/goals", dependencies=[Depends(require_owner)])
     async def goal(body: GoalBody):
-        return await planner.plan(body.project_id, body.goal, body.request_key)
+        result = await planner.plan(body.project_id, body.goal, body.request_key)
+        await scheduler.tick()
+        return {
+            **result,
+            "result": "accepted",
+            "tasks": scheduler.receipts(result.get("task_ids", [])),
+            "scheduler": scheduler.snapshot(),
+        }
 
     @app.put("/api/scheduler", dependencies=[Depends(require_owner)])
     def configure_scheduler(body: SchedulerBody):
@@ -327,7 +343,12 @@ def create_app(settings: Settings | None = None, server=None):
         db.set_setting("scheduler_enabled", body.enabled)
         db.set_setting("max_workers", body.max_workers)
         settings.max_workers = body.max_workers
-        return {"configured": True}
+        return {
+            "configured": True,
+            "result": "accepted",
+            "message": "Scheduler enabled" if body.enabled else "Scheduler paused",
+            "scheduler": scheduler.snapshot(),
+        }
 
     @app.get("/api/projects/{project_id}/verification", dependencies=[Depends(require_owner)])
     def get_verification(project_id: str):
@@ -341,19 +362,50 @@ def create_app(settings: Settings | None = None, server=None):
             not command or len(command) > 30 or any(len(arg) > 1000 for arg in command) for command in body.commands
         ):
             raise ValueError("Invalid verification command")
-        db.set_setting(f"verification_commands:{project_id}", body.commands)
-        return {"updated": True, "sandbox": "No host home or network; system runtime and workspace only"}
+        with db.transaction() as conn:
+            import json
+
+            conn.execute(
+                "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (f"verification_commands:{project_id}", json.dumps(body.commands)),
+            )
+            db.event(conn, "verification.configured", {"commands": body.commands, "configured_by": "owner"}, project_id)
+        return {
+            "updated": True,
+            "result": "accepted",
+            "message": "Trusted verification commands saved. Retry verification on blocked tasks; execution is not replayed automatically.",
+            "sandbox": "No host home or network; system runtime and workspace only",
+        }
 
     @app.post("/api/tasks/{task_id}/resume", dependencies=[Depends(require_owner)])
     async def resume_task(task_id: str, body: ResumeBody):
-        return await workers.resume(task_id, body.revision)
+        return await workers.resume(task_id, body.revision, body.reconciled, body.reconciliation)
+
+    @app.post("/api/tasks/{task_id}/retry", dependencies=[Depends(require_owner)])
+    async def retry_task(task_id: str, body: ResumeBody):
+        return await workers.retry(task_id, body.revision)
+
+    @app.post("/api/tasks/{task_id}/verify", dependencies=[Depends(require_owner)])
+    async def retry_verification(task_id: str, body: ResumeBody):
+        result = verifier.retry(task_id, body.revision)
+        await scheduler.tick()
+        return result
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
     def task_control(task_id: str, body: TaskControl):
         task = tasks.get(task_id)
-        if task["status"] in {"running", "verifying"} or body.status not in {"pending", "paused", "cancelled"}:
+        if task["status"] in {"running", "verifying", "awaiting_approval"} or body.status not in {
+            "pending",
+            "paused",
+            "cancelled",
+        }:
             raise ValueError("Use worker interruption controls for active work; completion requires verification")
-        return tasks.transition(task_id, body.status, body.revision)
+        if body.status == "pending" and workers.latest_worker(task_id):
+            raise ValueError(
+                "Use Retry launch, Resume persisted worker, or Retry verification; existing executions must not be replayed by a generic state change"
+            )
+        result = tasks.transition(task_id, body.status, body.revision)
+        return {**result, "result": "accepted", "message": f"Task {task_id[:8]} is {result['status']}"}
 
     @app.get("/api/history", dependencies=[Depends(require_owner)])
     def history(project_id: str | None = None, search: str = ""):
@@ -363,6 +415,22 @@ def create_app(settings: Settings | None = None, server=None):
     def evidence(task_id: str):
         tasks.get(task_id)
         return db.all("SELECT * FROM verification_results WHERE task_id=? ORDER BY created_at DESC", (task_id,))
+
+    @app.get("/api/tasks/{task_id}/execution-records", dependencies=[Depends(require_owner)])
+    def execution_records(task_id: str):
+        return {
+            "task": tasks.get(task_id),
+            "readiness": workers.readiness(task_id),
+            "executions": db.all("SELECT * FROM executions WHERE task_id=? ORDER BY started_at", (task_id,)),
+            "operations": db.all(
+                "SELECT o.* FROM operations o JOIN executions e ON e.id=o.execution_id WHERE e.task_id=? ORDER BY o.created_at",
+                (task_id,),
+            ),
+            "approvals": db.all("SELECT * FROM approvals WHERE task_id=? ORDER BY created_at", (task_id,)),
+            "verification": db.all(
+                "SELECT * FROM verification_results WHERE task_id=? ORDER BY created_at", (task_id,)
+            ),
+        }
 
     @app.get("/api/executions/{execution_id}/patch", dependencies=[Depends(require_owner)])
     def download_patch(execution_id: str):
@@ -415,7 +483,7 @@ def create_app(settings: Settings | None = None, server=None):
 
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
-        return await chat.submit(body.project_id, body.content)
+        return await chat.submit(body.project_id, body.content, body.mode)
 
     @app.post("/api/executions/{execution_id}/interrupt", dependencies=[Depends(require_owner)])
     async def interrupt(execution_id: str):
@@ -424,7 +492,12 @@ def create_app(settings: Settings | None = None, server=None):
             await workers.interrupt(execution_id)
         else:
             await chat.interrupt(execution_id)
-        return {"requested": True}
+        return {
+            "requested": True,
+            "result": "accepted",
+            "status": "interruption_requested",
+            "message": "Interruption requested; waiting for confirmed turn outcome",
+        }
 
     @app.get("/api/executions/{execution_id}/events", dependencies=[Depends(require_owner)])
     async def execution_events(execution_id: str, request: Request, after: int = 0):

@@ -35,3 +35,10 @@ The repository is `/home/codex/projects/Linko-Bot-Manager`. Approved native exec
 ## 2026-10-10 reboot preparation
 
 Documentation-only development checkpoint; all31 existing tests passed again. Service/startup, live integrity, 50 memory exports, empty production chat/thread stores and all existing backups inspected without restarting anything. Full inventory is in docs/inventory.md; post-reboot acceptance commands in docs/operations.md; checkpoint reference in HANDOFF.md. The owner plans to reboot; no reboot or service restart is authorized in this task. Stage6 remains partially verified until actual post-boot evidence and storage acceptance pass.
+
+
+## Execution reliability acceptance — 2026-10-10
+
+Completed the focused runtime investigation and control corrections. Actual acceptance fixture proves owner browser command → persistent task → configured scheduler → real Codex process/thread/turn → hash-bound ASK edit → approved isolated unittest → independent reviewer → completed dashboard → restart persistence. Production rollout preserved existing records. Validation: 48 pytest, Ruff/JS and real Chromium controls/mobile smoke.
+
+Current production readiness remains project-specific: all ten projects need owner-configured adequate verification; documented uv commands fail inside the existing isolated runtime; host/browser investigations exceed worker capability scope. Preserve pending/blocked/cancelled histories and reconcile acceptance before explicit verification retry or owner-selected supersession. Do not weaken the sandbox or replay uncertain work. Detailed evidence and decisions: docs/execution-reliability.md.

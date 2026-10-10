@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import time
 from pathlib import Path
 
@@ -43,6 +44,8 @@ WORKSPACE_TOOL = {
     },
 }
 
+log = logging.getLogger("uvicorn.error")
+
 
 class Workers:
     def __init__(self, db, registry, settings, server_factory=AppServer):
@@ -51,14 +54,69 @@ class Workers:
         self.factory = server_factory
         self.jobs, self.servers = {}, {}
 
-    async def start(self, task_id, previous=None):
+    def latest_worker(self, task_id):
+        return self.db.one(
+            "SELECT * FROM executions WHERE task_id=? AND agent_id NOT IN ('verification-controller','verification') ORDER BY started_at DESC LIMIT 1",
+            (task_id,),
+        )
+
+    def readiness(self, task_id):
         task = self.tasks.get(task_id)
+        project = self.registry.get(task["project_id"])
+        dependencies = self.db.all(
+            "SELECT t.id,t.status,t.blocker FROM dependencies d JOIN tasks t ON t.id=d.depends_on WHERE d.task_id=? AND t.status!='completed'",
+            (task_id,),
+        )
+        reason = ""
         if task["status"] != "pending":
+            reason = task["blocker"] or f"Task is {task['status']}"
+        elif project["status"] != "active":
+            reason = "Project must be active"
+        elif dependencies:
+            reason = "Unfinished dependencies: " + ", ".join(f"{d['id'][:8]} ({d['status']})" for d in dependencies)
+        elif self.db.one(
+            "SELECT id FROM tasks WHERE project_id=? AND status IN ('running','verifying','awaiting_approval')",
+            (project["id"],),
+        ):
+            reason = "Project already has active work"
+        elif (
+            self.db.one("SELECT count(*) n FROM tasks WHERE status IN ('running','verifying','awaiting_approval')")["n"]
+            >= self.settings.max_workers
+        ):
+            reason = "Worker concurrency limit reached"
+        previous = self.latest_worker(task_id)
+        observed = bool(
+            previous
+            and previous["pid"]
+            and previous["process_start"]
+            and process_start(previous["pid"]) == previous["process_start"]
+        )
+        verification_only = bool(previous and previous["status"] == "verifying" and previous["finished_at"])
+        return {
+            "dispatchable": not reason,
+            "reason": reason,
+            "dependencies": dependencies,
+            "verification_configured": bool(self.db.setting(f"verification_commands:{project['id']}", [])),
+            "verification_only": verification_only,
+            "can_resume": bool(
+                previous and previous["thread_id"] and previous["worktree"] and not observed and not verification_only
+            ),
+            "can_retry": bool(
+                previous and not previous["turn_id"] and not previous["thread_id"] and previous["finished_at"]
+            ),
+            "process_observed": observed,
+        }
+
+    async def start(self, task_id, previous=None, revision=None, reconciliation=""):
+        task = self.tasks.get(task_id)
+        restarting = revision is not None
+        if restarting and (task["revision"] != revision or task["status"] not in {"blocked", "paused", "failed"}):
+            raise ValueError("Task changed; refresh before editing")
+        if not restarting and task["status"] != "pending":
             raise ValueError("Only pending tasks can start; reconcile interrupted work first")
         project = self.registry.get(task["project_id"])
         if project["status"] != "active":
             raise ValueError("Project must be active")
-        self.registry.reconcile(project["id"])
         execution_id = new_id()
         with self.db.transaction() as conn:
             if (
@@ -79,8 +137,16 @@ class Workers:
             ).fetchone():
                 raise ValueError("Task dependencies are unfinished")
             cursor = conn.execute(
-                "UPDATE tasks SET status='running',agent_id=?,lease_owner=?,lease_until=?,revision=revision+1,updated_at=? WHERE id=? AND status='pending' AND revision=?",
-                (project["agent_id"], execution_id, time.time() + 90, time.time(), task_id, task["revision"]),
+                "UPDATE tasks SET status='running',blocker='',agent_id=?,lease_owner=?,lease_until=?,revision=revision+1,updated_at=? WHERE id=? AND status=? AND revision=?",
+                (
+                    project["agent_id"],
+                    execution_id,
+                    time.time() + 90,
+                    time.time(),
+                    task_id,
+                    task["status"],
+                    task["revision"],
+                ),
             )
             if cursor.rowcount != 1:
                 raise ValueError("Task was claimed by another worker")
@@ -89,44 +155,104 @@ class Workers:
                 (execution_id, task_id, project["id"], project["agent_id"], "queued", time.time()),
             )
             self.db.event(conn, "worker.queued", {}, project["id"], task_id, execution_id)
+            if restarting:
+                self.db.event(
+                    conn,
+                    "worker.reconciled" if previous else "worker.retry_requested",
+                    {"note": reconciliation, "previous_execution_id": previous["id"] if previous else None},
+                    project["id"],
+                    task_id,
+                    execution_id,
+                )
         self.tasks.sync(project["id"])
         job = asyncio.create_task(self._run(execution_id, task, project, previous))
         self.jobs[execution_id] = job
         job.add_done_callback(lambda _: self.jobs.pop(execution_id, None))
-        return {"execution_id": execution_id}
+        return {
+            "result": "accepted",
+            "status": "queued",
+            "task_id": task_id,
+            "project_id": project["id"],
+            "execution_id": execution_id,
+            "message": "Worker launch accepted; waiting for App Server process and turn confirmation",
+        }
 
-    async def resume(self, task_id, revision):
+    async def resume(self, task_id, revision, reconciled=False, reconciliation=""):
         task = self.tasks.get(task_id)
         if task["status"] not in {"paused", "blocked", "failed"}:
             raise ValueError("Only interrupted or failed tasks can resume")
-        previous = self.db.one(
-            "SELECT * FROM executions WHERE task_id=? AND thread_id IS NOT NULL ORDER BY started_at DESC LIMIT 1",
-            (task_id,),
-        )
-        if not previous or not previous["worktree"]:
+        previous = self.latest_worker(task_id)
+        if previous and previous["status"] == "verifying":
+            raise ValueError(
+                "Worker already finished; retry verification of the existing workspace instead of resuming execution"
+            )
+        if not previous or not previous["worktree"] or not previous["thread_id"]:
             raise ValueError("No persisted thread/workspace to resume")
-        if previous["pid"] and process_start(previous["pid"]) == previous["process_start"]:
+        if (
+            previous["pid"]
+            and previous["process_start"]
+            and process_start(previous["pid"]) == previous["process_start"]
+        ):
             raise ValueError("Previous worker process is still observed; reconcile it before resuming")
-        self.registry.reconcile(task["project_id"])
-        self.tasks.transition(task_id, "pending", revision)
-        return await self.start(task_id, previous)
+        uncertain_operation = self.db.one(
+            "SELECT operation_key FROM operations WHERE execution_id=? AND state!='completed'", (previous["id"],)
+        )
+        if (task["status"] == "blocked" or uncertain_operation) and (not reconciled or not reconciliation.strip()):
+            raise ValueError(
+                "Execution outcome is uncertain; inspect thread, workspace and operation ledger, then explicitly record reconciliation before resume"
+            )
+        root = Path(previous["worktree"])
+        if (
+            root.is_symlink()
+            or not root.resolve().is_relative_to((self.settings.data_dir / "workspaces").resolve())
+            or not (root / ".git").is_dir()
+        ):
+            raise ValueError("Persisted workspace is missing or outside manager isolation")
+        return await self.start(task_id, previous, revision, reconciliation)
+
+    async def retry(self, task_id, revision):
+        task = self.tasks.get(task_id)
+        if task["status"] not in {"blocked", "failed", "paused"} or not self.readiness(task_id)["can_retry"]:
+            raise ValueError(
+                "Retry is available only for a confirmed launch failure before a persisted thread/turn; reconcile other outcomes"
+            )
+        return await self.start(task_id, revision=revision)
 
     async def _run(self, execution_id, task, project, previous=None):
         server, workspace = self.factory(self.settings), Workspace(self.settings.data_dir, execution_id)
-        if previous:
-            root = Path(previous["worktree"])
-            if (
-                not root.resolve().is_relative_to((self.settings.data_dir / "workspaces").resolve())
-                or root.is_symlink()
-            ):
-                raise ValueError("Stored workspace is outside manager isolation")
-            workspace.root, workspace.branch = root, previous["branch"]
         self.servers[execution_id] = server
         thread_id, output, heartbeat = None, "", None
         start = time.monotonic()
         try:
+            heartbeat = asyncio.create_task(self._heartbeat(task["id"], execution_id))
+            if previous:
+                root = Path(previous["worktree"])
+                if root.is_symlink() or not root.resolve().is_relative_to(
+                    (self.settings.data_dir / "workspaces").resolve()
+                ):
+                    raise ValueError("Stored workspace is outside manager isolation")
+                workspace.root, workspace.branch = root, previous["branch"]
             await asyncio.to_thread(workspace.prepare, Path(project["path"]))
             await server.start()
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "UPDATE executions SET pid=?,process_start=?,worktree=?,branch=? WHERE id=?",
+                    (
+                        server.process.pid,
+                        process_start(server.process.pid),
+                        str(workspace.root),
+                        workspace.branch,
+                        execution_id,
+                    ),
+                )
+                self.db.event(
+                    conn,
+                    "worker.process_started",
+                    {"pid": server.process.pid, "process_start": process_start(server.process.pid)},
+                    project["id"],
+                    task["id"],
+                    execution_id,
+                )
             saved = self.db.setting("model_routes", {}).get("execution", {"effort": ROLES["execution"]})
             route = server.route(**saved)
             thread_id = await server.thread(
@@ -193,13 +319,21 @@ class Workers:
                         execution_id,
                     ),
                 )
-            heartbeat = asyncio.create_task(self._heartbeat(task["id"], execution_id))
             prompt = {
                 "task": {k: task[k] for k in ("id", "description", "acceptance", "verification")},
                 "project": {k: project[k] for k in ("id", "name", "objective", "instructions")},
                 "global_instructions": self.db.setting("global_instructions", ""),
                 "permissions": Policies(self.db).list(project["id"]),
             }
+            if previous:
+                prompt["resume"] = {
+                    "previous_execution_id": previous["id"],
+                    "previous_output": previous["output"][-12000:],
+                    "operations": self.db.all(
+                        "SELECT action,state,result FROM operations WHERE execution_id=?", (previous["id"],)
+                    ),
+                    "instruction": "Continue from the inspected current workspace. Do not repeat completed or uncertain operations. Reconcile evidence before further work.",
+                }
             turn = await server.request(
                 "turn/start",
                 {
@@ -211,6 +345,22 @@ class Workers:
             )
             with self.db.transaction() as conn:
                 conn.execute("UPDATE executions SET turn_id=? WHERE id=?", (turn["turn"]["id"], execution_id))
+                self.db.event(
+                    conn,
+                    "worker.started",
+                    {"pid": server.process.pid, "thread_id": thread_id, "turn_id": turn["turn"]["id"]},
+                    project["id"],
+                    task["id"],
+                    execution_id,
+                )
+            log.info(
+                "worker.started task=%s execution=%s pid=%s thread=%s turn=%s",
+                task["id"],
+                execution_id,
+                server.process.pid,
+                thread_id,
+                turn["turn"]["id"],
+            )
             while True:
                 try:
                     event = await asyncio.wait_for(queue.get(), 300)
@@ -283,6 +433,7 @@ class Workers:
             self.tasks.heartbeat(task_id, execution_id)
 
     def finish(self, execution_id, task_id, status, output, error, start):
+        log.info("worker.finished task=%s execution=%s status=%s error=%s", task_id, execution_id, status, error)
         with self.db.transaction() as conn:
             conn.execute(
                 "UPDATE approvals SET status='cancelled' WHERE execution_id=? AND status IN ('pending','approved')",
@@ -324,14 +475,16 @@ class Workers:
         with self.db.transaction() as conn:
             rows = conn.execute("SELECT * FROM executions WHERE task_id IS NOT NULL AND finished_at IS NULL").fetchall()
             for row in rows:
-                observed = bool(row["pid"] and process_start(row["pid"]) == row["process_start"])
+                observed = bool(
+                    row["pid"] and row["process_start"] and process_start(row["pid"]) == row["process_start"]
+                )
                 error = "Service restarted; process observed=" + str(observed) + "; reconcile before retry"
                 conn.execute(
                     "UPDATE executions SET status='blocked',error=?,finished_at=? WHERE id=?",
                     (error, time.time(), row["id"]),
                 )
                 conn.execute(
-                    "UPDATE tasks SET status='blocked',blocker=?,revision=revision+1 WHERE id=?",
+                    "UPDATE tasks SET status='blocked',blocker=?,lease_owner=NULL,lease_until=NULL,revision=revision+1,updated_at=strftime('%s','now') WHERE id=? AND status NOT IN ('completed','cancelled')",
                     (error, row["task_id"]),
                 )
                 self.db.event(
@@ -342,6 +495,29 @@ class Workers:
                     row["task_id"],
                     row["id"],
                 )
+
+    def detect_stale(self):
+        # Never replay or signal detached processes. Block abandoned durable claims.
+        rows = self.db.all(
+            "SELECT * FROM tasks WHERE status IN ('running','awaiting_approval') AND lease_until < ?", (time.time(),)
+        )
+        for task in rows:
+            if task["lease_owner"] in self.jobs:
+                continue
+            execution = self.db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],))
+            observed = bool(
+                execution
+                and execution["pid"]
+                and execution["process_start"]
+                and process_start(execution["pid"]) == execution["process_start"]
+            )
+            if execution and execution["agent_id"] == "verification-controller":
+                continue
+            reason = f"Detached worker lease expired; process observed={observed}; reconcile thread, workspace and operations before resume"
+            if execution and not execution["finished_at"]:
+                self.finish(execution["id"], task["id"], "blocked", execution["output"], reason, time.monotonic())
+            else:
+                self.tasks.transition(task["id"], "blocked", task["revision"], blocker=reason)
 
     async def close(self):
         jobs = list(self.jobs.values())

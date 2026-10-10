@@ -203,3 +203,31 @@ def test_rename_api_identity_recency_and_global_context(client):
     restarted = Registry(Database(app.state.db.path), settings.project_roots)
     assert restarted.get(first["id"])["display_name"] == "Bot Manager"
     assert restarted.get(second["id"])["last_used_at"] == timestamp
+
+
+def test_explicit_task_controls_and_verification_config_audit(client):
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    project = browser.post("/api/projects", json={"path": str(settings.project_roots[0] / "one")}).json()
+    task = browser.post(
+        "/api/tasks",
+        json={"project_id": project["id"], "description": "A harmless fixture", "acceptance": "No changes"},
+    ).json()
+    cancelled = browser.patch(
+        f"/api/tasks/{task['id']}", json={"revision": task["revision"], "status": "cancelled"}
+    ).json()
+    assert cancelled["result"] == "accepted" and cancelled["status"] == "cancelled"
+    before = app.state.db.one("SELECT * FROM tasks WHERE id=?", (task["id"],))
+    rejected = browser.post(f"/api/tasks/{task['id']}/start")
+    assert rejected.status_code == 409 and rejected.json()["result"] == "rejected"
+    assert app.state.db.one("SELECT * FROM tasks WHERE id=?", (task["id"],)) == before
+    configured = browser.put(
+        f"/api/projects/{project['id']}/verification", json={"commands": [["python3", "-m", "unittest"]]}
+    ).json()
+    assert configured["result"] == "accepted"
+    assert app.state.db.one("SELECT kind FROM events WHERE kind='verification.configured'")
+    portfolio = browser.get("/api/portfolio").json()
+    assert portfolio["scheduler"]["running"] and portfolio["tasks"][0]["readiness"]["verification_configured"]
+    assert browser.get(f"/api/tasks/{task['id']}/execution-records").json()["task"]["status"] == "cancelled"
+    blocked = browser.post("/api/chat", json={"content": "Do action", "mode": "execute"})
+    assert blocked.status_code == 409 and "Select a project" in blocked.json()["detail"]

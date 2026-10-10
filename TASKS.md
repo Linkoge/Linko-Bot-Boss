@@ -24,3 +24,17 @@ No new features are authorized during checkpoint preparation. After the owner re
 The two DB task blocker texts retain the original 99%-full/no-reboot-window observations. They are historical context, not current disk measurements. They remain blocked until actual acceptance evidence permits a deliberate state transition; do not rewrite them to imply success merely because a reboot is planned.
 
 Do not reopen verified stages without new evidence of failure. Never delete disk consumers, restart unrelated services, or merge/push/deploy as an incidental cleanup step.
+
+
+## Execution reliability follow-up — 2026-10-10
+
+- [x] Trace production chat/tasks/scheduler/policies/processes/App Server/verification/UI with DB and journal evidence.
+- [x] Reproduce Start/Resume/Cancel and missing-verification replay in actual Chromium fixtures.
+- [x] Correct launch receipts, scheduler visibility/eligibility, verification retry, safe resume/retry, stale identity/lease handling and chat execution receipts.
+- [x] Real owner-approved reversible Codex edit → trusted tests → independent review → completed dashboard → persisted restart records.
+- [x] 48 regression tests and static/browser checks; verified production backup and dedicated service rollout preserving existing records.
+- [ ] Owner selects sufficient trusted verification commands and an isolated offline runtime for each production project; documented uv checks are currently unavailable in bubblewrap.
+- [ ] Review the existing 5db40e44 → c78c0078 → 8589648a → ae1ba454 investigation plan and 5b9a10fd follow-up plan before any task retry or supersession. Their original DB statuses are preserved; this maintenance does not certify their task-specific acceptance.
+- [ ] Decide any further reboot/storage acceptance work using current measurements and existing follow-up tasks. Cancelled original tasks are terminal and retained.
+
+See docs/execution-reliability.md for exact task IDs, evidence, supported scope and remaining owner decisions.

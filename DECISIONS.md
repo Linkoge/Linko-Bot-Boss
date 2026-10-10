@@ -18,3 +18,14 @@
 - 2026-10-10: Keep original project name immutable through rename; add optional display_name and last_used_at in schema4. Recency updates atomically with meaningful events and backfills historical usage. All Projects remains a null global context. Permit duplicate display names and disambiguate labels with original name/short stable ID rather than changing identities or paths.
 - 2026-10-10: Fetch documentation/Git observation only on Memory navigation; keep drafts per context in session memory and guard asynchronous context switches/submission completion. Use visualViewport/dynamic height plus safe-area spacing for composer access without adding a third navigation row.
 - 2026-10-10: Deploy only the dedicated manager service after a verified private backup; compare durable records and deployed asset hashes. Preserve existing listeners/auth/policies/scheduler settings. Browser fixture credentials never touch production. Physical Android testing and original Stage6 acceptance remain separate from simulated viewport checks.
+
+
+## 2026-10-10 — Execution evidence and recovery controls
+
+A launch acknowledgement means accepted/queued; only a recorded App Server process/thread/turn establishes execution. Completed worker output and independent verification have separate retry controls. Missing trusted commands gate completion, not initial dispatch. Saving owner verification configuration never silently unblocks or replays existing work.
+
+Resume selects the actual latest worker, preserves rejected task state, validates isolated workspace and PID/start identity, and requires explicit reconciliation for uncertain outcomes. Safe launch retry requires no persisted thread/turn. Startup preserves terminal dispositions and clears obsolete leases. Detached expired work blocks instead of replaying.
+
+Conversation mode rejects mutation. Execute mode deterministically creates a persistent plan and attempts dispatch under the existing scheduler policy; Auto uses manager tools and adds authoritative receipts or an explicit no-task result. No autonomy/policy grants are inferred from model promises. Existing host/browser investigation tasks remain capability-limited; do not add unrestricted shell merely to satisfy them.
+
+The owner approved only the fixture's documented unittest command and exact calculator subtraction→addition edit. Actual ASK was consumed once, independent tests/review passed, and restart retained completion. No production verification command or policy was approved by that fixture decision. Documented uv test commands need a trusted isolated runtime; do not expose host home/network as a shortcut. See docs/execution-reliability.md.

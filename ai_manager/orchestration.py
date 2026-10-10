@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -169,6 +170,16 @@ class Planner:
     def __init__(self, db, registry, settings, server_factory=AppServer):
         self.db, self.registry, self.settings, self.factory = db, registry, settings, server_factory
 
+    def existing_result(self, plan_id):
+        task_ids = [
+            row["task_id"]
+            for row in self.db.all(
+                "SELECT task_id FROM events WHERE kind='task.planned' AND json_extract(payload,'$.plan_id')=? ORDER BY seq",
+                (plan_id,),
+            )
+        ]
+        return {"plan_id": plan_id, "already_applied": True, "task_ids": task_ids}
+
     def apply(self, project_id, goal, proposal, request_key, execution_id=None):
         items = proposal.get("tasks", [])
         if not 1 <= len(items) <= 20:
@@ -190,7 +201,7 @@ class Planner:
         with self.db.transaction() as conn:
             existing = conn.execute("SELECT id FROM plans WHERE request_key=?", (request_key,)).fetchone()
             if existing:
-                return {"plan_id": existing["id"], "already_applied": True}
+                return self.existing_result(existing["id"])
             conn.execute(
                 "INSERT INTO plans VALUES(?,?,?,?,?,?,?,?)",
                 (plan_id, request_key, project_id, goal, "applied", json.dumps(proposal), execution_id, now),
@@ -227,7 +238,7 @@ class Planner:
     async def plan(self, project_id, goal, request_key):
         existing = self.db.one("SELECT id FROM plans WHERE request_key=?", (request_key,))
         if existing:
-            return {"plan_id": existing["id"], "already_applied": True}
+            return self.existing_result(existing["id"])
         project = self.registry.get(project_id)
         with self.db.transaction() as conn:
             self.db.event(conn, "goal.submitted", {}, project_id)
@@ -253,6 +264,54 @@ class Verifier:
         self.db, self.registry, self.settings, self.factory = db, registry, settings, server_factory
         self.tasks = Tasks(db)
 
+    def retry(self, task_id, revision):
+        task = self.tasks.get(task_id)
+        worker = self.db.one(
+            "SELECT * FROM executions WHERE task_id=? AND worktree IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+            (task_id,),
+        )
+        if task["status"] != "blocked" or not worker or worker["status"] != "verifying" or not worker["finished_at"]:
+            raise ValueError("Verification retry requires a confirmed completed worker turn; reconcile other outcomes")
+        if not self.db.setting(f"verification_commands:{task['project_id']}", []):
+            raise ValueError("Owner must configure trusted project verification commands before completion")
+        root = Path(worker["worktree"])
+        if (
+            root.is_symlink()
+            or not root.resolve().is_relative_to((self.settings.data_dir / "workspaces").resolve())
+            or not (root / ".git").is_dir()
+        ):
+            raise ValueError("Verification workspace is missing or outside isolation")
+        with self.db.transaction() as conn:
+            if (
+                conn.execute(
+                    "SELECT count(*) FROM tasks WHERE status IN ('running','verifying','awaiting_approval')"
+                ).fetchone()[0]
+                >= self.settings.max_workers
+            ):
+                raise ValueError("Worker concurrency limit reached; wait before retrying verification")
+            if conn.execute(
+                "SELECT id FROM tasks WHERE project_id=? AND status IN ('running','verifying','awaiting_approval')",
+                (task["project_id"],),
+            ).fetchone():
+                raise ValueError("Project already has active work; wait before retrying verification")
+            cursor = conn.execute(
+                "UPDATE tasks SET status='verifying',blocker='Independent verification required',lease_owner=NULL,lease_until=NULL,revision=revision+1,updated_at=? WHERE id=? AND status='blocked' AND revision=? AND lease_owner IS NULL",
+                (time.time(), task_id, revision),
+            )
+            if cursor.rowcount != 1:
+                raise ValueError("Task changed; refresh before editing")
+            self.db.event(
+                conn, "verification.retry_requested", {"worker_execution_id": worker["id"]}, task["project_id"], task_id
+            )
+        self.tasks.sync(task["project_id"])
+        return {
+            "result": "accepted",
+            "status": "verifying",
+            "task_id": task_id,
+            "project_id": task["project_id"],
+            "message": "Independent verification queued for the existing workspace; worker will not be replayed",
+        }
+
     async def verify(self, task_id):
         task = self.tasks.get(task_id)
         if task["status"] != "verifying":
@@ -267,7 +326,9 @@ class Verifier:
                 task_id,
                 "blocked",
                 task["revision"],
-                blocker="Owner must configure trusted project verification commands before completion",
+                blocker="Owner must configure trusted project verification commands before completion"
+                if not commands
+                else "No isolated worker workspace is available for verification",
             )
             return False
         workspace = Workspace(self.settings.data_dir, execution["id"])
@@ -467,8 +528,45 @@ class Scheduler:
         )
         self.loop_job = None
         self.reviews = {}
+        self.tick_lock = asyncio.Lock()
+        self.last_tick = None
+        self.last_error = ""
+
+    def snapshot(self):
+        return {
+            "enabled": self.db.setting("scheduler_enabled", False),
+            "running": bool(self.loop_job and not self.loop_job.done()),
+            "scope": self.db.setting("scheduler_scope", None),
+            "batch": self.db.setting("scheduler_batch", {}),
+            "max_workers": self.settings.max_workers,
+            "last_tick": self.last_tick,
+            "error": self.last_error,
+            "active_workers": list(self.workers.jobs),
+            "active_verifications": list(self.reviews),
+        }
+
+    def review_finished(self, job, task_id):
+        self.reviews.pop(task_id, None)
+        if job.cancelled():
+            return
+        error = job.exception()
+        if error:
+            self.last_error = str(error)[:2000] or type(error).__name__
+            logging.getLogger(__name__).error("verification.failed task=%s error=%s", task_id, self.last_error)
+            with self.db.transaction() as conn:
+                self.db.event(conn, "verification.error", {"error": self.last_error}, task_id=task_id)
+            task = Tasks(self.db).get(task_id)
+            if task["status"] == "verifying":
+                Tasks(self.db).transition(task_id, "blocked", task["revision"], blocker=self.last_error)
 
     async def tick(self):
+        async with self.tick_lock:
+            self.last_tick = time.time()
+            await self._tick()
+            self.last_error = ""
+
+    async def _tick(self):
+        self.workers.detect_stale()
         if self.db.setting("daily_summaries", False):
             day = datetime.now(timezone.utc).date().isoformat()
             with self.db.transaction() as conn:
@@ -496,8 +594,16 @@ class Scheduler:
             if task["status"] == "verifying" and task["id"] not in self.reviews and task["lease_owner"] is None:
                 job = asyncio.create_task(self.verifier.verify(task["id"]))
                 self.reviews[task["id"]] = job
-                job.add_done_callback(lambda _, task_id=task["id"]: self.reviews.pop(task_id, None))
+                job.add_done_callback(lambda job, task_id=task["id"]: self.review_finished(job, task_id))
         if not self.db.setting("scheduler_enabled", False):
+            return
+        batch = self.db.setting("scheduler_batch", {})
+        if (
+            batch.get("limit")
+            and sum(Tasks(self.db).get(task_id)["status"] == "completed" for task_id in batch.get("task_ids", []))
+            >= batch["limit"]
+        ):
+            self.db.set_setting("scheduler_enabled", False)
             return
         scope = self.db.setting("scheduler_scope", None)
         rows = self.db.all(
@@ -505,6 +611,8 @@ class Scheduler:
         )
         for task in rows:
             if scope and task["project_id"] != scope:
+                continue
+            if not self.workers.readiness(task["id"])["dispatchable"]:
                 continue
             batch = self.db.setting("scheduler_batch", {})
             if batch.get("limit"):
@@ -537,8 +645,10 @@ class Scheduler:
             try:
                 await self.tick()
             except Exception as error:
+                self.last_error = str(error)[:2000] or type(error).__name__
+                logging.getLogger(__name__).exception("scheduler.error")
                 with self.db.transaction() as conn:
-                    self.db.event(conn, "scheduler.error", {"error": type(error).__name__})
+                    self.db.event(conn, "scheduler.error", {"error": self.last_error})
             await asyncio.sleep(2)
 
     def start(self):
@@ -551,7 +661,9 @@ class Scheduler:
                 "SELECT * FROM executions WHERE task_id IS NULL AND agent_id IN ('planning','verification','summarization') AND finished_at IS NULL"
             ).fetchall()
             for row in rows:
-                observed = bool(row["pid"] and process_start(row["pid"]) == row["process_start"])
+                observed = bool(
+                    row["pid"] and row["process_start"] and process_start(row["pid"]) == row["process_start"]
+                )
                 error = f"Service restarted; process observed={observed}; inspect role output before retry"
                 conn.execute(
                     "UPDATE executions SET status='blocked',error=?,finished_at=? WHERE id=?",
@@ -623,6 +735,9 @@ class Scheduler:
             if not project_id or not args.get("goal"):
                 raise ValueError("Select a project and specify the delegated goal")
             result = await self.planner.plan(project_id, args["goal"], params["callId"])
+            await self.tick()
+            result["tasks"] = self.receipts(result.get("task_ids", []))
+            result["scheduler"] = self.snapshot()
         elif action in {"prioritize", "pause_project", "resume_project"}:
             if not project_id:
                 raise ValueError("Specify an existing project")
@@ -646,7 +761,14 @@ class Scheduler:
             self.db.set_setting("scheduler_batch", {"limit": limit, "task_ids": []})
             self.db.set_setting("scheduler_scope", project_id)
             self.db.set_setting("scheduler_enabled", True)
-            result = {"enabled": True, "scope": project_id or "All Projects", "completion_limit": limit}
+            await self.tick()
+            result = {
+                "result": "accepted",
+                "enabled": True,
+                "scope": project_id or "All Projects",
+                "completion_limit": limit,
+                "scheduler": self.snapshot(),
+            }
         elif action == "freeze_projects":
             until = (
                 datetime.fromisoformat(args["until"]).replace(tzinfo=timezone.utc)
@@ -668,3 +790,33 @@ class Scheduler:
         with self.db.transaction() as conn:
             self.db.event(conn, "manager.action", {"action": action, "result": result}, project_id)
         return result
+
+    def receipts(self, task_ids):
+        records = []
+        for task_id in task_ids:
+            task = Tasks(self.db).get(task_id)
+            worker = self.workers.latest_worker(task_id)
+            ready = self.workers.readiness(task_id)
+            blocker = ready["reason"] if task["status"] == "pending" else task["blocker"]
+            scope = self.db.setting("scheduler_scope", None)
+            if task["status"] == "pending" and not blocker:
+                blocker = (
+                    "Scheduler paused; enable scheduling or Start worker"
+                    if not self.db.setting("scheduler_enabled", False)
+                    else "Outside scheduler scope"
+                    if scope and scope != task["project_id"]
+                    else "Waiting for scheduler dispatch/batch budget"
+                )
+            records.append(
+                {
+                    "task_id": task_id,
+                    "project_id": task["project_id"],
+                    "project": self.registry.get(task["project_id"])["name"],
+                    "status": task["status"],
+                    "blocker": blocker,
+                    "worker": None
+                    if not worker
+                    else {k: worker[k] for k in ("id", "status", "pid", "thread_id", "turn_id")},
+                }
+            )
+        return records

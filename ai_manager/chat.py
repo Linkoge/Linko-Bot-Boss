@@ -21,6 +21,7 @@ class Chat:
         self.db, self.registry, self.server = db, registry, server
         self.jobs = {}
         self.action_handler = None
+        self.receipt_provider = None
         self.workspace = db.path.parent / "chat-workspace"
         self.workspace.mkdir(exist_ok=True, mode=0o700)
 
@@ -83,7 +84,9 @@ class Chat:
         saved = self.db.setting("model_routes", {})
         return {role: self.server.route(**saved.get(role, {"effort": effort})) for role, effort in ROLES.items()}
 
-    async def submit(self, project_id, content):
+    async def submit(self, project_id, content, mode="auto"):
+        if mode == "execute" and not project_id:
+            raise ValueError("Select a project for execution mode")
         if not content.strip() or len(content) > 24000:
             raise ValueError("Message must be 1–24000 characters")
         conversation = self.conversation(project_id)
@@ -116,15 +119,42 @@ class Chat:
                 ),
             )
             self.db.event(conn, "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
-        job = asyncio.create_task(self._run(execution_id, response_id, conversation, content, routes["interactive"]))
+        job = asyncio.create_task(
+            self._run(execution_id, response_id, conversation, content, routes["interactive"], mode)
+        )
         self.jobs[execution_id] = job
         job.add_done_callback(lambda _: self.jobs.pop(execution_id, None))
-        return {"execution_id": execution_id, "message_id": response_id}
+        return {
+            "result": "accepted",
+            "status": "queued",
+            "mode": mode,
+            "execution_id": execution_id,
+            "message_id": response_id,
+            "message": "Execution request accepted; planning and dispatch follow the configured scheduler policy"
+            if mode == "execute"
+            else "Conversation accepted",
+        }
 
-    async def _run(self, execution_id, response_id, conversation, content, route):
+    async def _run(self, execution_id, response_id, conversation, content, route, mode="auto"):
         thread_id, output, now = None, "", time.monotonic()
         try:
             from .orchestration import MANAGER_TOOL
+
+            if mode == "execute":
+                if not self.action_handler:
+                    raise ValueError("Execution delegation is unavailable")
+                result = await self.action_handler(
+                    conversation["project_id"],
+                    {
+                        "tool": "manager_action",
+                        "callId": "execute:" + execution_id,
+                        "arguments": {"action": "plan_goal", "goal": content},
+                        "manager_execution_id": execution_id,
+                    },
+                )
+                output = "Execution request recorded.\n" + self.receipt_text(result.get("tasks", []))
+                self._finish(execution_id, response_id, "completed", "", output, now)
+                return
 
             thread_id = await self.server.thread(
                 self.workspace,
@@ -136,9 +166,19 @@ class Chat:
             if self.action_handler:
 
                 async def action(params):
-                    return await self.action_handler(
+                    args = params["arguments"]
+                    args = json.loads(args) if isinstance(args, str) else args
+                    if mode == "conversation" and args.get("action") not in {"read_document", "show_approvals"}:
+                        raise ValueError("Conversation mode does not delegate work; choose Execute or Auto")
+                    result = await self.action_handler(
                         conversation["project_id"], {**params, "manager_execution_id": execution_id}
                     )
+                    if args.get("action") == "plan_goal":
+                        with self.db.transaction() as conn:
+                            self.db.event(
+                                conn, "chat.delegated", result, conversation["project_id"], execution_id=execution_id
+                            )
+                    return result
 
                 self.server.tool_handlers[thread_id] = action
             queue = asyncio.Queue()
@@ -155,6 +195,10 @@ class Chat:
                 + json.dumps(self.context(conversation["project_id"]))
                 + "\nOwner message:\n"
                 + content
+                + "\nMode: "
+                + mode
+                + "\nEffective model/effort: "
+                + json.dumps(route)
             )
             started = await self.server.request(
                 "turn/start",
@@ -221,6 +265,28 @@ class Chat:
                     if status not in {"completed", "interrupted", "failed"}:
                         status = "failed"
                     error = (turn.get("error") or {}).get("message", "")
+                    delegated = self.db.all(
+                        "SELECT payload FROM events WHERE execution_id=? AND kind='chat.delegated' ORDER BY seq",
+                        (execution_id,),
+                    )
+                    if delegated:
+                        ids = [
+                            task_id
+                            for event in delegated
+                            for task_id in json.loads(event["payload"]).get("task_ids", [])
+                        ]
+                        receipts = (
+                            self.receipt_provider(ids)
+                            if self.receipt_provider
+                            else [
+                                record
+                                for event in delegated
+                                for record in json.loads(event["payload"]).get("tasks", [])
+                            ]
+                        )
+                        output += "\n\nManager execution records:\n" + self.receipt_text(receipts)
+                    elif mode == "auto" and self.action_handler:
+                        output += "\n\nManager execution records: no executable task was created by this message."
                     self._finish(execution_id, response_id, status, error, output, now)
                     return
         except asyncio.CancelledError:
@@ -246,7 +312,24 @@ class Chat:
                 (status, error, output, time.time(), (time.monotonic() - start) * 1000, execution_id),
             )
             conn.execute("UPDATE messages SET status=? WHERE id=?", (status, response_id))
+            conn.execute("UPDATE messages SET content=? WHERE id=?", (output, response_id))
             self.db.event(conn, "chat.finished", {"status": status, "error": error}, execution_id=execution_id)
+
+    @staticmethod
+    def receipt_text(records):
+        return (
+            "\n".join(
+                f"Task {r['task_id']} · {r['project']} · {r['status']} · "
+                + (
+                    f"Worker {r['worker']['id']} (PID {r['worker']['pid'] or 'launch pending'}, thread {r['worker']['thread_id'] or 'pending'}, turn {r['worker']['turn_id'] or 'pending'})"
+                    if r["worker"]
+                    else "No worker started"
+                )
+                + (f" · Blocker: {r['blocker']}" if r["blocker"] else "")
+                for r in records
+            )
+            or "No task records available; inspect planning execution before retry."
+        )
 
     async def interrupt(self, execution_id):
         execution = self.db.one("SELECT * FROM executions WHERE id=? AND agent_id='manager'", (execution_id,))
@@ -263,7 +346,9 @@ class Chat:
         with self.db.transaction() as conn:
             rows = conn.execute("SELECT * FROM executions WHERE agent_id='manager' AND finished_at IS NULL").fetchall()
             for row in rows:
-                observed = bool(row["pid"] and process_start(row["pid"]) == row["process_start"])
+                observed = bool(
+                    row["pid"] and row["process_start"] and process_start(row["pid"]) == row["process_start"]
+                )
                 error = (
                     "Service restarted; previous process still observed"
                     if observed
