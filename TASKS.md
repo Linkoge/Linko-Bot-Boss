@@ -48,3 +48,21 @@ See docs/execution-reliability.md for exact task IDs, evidence, supported scope 
 - [x] Validate isolated real endpoint Start rejection, verification rejection, configuration dialog and accepted cancellation; rerun 48 tests and existing browser smoke.
 - [x] Verify updated static assets at the live URL without restarting or mutating production tasks.
 - [ ] Existing production verification/runtime/acceptance decisions above remain open. Repeated Start/Retry clicks do not satisfy prerequisites.
+
+
+## Autonomy upgrade — current checkpoint, 2026-10-10
+
+- [x] Phase1: inspect architecture, project documentation, policies, verification, scheduler/workers, task state, approvals, UI/tests and production blockers; record baseline and activation contract before policy work.
+- [x] Phase2: legacy-safe owner-activated profiles, stable scoped ALLOW/ASK/DENY permissions, effective explanations, audited reversible settings and authenticated hash-bound proposals.
+- [x] Phase3: static command discovery, reusable per-project exact approval/revocation/config identity, consolidated controls and offline dependency proposals.
+- [x] Phase4: code/documentation/research/infrastructure/investigation evidence plus independent actual-file review; task acceptance can require commit/merge.
+- [x] Phase5: permission-gated automatic dispatch, lease/operation reconciliation, changed-prerequisite recovery, duplicate prevention and completed-work verification recovery.
+- [x] Phase6: preserve two-row navigation; add profile/history/commands/integration settings, monitoring, immediate accurate action receipts and blocked-integration reconciliation.
+- [x] Phase7 development acceptance:74 regression tests, Ruff/JS, desktop/mobile Chromium, real ChatGPT-authenticated Codex fixture completion/restart and unauthorized-operation denial; checkpoint3e24e70.
+- [ ] Owner's consolidated rollout + global High Autonomy activation approval (explicit requested boundary; proposal in docs/autonomy-upgrade.md).
+- [ ] After approval: online private DB backup/integrity, dedicated backend rollout/additive migration, authenticated fresh proposal activation and live state/health checks. Preserve scheduler scope/budget and all existing records.
+- [ ] Owner approve adequate project-specific commands/offline provisioning and any auto-merge target; discovery candidates alone do not resolve production investigations or authorize host access. Existing uncertain/host-capability blockers require evidence, never blind replay.
+
+Private acceptance records: autonomy-upgrade-evidence-20261010; real task591fb6036cb54ee4bf094efa12bcc4a8 belongs only to the isolated fixture. No original production task was discarded, duplicated, requeued or marked completed.
+
+Final completion-state checkpoint: 5de4607. Verified workers and verification-controller records now reach completed before the locked handoff export; the 74-test regression confirms backend/history/memory consistency.

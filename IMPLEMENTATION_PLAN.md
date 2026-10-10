@@ -47,3 +47,12 @@ Current production readiness remains project-specific: all ten projects need own
 ## Visible control feedback follow-up — 2026-10-10
 
 Completed the owner-reported live UI investigation: correlate real requests/rejections, reproduce offscreen errors, implement per-card receipts and prerequisite navigation, exercise real isolated API responses at desktop/phone viewports, and verify served asset hashes. Validation passed: 48 pytest, Ruff, JS syntax, existing browser smoke and new task feedback regression. Production task state and security/verification gates remain intact. Adequate production verification and original task acceptance remain the previously documented external prerequisites.
+
+
+## High autonomy upgrade delivery — 2026-10-10
+
+All seven development phases have been executed incrementally using the existing architecture (checkpoints6511cb3,c1ec386,3e24e70). Baseline/activation contract preceded policy implementation. Profiles/permissions, reusable command discovery/approval, task-specific evidence, lease-safe dispatch/recovery, completion-safe local integration and two-row dashboard controls are implemented. Verification:74 regression tests, static checks, desktop/mobile Chromium and a real ChatGPT-authenticated Codex fixture that completed and survived its service restart; unauthorized deployment was blocked. Full implementation/evidence and exact consolidated proposal:docs/autonomy-upgrade.md.
+
+Remaining operational gate is the owner's explicit rollout/global High Autonomy activation decision, required by this request. On approval, preserve live records with an integrity-checked online backup, apply additive schema5 via dedicated backend rollout, activate the fresh authenticated policy proposal, verify live backend/frontend consistency and refresh project memory. No broader policy/command activation or production service restart occurred during development. Existing scheduler scope/budget are preserved; adequate reusable production verification, supported capabilities and project merge targets remain owner-scoped prerequisites, not conclusions inferred from successful fixtures.
+
+Final completion-state checkpoint: 5de4607. Verified workers and verification-controller records now reach completed before the locked handoff export; the 74-test regression confirms backend/history/memory consistency.

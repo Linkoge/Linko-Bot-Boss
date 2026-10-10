@@ -34,3 +34,16 @@ The owner approved only the fixture's documented unittest command and exact calc
 ## 2026-10-10 — Task feedback must be visible at the action
 
 A status unchanged after HTTP 409 is correct but insufficient feedback. Show requesting and authoritative accepted/rejected/failed responses in the originating task card, retain them across polling, and scroll the receipt into view. Explain blockers before the action and provide direct navigation to unfinished prerequisites. Keep the backend dependency, approval and verification gates unchanged. UI fixture rows are explicitly display-only data and never evidence of Codex execution. Static-only deployment requires verifying the live served bytes, without a service restart.
+
+
+## 2026-10-10 — Autonomy upgrade decisions
+
+Retain legacy permissions until explicit consolidated owner activation; a tested recommended profile is not an implicit grant. Preserve owner overrides and scheduler scope/budget. Policy precedence is technical capability/workspace boundaries, explicit project policy, explicit global policy, selected profile defaults; authenticated owner overrides are recorded with prior effective state. Profile hashes/epochs and revocation prevent stale authorization, and workers have no security-administration tool. Maximum policy declarations cannot create missing infrastructure/external capabilities.
+
+Bind reusable command approvals to exact argv, cwd, sandbox environment and configuration hashes. Discovery never executes repository scripts or approves candidates. Renewal may use confirmed isolated worker configuration without mutating source. Use system runtimes/offline project artifacts and fail closed when the isolated environment is inadequate. Disposable build copies allow generated artifacts while preserving original inputs; systemd cgroups/time/log/file guards bound execution. The monitored build growth budget is not a disk quota.
+
+All task kinds require explicit acceptance and independent evidence, not an AI success claim. Record partial/failed/blocked/unverified separately. Feed independent reviewers consumed approval receipts and operation states; unsupported host state and unfetched external claims remain limitations. Recover only known safe blockers after prerequisite identity changes; do not replay uncertain worker/integration operations. Required merge/commit obligations finish before completion/checkpoint. Clean, baseline-matching fast-forward source merges need explicit project target authorization; blocked integration needs owner reconciliation and fresh verification.
+
+Use installed ChatGPT-authenticated Codex catalog/routes, not invented model/cost assumptions or separately billed APIs. The actual gpt-6.1-sol/medium fixture passed; catalog names alone do not prove subscription access. Preserve old-backend frontend compatibility while approval-gated backend rollout is pending. Keep private evidence outside Git and preserve all historical docs/MASTER_SPEC.md. See docs/autonomy-upgrade.md.
+
+Final completion-state checkpoint: 5de4607. Verified workers and verification-controller records now reach completed before the locked handoff export; the 74-test regression confirms backend/history/memory consistency.
