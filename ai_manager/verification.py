@@ -27,6 +27,7 @@ ENVIRONMENT = {
     "filesystem": "project-only",
 }
 CONFIG_NAMES = {
+    ".linko-runtime.json",
     "pyproject.toml",
     "pytest.ini",
     "tox.ini",

@@ -70,6 +70,7 @@ def test_plan_atomic_idempotent_and_dependency_validation(worker_env):
     assert len(Tasks(db).list()) == 2
 
 
+@pytest.mark.host_runtime
 async def test_evidence_based_auto_completion(worker_env):
     settings, db, registry, project, source = worker_env
     db.set_setting(

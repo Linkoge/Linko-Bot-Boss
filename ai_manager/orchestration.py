@@ -100,6 +100,7 @@ MANAGER_TOOL = {
                     "freeze_projects",
                     "show_approvals",
                     "read_document",
+                    "owner_admin",
                 ],
             },
             "project_id": {"type": "string"},
@@ -107,6 +108,10 @@ MANAGER_TOOL = {
             "limit": {"type": "integer"},
             "until": {"type": "string"},
             "path": {"type": "string"},
+            "request": {
+                "type": "string",
+                "description": "JSON owner administration request: id, grant_id, action, project_id, arguments. Only existing scoped grants authorize actions; workers cannot administer policy.",
+            },
         },
         "required": ["action"],
         "additionalProperties": False,
@@ -416,6 +421,9 @@ class Verifier:
         heartbeat_job = asyncio.create_task(heartbeat())
         authorization_epoch = self.db.setting("policy_epoch", 0)
         try:
+            from .verification_runtime import VerificationRuntime
+
+            await VerificationRuntime(self.db, self.settings).provision(task["project_id"], workspace, task_id, lease)
             dependency_commands = VerificationCommands(self.db, self.registry).approved(
                 task["project_id"], workspace.root, "dependency"
             )
@@ -957,6 +965,16 @@ class Scheduler:
         if selected_project and project_id != selected_project:
             raise ValueError("Select All Projects to authorize cross-project management")
         action = args["action"]
+        if action == "owner_admin":
+            from .administration import Administration
+
+            execution_id = params.get("manager_execution_id")
+            if not execution_id:
+                raise ValueError("Owner administration requires an active manager conversation")
+            request = json.loads(args["request"])
+            return Administration(self.db, self.registry, self.settings, self.verifier).execute(
+                request, "authenticated_owner", execution_id, selected_project
+            )
         if action == "read_document":
             if not project_id or not args.get("path"):
                 raise ValueError("Select a project and provide a relative document path")

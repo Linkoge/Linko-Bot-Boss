@@ -47,8 +47,16 @@ class Chat:
         return {"conversation": conversation, "messages": list(reversed(rows))}
 
     def context(self, project_id):
+        from .administration import Administration
+
+        grants = [
+            g
+            for g in Administration(self.db, self.registry, self.server.settings).grants()
+            if g["active"] and (not project_id or g["project_id"] == project_id)
+        ]
         if not project_id:
             return {
+                "owner_administration_grants": grants,
                 "selected_context": "All Projects",
                 "projects": [
                     {k: p[k] for k in ("id", "name", "objective", "priority", "status")} for p in self.registry.list()
@@ -61,6 +69,7 @@ class Chat:
             }
         project = self.registry.get(project_id)
         return {
+            "owner_administration_grants": grants,
             "selected_context": {
                 k: project[k]
                 for k in ("id", "name", "description", "objective", "success_criteria", "status", "instructions")
@@ -169,7 +178,13 @@ class Chat:
                     args = params["arguments"]
                     args = json.loads(args) if isinstance(args, str) else args
                     if mode == "conversation" and args.get("action") not in {"read_document", "show_approvals"}:
-                        raise ValueError("Conversation mode does not delegate work; choose Execute or Auto")
+                        if (
+                            args.get("action") != "owner_admin"
+                            or json.loads(args.get("request", "{}")).get("action") != "snapshot"
+                        ):
+                            raise ValueError(
+                                "Conversation mode does not delegate work or mutate administration; choose Execute or Auto"
+                            )
                     result = await self.action_handler(
                         conversation["project_id"], {**params, "manager_execution_id": execution_id}
                     )
@@ -285,7 +300,15 @@ class Chat:
                             ]
                         )
                         output += "\n\nManager execution records:\n" + self.receipt_text(receipts)
-                    elif mode == "auto" and self.action_handler:
+                    administration = self.db.all(
+                        "SELECT seq,payload FROM events WHERE execution_id=? AND kind IN ('owner_admin.completed','owner_admin.failed','owner_admin.rejected') ORDER BY seq",
+                        (execution_id,),
+                    )
+                    if administration:
+                        output += "\n\nPersistent owner administration receipts:\n" + "\n".join(
+                            json.dumps({"event": e["seq"], **json.loads(e["payload"])}) for e in administration
+                        )
+                    elif not delegated and mode == "auto" and self.action_handler:
                         output += "\n\nManager execution records: no executable task was created by this message."
                     self._finish(execution_id, response_id, status, error, output, now)
                     return

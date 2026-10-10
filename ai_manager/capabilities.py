@@ -122,6 +122,10 @@ class Capabilities:
                 commands = args["commands"]
                 if not commands:
                     raise ValueError("No owner-configured verification commands")
+                from .verification_runtime import VerificationRuntime
+                await VerificationRuntime(self.db, self.settings).provision(
+                    self.project_id, self.workspace, self.task_id, self.execution_id
+                )
                 if operation == "test":
                     from .verification_workspace import prepare_copy, run_checked
 

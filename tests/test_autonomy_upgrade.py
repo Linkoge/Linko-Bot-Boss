@@ -170,6 +170,7 @@ def test_discovery_preserves_old_owner_commands_and_rejects_symlink_config(worke
         ),
     ],
 )
+@pytest.mark.host_runtime
 async def test_task_specific_evidence_and_independent_review(worker_env, kind, body, spec):
     settings, db, registry, project, source = worker_env
     task = Tasks(db).add(
@@ -226,6 +227,7 @@ async def test_documentation_unrelated_change_and_research_claims_fail(worker_en
         inspect(task, workspace, base, [])
 
 
+@pytest.mark.host_runtime
 async def test_missing_configuration_recovers_without_worker_replay_or_duplicate(worker_env):
     settings, db, registry, project, source = worker_env
     task = Tasks(db).add(project["id"], "Inspect README", "Original content")
@@ -274,6 +276,7 @@ async def test_uncertain_execution_is_never_automatically_recovered(worker_env):
     await scheduler.close()
 
 
+@pytest.mark.host_runtime
 async def test_verification_sandbox_readonly_network_home_resources_and_timeout(worker_env):
     settings, db, registry, project, source = worker_env
     workspace = Workspace(settings.data_dir, "sandbox-v2")
@@ -359,6 +362,7 @@ def test_profile_inherit_reversal_restores_global_tracking(worker_env):
     assert db.setting(f"autonomy_profile:{project['id']}") is None
 
 
+@pytest.mark.host_runtime
 async def test_workspace_config_renewal_can_be_approved_without_source_changes(worker_env):
     settings, db, registry, project, source = worker_env
     (source / "pyproject.toml").write_text('[tool.pytest.ini_options]\naddopts="-q"\n')
@@ -400,6 +404,7 @@ async def test_workspace_config_renewal_can_be_approved_without_source_changes(w
     await workers.close()
 
 
+@pytest.mark.host_runtime
 async def test_revocation_during_command_blocks_completion(worker_env, monkeypatch):
     settings, db, registry, project, source = worker_env
     commands = VerificationCommands(db, registry)
@@ -423,6 +428,7 @@ async def test_revocation_during_command_blocks_completion(worker_env, monkeypat
     await workers.close()
 
 
+@pytest.mark.host_runtime
 async def test_offline_provisioning_stays_isolated_and_approved(worker_env):
     settings, db, registry, project, source = worker_env
     (source / ".gitignore").write_text("offline-dependency.txt\n")
@@ -490,6 +496,7 @@ def test_plan_schema_strict_object_keys():
         (["linko-unavailable-runtime-fixture"], "runtime_unavailable"),
     ],
 )
+@pytest.mark.host_runtime
 async def test_runtime_dependency_recovery_is_change_triggered_without_replay(worker_env, command, code):
     settings, db, registry, project, source = worker_env
     commands = VerificationCommands(db, registry)
@@ -517,6 +524,7 @@ async def test_runtime_dependency_recovery_is_change_triggered_without_replay(wo
     await workers.close()
 
 
+@pytest.mark.host_runtime
 async def test_build_outputs_are_disposable_and_test_input_mutation_fails(worker_env):
     settings, db, registry, project, source = worker_env
     from ai_manager.verification_workspace import prepare_copy, run_checked

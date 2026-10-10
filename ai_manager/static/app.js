@@ -26,7 +26,7 @@ async function boot(){
 }
 async function enter(){
   $('auth-screen').hidden=true;$('app').hidden=false;notice('');
-  const settings=await api('/api/settings');state.upgradeAvailable=settings.autonomy_upgrade_available===true;for(const id of ['switch-profile','policy-history','configure-integration','discover-verification','verification-overview','propose-command','batch-approvals'])$(id).hidden=!state.upgradeAvailable;$('global-instructions').value=settings.global_instructions;$('scheduler-status').textContent=settings.scheduler_enabled?'Scheduler enabled':'Scheduler paused';
+  const settings=await api('/api/settings');state.upgradeAvailable=settings.autonomy_upgrade_available===true;$('owner-administration').hidden=settings.owner_administration_available!==true;for(const id of ['switch-profile','policy-history','configure-integration','discover-verification','verification-overview','propose-command','batch-approvals'])$(id).hidden=!state.upgradeAvailable;$('global-instructions').value=settings.global_instructions;$('scheduler-status').textContent=settings.scheduler_enabled?'Scheduler enabled':'Scheduler paused';
   await refresh();await selectProject(state.project);
 }
 async function refresh(){
@@ -301,4 +301,12 @@ $('propose-command').onclick=action(async()=>{
     await api(`/api/projects/${project}/verification/commands`,{method:'POST',body:JSON.stringify({argv:JSON.parse(values.argv),cwd:values.cwd,purpose:values.purpose,execution_id:values.execution_id||null})});
     return {message:'Command proposed. Use Discover and review commands to approve its exact scope.'};
   });
+});
+
+$('owner-administration').onclick=action(async()=>{
+  const data=await api('/api/administration');
+  const grants=data.grants.filter(g=>g.active && (!state.project || g.project_id===state.project));
+  const fields=[{name:'receipts',label:'Persistent receipts: actual result and original scoped authorization',value:JSON.stringify(data,null,2),long:true,readonly:true,rows:10}];
+  grants.forEach((g,i)=>fields.push({name:`grant_${i}`,label:`${g.id}: ${g.actions.join(', ')}; ${g.project_id||'global'}; until revoked`,options:[['keep','Keep authorization'],['revoke','Revoke authorization']]}));
+  editor('Owner-authorized chat administration',fields,async values=>{const receipts=[];for(let i=0;i<grants.length;i++)if(values[`grant_${i}`]==='revoke')receipts.push(await api(`/api/administration/grants/${encodeURIComponent(grants[i].id)}`,{method:'DELETE'}));return {result:'accepted',message:'Administration grants reviewed',receipts};});
 });

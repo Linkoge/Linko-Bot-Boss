@@ -119,6 +119,21 @@ def main():
                 expect(page.locator("#editor-title")).to_have_text("Policy change history")
                 assert "policy.profile_activated" in page.locator("textarea[name=history]").input_value()
                 page.locator("#editor-cancel").click()
+                page.evaluate(
+                    """async pid => {
+                    const auth = await (await fetch('/api/auth-status')).json();
+                    const response = await fetch('/api/administration/grants', {method:'POST', headers:{'Content-Type':'application/json','X-CSRF-Token':auth.csrf}, body:JSON.stringify({id:'browser-manager', project_id:pid, actions:['snapshot'], authorization:'Explicit fixture owner authorization'})});
+                    if(!response.ok) throw new Error('Fixture administration grant failed');
+                }""",
+                    pid,
+                )
+                page.locator("#owner-administration").click()
+                expect(page.locator("#editor-title")).to_have_text("Owner-authorized chat administration")
+                assert "browser-manager" in page.locator("textarea[name=receipts]").input_value()
+                page.locator("select[name=grant_0]").select_option("revoke")
+                page.locator("#editor-form button.primary").click()
+                expect(page.locator("#editor")).not_to_be_visible()
+                assert not api("/api/administration")["grants"][0]["active"]
                 page.screenshot(path=str(root / "desktop.png"), full_page=True)
                 page.set_viewport_size({"width": 393, "height": 851})
                 assert page.locator(".navigation").bounding_box()["height"] <= 96
@@ -136,6 +151,7 @@ def main():
                             "persistent_command_approval_and_revocation": True,
                             "two_row_navigation": True,
                             "mobile_dialog": True,
+                            "administration_scope_and_revocation": True,
                         },
                         indent=2,
                     )

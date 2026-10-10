@@ -11,6 +11,7 @@ dependencies = [
 [tool.pytest.ini_options]
 pythonpath = ["."]
 asyncio_mode = "auto"
+markers = ["host_runtime: needs an owner-supervised systemd/bubblewrap runner outside nested verification"]
 
 [tool.ruff]
 line-length = 120

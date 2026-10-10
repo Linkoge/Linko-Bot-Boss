@@ -207,6 +207,12 @@ class Workspace:
             "--",
             *argv,
         ]
+        runtime = self.root / ".linko-runtime"
+        if runtime.is_symlink():
+            raise ValueError("Verification runtime cannot be a symlink")
+        if runtime.is_dir():
+            position = args.index("--chdir")
+            args[position:position] = ["--ro-bind", str(runtime), "/workspace/.linko-runtime"]
         process = await asyncio.create_subprocess_exec(
             *args, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True
         )

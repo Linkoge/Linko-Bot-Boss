@@ -156,7 +156,7 @@ class Policies:
         result["proposal_hash"] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
         return result
 
-    def activate(self, profile, project_id, proposal_hash):
+    def activate(self, profile, project_id, proposal_hash, authorized_by="authenticated_owner"):
         # Called only through authenticated owner routes, never a worker tool.
         with self.db.transaction() as conn:
             proposal = self.proposal(profile, project_id)
@@ -175,7 +175,7 @@ class Policies:
             )
             conn.execute("UPDATE approvals SET status='invalidated' WHERE status IN ('pending','approved')")
             self.db.event(
-                conn, "policy.profile_activated", {**proposal, "authorized_by": "authenticated_owner"}, project_id
+                conn, "policy.profile_activated", {**proposal, "authorized_by": authorized_by}, project_id
             )
         return {
             "result": "accepted",

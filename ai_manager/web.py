@@ -154,6 +154,13 @@ class NotificationSettings(BaseModel):
     daily_summaries: bool
 
 
+class AdministrationGrant(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    project_id: str | None = None
+    actions: list[str] = Field(min_length=1, max_length=20)
+    authorization: str = Field(min_length=1, max_length=5000)
+
+
 def create_app(settings: Settings | None = None, server=None):
     settings = settings or Settings()
     settings.prepare()
@@ -232,6 +239,31 @@ def create_app(settings: Settings | None = None, server=None):
         if not session:
             raise HTTPException(401, "Login required")
         return session
+
+    from .administration import Administration
+
+    administration = Administration(db, registry, settings, verifier)
+
+    @app.get("/api/administration", dependencies=[Depends(require_owner)])
+    def administration_status():
+        return {
+            "grants": administration.grants(),
+            "receipts": db.all(
+                "SELECT seq,payload FROM events WHERE kind LIKE 'owner_admin.%' ORDER BY seq DESC LIMIT 50"
+            ),
+        }
+
+    @app.post("/api/administration/grants", dependencies=[Depends(require_owner)])
+    def administration_grant(body: AdministrationGrant):
+        return administration.grant(**body.model_dump(exclude={"id"}), grant_id=body.id, actor="authenticated_owner")
+
+    @app.delete("/api/administration/grants/{grant_id}", dependencies=[Depends(require_owner)])
+    def administration_revoke(grant_id: str):
+        return administration.revoke(grant_id, "authenticated_owner")
+
+    @app.post("/api/administration/actions", dependencies=[Depends(require_owner)])
+    def administration_action(body: dict):
+        return administration.execute(body, "authenticated_owner")
 
     @app.exception_handler(ValueError)
     async def invalid(request, error):
@@ -650,6 +682,7 @@ def create_app(settings: Settings | None = None, server=None):
     def get_settings():
         return {
             "autonomy_upgrade_available": True,
+            "owner_administration_available": True,
             "global_instructions": db.setting("global_instructions", ""),
             "max_workers": settings.max_workers,
             "project_roots": [str(p) for p in settings.project_roots],

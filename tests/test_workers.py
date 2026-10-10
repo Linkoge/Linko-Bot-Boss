@@ -122,6 +122,7 @@ def test_workspace_rejects_secrets_traversal_symlinks_and_stale_write(worker_env
         workspace.write_file("README.md", "stale", read["sha256"])
 
 
+@pytest.mark.host_runtime
 async def test_controlled_test_has_os_boundary(worker_env):
     settings, db, registry, project, source = worker_env
     workspace = Workspace(settings.data_dir, "fixture")
