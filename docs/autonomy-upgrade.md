@@ -81,3 +81,50 @@ Read-only initial discovery found 16 command candidates across five projects (ma
 Pending approval is required by the owner's explicit activation/production-deployment boundaries in this upgrade request. The implementation and acceptance work is finished; backend rollout and broader production activation are intentionally pending that consolidated decision.
 
 Final completion-state checkpoint: 5de4607. Verified workers and verification-controller records now reach completed before the locked handoff export; the 74-test regression confirms backend/history/memory consistency.
+
+## Owner-approved operational rollout — 2026-10-10
+
+This section supersedes the earlier pending-approval state. The owner explicitly approved backend rollout and global High Autonomy until revoked, manager runtime/verification resolution, obsolete-task reconciliation and supported chat administration. The tested backend was deployed only to the dedicated manager service. It migrated additively to schema5 and activated High Autonomy globally through a hash-bound, scoped local-owner administration receipt. All ten registered projects inherit it; owner overrides and technical unavailable-capability boundaries still take precedence. Scheduler manager-only scope and six-task budget were preserved, with only the legitimate newly dispatched validation task added to the batch history. No auto-merge target, external push, other-project runtime/command approval, deployment capability, paid service or host/network/security change was granted.
+
+### Data preservation and recovery
+
+The live database had advanced since development acceptance: the pre-rollout online backup contains 10projects,17tasks,19dependency edges,9conversations,14messages,15executions,100135events,50memory documents,oneowner/session/approval andonecheckpoint. Backup: ~/.local/share/linko-bot-manager/backups/manager-before-approved-autonomy-1791639998.sqlite3. Integrity/foreign keys passed. Immediately after migration, every existing column and row in projects/tasks/dependencies/conversations/messages/executions/events/memory/owner/sessions/policies/approvals/settings/checkpoints matched that backup exactly.
+
+Fourteen nonterminal historical reboot/storage/Start/Resume/audit/proposal tasks were reconciled as obsolete and cancelled under the current owner instruction. Each has a unique durable administration receipt and task.owner_reconciled evidence referencing its superseding work, original status and blocker. Original descriptions, acceptance, outputs, blockers, thread references and events were retained; none was represented as verified completion. The three previously cancelled records (9e43efbd,e6f17f3b,5db40e44) remained terminal without being reopened. The exact per-task disposition is in private activation-and-reconciliation.json. Original incomplete host/browser evidence is historical, not newly certified by cancellation.
+
+The new backend started as PID966467, then survived a second dedicated-service restart as PID976839. Tasks, messages, execution/thread/turn references, profile, command approvals, grants and administration receipts matched exactly across restart. All original IDs and event/message contents, original task criteria/blockers and owner/session rows remained intact; SQLite integrity and foreign keys passed. Post-rollout backup: backups/manager-after-approved-autonomy-1791641493.sqlite3. Private HTTPS returned200 with certificate verification and served exact local JS/CSS hashes; anonymous administration requests returned401. The backup timer remains active/enabled. Fresh storage was ~170GiB free/18% used; RAM total8126472kB and available5543000kB. No data cleanup or reboot was performed.
+
+### Resolved manager verification/runtime
+
+The old host-home Python3.12 virtualenv was incompatible with sandbox system Python3.14. A project-scoped offline copy of the existing Python3.12 runtime/dependencies and Ruff binary now resides in data/verification-runtimes/29018771ce9842f2bb52afb7dcf491d0/python312-20261010-v2. Its SHA-256 tree identity is29593a40c69b80617861a4d3d5c354872416f8ae0de06ec0a148ec72a90c8799. Tracked .linko-runtime.json binds that identity into command configuration. Trusted controller provisioning checks package identity and project boundary, applies install_dependencies authorization, copies only into assigned workspaces and records receipts. The runtime is additionally mounted read-only. No host-home bind, credential exposure, network enablement, package download or new dependency version was required. The incomplete first package was retained as evidence and replaced by a new immutable package, not silently changed.
+
+The manager has two persistent owner-authorized commands (cwd '.', bubblewrap-v3/config-bound), automatically reused until revoked/materially changed:
+
+```json
+[".linko-runtime/python/bin/python3.12", "-m", "pytest", "-q", "-m", "not host_runtime"]
+[".linko-runtime/python/bin/python3.12", "-m", "ruff", "check", "ai_manager", "scripts", "tests"]
+```
+
+Fifteen tests explicitly require the outer systemd/bubblewrap runner and are marked host_runtime; they remain in the complete native suite, not disabled or mocked. The final native suite passed **82 tests** in17.77s. The deployed isolated verifier passed **67 tests,15 deselected**, in28.14s, plus Ruff. One existing TestClient deprecation warning remains. Desktop/mobile Chromium passed profile/command/history/navigation and new administration-scope revocation controls; task-feedback regression passed. JavaScript/Ruff checks passed.
+
+Actual live task **3684e98011fb4bf8bcc5a5f6776ab89c** was accepted for this owner's rollout validation, entered the persistent queue and was dispatched automatically by the deployed service under High Autonomy. Real Codex worker **9661052234494e60beaa05cf23addf22**, thread01a12623-c2e2-70d3-b698-a3dd2da2d4db, ran approved commands through the broker without an ASK prompt. Independent controller2787d7fdc3904cf9b4a8588a07a28cdb reran commands in disposable isolation, and independent Codex review inspected actual required files. Both commands exited0; changed_files=[] and no write/commit operations occurred. The task reached completed/verified, checkpoint and memory were recorded, worker/controller statuses finished accurately, and completion survived the real service restart. This demonstrates that the manager's current source/runtime can verify itself; it does not authorize arbitrary host-only checks inside the worker sandbox.
+
+### Supported owner chat administration
+
+Administration is available through authenticated CSRF-protected routes and the existing private Unix-owner local CLI channel:
+
+```bash
+.venv/bin/python -m ai_manager.cli owner-admin /private/scoped-request.json
+```
+
+Explicit grants persist until revoked; requests have stable IDs, argument fingerprints, started/result receipts, bounded supported action names and project scopes. Duplicate successful requests return the original receipt; uncertain started operations cannot be replayed. Project workers are excluded technically by tool exposure and active-manager identity checks. Neither chat nor workers can create/expand grants through the manager tool. Owner routes can create/revoke grants, and dashboard Settings → Chat administration grants and receipts shows scopes/history and revocation controls.
+
+Existing grants: approved-global-high-autonomy-20261010 (global High Autonomy activation/snapshot only), and approved-manager-administration-20261010 (manager snapshot, command discovery/proposal/decisions, obsolete-task reconciliation and confirmed-work verification retry only). Broader profiles, infrastructure, secrets, spending, arbitrary shell or other project administration are outside these grants. Grant changes require authenticated owner/Unix-owner administration and are recorded. Tool-schema upgrades create a new manager thread only when needed, preserve all earlier Codex references/messages, record the rollover and seed retained conversation context; they do not delete sessions/history.
+
+A real owner-directed Codex chat invoked discovery successfully: execution **0181b4e239334e96a272041b686b334b**, request **owner-chat-manager-discovery-20261010**, persisted event **100269**. Its actual result/receipt was appended to the stored chat response. No duplicate execution plan or approval was created. Local rollout/profile/command/reconciliation actions also have durable receipts.
+
+### Current limits and next work
+
+There is no remaining manager runtime/verification blocker. Current tasks:17historical cancelled,1new verified completed; pending/blocked/running=0, approval queue=0. Routine eligible work can dispatch without repeated approval within the preserved scheduler scope/budget. Project-specific auto-merges still need an explicit target policy. Other projects still need adequate project-specific command/runtime approval; this owner instruction resolved the manager only. Sensitive and external capabilities remain technically unavailable even where policy labels are ASK. Host-runtime tests and actual host infrastructure observations require the supported owner-supervised outer environment; the worker sandbox remains isolated.
+
+Persistent private evidence: ~/.local/share/linko-bot-manager/autonomy-rollout-evidence-20261010. Includes verified before/after backups, preservation matrices, activation/per-task receipts, live health/private-HTTPS checks, native/isolated test logs, Chromium screenshots, real-owner-chat.json, live-verification.json and restart-and-final-preservation.json. Development checkpoints:b4a6ff7 (owner administration/offline runtime),a62f2a4/f3edc9c (safe existing-chat tool/history upgrade). No remote push. MASTER_SPEC.md remains unchanged.

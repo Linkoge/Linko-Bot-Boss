@@ -66,3 +66,20 @@ See docs/execution-reliability.md for exact task IDs, evidence, supported scope 
 Private acceptance records: autonomy-upgrade-evidence-20261010; real task591fb6036cb54ee4bf094efa12bcc4a8 belongs only to the isolated fixture. No original production task was discarded, duplicated, requeued or marked completed.
 
 Final completion-state checkpoint: 5de4607. Verified workers and verification-controller records now reach completed before the locked handoff export; the 74-test regression confirms backend/history/memory consistency.
+
+
+## Latest operational state — approved autonomy rollout, 2026-10-10
+
+Owner approval was applied. Dedicated backend is live on schema5; global High Autonomy is active until revoked, inherited by all10projects. Existing scheduler manager-only scope/limit6 and technical isolation/sensitive boundaries were preserved. Verified pre-rollout backup and exact migration comparison preserved every existing row/column; restart preserved completed task, grants, commands, receipts, all original IDs/events/messages/criteria/blockers and owner/session data. Service restarted PID966467→976839; private HTTPS/TLS and asset hashes pass; auth remains enforced.
+
+Manager runtime blocker is resolved with an immutable scoped offline Python3.12/dependency/Ruff package, config-hash binding and read-only runtime mount. Its two reusable commands run67portable tests +Ruff inside no-network/no-home isolation; full native suite82tests passes. Fifteen host-runtime tests remain owner-supervised outside the nested sandbox. Real deployed Codex task3684e98011fb4bf8bcc5a5f6776ab89c automatically dispatched without ASK, passed independent commands/actual-file review and completed/verified with unchanged files/commits; persistence passed a real service restart.
+
+Fourteen obsolete nonterminal requests were cancelled with individual evidence/receipts; three prior cancelled tasks remained terminal. All original history is retained and none was falsely completed. Queue now has17historical cancelled and1verified completed, no pending/blocked/running work or pending approvals. Real chat administration execution0181b4e239334e96a272041b686b334b produced event100269/requestowner-chat-manager-discovery-20261010. Scoped grants permit supported manager administration through chat or owner CLI; dashboard can inspect/revoke them, workers cannot grant authority. Other-project commands/runtime and explicit merge targets remain project-scoped prerequisites; sensitive/external capabilities stay unavailable.
+
+Details, exact scopes/commands/dispositions and private evidence paths:docs/autonomy-upgrade.md; ~/.local/share/linko-bot-manager/autonomy-rollout-evidence-20261010. Implementation checkpointsb4a6ff7,f3edc9c. No push, unrelated-project edits, credential exposure, host security/network change or paid API was introduced. Existing earlier pending-approval/blocker sections above are historical.
+
+- [x] Owner-approved backend rollout/global High Autonomy activation, exact data preservation/restart checks.
+- [x] Manager offline verification/runtime provisioning and reusable command approval.
+- [x] Evidence-backed obsolete-task reconciliation without history deletion or false completion.
+- [x] Supported real owner chat administration with durable scoped receipts and dashboard revocation.
+- [x] Actual deployed automatic Codex task, independent verification, memory/checkpoint and restart persistence.

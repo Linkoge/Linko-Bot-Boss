@@ -33,7 +33,7 @@ Do not run `tailscale serve reset` or modify SSH/RustDesk routes. A user service
 3. Talk naturally, explicitly delegate a goal, or add tasks. Brainstorming does not launch work.
 4. Enable a scoped or limited scheduler batch. It starts at most two execution workers by default and respects dependencies.
 5. Review exact edits/commits/deletions in Approval center. Change global/project policy when desired.
-6. Review verification evidence and results in Agent monitor. Completed code lives in an isolated clone/branch; source checkouts and remote repositories remain untouched. Integration/merge/push/deployment require a future controlled capability or deliberate owner action.
+6. Review verification evidence and results in Agent monitor. Completed code lives in an isolated clone/branch. High Autonomy can create verified local commits. Source integration requires an explicit project auto-merge policy/target and a clean unchanged baseline; only fast-forward integration is supported. Remote push and deployment capabilities remain unavailable.
 
 ## Interrupted work
 
@@ -224,3 +224,10 @@ uv run --offline python -m ai_manager.cli restore /home/codex/.local/share/linko
 ```
 
 The destination must not exist. Verify it read-only using the integrity commands above adjusted to that path. For an authorized production switch, set AI_MANAGER_DATA to the fresh directory in the0600 service env file, use the same data selection for `revoke-sessions`, then start the dedicated service and inspect recovery before enabling scheduling. Restore/preserve original `workspaces/` and protected Codex rollouts separately; database-only recovery cannot resume missing workspace/thread files. Never commit the recovered DB or authentication state.
+
+
+## Active owner administration and manager verification
+
+Global High Autonomy is owner-approved/active until revoked. Use Settings for effective permissions/profile/history and Chat administration grants and receipts. Auto chat can execute supported administration under an existing explicit grant; Conversation mode stays read-only. Local Unix-owner administration uses `python -m ai_manager.cli owner-admin /private/request.json`. Request shape: id, grant_id, action, project_id, arguments. Stable IDs make receipts idempotent; never replay a started/uncertain receipt. Workers cannot administer grants. Existing manager grant is approved-manager-administration-20261010; global activation-only grant is approved-global-high-autonomy-20261010. Owner web grant edits require authentication/CSRF; local CLI is the private Unix-owner administration channel.
+
+The manager's registered commands use .linko-runtime/python/bin/python3.12 for pytest `-q -m "not host_runtime"` and Ruff `check ai_manager scripts tests`. An approved immutable offline package is copied into each assigned workspace and mounted read-only. Preserve .linko-runtime.json, package tree identity and config-bound approvals. Material config/dependency/package changes require scoped replacement/approval; never mount a host home environment or open network to repair dependencies. Fifteen marked host-runtime tests are run by the owner-supervised native full suite; the portable suite is67tests, native suite82 at this checkpoint. See docs/autonomy-upgrade.md for receipts/limits. Other projects require their own verification/runtime setup and merge targets.
