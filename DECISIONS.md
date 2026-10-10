@@ -29,3 +29,8 @@ Resume selects the actual latest worker, preserves rejected task state, validate
 Conversation mode rejects mutation. Execute mode deterministically creates a persistent plan and attempts dispatch under the existing scheduler policy; Auto uses manager tools and adds authoritative receipts or an explicit no-task result. No autonomy/policy grants are inferred from model promises. Existing host/browser investigation tasks remain capability-limited; do not add unrestricted shell merely to satisfy them.
 
 The owner approved only the fixture's documented unittest command and exact calculator subtraction→addition edit. Actual ASK was consumed once, independent tests/review passed, and restart retained completion. No production verification command or policy was approved by that fixture decision. Documented uv test commands need a trusted isolated runtime; do not expose host home/network as a shortcut. See docs/execution-reliability.md.
+
+
+## 2026-10-10 — Task feedback must be visible at the action
+
+A status unchanged after HTTP 409 is correct but insufficient feedback. Show requesting and authoritative accepted/rejected/failed responses in the originating task card, retain them across polling, and scroll the receipt into view. Explain blockers before the action and provide direct navigation to unfinished prerequisites. Keep the backend dependency, approval and verification gates unchanged. UI fixture rows are explicitly display-only data and never evidence of Codex execution. Static-only deployment requires verifying the live served bytes, without a service restart.

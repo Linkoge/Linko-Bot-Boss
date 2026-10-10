@@ -1,6 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(), memorySelection:0, pending:new Set()};
+const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(), memorySelection:0, pending:new Set(), taskFeedback:new Map(), busyTasks:new Set()};
 const element = (tag, text, cls) => {const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
 function notice(text){$('notice').textContent=text;$('notice').hidden=!text;}
 async function api(path, options={}){
@@ -8,11 +8,13 @@ async function api(path, options={}){
   if(options.method && options.method!=='GET')headers['X-CSRF-Token']=state.csrf||'';
   const response=await fetch(path,{...options,headers});
   const result=await response.json();
-  if(!response.ok){if(response.status===401 && !path.includes('login'))showAuth();throw new Error(result.detail||'Request failed');}
+  if(!response.ok){if(response.status===401 && !path.includes('login'))showAuth();const error=new Error(result.detail||result.message||'Request failed');error.result=result.result||(response.status<500?'rejected':'failed');throw error;}
   return result;
 }
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice('Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
-function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}${result.execution_id?' · Execution '+result.execution_id.slice(0,8):''}`);}
+function taskFeedback(id,text){state.taskFeedback.set(id,text);const feedback=document.querySelector(`[data-task="${id}"] .task-feedback`);if(feedback){feedback.textContent=text;feedback.hidden=!text;if(text&&!$('editor').open)feedback.scrollIntoView({block:'nearest'});}}
+function taskAction(task,fn){return async event=>{const button=event.currentTarget;if(state.busyTasks.has(task.id))return;state.busyTasks.add(task.id);button.disabled=true;taskFeedback(task.id,`${button.textContent} requested…`);try{await fn(event);}catch(error){const text=`${error.result||'failed'}: ${error.message}`;taskFeedback(task.id,text);notice(text);}finally{state.busyTasks.delete(task.id);document.querySelectorAll(`[data-task="${task.id}"] button`).forEach(b=>b.disabled=false);}};}
+function actionResult(result,taskId){const text=`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}${result.execution_id?' · Execution '+result.execution_id.slice(0,8):''}`;notice(text);if(taskId)taskFeedback(taskId,text);}
 function showAuth(){state.source?.close();$('app').hidden=true;$('auth-screen').hidden=false;}
 async function boot(){
   const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;
@@ -114,13 +116,31 @@ function renderDashboard(){
 function renderTasks(){
   const tasks=filteredTasks();$('task-count').textContent=tasks.filter(t=>!['completed','cancelled'].includes(t.status)).length;$('task-list').replaceChildren();
   if(!tasks.length)$('task-list').append(element('p','No queued tasks. Add a concrete goal and acceptance criteria.','empty'));
-  for(const t of tasks){const row=element('article',undefined,'task-row');row.append(element('h3',t.description));const meta=element('div',undefined,'row-meta');meta.append(element('span',t.status,`badge ${t.status}`),element('span',projectName(t.project_id)),element('span',`Priority ${t.priority}`),element('span',`#${t.id.slice(0,8)}`));row.append(meta,element('p',`Acceptance: ${t.acceptance}`));if(t.blocker)row.append(element('p',t.blocker));if(t.readiness?.reason&&!t.blocker)row.append(element('p',t.readiness.reason));if(!t.readiness?.verification_configured)row.append(element('small','Trusted verification is not configured; completion will be blocked.'));
-    if(t.readiness?.verification_only&&t.status==='blocked'){const verify=element('button','Retry verification');verify.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/verify`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result);});row.append(verify);const configure=element('button','Configure verification');configure.onclick=action(async()=>{await selectProject(t.project_id);await configureVerification(t.project_id);});row.append(configure);}
-    if(t.status==='pending'){const start=element('button','Start worker');start.onclick=action(async()=>{notice('Requesting worker launch…');const result=await api(`/api/tasks/${t.id}/start`,{method:'POST'});await refresh();actionResult(result);});row.append(start);}
-    if(['paused','blocked','failed'].includes(t.status)&&t.readiness?.can_resume){const resume=element('button','Resume persisted worker');resume.onclick=action(async()=>{if(t.status==='blocked'){editor('Reconcile uncertain execution',[{name:'reconciliation',label:'Inspect saved thread, workspace and operation records first. Describe evidence establishing what ran and why continuing is safe.',long:true,required:true}],async values=>{const result=await api(`/api/tasks/${t.id}/resume`,{method:'POST',body:JSON.stringify({...values,revision:t.revision,reconciled:true})});actionResult(result);});return;}const result=await api(`/api/tasks/${t.id}/resume`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result);});row.append(resume);}
-    if(['paused','blocked','failed'].includes(t.status)&&t.readiness?.can_retry){const retry=element('button','Retry launch');retry.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/retry`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result);});row.append(retry);}
-    if(['pending','paused','blocked','failed'].includes(t.status)){const cancel=element('button','Cancel task');cancel.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}`,{method:'PATCH',body:JSON.stringify({revision:t.revision,status:'cancelled'})});await refresh();actionResult(result);});row.append(cancel);}
-    const inspect=element('button','Inspect execution records');inspect.onclick=action(async()=>{const records=await api(`/api/tasks/${t.id}/execution-records`);editor('Persisted task and execution records',[{name:'records',label:'Review task, thread, turn, workspace, operations, approvals and verification evidence',long:true,rows:14,value:JSON.stringify(records,null,2)}],async()=>{});});row.append(inspect);$('task-list').append(row);}
+  for(const t of tasks){
+    const row=element('article',undefined,'task-row');row.dataset.task=t.id;row.tabIndex=-1;
+    row.append(element('h3',t.description));const meta=element('div',undefined,'row-meta');
+    meta.append(element('span',t.status,`badge ${t.status}`),element('span',projectName(t.project_id)),element('span',`Priority ${t.priority}`),element('span',`#${t.id.slice(0,8)}`));row.append(meta,element('p',`Acceptance: ${t.acceptance}`));
+    if(t.blocker)row.append(element('p','Blocked: '+t.blocker,'task-blocker'));
+    if(t.readiness?.reason&&!t.blocker&&t.status==='pending')row.append(element('p','Cannot start: '+t.readiness.reason,'task-blocker'));
+    if(t.readiness?.verification_only&&t.status==='blocked')row.append(element('p','The worker has finished. Configure verification, then retry its independent checks. Retrying does not run the worker again.'));
+    if(!t.readiness?.verification_configured&&!['completed','cancelled'].includes(t.status))row.append(element('p','Trusted verification is not configured; completion will be blocked.'));
+    for(const dependency of t.readiness?.dependencies||[]){
+      const view=element('button',`View prerequisite #${dependency.id.slice(0,8)} (${dependency.status})`);
+      view.onclick=action(async()=>{await selectProject(t.project_id);const prerequisite=document.querySelector(`[data-task="${dependency.id}"]`);prerequisite?.scrollIntoView({block:'center'});prerequisite?.focus({preventScroll:true});});row.append(view);
+    }
+    if(t.readiness?.verification_only&&t.status==='blocked'){
+      const verify=element('button','Retry verification');verify.onclick=taskAction(t,async()=>{const result=await api(`/api/tasks/${t.id}/verify`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result,t.id);});row.append(verify);
+      const configure=element('button','Configure verification');configure.onclick=taskAction(t,async()=>{await selectProject(t.project_id);await configureVerification(t.project_id);taskFeedback(t.id,'Verification settings opened. After saving approved commands, click Retry verification.');});row.append(configure);
+    }
+    if(t.status==='pending'){const start=element('button','Start worker');start.onclick=taskAction(t,async()=>{const result=await api(`/api/tasks/${t.id}/start`,{method:'POST'});await refresh();actionResult(result,t.id);});row.append(start);}
+    if(['paused','blocked','failed'].includes(t.status)&&t.readiness?.can_resume){const resume=element('button','Resume persisted worker');resume.onclick=taskAction(t,async()=>{if(t.status==='blocked'){editor('Reconcile uncertain execution',[{name:'reconciliation',label:'Inspect saved thread, workspace and operation records first. Describe evidence establishing what ran and why continuing is safe.',long:true,required:true}],async values=>{const result=await api(`/api/tasks/${t.id}/resume`,{method:'POST',body:JSON.stringify({...values,revision:t.revision,reconciled:true})});actionResult(result,t.id);});taskFeedback(t.id,'Owner reconciliation is required before this uncertain execution can resume.');return;}const result=await api(`/api/tasks/${t.id}/resume`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result,t.id);});row.append(resume);}
+    if(['paused','blocked','failed'].includes(t.status)&&t.readiness?.can_retry){const retry=element('button','Retry launch');retry.onclick=taskAction(t,async()=>{const result=await api(`/api/tasks/${t.id}/retry`,{method:'POST',body:JSON.stringify({revision:t.revision})});await refresh();actionResult(result,t.id);});row.append(retry);}
+    if(['pending','paused','blocked','failed'].includes(t.status)){const cancel=element('button','Cancel task');cancel.onclick=taskAction(t,async()=>{const result=await api(`/api/tasks/${t.id}`,{method:'PATCH',body:JSON.stringify({revision:t.revision,status:'cancelled'})});await refresh();actionResult(result,t.id);});row.append(cancel);}
+    const inspect=element('button','Inspect execution records');inspect.onclick=taskAction(t,async()=>{const records=await api(`/api/tasks/${t.id}/execution-records`);editor('Persisted task and execution records',[{name:'records',label:'Review task, thread, turn, workspace, operations, approvals and verification evidence',long:true,rows:14,value:JSON.stringify(records,null,2)}],async()=>{});taskFeedback(t.id,'Execution records opened.');});row.append(inspect);
+    const feedback=element('p',state.taskFeedback.get(t.id)||'','task-feedback');feedback.setAttribute('role','status');feedback.setAttribute('aria-live','polite');feedback.hidden=!feedback.textContent;row.append(feedback);
+    if(state.busyTasks.has(t.id))row.querySelectorAll('button').forEach(button=>button.disabled=true);
+    $('task-list').append(row);
+  }
 }
 function renderAgents(){
   $('agent-list').replaceChildren();const executions=filteredExecutions();

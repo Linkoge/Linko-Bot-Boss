@@ -42,3 +42,8 @@ Documentation-only development checkpoint; all31 existing tests passed again. Se
 Completed the focused runtime investigation and control corrections. Actual acceptance fixture proves owner browser command → persistent task → configured scheduler → real Codex process/thread/turn → hash-bound ASK edit → approved isolated unittest → independent reviewer → completed dashboard → restart persistence. Production rollout preserved existing records. Validation: 48 pytest, Ruff/JS and real Chromium controls/mobile smoke.
 
 Current production readiness remains project-specific: all ten projects need owner-configured adequate verification; documented uv commands fail inside the existing isolated runtime; host/browser investigations exceed worker capability scope. Preserve pending/blocked/cancelled histories and reconcile acceptance before explicit verification retry or owner-selected supersession. Do not weaken the sandbox or replay uncertain work. Detailed evidence and decisions: docs/execution-reliability.md.
+
+
+## Visible control feedback follow-up — 2026-10-10
+
+Completed the owner-reported live UI investigation: correlate real requests/rejections, reproduce offscreen errors, implement per-card receipts and prerequisite navigation, exercise real isolated API responses at desktop/phone viewports, and verify served asset hashes. Validation passed: 48 pytest, Ruff, JS syntax, existing browser smoke and new task feedback regression. Production task state and security/verification gates remain intact. Adequate production verification and original task acceptance remain the previously documented external prerequisites.

@@ -38,3 +38,13 @@ Do not reopen verified stages without new evidence of failure. Never delete disk
 - [ ] Decide any further reboot/storage acceptance work using current measurements and existing follow-up tasks. Cancelled original tasks are terminal and retained.
 
 See docs/execution-reliability.md for exact task IDs, evidence, supported scope and remaining owner decisions.
+
+
+## Owner-reported button feedback — 2026-10-10
+
+- [x] Confirm exact live URL and correlate owner clicks with actual backend rejection logs.
+- [x] Reproduce offscreen task errors on desktop and phone; add visible per-task feedback retained during polling.
+- [x] Add prerequisite navigation and explain why verification retry cannot remove a missing-configuration blocker.
+- [x] Validate isolated real endpoint Start rejection, verification rejection, configuration dialog and accepted cancellation; rerun 48 tests and existing browser smoke.
+- [x] Verify updated static assets at the live URL without restarting or mutating production tasks.
+- [ ] Existing production verification/runtime/acceptance decisions above remain open. Repeated Start/Retry clicks do not satisfy prerequisites.
