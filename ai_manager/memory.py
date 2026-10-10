@@ -43,6 +43,15 @@ def sync_project(db, project_id):
                 else "No outstanding task; ask the owner for the next goal."
             )
         )
+        executions = conn.execute(
+            "SELECT id,task_id,status,thread_id,turn_id,branch,commit_ref FROM executions WHERE project_id=? ORDER BY started_at DESC LIMIT 10",
+            (project_id,),
+        ).fetchall()
+        if executions:
+            handoff += "\n\n## Recent execution references\n" + "\n".join(
+                f"- {e['id']} · {e['status']} · task {e['task_id'] or 'role turn'} · thread {e['thread_id'] or 'none'} · turn {e['turn_id'] or 'none'} · branch {e['branch'] or 'none'} · commit {e['commit_ref'] or 'none'}"
+                for e in executions
+            )
         context = f"## Registry context\nObjective: {project['objective'] or 'Not yet specified'}\nSuccess criteria: {project['success_criteria'] or 'Not yet specified'}\nRepository: {project['repository']}\nWorking directory: {project['path']}\nInstructions: {project['instructions']}"
         for name, generated in (("TASKS.md", "\n".join(task_lines)), ("HANDOFF.md", handoff), ("PROJECT.md", context)):
             row = conn.execute(

@@ -5,6 +5,7 @@ import hashlib
 import os
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 from .registry import git
@@ -121,11 +122,29 @@ class Workspace:
         temporary.replace(file)
         return {"sha256": fingerprint(file)}
 
-    async def isolated_test(self, argv: list[str], timeout=120):
+    async def isolated_test(self, argv: list[str], timeout=120, cwd=".", writable=False):
         if not argv or not all(isinstance(a, str) and len(a) <= 1000 for a in argv):
             raise ValueError("Invalid test command")
+        directory = safe_file(self.root, cwd)
+        if not directory.is_dir():
+            raise ValueError("Approved command working directory is unavailable")
         # Tests see system runtimes and this workspace, never the home directory or network.
+        unit = "linko-verification-" + uuid.uuid4().hex + ".scope"
         args = [
+            "systemd-run",
+            "--user",
+            "--scope",
+            "--quiet",
+            "--unit=" + unit,
+            "--property=MemoryMax=2147483648",
+            "--property=TasksMax=128",
+            "--property=CPUQuota=100%",
+            "prlimit",
+            "--as=2147483648",
+            "--cpu=120",
+            "--nofile=256",
+            "--fsize=67108864",
+            "--",
             "bwrap",
             "--die-with-parent",
             "--unshare-all",
@@ -152,14 +171,14 @@ class Workspace:
             "/home",
             "--dir",
             "/workspace",
-            "--bind",
+            "--bind" if writable else "--ro-bind",
             str(self.root),
             "/workspace",
             "--ro-bind",
             str(self.root / ".git"),
             "/workspace/.git",
             "--chdir",
-            "/workspace",
+            "/workspace" + ("/" + cwd if cwd != "." else ""),
             "--clearenv",
             "--setenv",
             "PATH",
@@ -170,6 +189,21 @@ class Workspace:
             "--setenv",
             "PYTHONDONTWRITEBYTECODE",
             "1",
+            "--setenv",
+            "PYTEST_ADDOPTS",
+            "-o cache_dir=/tmp/pytest-cache",
+            "--setenv",
+            "npm_config_cache",
+            "/workspace/.npm-cache",
+            "--setenv",
+            "GOPROXY",
+            "off",
+            "--setenv",
+            "GOCACHE",
+            "/tmp/go-cache",
+            "--setenv",
+            "CARGO_HOME",
+            "/workspace/.cargo-cache",
             "--",
             *argv,
         ]
@@ -194,10 +228,30 @@ class Workspace:
                 "exit_code": process.returncode,
                 "output": output.decode(errors="replace")[-20000:],
                 "sandbox": "bubblewrap/no-network/no-host-home",
+                "cwd": cwd,
+                "environment": "bubblewrap-v2",
+                "resources": {
+                    "per_process_address_space": 2147483648,
+                    "cpu_seconds": 120,
+                    "cgroup_tasks_max": 128,
+                    "cgroup_memory_max": 2147483648,
+                    "cpu_quota": "100%",
+                    "wall_seconds": timeout,
+                },
             }
         except (TimeoutError, ValueError, asyncio.CancelledError):
             import signal
 
+            cleanup = await asyncio.create_subprocess_exec(
+                "systemctl",
+                "--user",
+                "kill",
+                "--signal=SIGKILL",
+                unit,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            await cleanup.wait()
             try:
                 os.killpg(process.pid, signal.SIGKILL)
             except ProcessLookupError:

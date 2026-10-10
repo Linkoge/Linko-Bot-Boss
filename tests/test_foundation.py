@@ -173,7 +173,7 @@ def test_navigation_migration_preserves_legacy_project_and_history(tmp_path):
             "INSERT INTO conversations(id,context,project_id,thread_id,created_at) VALUES('conversation','stable','stable','thread',1)"
         )
     db = Database(path)
-    assert db.one("SELECT MAX(version) AS version FROM schema_version")["version"] == 4
+    assert db.one("SELECT MAX(version) AS version FROM schema_version")["version"] == 5
     project = db.one("SELECT * FROM projects")
     assert project["id"] == "stable" and project["name"] == "legacy" and project["last_used_at"] == 123
     assert project["display_name"] is None

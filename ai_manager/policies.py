@@ -21,8 +21,57 @@ DEFAULTS = {
     "start_services": "ASK",
     "external_communications": "ASK",
     "paid_services": "DENY",
+    "create_files": "ASK",
+    "launch_workers": "ALLOW",
+    "resume_sessions": "ALLOW",
+    "create_branches": "ALLOW",
+    "access_other_projects": "DENY",
+    "external_api_calls": "ASK",
+    "destructive_operations": "ASK",
 }
-SUPPORTED = {"read_files", "edit_files", "run_tests", "create_commits", "delete_files"}
+SUPPORTED = {
+    "read_files",
+    "edit_files",
+    "create_files",
+    "run_tests",
+    "create_commits",
+    "delete_files",
+    "launch_workers",
+    "resume_sessions",
+    "create_branches",
+    "install_dependencies",
+    "merge_branches",
+}
+# Stable identifiers preserve existing stored policies. New IDs describe formerly implicit gates.
+ROUTINE = {
+    "read_files",
+    "edit_files",
+    "create_files",
+    "delete_files",
+    "run_tests",
+    "install_dependencies",
+    "launch_workers",
+    "resume_sessions",
+    "create_branches",
+    "create_commits",
+    "merge_branches",
+}
+PROFILES = {
+    "legacy": DEFAULTS,
+    "conservative": {**DEFAULTS, **{a: "ASK" for a in ROUTINE - {"read_files", "run_tests"}}},
+    "high_autonomy": {a: "ALLOW" if a in ROUTINE else "ASK" for a in DEFAULTS},
+    "maximum_autonomy": {
+        **{a: "ALLOW" if a in ROUTINE else "ASK" for a in DEFAULTS},
+        "external_api_calls": "ALLOW",
+        "access_other_projects": "ALLOW",
+        "start_services": "ALLOW",
+    },
+}
+BOUNDARY = (
+    "Assigned isolated project only; approved commands; no host home, secrets or network. "
+    "Merge requires explicit project integration policy. Offline dependencies require owner-approved provisioning. "
+    "Host/infrastructure/external/spending capabilities remain unavailable."
+)
 
 
 def operation_key(execution_id, call_id, action, arguments):
@@ -33,7 +82,11 @@ class Policies:
     def __init__(self, db):
         self.db = db
 
-    def effective(self, project_id, action):
+    def profile(self, project_id=None):
+        local = self.db.setting(f"autonomy_profile:{project_id}") if project_id else None
+        return local or self.db.setting("autonomy_profile:global", "legacy")
+
+    def effective(self, project_id, action, profile=None):
         if action not in DEFAULTS:
             raise ValueError("Unknown action category")
         local = (
@@ -42,13 +95,97 @@ class Policies:
             else None
         )
         global_policy = self.db.one("SELECT mode FROM policies WHERE scope='global' AND action=?", (action,))
+        selected = profile or self.profile(project_id)
+        source = "project" if local else "global" if global_policy else "profile:" + selected
+        mode = local["mode"] if local else global_policy["mode"] if global_policy else PROFILES[selected][action]
+        available = action in SUPPORTED
         return {
             "action": action,
-            "mode": local["mode"] if local else global_policy["mode"] if global_policy else DEFAULTS[action],
-            "source": "project" if local else "global",
-            "available": action in SUPPORTED,
+            "mode": mode,
+            "source": source,
+            "available": available,
+            "profile": selected,
             "epoch": self.db.setting("policy_epoch", 0),
+            "explanation": f"{mode} from {source}. "
+            + (BOUNDARY if available else "No controlled capability; policy cannot enable execution."),
         }
+
+    def proposal(self, profile, project_id=None):
+        if profile not in PROFILES and not (profile == "inherit" and project_id):
+            raise ValueError("Unknown autonomy profile")
+        changes = []
+        scopes = (
+            [project_id]
+            if project_id
+            else [None] + [p["id"] for p in self.db.all("SELECT id FROM projects WHERE status!='removed'")]
+        )
+        for scope in scopes:
+            # Explicit project profiles survive a global switch.
+            target = self.db.setting(f"autonomy_profile:{scope}") if not project_id and scope else None
+            for action in DEFAULTS:
+                old, new = (
+                    self.effective(scope, action),
+                    self.effective(
+                        scope,
+                        action,
+                        target
+                        or (self.db.setting("autonomy_profile:global", "legacy") if profile == "inherit" else profile),
+                    ),
+                )
+                if old["mode"] != new["mode"]:
+                    changes.append(
+                        {
+                            "scope": scope or "global",
+                            "action": action,
+                            "old": old["mode"],
+                            "mode": new["mode"],
+                            "available": new["available"],
+                        }
+                    )
+        result = {
+            "profile": profile,
+            "previous": self.profile(project_id),
+            "previous_override": self.db.setting("autonomy_profile:" + (project_id or "global")),
+            "scope": project_id or "global",
+            "epoch": self.db.setting("policy_epoch", 0),
+            "changes": changes,
+            "boundaries": BOUNDARY,
+            "scheduler": "Preserve enabled/scope/budget; profile activation does not start previously paused scheduling.",
+            "duration": "Until owner changes or revokes it; explicit overrides remain in effect.",
+        }
+        result["proposal_hash"] = hashlib.sha256(json.dumps(result, sort_keys=True).encode()).hexdigest()
+        return result
+
+    def activate(self, profile, project_id, proposal_hash):
+        # Called only through authenticated owner routes, never a worker tool.
+        with self.db.transaction() as conn:
+            proposal = self.proposal(profile, project_id)
+            if proposal["proposal_hash"] != proposal_hash:
+                raise ValueError("Policy proposal changed; review a fresh consolidated proposal")
+            if profile == "inherit":
+                conn.execute("DELETE FROM settings WHERE key=?", ("autonomy_profile:" + project_id,))
+            else:
+                conn.execute(
+                    "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                    ("autonomy_profile:" + (project_id or "global"), json.dumps(profile)),
+                )
+            conn.execute(
+                "INSERT INTO settings VALUES('policy_epoch',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (json.dumps(proposal["epoch"] + 1),),
+            )
+            conn.execute("UPDATE approvals SET status='invalidated' WHERE status IN ('pending','approved')")
+            self.db.event(
+                conn, "policy.profile_activated", {**proposal, "authorized_by": "authenticated_owner"}, project_id
+            )
+        return {
+            "result": "accepted",
+            "profile": profile,
+            "message": "Owner-approved autonomy profile activated",
+            "proposal": proposal,
+        }
+
+    def history(self):
+        return self.db.all("SELECT * FROM events WHERE kind LIKE 'policy.%' ORDER BY seq DESC LIMIT 100")
 
     def list(self, project_id=None):
         return [self.effective(project_id, action) for action in DEFAULTS]
@@ -85,6 +222,7 @@ class Policies:
                     "scope": scope,
                     "epoch": epoch,
                     "risk_accepted": risk_accepted,
+                    "authorized_by": "authenticated_owner",
                 },
                 project_id,
             )

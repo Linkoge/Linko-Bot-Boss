@@ -69,6 +69,14 @@ CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY,dedupe_key TEXT UNI
  kind TEXT NOT NULL,title TEXT NOT NULL,body TEXT NOT NULL,project_id TEXT,task_id TEXT,
  read_at REAL,created_at REAL NOT NULL);
 INSERT OR IGNORE INTO schema_version VALUES(3);
+CREATE TABLE IF NOT EXISTS verification_commands(
+ id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), definition TEXT NOT NULL,
+ status TEXT NOT NULL CHECK(status IN ('discovered','approved','rejected','revoked')),
+ created_at REAL NOT NULL, decided_at REAL);
+CREATE TABLE IF NOT EXISTS integration_results(
+ id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), execution_id TEXT NOT NULL,
+ status TEXT NOT NULL, evidence TEXT NOT NULL, created_at REAL NOT NULL);
+INSERT OR IGNORE INTO schema_version VALUES(5);
 """
 
 
@@ -94,6 +102,15 @@ class Database:
                     (SELECT MAX(created_at) FROM events WHERE events.project_id=projects.id
                      AND kind IN ('chat.queued','task.created','task.claimed','worker.queued','plan.applied','manager.action')),0)""")
                 conn.execute("INSERT INTO schema_version VALUES(4)")
+            task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+            for name, definition in (
+                ("kind", "TEXT NOT NULL DEFAULT 'code'"),
+                ("verification_spec", "TEXT NOT NULL DEFAULT '{}'"),
+                ("verification_status", "TEXT NOT NULL DEFAULT 'unverified'"),
+                ("blocker_code", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if name not in task_columns:
+                    conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
             conn.commit()
         self.path.chmod(0o600)
 

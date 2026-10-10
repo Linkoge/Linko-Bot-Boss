@@ -7,9 +7,16 @@ import time
 
 from .policies import Policies
 from .registry import git
+from .verification import VerificationCommands
 from .workspace import fingerprint, safe_file
 
-MUTATING = {"write": "edit_files", "delete": "delete_files", "commit": "create_commits", "test": "run_tests"}
+MUTATING = {
+    "write": "edit_files",
+    "delete": "delete_files",
+    "commit": "create_commits",
+    "test": "run_tests",
+    "install": "install_dependencies",
+}
 
 
 class Capabilities:
@@ -37,7 +44,7 @@ class Capabilities:
     async def _perform(self, args, call_id):
         async with self.lock:
             operation = args["operation"]
-            if operation not in {"list", "read", "write", "delete", "test", "commit"}:
+            if operation not in {"list", "read", "write", "delete", "test", "commit", "install"}:
                 raise ValueError("Unknown capability")
             action = MUTATING.get(operation, "read_files")
             task = self.db.one("SELECT status,lease_owner FROM tasks WHERE id=?", (self.task_id,))
@@ -52,21 +59,41 @@ class Capabilities:
             if operation in {"write", "delete"}:
                 if fingerprint(safe_file(self.workspace.root, args["path"])) != args.get("expected_hash"):
                     raise ValueError("File changed; refresh its hash before requesting approval")
-            if operation == "test":
-                args = {**args, "commands": self.db.setting(f"verification_commands:{self.project_id}", [])}
+            if operation == "write" and args.get("expected_hash") == "missing":
+                # Creation has a separate stable policy; existing edit grants cannot authorize it.
+                action = "create_files"
+            if operation in {"test", "install"}:
+                from .registry import Registry
+
+                commands = VerificationCommands(self.db, Registry(self.db, self.settings.project_roots)).approved(
+                    self.project_id, self.workspace.root, "dependency" if operation == "install" else "verification"
+                )
+                if operation == "install":
+                    commands = [c for c in commands if c.get("id") == args.get("command_id")]
+                args = {**args, "commands": commands}
             if operation == "commit":
                 args = {**args, "workspace_state": self.state_digest()}
             consequences = f"{operation} in isolated workspace {self.workspace.root.name}: " + args.get(
                 "path", args.get("message", "registered verification commands")
             )
+            authorization_epoch = self.db.setting("policy_epoch", 0)
             key = await self.policies.authorize(
                 self.project_id, self.task_id, self.execution_id, action, args, call_id, consequences
             )
+            if self.db.setting("policy_epoch", 0) != authorization_epoch:
+                raise ValueError("Policy changed before execution; request a fresh authorization")
             current = self.db.one("SELECT status,lease_owner FROM tasks WHERE id=?", (self.task_id,))
             if not current or current["status"] != "running" or current["lease_owner"] != self.execution_id:
                 raise ValueError("Task ownership changed before execution")
             if operation == "commit" and args["workspace_state"] != self.state_digest():
                 raise ValueError("Workspace changed since the exact commit approval")
+            if operation in {"test", "install"}:
+                VerificationCommands(self.db, Registry(self.db, self.settings.project_roots)).assert_current(
+                    self.project_id,
+                    args["commands"],
+                    self.workspace.root,
+                    "dependency" if operation == "install" else "verification",
+                )
             with self.db.transaction() as conn:
                 previous = conn.execute("SELECT * FROM operations WHERE operation_key=?", (key,)).fetchone()
                 if previous:
@@ -91,11 +118,22 @@ class Capabilities:
                     raise ValueError("Delete requires an existing file with the approved hash")
                 path.unlink()
                 result = {"deleted": args["path"]}
-            elif operation == "test":
+            elif operation in {"test", "install"}:
                 commands = args["commands"]
                 if not commands:
                     raise ValueError("No owner-configured verification commands")
-                result = [await self.workspace.isolated_test(command) for command in commands]
+                result = [
+                    await self.workspace.isolated_test(
+                        command["argv"], cwd=command["cwd"], writable=operation == "install"
+                    )
+                    for command in commands
+                ]
+                VerificationCommands(self.db, Registry(self.db, self.settings.project_roots)).assert_current(
+                    self.project_id,
+                    commands,
+                    self.workspace.root,
+                    "dependency" if operation == "install" else "verification",
+                )
             elif operation == "commit":
                 result = await asyncio.to_thread(self.commit, args["message"])
             else:

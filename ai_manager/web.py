@@ -23,6 +23,7 @@ from .orchestration import Planner, Scheduler, Verifier
 from .policies import Policies
 from .registry import Registry, git
 from .tasks import Tasks
+from .verification import VerificationCommands
 from .workers import Workers
 from .workspace import safe_file
 
@@ -65,6 +66,8 @@ class TaskBody(BaseModel):
     dependencies: list[str] = Field(default_factory=list, max_length=50)
     verification: str = Field(default="", max_length=5000)
     permissions: list[str] = Field(default_factory=list, max_length=30)
+    kind: Literal["code", "documentation", "research", "infrastructure", "investigation"] = "code"
+    verification_spec: dict = Field(default_factory=dict)
 
 
 class MessageBody(BaseModel):
@@ -106,7 +109,7 @@ class SchedulerBody(BaseModel):
     max_workers: int = Field(default=2, ge=1, le=8)
 
 
-class VerificationCommands(BaseModel):
+class VerificationCommandsBody(BaseModel):
     commands: list[list[str]] = Field(max_length=10)
 
 
@@ -117,6 +120,34 @@ class PolicyBody(BaseModel):
 
 class ApprovalBody(BaseModel):
     approve: bool
+
+
+class ProfileBody(BaseModel):
+    profile: str
+    project_id: str | None = None
+    proposal_hash: str = Field(min_length=64, max_length=64)
+
+
+class CommandDecision(BaseModel):
+    id: str
+    status: Literal["approved", "rejected", "revoked"]
+
+
+class CommandDecisions(BaseModel):
+    decisions: list[CommandDecision] = Field(min_length=1, max_length=100)
+
+
+class CommandDefinition(BaseModel):
+    argv: list[str] = Field(min_length=1, max_length=30)
+    cwd: str = Field(default=".", max_length=1000)
+    purpose: Literal["verification", "dependency"] = "verification"
+    execution_id: str | None = None
+
+
+class IntegrationPolicy(BaseModel):
+    auto_commit: bool = False
+    auto_merge: bool = False
+    target_branch: str = Field(default="", max_length=200)
 
 
 class NotificationSettings(BaseModel):
@@ -135,6 +166,7 @@ def create_app(settings: Settings | None = None, server=None):
     chat.action_handler = scheduler.manager_action
     chat.receipt_provider = scheduler.receipts
     policies = Policies(db)
+    verification = VerificationCommands(db, registry)
 
     @asynccontextmanager
     async def lifespan(app):
@@ -151,6 +183,11 @@ def create_app(settings: Settings | None = None, server=None):
         registry.discover()
         for project in registry.list():
             tasks.sync(project["id"])
+            try:
+                verification.discover(project["id"])
+            except (ValueError, OSError) as error:
+                with db.transaction() as conn:
+                    db.event(conn, "verification.discovery_blocked", {"reason": str(error)}, project["id"])
         with db.transaction() as conn:
             conn.execute("UPDATE approvals SET status='cancelled' WHERE status IN ('pending','approved')")
         settings.max_workers = db.setting("max_workers", settings.max_workers)
@@ -277,6 +314,8 @@ def create_app(settings: Settings | None = None, server=None):
             else "Continue the highest priority unblocked task",
             "automation_enabled": db.setting("scheduler_enabled", False),
             "scheduler": scheduler.snapshot(),
+            "autonomy_profile": policies.profile(),
+            "integration": db.all("SELECT * FROM integration_results ORDER BY created_at DESC LIMIT 30"),
             "approvals": db.all("SELECT * FROM approvals WHERE status='pending' ORDER BY created_at"),
             "notifications": db.all("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 30"),
             "storage": {
@@ -292,7 +331,12 @@ def create_app(settings: Settings | None = None, server=None):
 
     @app.post("/api/projects", dependencies=[Depends(require_owner)])
     def add_project(body: ProjectBody):
-        return registry.add(body.path, body.name)
+        project = registry.add(body.path, body.name)
+        try:
+            verification.discover(project["id"])
+        except (ValueError, OSError):
+            pass
+        return project
 
     @app.patch("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
     def update_project(project_id: str, body: ProjectUpdate):
@@ -316,8 +360,10 @@ def create_app(settings: Settings | None = None, server=None):
         return {"updated": True}
 
     @app.post("/api/tasks", dependencies=[Depends(require_owner)])
-    def add_task(body: TaskBody):
-        return tasks.add(**body.model_dump())
+    async def add_task(body: TaskBody):
+        task = tasks.add(**body.model_dump())
+        await scheduler.tick()
+        return {**tasks.get(task["id"]), "result": "accepted", "receipt": scheduler.receipts([task["id"]])[0]}
 
     @app.post("/api/tasks/{task_id}/start", dependencies=[Depends(require_owner)])
     async def start_task(task_id: str):
@@ -353,28 +399,65 @@ def create_app(settings: Settings | None = None, server=None):
     @app.get("/api/projects/{project_id}/verification", dependencies=[Depends(require_owner)])
     def get_verification(project_id: str):
         registry.get(project_id)
-        return {"commands": db.setting(f"verification_commands:{project_id}", [])}
+        return verification.snapshot(project_id)
 
     @app.put("/api/projects/{project_id}/verification", dependencies=[Depends(require_owner)])
-    def verification_commands(project_id: str, body: VerificationCommands):
+    def verification_commands(project_id: str, body: VerificationCommandsBody):
         registry.get(project_id)
-        if any(
-            not command or len(command) > 30 or any(len(arg) > 1000 for arg in command) for command in body.commands
-        ):
-            raise ValueError("Invalid verification command")
-        with db.transaction() as conn:
-            import json
+        return verification.register(project_id, body.commands)
 
-            conn.execute(
-                "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (f"verification_commands:{project_id}", json.dumps(body.commands)),
+    @app.post("/api/projects/{project_id}/verification/discover", dependencies=[Depends(require_owner)])
+    def discover_verification(project_id: str, execution_id: str | None = None):
+        return verification.discover(project_id, execution_id)
+
+    @app.post("/api/projects/{project_id}/verification/commands", dependencies=[Depends(require_owner)])
+    def propose_command(project_id: str, body: CommandDefinition):
+        return verification.add_definition(project_id, **body.model_dump())
+
+    @app.post("/api/projects/{project_id}/verification/decisions", dependencies=[Depends(require_owner)])
+    async def command_decisions(project_id: str, body: CommandDecisions):
+        registry.get(project_id)
+        result = verification.decide(project_id, [d.model_dump() for d in body.decisions])
+        await scheduler.tick()
+        return result
+
+    @app.get("/api/verification", dependencies=[Depends(require_owner)])
+    def all_verification():
+        return [
+            {"project_id": p["id"], "project": p["display_name"] or p["name"], **verification.snapshot(p["id"])}
+            for p in registry.list()
+            if p["status"] != "removed"
+        ]
+
+    @app.get("/api/projects/{project_id}/integration", dependencies=[Depends(require_owner)])
+    def integration_policy(project_id: str):
+        registry.get(project_id)
+        return db.setting(
+            f"integration_policy:{project_id}", {"auto_commit": False, "auto_merge": False, "target_branch": ""}
+        )
+
+    @app.put("/api/projects/{project_id}/integration", dependencies=[Depends(require_owner)])
+    def configure_integration(project_id: str, body: IntegrationPolicy):
+        registry.get(project_id)
+        if body.auto_merge and (
+            not body.auto_commit
+            or not body.target_branch
+            or body.target_branch.startswith("-")
+            or ".." in body.target_branch
+        ):
+            raise ValueError("Verified automatic merge requires automatic commits and an explicit target branch")
+        old = db.setting(f"integration_policy:{project_id}", {})
+        db.set_setting(f"integration_policy:{project_id}", body.model_dump())
+        with db.transaction() as conn:
+            db.event(
+                conn,
+                "policy.integration_changed",
+                {"old": old, "new": body.model_dump(), "authorized_by": "authenticated_owner"},
+                project_id,
             )
-            db.event(conn, "verification.configured", {"commands": body.commands, "configured_by": "owner"}, project_id)
         return {
-            "updated": True,
             "result": "accepted",
-            "message": "Trusted verification commands saved. Retry verification on blocked tasks; execution is not replayed automatically.",
-            "sandbox": "No host home or network; system runtime and workspace only",
+            "message": "Owner integration policy saved for future verified tasks; existing integration outcomes are never replayed",
         }
 
     @app.post("/api/tasks/{task_id}/resume", dependencies=[Depends(require_owner)])
@@ -567,6 +650,32 @@ def create_app(settings: Settings | None = None, server=None):
     def global_instructions(body: InstructionsBody):
         db.set_setting("global_instructions", body.content)
         return {"updated": True}
+
+    @app.get("/api/autonomy", dependencies=[Depends(require_owner)])
+    def autonomy(project_id: str | None = None):
+        if project_id:
+            registry.get(project_id)
+        from .policies import PROFILES
+
+        return {
+            "active_profile": policies.profile(project_id),
+            "profiles": list(PROFILES) + (["inherit"] if project_id else []),
+            "recommended": "high_autonomy",
+            "policies": policies.list(project_id),
+            "history": policies.history(),
+        }
+
+    @app.get("/api/autonomy/proposal", dependencies=[Depends(require_owner)])
+    def autonomy_proposal(profile: str, project_id: str | None = None):
+        if project_id:
+            registry.get(project_id)
+        return policies.proposal(profile, project_id)
+
+    @app.post("/api/autonomy/activate", dependencies=[Depends(require_owner)])
+    def activate_autonomy(body: ProfileBody):
+        if body.project_id:
+            registry.get(body.project_id)
+        return policies.activate(body.profile, body.project_id, body.proposal_hash)
 
     @app.get("/api/policies", dependencies=[Depends(require_owner)])
     def get_policies(project_id: str | None = None):

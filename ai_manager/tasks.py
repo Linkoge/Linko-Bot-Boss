@@ -2,6 +2,7 @@ import json
 import time
 
 from .db import Database, new_id
+from .verification_strategies import validate_spec
 
 TRANSITIONS = {
     "pending": {"running", "paused", "blocked", "awaiting_approval", "cancelled"},
@@ -20,9 +21,21 @@ class Tasks:
     def __init__(self, db: Database):
         self.db = db
 
-    def add(self, project_id, description, acceptance, priority=50, dependencies=(), verification="", permissions=()):
+    def add(
+        self,
+        project_id,
+        description,
+        acceptance,
+        priority=50,
+        dependencies=(),
+        verification="",
+        permissions=(),
+        kind="code",
+        verification_spec=None,
+    ):
         if not description.strip() or not acceptance.strip():
             raise ValueError("Tasks need description and acceptance criteria")
+        validate_spec(kind, verification_spec or {})
         task_id, now = new_id(), time.time()
         with self.db.transaction() as conn:
             for dep in dependencies:
@@ -43,6 +56,10 @@ class Tasks:
                     now,
                 ),
             )
+            conn.execute(
+                "UPDATE tasks SET kind=?,verification_spec=? WHERE id=?",
+                (kind, json.dumps(verification_spec or {}), task_id),
+            )
             conn.executemany("INSERT INTO dependencies VALUES(?,?)", [(task_id, d) for d in dependencies])
             self.db.event(conn, "task.created", {"description": description}, project_id, task_id)
         self.sync(project_id)
@@ -62,7 +79,7 @@ class Tasks:
             (project_id,) if project_id else (),
         )
 
-    def transition(self, task_id, status, revision, evidence=None, blocker=""):
+    def transition(self, task_id, status, revision, evidence=None, blocker="", blocker_code=""):
         with self.db.transaction() as conn:
             row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if not row or row["revision"] != revision:
@@ -72,13 +89,20 @@ class Tasks:
             if status == "completed" and not evidence:
                 raise ValueError("Completion requires independent verification evidence")
             conn.execute(
-                "UPDATE tasks SET status=?,blocker=?,revision=revision+1,updated_at=?,lease_owner=NULL,lease_until=NULL WHERE id=?",
-                (status, blocker, time.time(), task_id),
+                "UPDATE tasks SET status=?,blocker=?,blocker_code=?,revision=revision+1,updated_at=?,lease_owner=NULL,lease_until=NULL WHERE id=?",
+                (status, blocker, blocker_code, time.time(), task_id),
             )
             self.db.event(
                 conn,
                 "task.transition",
-                {"from": row["status"], "to": status, "evidence": evidence, "blocker": blocker},
+                {
+                    "from": row["status"],
+                    "to": status,
+                    "evidence": evidence,
+                    "blocker": blocker,
+                    "blocker_code": blocker_code,
+                    "previous_blocker": row["blocker"],
+                },
                 row["project_id"],
                 task_id,
             )
