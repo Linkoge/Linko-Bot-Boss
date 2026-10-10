@@ -41,7 +41,7 @@ class ProjectBody(BaseModel):
 
 class ProjectUpdate(BaseModel):
     revision: int
-    name: str | None = Field(default=None, min_length=1, max_length=200)
+    display_name: str | None = Field(default=None, max_length=80)
     description: str | None = Field(default=None, max_length=5000)
     objective: str | None = Field(default=None, max_length=5000)
     success_criteria: str | None = Field(default=None, max_length=5000)

@@ -166,3 +166,40 @@ def test_policy_api_is_authenticated_and_audited(client):
     assert browser.get("/api/approvals").json() == []
     assert browser.post("/api/approvals/unknown/decision", json={"approve": True}).status_code == 409
     assert any(e["kind"] == "policy.changed" for e in browser.get("/api/audit").json())
+
+
+def test_rename_api_identity_recency_and_global_context(client):
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    first = browser.post("/api/projects", json={"path": str(settings.project_roots[0] / "one")}).json()
+    second = browser.post("/api/projects", json={"path": str(settings.project_roots[0] / "two")}).json()
+    for project in (first, second):
+        assert browser.get("/api/history", params={"project_id": project["id"]}).status_code == 200
+        assert browser.get(f"/api/projects/{project['id']}").status_code == 200
+    assert app.state.registry.get(first["id"])["last_used_at"] == 0
+    result = browser.patch(f"/api/projects/{first['id']}", json={"revision": 0, "display_name": "Bot Manager"})
+    assert result.status_code == 200
+    renamed = result.json()
+    assert renamed["display_name"] == "Bot Manager" and renamed["name"] == "one"
+    for key in ("id", "path", "repository", "agent_id", "last_used_at"):
+        assert renamed[key] == first[key]
+    assert (
+        browser.patch(f"/api/projects/{first['id']}", json={"revision": 0, "display_name": "Stale"}).status_code == 409
+    )
+    assert (
+        browser.patch(f"/api/projects/{first['id']}", json={"revision": 1, "display_name": "bad\nname"}).status_code
+        == 409
+    )
+    assert (
+        browser.post("/api/chat", json={"project_id": second["id"], "content": "Project scoped message"}).status_code
+        == 200
+    )
+    timestamp = app.state.registry.get(second["id"])["last_used_at"]
+    assert timestamp > 0 and browser.get("/api/portfolio").json()["projects"][0]["id"] == second["id"]
+    assert browser.post("/api/chat", json={"project_id": None, "content": "Global message"}).status_code == 200
+    assert app.state.registry.get(second["id"])["last_used_at"] == timestamp
+    assert len(browser.get("/api/portfolio").json()["projects"]) == 2
+    assert browser.get("/api/history").json()["conversation"]["project_id"] is None
+    restarted = Registry(Database(app.state.db.path), settings.project_roots)
+    assert restarted.get(first["id"])["display_name"] == "Bot Manager"
+    assert restarted.get(second["id"])["last_used_at"] == timestamp

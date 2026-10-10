@@ -1,3 +1,15 @@
+# Current handoff — compact navigation deployed, 2026-10-10
+
+This section supersedes the older pre-reboot-only instructions below. Current authorization was to implement/test/deploy the compact navigation and create a Git checkpoint; that delivery is complete. Work remains in /home/codex/projects/Linko-Bot-Manager, main; use git log/status to identify the latest navigation checkpoint. No remote push.
+
+UI now has exactly two compact sticky rows at all widths. Controls moved to the project menu/Settings. SQLite schema4 adds display_name and last_used_at; original name, ID, path, repository, agent/thread/task associations and memory directory remain stable. Recency is based on accepted meaningful submissions/assignments, not opening/renaming/polling. All Projects remains null/global context. Duplicate display labels include original name/short ID. Blank rename resets fallback. Dropdown uses case-insensitive display-name sorting with keyboard/touch support. Drafts survive context switches in the current page session; Memory/Git detail is fetched only on demand, and async switching is guarded.
+
+Verified35 tests, Ruff, node syntax and expanded Chromium browser checks. Mobile393×851 navigation92px, conversation600.25px (previous351px); desktop1440×1000 content begins92px (previous192.98px). Smaller393×420 viewport keeps composer reachable. /tmp holds before/after screenshots; scripts/browser_smoke.py repeats comparison using incoming checkpoint990ed95fc35724a699e103ee7a238aba97ca22c2. Physical Android keyboard/safe-area behavior remains unverified; one pre-existing dependency warning remains.
+
+Deployed through the established dedicated systemctl --user restart, with a verified pre-deployment backup at /home/codex/.local/share/linko-bot-manager/backups/manager-navigation-20261010-100802.sqlite3. Private HTTPS https://codex-server.tail5ebb9d.ts.net:8787 serves exact tested assets; service active/PID594062; auth boundary and Tailscale443/3000 preserved. No dependency, security, infrastructure or unrelated-service changes.
+
+Actual production now has10 projects,9 conversations,8 messages,11 tasks and an owner account. Compared pre/post deployment identities/history/task/auth/policy records successfully; SQLite integrity/foreign keys and all memory exports pass. Scheduler configuration was preserved and there were no unfinished executions before restart. Current172GiB free/18% used supersedes old disk observations. Separate durable reboot/storage tasks were preserved; this work does not certify full Stage6 or a VM reboot. Refresh only this project's private memory with revision checks/Tasks.sync after development-document changes.
+
 # Fresh Codex session handoff — pre-reboot2026-10-10
 
 ## Start here without conversation context

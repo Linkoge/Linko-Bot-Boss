@@ -1,3 +1,11 @@
+# Current delivery — compact navigation, 2026-10-10
+
+Completed under the owner's current authorization: two-row responsive sticky navigation, durable meaningful-use ordering, alphabetical accessible dropdown/global context, editable persisted display names with stable identity, compact conversation/composer, per-context session drafts and lazy Memory loading. Added migration, persistence, identity, chat/global-context tests and expanded browser coverage. All35 backend tests, Ruff, JavaScript syntax and desktop/mobile browser checks pass. Deployed to the existing private service and verified data/asset preservation. Git checkpoint covers this delivery.
+
+Remaining UI validation: a physical Android keyboard/safe-area check is optional follow-up; no reproduced UI failure remains. Existing Starlette/httpx warning remains a dependency-maintenance item. Draft persistence across full browser reloads is not implemented.
+
+The earlier checkpoint task restrictions below are historical and superseded by this authorized feature/deployment task. The owner account now exists and current storage is172GiB available; initial-owner and old low-space observations below are no longer the current baseline. Existing durable reboot/storage tasks require their own acceptance evidence and were not automatically completed. Preserve all unrelated task states and infrastructure.
+
 # Outstanding tasks — pre-reboot checkpoint, 2026-10-10
 
 No new features are authorized during checkpoint preparation. After the owner reboots, resume with the read-only checklist in docs/operations.md. Stages 1–5 remain verified for supported capabilities; Stage 6 remains open.

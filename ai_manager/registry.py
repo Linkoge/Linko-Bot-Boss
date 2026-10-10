@@ -9,6 +9,14 @@ from .db import Database, new_id
 MEMORY_NAMES = ("PROJECT.md", "STATE.md", "TASKS.md", "DECISIONS.md", "HANDOFF.md")
 
 
+def validate_display_name(value):
+    if value is None:
+        return None
+    if len(value.strip()) > 80 or any(ord(c) < 32 or ord(c) == 127 for c in value):
+        raise ValueError("Display name must be at most 80 characters without control characters")
+    return value.strip() or None
+
+
 def git(path: Path, *args: str) -> str:
     result = subprocess.run(
         ["git", "-C", str(path), "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", *args],
@@ -48,6 +56,7 @@ class Registry:
         return resolved
 
     def add(self, path: str | Path, name: str | None = None) -> dict:
+        name = validate_display_name(name)
         path = self.allowed_path(path)
         existing = self.db.one("SELECT * FROM projects WHERE path=?", (str(path),))
         if existing:
@@ -60,7 +69,7 @@ class Registry:
                 "INSERT INTO projects(id,name,path,repository,agent_id,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
                 (
                     project_id,
-                    name or path.name,
+                    path.name,
                     str(path),
                     safe_remote(git(path, "remote", "get-url", "origin")),
                     f"project-{project_id[:12]}",
@@ -81,6 +90,8 @@ class Registry:
                     (project_id, filename, content, now),
                 )
             self.db.event(conn, "project.registered", {"path": str(path)}, project_id)
+        if name:
+            self.update(project_id, 0, {"display_name": name})
         self.export_memory(project_id)
         return self.get(project_id)
 
@@ -108,7 +119,9 @@ class Registry:
         return [p for p in found if p["status"] != "removed"]
 
     def list(self):
-        return self.db.all("SELECT * FROM projects WHERE status != 'removed' ORDER BY priority DESC,name")
+        return self.db.all(
+            "SELECT * FROM projects WHERE status != 'removed' ORDER BY last_used_at DESC,COALESCE(display_name,name) COLLATE NOCASE,id"
+        )
 
     def get(self, project_id):
         project = self.db.one("SELECT * FROM projects WHERE id=?", (project_id,))
@@ -117,11 +130,13 @@ class Registry:
         return project
 
     def update(self, project_id: str, revision: int, changes: dict):
-        allowed = {"name", "description", "objective", "success_criteria", "instructions", "priority", "status"}
+        allowed = {"display_name", "description", "objective", "success_criteria", "instructions", "priority", "status"}
         if not changes or not set(changes) <= allowed:
             raise ValueError("Unsupported project update")
         if "status" in changes and changes["status"] not in {"active", "paused", "archived", "removed"}:
             raise ValueError("Invalid project status")
+        if "display_name" in changes:
+            changes = {**changes, "display_name": validate_display_name(changes["display_name"])}
         with self.db.transaction() as conn:
             assignments = ",".join(f"{key}=?" for key in changes)
             cursor = conn.execute(

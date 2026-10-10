@@ -85,6 +85,15 @@ class Database:
             conn.executescript(SCHEMA)
             if "base_commit" not in {r[1] for r in conn.execute("PRAGMA table_info(executions)")}:
                 conn.execute("ALTER TABLE executions ADD COLUMN base_commit TEXT")
+            columns = {r[1] for r in conn.execute("PRAGMA table_info(projects)")}
+            for name, definition in (("display_name", "TEXT"), ("last_used_at", "REAL NOT NULL DEFAULT 0")):
+                if name not in columns:
+                    conn.execute(f"ALTER TABLE projects ADD COLUMN {name} {definition}")
+            if not conn.execute("SELECT 1 FROM schema_version WHERE version=4").fetchone():
+                conn.execute("""UPDATE projects SET last_used_at=COALESCE(
+                    (SELECT MAX(created_at) FROM events WHERE events.project_id=projects.id
+                     AND kind IN ('chat.queued','task.created','task.claimed','worker.queued','plan.applied','manager.action')),0)""")
+                conn.execute("INSERT INTO schema_version VALUES(4)")
             conn.commit()
         self.path.chmod(0o600)
 
@@ -119,6 +128,16 @@ class Database:
 
     @staticmethod
     def event(conn, kind: str, payload: dict, project_id=None, task_id=None, execution_id=None):
+        if project_id and kind in {
+            "chat.queued",
+            "task.created",
+            "task.claimed",
+            "worker.queued",
+            "plan.applied",
+            "manager.action",
+            "goal.submitted",
+        }:
+            conn.execute("UPDATE projects SET last_used_at=MAX(last_used_at,?) WHERE id=?", (time.time(), project_id))
         conn.execute(
             "INSERT INTO events(kind,project_id,task_id,execution_id,payload,created_at) VALUES(?,?,?,?,?,?)",
             (kind, project_id, task_id, execution_id, json.dumps(payload), time.time()),

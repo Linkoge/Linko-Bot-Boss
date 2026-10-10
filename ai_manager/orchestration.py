@@ -229,6 +229,8 @@ class Planner:
         if existing:
             return {"plan_id": existing["id"], "already_applied": True}
         project = self.registry.get(project_id)
+        with self.db.transaction() as conn:
+            self.db.event(conn, "goal.submitted", {}, project_id)
         proposal, execution_id = await structured_turn(
             self.db,
             self.settings,
