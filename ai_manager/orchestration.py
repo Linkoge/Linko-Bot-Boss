@@ -23,7 +23,8 @@ PLAN_SCHEMA = {
     "properties": {
         "tasks": {
             "type": "array",
-            "minItems": 1,
+            "description": "Normally one complete objective: the worker investigates, implements, tests and reports within that assignment. Empty only when reusing existing_task_id.",
+            "minItems": 0,
             "maxItems": 20,
             "items": {
                 "type": "object",
@@ -34,7 +35,7 @@ PLAN_SCHEMA = {
                     "priority": {"type": "integer", "minimum": 0, "maximum": 100},
                     "dependencies": {
                         "type": "array",
-                        "description": "Zero-based indexes of earlier tasks in this plan.",
+                        "description": "Earlier zero-based task indexes whose output this task requires. Independent work queues without dependencies.",
                         "items": {"type": "integer", "minimum": 0},
                     },
                     "kind": {
@@ -78,9 +79,17 @@ PLAN_SCHEMA = {
                 ],
                 "additionalProperties": False,
             },
-        }
+        },
+        "decomposition_reason": {
+            "type": "string",
+            "description": "Empty for one assignment. Multiple tasks require a concrete reason: distinct deliverables, required execution stages, explicit multiple-task request or operational constraints. Investigation, implementation, testing and reporting of one objective belong to one worker.",
+        },
+        "existing_task_id": {
+            "type": "string",
+            "description": "Reuse an existing unfinished assignment for an equivalent repeated/resume request; return its ID and empty tasks. Failed/blocked work keeps its status and history until explicitly retried. Otherwise empty.",
+        },
     },
-    "required": ["tasks"],
+    "required": ["tasks", "decomposition_reason", "existing_task_id"],
     "additionalProperties": False,
 }
 REVIEW_SCHEMA = {
@@ -96,7 +105,7 @@ REVIEW_SCHEMA = {
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Read a selected project document or perform explicitly delegated portfolio management actions in existing projects. plan_goal delegates implementation/testing to project workers, queues a goal and attempts dispatch under current scheduler settings; the read-only chat workspace is separate from project worker workspaces. prioritize/pause_project/resume_project update a project; run_queue enables scheduling for a batch and requires explicit owner authorization to enable scheduling; show_approvals lists pending approvals; freeze_projects pauses registration; owner_admin performs scoped administration. Do not launch work for brainstorming or unapproved proposals.",
+    "description": "Read a selected project document or perform explicitly delegated portfolio management actions in existing projects. plan_goal queues a complete objective for one project worker and attempts dispatch under current scheduler settings; the worker investigates, implements, tests and reports. Distinct deliverables or execution constraints can justify multiple assignments. The read-only chat workspace is separate from project worker workspaces. prioritize/pause_project/resume_project update a project; run_queue enables scheduling for a batch and requires explicit owner authorization to enable scheduling; show_approvals lists pending approvals; freeze_projects pauses registration; owner_admin performs scoped administration. Do not launch work for brainstorming or unapproved proposals.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -228,16 +237,39 @@ class Planner:
         task_ids = [
             row["task_id"]
             for row in self.db.all(
-                "SELECT task_id FROM events WHERE kind='task.planned' AND json_extract(payload,'$.plan_id')=? ORDER BY seq",
+                "SELECT task_id FROM events WHERE kind IN ('task.planned','task.reused') AND json_extract(payload,'$.plan_id')=? ORDER BY seq",
                 (plan_id,),
             )
         ]
         return {"plan_id": plan_id, "already_applied": True, "task_ids": task_ids}
 
+    def repeated_result(self, project_id, goal):
+        for previous in self.db.all(
+            "SELECT id FROM plans WHERE project_id=? AND trim(goal)=? ORDER BY created_at DESC",
+            (project_id, goal.strip()),
+        ):
+            result = self.existing_result(previous["id"])
+            if result["task_ids"] and all(
+                Tasks(self.db).get(task_id)["status"] not in {"completed", "cancelled"}
+                for task_id in result["task_ids"]
+            ):
+                return result
+        return None
+
     def apply(self, project_id, goal, proposal, request_key, execution_id=None):
+        existing = self.db.one("SELECT id,project_id FROM plans WHERE request_key=?", (request_key,))
+        if existing:
+            if existing["project_id"] != project_id:
+                raise ValueError("Delegation request belongs to another project")
+            return self.existing_result(existing["id"])
         items = proposal.get("tasks", [])
-        if not 1 <= len(items) <= 20:
+        reused_id = proposal.get("existing_task_id", "")
+        if reused_id and items:
+            raise ValueError("Reuse an assignment or create tasks, not both")
+        if not reused_id and not 1 <= len(items) <= 20:
             raise ValueError("A plan must contain 1–20 tasks")
+        if len(items) > 1 and not proposal.get("decomposition_reason", "").strip():
+            raise ValueError("Multiple assignments require a concrete decomposition reason")
         for index, item in enumerate(items):
             validate_spec(item.get("kind", "code"), item.get("verification_spec", {}))
             if (
@@ -252,15 +284,31 @@ class Planner:
                 or any(not isinstance(dep, int) or dep < 0 or dep >= index for dep in item["dependencies"])
             ):
                 raise ValueError("Plan priorities/dependencies invalid or cyclic")
-        plan_id, task_ids, now = new_id(), [new_id() for _ in items], time.time()
+        plan_id, task_ids, now = new_id(), [reused_id] if reused_id else [new_id() for _ in items], time.time()
         with self.db.transaction() as conn:
-            existing = conn.execute("SELECT id FROM plans WHERE request_key=?", (request_key,)).fetchone()
+            existing = conn.execute("SELECT id,project_id FROM plans WHERE request_key=?", (request_key,)).fetchone()
             if existing:
+                if existing["project_id"] != project_id:
+                    raise ValueError("Delegation request belongs to another project")
                 return self.existing_result(existing["id"])
+            # Recheck under the write transaction when planning calls overlap.
+            repeated = self.repeated_result(project_id, goal) if not reused_id else None
+            if repeated:
+                if len(repeated["task_ids"]) != 1:
+                    return repeated
+                reused_id = repeated["task_ids"][0]
+                task_ids, items = [reused_id], []
+                proposal = {"tasks": [], "existing_task_id": reused_id, "decomposition_reason": ""}
+            if reused_id:
+                task = conn.execute("SELECT project_id,status FROM tasks WHERE id=?", (reused_id,)).fetchone()
+                if not task or task["project_id"] != project_id or task["status"] in {"completed", "cancelled"}:
+                    raise ValueError("Reuse requires an unfinished task in the selected project")
             conn.execute(
                 "INSERT INTO plans VALUES(?,?,?,?,?,?,?,?)",
                 (plan_id, request_key, project_id, goal, "applied", json.dumps(proposal), execution_id, now),
             )
+            if reused_id:
+                self.db.event(conn, "task.reused", {"plan_id": plan_id}, project_id, reused_id)
             for index, item in enumerate(items):
                 conn.execute(
                     "INSERT INTO tasks(id,project_id,description,priority,acceptance,verification,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
@@ -292,13 +340,24 @@ class Planner:
                 )
             self.db.event(conn, "plan.applied", {"plan_id": plan_id, "task_ids": task_ids}, project_id)
         Tasks(self.db).sync(project_id)
-        return {"plan_id": plan_id, "task_ids": task_ids, "status": "queued"}
+        return {"plan_id": plan_id, "task_ids": task_ids, "reused": bool(reused_id)}
 
     async def plan(self, project_id, goal, request_key):
-        existing = self.db.one("SELECT id FROM plans WHERE request_key=?", (request_key,))
+        existing = self.db.one("SELECT id,project_id FROM plans WHERE request_key=?", (request_key,))
         if existing:
+            if existing["project_id"] != project_id:
+                raise ValueError("Delegation request belongs to another project")
             return self.existing_result(existing["id"])
         project = self.registry.get(project_id)
+        # Exact repeats need no new model turn. Include failed/blocked assignments:
+        # re-delegating is not authorization to replay their execution.
+        repeated = self.repeated_result(project_id, goal)
+        if repeated:
+            if len(repeated["task_ids"]) == 1:
+                return self.apply(
+                    project_id, goal, {"tasks": [], "existing_task_id": repeated["task_ids"][0]}, request_key
+                )
+            return repeated
         with self.db.transaction() as conn:
             self.db.event(conn, "goal.submitted", {}, project_id)
         proposal, execution_id = await structured_turn(

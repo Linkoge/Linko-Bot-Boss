@@ -42,6 +42,7 @@ def test_plan_atomic_idempotent_and_dependency_validation(worker_env):
     settings, db, registry, project, source = worker_env
     planner = Planner(db, registry, settings)
     proposal = {
+        "decomposition_reason": "Explicit owner request for separate inspection and review deliverables",
         "tasks": [
             {
                 "description": "Inspect",
