@@ -316,6 +316,9 @@ async def test_verified_commit_and_merge_require_project_policy_and_content_iden
     before = workspace.read_file("README.md")
     workspace.write_file("README.md", "# Original\nVerified local integration.\n", before["sha256"])
     assert await Verifier(db, registry, settings, ReviewServer).verify(task["id"])
+    assert workers.latest_worker(task["id"])["status"] == "completed"
+    handoff = db.one("SELECT content FROM memory WHERE project_id=? AND name='HANDOFF.md'", (project["id"],))["content"]
+    assert "· verifying ·" not in handoff and "· running ·" not in handoff
     result = db.one("SELECT * FROM integration_results")
     assert result["status"] == "completed" and "Verified local integration" in (source / "README.md").read_text()
     await Integrator(db, registry, settings).integrate(Tasks(db).get(task["id"]))

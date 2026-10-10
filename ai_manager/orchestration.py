@@ -590,6 +590,10 @@ class Verifier:
                 if cursor.rowcount != 1:
                     raise ValueError("Verification lease changed before completion")
                 conn.execute(
+                    "UPDATE executions SET status='completed',error='' WHERE id=? AND status='verifying' AND finished_at IS NOT NULL",
+                    (execution["id"],),
+                )
+                conn.execute(
                     "INSERT INTO verification_results VALUES(?,?,?,?,?,?)",
                     (new_id(), task_id, review_id, 1, json.dumps(evidence), now),
                 )
@@ -631,11 +635,6 @@ class Verifier:
                     task["project_id"],
                     task_id,
                 )
-            try:
-                self.tasks.sync(task["project_id"])
-            except OSError:
-                with self.db.transaction() as conn:
-                    self.db.event(conn, "memory.export_retry_required", {}, task["project_id"], task_id)
             return True
         except asyncio.CancelledError:
             current = self.tasks.get(task_id)
@@ -701,6 +700,12 @@ class Verifier:
                         lease,
                     ),
                 )
+            # Export after both worker and controller receipts have their final states.
+            try:
+                self.tasks.sync(task["project_id"])
+            except OSError:
+                with self.db.transaction() as conn:
+                    self.db.event(conn, "memory.export_retry_required", {}, task["project_id"], task_id)
 
 
 class Scheduler:
