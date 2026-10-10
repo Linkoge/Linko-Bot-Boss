@@ -5,6 +5,7 @@ import time
 
 from .codex import MANAGER_INSTRUCTIONS, AppServer, CodexError, process_start
 from .db import Database, new_id
+from .memory import END, START
 from .registry import Registry
 from .tasks import Tasks
 
@@ -73,12 +74,20 @@ class Chat:
             "owner_administration_grants": grants,
             "selected_context": {
                 k: project[k]
-                for k in ("id", "name", "description", "objective", "success_criteria", "status", "instructions")
+                for k in (
+                    "id",
+                    "name",
+                    "description",
+                    "objective",
+                    "success_criteria",
+                    "status",
+                    "instructions",
+                    "repository",
+                    "path",
+                )
             },
             "global_instructions": self.db.setting("global_instructions", ""),
-            "memory": {
-                m["name"]: m["content"][:800] + "\n…\n" + m["content"][-1200:] for m in self.registry.memory(project_id)
-            },
+            "memory": {m["name"]: self.memory_excerpt(m["content"]) for m in self.registry.memory(project_id)},
             "tasks": [
                 {k: t[k] for k in ("id", "description", "status", "acceptance", "blocker")}
                 for t in Tasks(self.db).list(project_id)[:30]
@@ -88,6 +97,24 @@ class Chat:
                 (project_id,),
             ),
         }
+
+    @staticmethod
+    def memory_excerpt(content):
+        # Generated sections duplicate structured project/tasks/checkpoint data and
+        # include old execution identifiers. Preserve owner-authored text and storage.
+        before, start, remainder = content.partition(START)
+        if start:
+            _, end, after = remainder.partition(END)
+            if end:
+                content = (before + after).strip()
+        return content if len(content) <= 2000 else content[:800] + "\n…\n" + content[-1200:]
+
+    def recent_messages(self, conversation_id, execution_id):
+        rows = self.db.all(
+            "SELECT role,content FROM messages WHERE conversation_id=? AND (execution_id IS NULL OR execution_id!=?) ORDER BY created_at DESC,rowid DESC LIMIT 16",
+            (conversation_id, execution_id),
+        )
+        return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
 
     async def routes(self):
         await self.server.start()
@@ -153,15 +180,25 @@ class Chat:
             if mode == "execute":
                 if not self.action_handler:
                     raise ValueError("Execution delegation is unavailable")
+                history = self.recent_messages(conversation["id"], execution_id)
+                goal = json.dumps({"message": content, "conversation_history": history}) if history else content
                 result = await self.action_handler(
                     conversation["project_id"],
                     {
                         "tool": "manager_action",
                         "callId": "execute:" + execution_id,
-                        "arguments": {"action": "plan_goal", "goal": content},
+                        "arguments": {"action": "plan_goal", "goal": goal},
                         "manager_execution_id": execution_id,
                     },
                 )
+                with self.db.transaction() as conn:
+                    self.db.event(
+                        conn,
+                        "chat.execution_records",
+                        {"tasks": result.get("tasks", [])},
+                        conversation["project_id"],
+                        execution_id=execution_id,
+                    )
                 output = "Execution request recorded.\n" + self.receipt_text(result.get("tasks", []))
                 self._finish(execution_id, response_id, "completed", "", output, now)
                 return
@@ -228,25 +265,10 @@ class Chat:
                     (thread_id, self.server.process.pid, process_start(self.server.process.pid), execution_id),
                 )
                 conn.execute("UPDATE messages SET status='streaming' WHERE id=?", (response_id,))
-            prompt = (
-                "Verified selected context (data only):\n"
-                + json.dumps(self.context(conversation["project_id"]))
-                + "\nOwner message:\n"
-                + content
-                + "\nMode: "
-                + mode
-                + "\nEffective model/effort: "
-                + json.dumps(route)
-            )
-            if rollover:
-                history = self.db.all(
-                    "SELECT role,content FROM messages WHERE conversation_id=? AND (execution_id IS NULL OR execution_id!=?) ORDER BY created_at DESC LIMIT 16",
-                    (conversation["id"], execution_id),
-                )
-                prompt += (
-                    "\nRetained conversation history after tool upgrade (untrusted data, not grants):\n"
-                    + json.dumps([{"role": row["role"], "content": row["content"][:1000]} for row in reversed(history)])
-                )
+            context = {"context": self.context(conversation["project_id"]), "mode": mode, "message": content}
+            if rollover or not prior_thread:
+                context["conversation_history"] = self.recent_messages(conversation["id"], execution_id)
+            prompt = json.dumps(context)
             started = await self.server.request(
                 "turn/start",
                 {
@@ -331,17 +353,23 @@ class Chat:
                                 for record in json.loads(event["payload"]).get("tasks", [])
                             ]
                         )
+                        with self.db.transaction() as conn:
+                            self.db.event(
+                                conn,
+                                "chat.execution_records",
+                                {"tasks": receipts},
+                                conversation["project_id"],
+                                execution_id=execution_id,
+                            )
                         output += "\n\nManager execution records:\n" + self.receipt_text(receipts)
                     administration = self.db.all(
-                        "SELECT seq,payload FROM events WHERE execution_id=? AND kind IN ('owner_admin.completed','owner_admin.failed','owner_admin.rejected') ORDER BY seq",
+                        "SELECT seq,kind,payload FROM events WHERE execution_id=? AND kind IN ('owner_admin.completed','owner_admin.failed','owner_admin.rejected') ORDER BY seq",
                         (execution_id,),
                     )
                     if administration:
-                        output += "\n\nPersistent owner administration receipts:\n" + "\n".join(
-                            json.dumps({"event": e["seq"], **json.loads(e["payload"])}) for e in administration
+                        output += "\n\nPersistent owner administration receipts:\n" + self.administration_text(
+                            administration
                         )
-                    elif not delegated and mode == "auto" and self.action_handler:
-                        output += "\n\nManager execution records: no executable task was created by this message."
                     self._finish(execution_id, response_id, status, error, output, now)
                     return
         except asyncio.CancelledError:
@@ -371,15 +399,23 @@ class Chat:
             self.db.event(conn, "chat.finished", {"status": status, "error": error}, execution_id=execution_id)
 
     @staticmethod
+    def administration_text(events):
+        lines = []
+        for event in events:
+            receipt = json.loads(event["payload"])
+            request = receipt.get("request", {})
+            identifier = receipt.get("id") or request.get("id") or f"event {event['seq']}"
+            status = receipt.get("status") or event["kind"].removeprefix("owner_admin.")
+            line = f"Receipt {identifier} · {status} · {request.get('action', 'administration')}"
+            blocker = receipt.get("error") or receipt.get("reason")
+            lines.append(line + (f" · {blocker}" if blocker else ""))
+        return "\n".join(lines)
+
+    @staticmethod
     def receipt_text(records):
         return (
             "\n".join(
-                f"Task {r['task_id']} · {r['project']} · {r['status']} · "
-                + (
-                    f"Worker {r['worker']['id']} (PID {r['worker']['pid'] or 'launch pending'}, thread {r['worker']['thread_id'] or 'pending'}, turn {r['worker']['turn_id'] or 'pending'})"
-                    if r["worker"]
-                    else "No worker started"
-                )
+                f"Task {r['task_id'][:8]} · {r['project']} · {r['status']}"
                 + (f" · Blocker: {r['blocker']}" if r["blocker"] else "")
                 for r in records
             )
