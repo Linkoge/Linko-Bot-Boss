@@ -305,6 +305,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     def portfolio():
         return {
             "projects": registry.list(),
+            "global_last_used_at": db.setting("global_last_used_at", 0),
             "tasks": tasks.list(),
             "executions": db.all("SELECT * FROM executions ORDER BY started_at DESC LIMIT 100"),
             "questions": db.all(

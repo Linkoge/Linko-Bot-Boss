@@ -72,6 +72,12 @@ class Database:
                     (SELECT MAX(created_at) FROM events WHERE events.project_id=projects.id
                      AND kind IN ('chat.queued','task.created','task.claimed','worker.queued','plan.applied','manager.action')),0)""")
                 conn.execute("INSERT INTO schema_version VALUES(4)")
+            # Global context has no project row. Seed its durable recency once from
+            # accepted global submissions without altering project history.
+            if not conn.execute("SELECT 1 FROM settings WHERE key='global_last_used_at'").fetchone():
+                conn.execute("""INSERT INTO settings(key,value)
+                    SELECT 'global_last_used_at', CAST(COALESCE(MAX(created_at),0) AS TEXT)
+                    FROM events WHERE project_id IS NULL AND kind='chat.queued'""")
             task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
             # Old supervision records remain historical. Only lifecycle drives new execution.
             for name, definition in (
@@ -168,6 +174,12 @@ class Database:
             "worker.queued",
         }:
             conn.execute("UPDATE projects SET last_used_at=MAX(last_used_at,?) WHERE id=?", (time.time(), project_id))
+        elif project_id is None and kind == "chat.queued":
+            conn.execute(
+                """INSERT INTO settings(key,value) VALUES('global_last_used_at',?)
+                ON CONFLICT(key) DO UPDATE SET value=CAST(MAX(CAST(value AS REAL),CAST(excluded.value AS REAL)) AS TEXT)""",
+                (json.dumps(time.time()),),
+            )
         conn.execute(
             "INSERT INTO events(kind,project_id,task_id,execution_id,payload,created_at) VALUES(?,?,?,?,?,?)",
             (kind, project_id, task_id, execution_id, json.dumps(payload), time.time()),

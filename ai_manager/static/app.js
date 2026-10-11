@@ -20,20 +20,23 @@ function showAuth(){state.selection++;state.source?.close();state.source=null;st
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh();await selectProject(state.project);}
 async function refresh(){state.portfolio=await api('/api/portfolio');renderProjects();renderTasks();renderAgents();renderQuestions();$('task-count').textContent=state.portfolio.tasks.filter(t=>['queued','running','waiting'].includes(t.status)).length;if(state.portfolio.queue_error)notice(state.portfolio.queue_error);if(!state.source&&!state.pending.has(state.project))await loadHistory();}
-const displayName = p => p.display_name || p.name;
+const displayName = p => p ? p.display_name || p.name : 'All Projects';
+const compareContexts = (a,b) => displayName(a).localeCompare(displayName(b),undefined,{sensitivity:'base'})||(a?.id||'').localeCompare(b?.id||'');
+const contextRecency = p => p ? p.last_used_at||0 : state.portfolio.global_last_used_at||0;
 function projectLabel(p){
   const duplicates=state.portfolio.projects.filter(other=>displayName(other).toLocaleLowerCase()===displayName(p).toLocaleLowerCase());
   return displayName(p)+(duplicates.length>1?` · ${p.name} (${p.id.slice(0,6)})`:'');
 }
 function renderProjects(){
-  const scroll=$('project-tabs').scrollLeft,focused=document.activeElement.closest('#projects button')?.dataset.project;
+  const scroll=$('project-tabs').scrollLeft,focused=document.activeElement.closest('#projects button')?.dataset.project,globalButton=$('all-projects');
   $('projects').replaceChildren();
-  for(const p of [...state.portfolio.projects].sort((a,b)=>(b.last_used_at||0)-(a.last_used_at||0)||displayName(a).localeCompare(displayName(b),undefined,{sensitivity:'base'})||a.id.localeCompare(b.id))){
-    const b=element('button',projectLabel(p),'project-button'+(state.project===p.id?' selected':''));
-    b.title=p.path;b.dataset.project=p.id;b.setAttribute('aria-pressed',String(state.project===p.id));
-    b.onclick=action(()=>selectProject(p.id));$('projects').append(b);
+  for(const p of [null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))){
+    const id=p?.id||null,b=p?element('button',projectLabel(p),'project-button'):globalButton;
+    b.classList.toggle('selected',state.project===id);b.title=p?p.path:'Global manager conversation and portfolio';
+    b.dataset.project=id||'';b.setAttribute('aria-pressed',String(state.project===id));
+    b.onclick=action(()=>selectProject(id));$('projects').append(b);
   }
-  if(focused)$('projects').querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
+  if(focused!==undefined)$('projects').querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
   $('project-tabs').scrollLeft=scroll;
   $('all-projects').classList.toggle('selected',!state.project);$('all-projects').setAttribute('aria-pressed',String(!state.project));
   if(!$('project-menu').hidden)renderProjectMenu();
@@ -42,7 +45,7 @@ function renderProjects(){
 function closeProjectMenu(focus=false){$('project-menu').hidden=true;$('project-menu-button').setAttribute('aria-expanded','false');if(focus)$('project-menu-button').focus();}
 function renderProjectMenu(){
   const menu=$('project-menu'),focused=menu.contains(document.activeElement)?document.activeElement.dataset.project:undefined;menu.replaceChildren();
-  for(const p of [null,...[...state.portfolio.projects].sort((a,b)=>displayName(a).localeCompare(displayName(b),undefined,{sensitivity:'base'})||a.id.localeCompare(b.id))]){
+  for(const p of [null,...state.portfolio.projects].sort(compareContexts)){
     const selected=state.project===(p?.id||null),button=element('button',p?projectLabel(p):'◈ All Projects · global context',selected?'selected':'');
     button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(selected));button.dataset.project=p?.id||'';
     button.onclick=action(async()=>{closeProjectMenu(true);await selectProject(p?.id||null);});menu.append(button);
