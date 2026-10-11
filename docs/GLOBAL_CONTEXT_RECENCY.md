@@ -1,0 +1,57 @@
+# All Projects recency patch and release handoff — 2026-10-12
+
+## Result and review
+
+All Projects participates in the same descending meaningful-use recency ordering as project tabs. It remains the null/global context with a separate manager conversation. The dropdown sorts every context alphabetically, including All Projects; for example Aardvark precedes All Projects and Alpha follows it. Case-insensitive display-name ordering and stable ID tie-breaking are retained. The fixed dropdown remains available when the selected tab is outside the horizontal scroll viewport.
+
+The patch adds one JSON-number settings key, `global_last_used_at`, using the existing database/event mechanism. On first initialization only, absent storage is seeded from the latest null-project `chat.queued` event, or zero. No project/repository row or schema marker is invented. Once present, the key avoids rescanning history and survives conversation clearing/archiving and history removal. Accepted global `chat.queued` updates it monotonically inside the same transaction; failed/rolled-back acceptance cannot advance it. Existing project event semantics are unchanged (`chat.queued`, `task.created`, `worker.queued`, including existing automatic manager continuation semantics). Opening, polling, renaming and terminal response events do not advance recency.
+
+The actual existing global button is moved into the sorted tabs container and retains its null selection handler. Focus restoration now handles the empty global dataset identity. Draft keys, project IDs/names/paths/agents, conversation identities, submission capture and selection guards remain unchanged. No CSS, dependency, auth, worker, scheduler, native thread, global instruction or repository memory behavior was changed.
+
+Source/diff review by the implementing agent covered all six changed implementation/test files, event transactions/backfill, identity/tie semantics, menu accessibility, focus/scroll preservation and preservation of the pending reliability patch. No independent agent review is claimed. The production diff is limited to database recency, portfolio exposure and navigation rendering/markup; the remaining code is focused regression coverage. Git whitespace, Ruff and JavaScript syntax checks pass. This is a reviewed, tested preparation artifact, **not a deployed release**.
+
+## Exact versions and validation
+
+Standalone checkout: `/home/codex/projects/linko-global-recency-review`, shallow independent clone of clean live baseline `5ff6d7ff3f5cad4d0e2cad8d78bda3570edd8f5d`.
+
+- Implementation: `29c4287` (global ordering/storage and focused tests).
+- Additional stable-identity, tab-focus and touch checks: `c8b9be14067878258e73fb1deaabaab2ec4bff82`.
+- Standalone baseline plus patch: **85 tests passed**, existing Chromium smoke passed; focused recency browser suite passed. Final focused backend checks: **3 passed in 0.12s**.
+- Isolated compatibility checkout: `/home/codex/checkouts/linko-global-recency-combined`, based on the unchanged pending release `18998598a80c14585b98dce692cb242294c5dd0b` (reviewed reliability implementations `00ac947` and `d3acbb1`). Navigation changes cherry-picked without conflicts as `84b9eb5` and `e573f6c8f85f3005f744cb2a05721342eb631c7b`.
+- Combined release: **100 tests passed in 7.04s**, Ruff/syntax/whitespace passed, existing Chromium smoke, reliability fault Chromium suite and focused global recency suite passed. Final focused backend checks: **3 passed in 0.12s**; final browser checks also passed after adding touch/tab-focus checks.
+
+Commands use the existing production virtual environment's binaries with checkout-local source, disposable databases, fake inference and ephemeral loopback servers. Set `AI_MANAGER_ALLOWED_HOSTS=localhost,127.0.0.1,testserver` for pytest because the inherited production host list excludes TestClient's testserver. An initial inherited-host run produced three HTTP-400 test failures; using the fixture host list resolves them without changing product code. The existing Starlette/httpx deprecation warning remains. Initial browser fixture mistakes (unsupported locator argument and a deliberately held Promise accidentally returned from evaluate) were corrected; no corresponding product issue was found.
+
+Focused backend checks verify backfill ignores project events and nonmeaningful global events, preserves original rows, keeps global conversation separate, never registers a synthetic project, persists through reopened databases/history removal, rejects overlapping/empty submissions without advancing recency, preserves stable fields through rename, advances accepted assignments/worker claims, retains unrelated settings and handles transaction rollback/backward clock movement.
+
+Focused Chromium checks verify project→global→project recency movement, alphabetical/keyboard dropdown, menu and global-tab focus across background refresh, separate conversation IDs/null identity, per-context unsent drafts, delayed history response selection guard, touch menu selection, overflowing tabs with reachable fixed dropdown, no page overflow, two compact rows and reachable composer at 1440×1000, 393×851, 393×420 and 320×700. Fixture server restart plus browser reload preserves stored ordering and conversation identity. Mobile keyboard/safe-area behavior on a physical Android device remains unverified. The 393×420 screenshot was visually inspected; it shows a reachable composer and fixed dropdown with horizontally scrolled tabs.
+
+## Live observation and preservation evidence
+
+Read actual live source/service/served bytes rather than assuming prior release deployment. Live HEAD is still `5ff6d7f`, clean; service PID **1410**, active since **2026-10-11 22:56:07 +04**, `KillMode=control-group`; schema remains **9**. Served HTML/JS/CSS match live baseline hashes, not the pending reliability/navigation assets. Reliability assignment `fd3c0e2042f44136a9c81e0f726bfef9` remains waiting; this assignment is `27bfa88aa2cd463485c8fab15bd29be6` with execution `97325c1b4afc4bd2b7a0fc6587f2949c`. Current workers belong to the manager service. Production integration/deployment, schema-10 activation and post-deployment smoke have **not occurred**.
+
+Durable private evidence directory: `/home/codex/.local/share/linko-bot-manager/deployments/global-recency-20261012/`.
+
+- `live-before.json` / `live-after.json`: actual version, clean status, service identity, schema, served asset hashes and health/auth boundary observations.
+- `migration.json`: online read-only production snapshot migrated only on disposable copies under both standalone and combined code. Every original table row/hash remains identical; navigation adds only its setting. Combined code additionally adds the pending release's empty `chat_requests` table/schema-10 marker. Global seed equals the latest meaningful null-project event. Integrity and foreign-key checks pass. No application startup, inference or task replay was run against those snapshots; copies were discarded afterward.
+- Four `linko-global-recency-*.png` screenshots: responsive navigation evidence.
+- `release.json`: exact final standalone/combined receipt heads, original pending head, task/execution references, exported patch hashes and validation/status summary.
+- `REPORT.md`: durable copy of this review/handoff.
+
+No live served file, service/listener, original source checkout or pending-release checkout was modified. No restart, remote push, deployment, lifecycle change, native-history deletion or task replay occurred. A single linked task/execution audit event records the report and release references; it does not alter assignment state or recency. This is the only intended production database write for this task; source/data inspection and snapshot preparation otherwise use read-only access.
+
+## Safe external release handoff
+
+This navigation task does not authorize self-supervised production activation. Use an operator session outside `linko-bot-manager.service`. The existing reliability release preparation and rollback restrictions are in the unchanged pending checkout's `docs/chat-history.md`; its prior cutover blocker is still relevant. The compatibility checkout provides a composed local fast-forward candidate incorporating both releases, rather than overwriting pending work. Its final receipt head and patch hashes are in `release.json`. It has not been merged into live main.
+
+Before activation, recheck current live/pending heads and clean status; inspect the final candidate diff. Establish a quiet window, let this worker and automatic manager reporting finish, and wait for all relevant executions/leases/deliveries/questions/eligible queue work to settle. Preserve drafts and ambiguous submission state. Refresh verified SQLite/native-history backups and migration rehearsal; online preparation evidence is not an idle cutover backup. Immediately recheck idleness, stop only the dedicated service externally, recheck persisted work and take the final stopped snapshot. If new work appeared, resume original service and defer. Otherwise fast-forward the clean live checkout to the reviewed combined candidate and start the existing unit/environment.
+
+Verify exact served candidate assets through loopback/private HTTPS, service process/start/version, integrity/foreign keys, all original sessions/rows/native references, scheduler health and authenticated boundaries; run disposable chat reliability/global navigation acceptance with deployed code. Record the actual integration/deployment commit and preservation receipt. Do not claim activation from these preparatory tests.
+
+Navigation-only rollback can revert the navigation code while retaining the harmless settings key and latest accepted history; it needs no destructive schema downgrade. The combined reliability release must retain `chat_requests`/accepted work for any rollback: receipt-blind downgrade can duplicate ambiguous requests. Do not restore an old preparation backup over new submissions; follow the pending release's reviewed receipt-aware rollback restrictions.
+
+## What All Projects means
+
+Owner explanation: **All Projects is the global manager conversation and portfolio scope. The Linko-Bot-Manager tab supplies that repository's context. Selecting All Projects does not broadcast work.** Requests in Auto/Execute can explicitly delegate to intended projects; Conversation mode is read-only.
+
+Evidence: `Chat.conversation` stores context `global` with null `project_id`, separately from the repository-ID conversation. `Chat.context(None)` provides registered projects' IDs/names/objectives/status and global instructions; `Chat.context(project_id)` supplies that project's path, objective, criteria, instructions, notes and assignments. Global Tasks/Agents views show portfolio records through the existing null filter. `selectProject` changes browser context/drafts and reads history (and Memory only when requested); it does not submit or delegate. `Scheduler.action` resolves an explicit target ID or selected project and rejects missing targets; `delegate` creates one task for that target, with an origin conversation. There is no selection-triggered loop over all repositories. Both manager conversations execute in the private chat workspace; project workers separately use the target repository. Global scope permits intentional cross-project coordination, not automatic changes to every project.
