@@ -66,20 +66,37 @@ async function loadHistory(selection=state.selection){
   const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);
   const request=state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
   const history=await api(`/api/history?${query}`);if(selection!==state.selection||request!==state.loadHistoryRequest)return;
+  const messages=$('messages'),follow=shouldFollowChat(),fresh=state.history?.conversation.id!==history.conversation.id;
   state.history=history;updateChatActions();
-  $('messages').replaceChildren();
+  if(fresh||!history.messages.length)messages.replaceChildren();
+  if(history.messages.length)messages.querySelector('.welcome')?.remove();
   if(!history.messages.length){const welcome=element('div',undefined,'welcome');welcome.append(element('div','Ai','mark'),element('h2','What should we move forward?'),element('p','Talk through a goal, review project state, or plan the next useful step. Your context stays with each project.'));const suggestions=element('div',undefined,'suggestions');for(const text of ['What needs my attention?','Summarize current project state','Help me prioritize the next tasks','Brainstorm a plan for this project']){const b=element('button',text);b.onclick=()=>{$('message-input').value=text;$('message-input').focus();};suggestions.append(b);}welcome.append(suggestions);$('messages').append(welcome);}
+  const rows=new Map([...messages.querySelectorAll('[data-message]')].map(row=>[row.dataset.message,row]));
+  const ids=new Set(history.messages.map(m=>m.id));
+  for(const [id,row] of rows)if(!ids.has(id))row.remove();
   for(const m of history.messages){
-    const row=element('article',undefined,`message ${m.role}`),body=element('div'),label=element('div',undefined,'message-label');label.append(element('strong',m.role==='user'?'You':m.role==='worker'?'Codex result':'AI Manager'),element('span',m.status,`badge ${m.status}`));body.append(label,element('div',m.content||'Connecting to Codex…','message-content'));row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);row.dataset.message=m.id;$('messages').append(row);
+    let row=rows.get(m.id);
+    if(!row){row=element('article',undefined,`message ${m.role}`);const body=element('div'),label=element('div',undefined,'message-label');label.append(element('strong',messageAuthor(m)),element('span',m.status,`badge ${m.status}`));body.append(label,element('div',m.content||'Connecting to Codex…','message-content'));row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);row.dataset.message=m.id;messages.append(row);}
+    else{const badge=row.querySelector('.badge');if(badge.textContent!==m.status){badge.textContent=m.status;badge.className=`badge ${m.status}`;}updateMessageContent(row.querySelector('.message-content'),m.content||'Connecting to Codex…');}
     if(m.role==='assistant'&&['queued','streaming'].includes(m.status))attachStream(m.execution_id,m.id,m.stream_cursor);
   }
-  $('messages').scrollTop=$('messages').scrollHeight;
+  if(fresh||follow)messages.scrollTop=messages.scrollHeight;
 }
+function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Codex result':'AI Manager';}
+function chatHasSelection(node=$('messages')){const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&selection.containsNode(node,true);}
+function shouldFollowChat(){const messages=$('messages');return !state.selectingChat&&!chatHasSelection()&&messages.scrollHeight-messages.clientHeight-messages.scrollTop<48;}
+function updateMessageContent(node,text){
+  if(node.textContent===text)return;
+  if(node.firstChild?.nodeType===Node.TEXT_NODE&&text.startsWith(node.textContent))node.firstChild.appendData(text.slice(node.textContent.length));
+  else if(!chatHasSelection(node))node.textContent=text;
+}
+$('messages').addEventListener('pointerdown',()=>{state.selectingChat=true;});
+for(const event of ['pointerup','pointercancel'])document.addEventListener(event,()=>{state.selectingChat=false;});
 function attachStream(execution,messageId,cursor=0){
   state.source?.close();state.execution=execution;$('stop-chat').hidden=false;$('send').disabled=true;$('status-label').textContent='Thinking / responding';
   updateChatActions();
   const source=new EventSource(`/api/executions/${execution}/events?after=${cursor}`);state.source=source;
-  source.addEventListener('chat.delta',event=>{const data=JSON.parse(event.data);const content=document.querySelector(`[data-message="${messageId}"] .message-content`);if(content){if(content.textContent==='Connecting to Codex…')content.textContent='';content.textContent+=data.delta;}$('messages').scrollTop=$('messages').scrollHeight;});
+  source.addEventListener('chat.delta',event=>{const data=JSON.parse(event.data),follow=shouldFollowChat();const message=state.history?.messages.find(m=>m.id===messageId);if(message)message.content+=data.delta;const content=document.querySelector(`[data-message="${messageId}"] .message-content`);if(content)updateMessageContent(content,message?.content||((content.textContent==='Connecting to Codex…'?'':content.textContent)+data.delta));if(follow)$('messages').scrollTop=$('messages').scrollHeight;});
   source.addEventListener('chat.finished',event=>{const data=JSON.parse(event.data);if(data.error)notice(data.error);});
   source.addEventListener('stream.end',action(async()=>{source.close();if(state.source!==source)return;state.source=null;state.execution=null;$('stop-chat').hidden=true;$('send').disabled=false;$('status-label').textContent='Ready to help';await loadHistory();await refresh();}));
   source.addEventListener('stream.auth_expired',()=>{source.close();showAuth();});
@@ -88,7 +105,35 @@ function attachStream(execution,messageId,cursor=0){
 function updateChatActions(){
   const disabled=!state.history?.messages.length||state.pending.has(state.project)||!!state.execution||state.history.messages.some(m=>['queued','streaming'].includes(m.status));
   for(const id of ['archive-chat','clear-chat'])$(id).disabled=disabled;
+  for(const id of ['copy-all','copy-five'])$(id).disabled=!state.history?.messages.length||!!state.copyingChat;
 }
+async function copyChat(all){
+  const history=state.history;if(!history?.messages.length||state.copyingChat)return;
+  const latest=history.messages.map(m=>({...m}));
+  state.copyingChat=true;updateChatActions();
+  try{
+    let messages=latest.slice(-5);
+    if(all){
+      const query=new URLSearchParams();if(history.conversation.project_id)query.set('project_id',history.conversation.project_id);
+      const pages=[];let page;
+      do{page=await api(`/api/chat-history/${encodeURIComponent(history.conversation.id)}?${query}`);pages.push(page.messages);if(page.has_more)query.set('before',page.messages[0].id);}while(page.has_more);
+      messages=pages.reverse().flat();
+      const streaming=new Map(latest.filter(m=>['queued','streaming'].includes(m.status)).map(m=>[m.id,m]));
+      messages=messages.map(m=>{const live=streaming.get(m.id);return live&&live.content.length>m.content.length?live:m;});
+    }
+    await copyText(messages.map(m=>`${messageAuthor(m)}:\n${m.content}`).join('\n\n'));
+    $('chat-notice').textContent=all?'Copied the whole chat.':`Copied the latest ${messages.length} message${messages.length===1?'':'s'}.`;
+    $('chat-notice').hidden=false;clearTimeout(state.chatNoticeTimer);state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,4000);
+  }finally{state.copyingChat=false;updateChatActions();}
+}
+async function copyText(text){
+  try{if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return;}}catch{}
+  const selection=window.getSelection(),ranges=Array.from({length:selection.rangeCount},(_,i)=>selection.getRangeAt(i).cloneRange()),focused=document.activeElement;
+  const input=element('textarea');input.value=text;input.className='clipboard-fallback';input.setAttribute('aria-hidden','true');document.body.append(input);
+  try{input.select();if(!document.execCommand('copy'))throw new Error('Could not copy to the clipboard. Select the chat text and copy it manually.');}
+  finally{input.remove();focused?.focus({preventScroll:true});selection.removeAllRanges();for(const range of ranges)selection.addRange(range);}
+}
+for(const [id,all] of [['copy-all',true],['copy-five',false]])$(id).onclick=()=>copyChat(all).catch(error=>notice('Rejected or failed: '+error.message));
 function confirmChatReset(archive){
   if(!state.history?.messages.length)return;
   const project=state.project,selection=state.selection,history=state.history;

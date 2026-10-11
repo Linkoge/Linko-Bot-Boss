@@ -1,6 +1,7 @@
 """Check the minimal UI against an isolated authenticated HTTP fixture."""
 
 import os
+import socket
 import subprocess
 import tempfile
 import time
@@ -30,13 +31,25 @@ from ai_manager.config import Settings
 from ai_manager.web import create_app
 s=Settings();app=create_app(s,FakeServer(s))
 for name in ('Alpha','Beta'):app.state.registry.add(s.project_roots[0]/name)
+beta=app.state.db.one("SELECT id FROM projects WHERE name='Beta'")
+conversation=app.state.chat.conversation(beta['id'])
+with app.state.db.transaction() as conn:
+    for i in range(425):
+        conn.execute('INSERT INTO messages VALUES(?,?,?,?,?,?,?)',
+            (f'fixture-{i}',conversation['id'],'user' if i%2==0 else 'assistant',
+             f'Fixture message {i}\\nSecond line {i}','completed',None,1700000000+i))
 uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
 """
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            port = listener.getsockname()[1]
+        base_url = f"http://127.0.0.1:{port}"
+        program = program.replace("port=18879", f"port={port}")
         process = subprocess.Popen([os.sys.executable, "-c", program], env=env)
         try:
             for _ in range(100):
                 try:
-                    if httpx.get("http://127.0.0.1:18879/api/auth-status").status_code == 200:
+                    if httpx.get(base_url + "/api/auth-status").status_code == 200:
                         break
                 except httpx.HTTPError:
                     pass
@@ -45,18 +58,28 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch()
                 page = browser.new_page()
+                page.context.grant_permissions(["clipboard-read", "clipboard-write"])
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
-                page.goto("http://127.0.0.1:18879")
+                page.goto(base_url)
                 page.locator("#username").fill("fixture")
                 page.locator("#password").fill("fixture-private-password")
                 page.locator("#setup-token").fill(token)
                 page.locator("#login-button").click()
                 page.locator("#app").wait_for(state="visible")
-                page.locator("#projects button").first.click()
+                page.locator("#projects button").filter(has_text="Alpha").click()
+                assert page.locator("#copy-all").is_disabled()
+                assert page.locator("#copy-five").is_disabled()
                 page.locator("#message-input").fill("Discuss the project.")
                 page.locator("#send").click()
                 page.get_by_text("Saved streamed answer", exact=True).wait_for()
+                page.wait_for_function("() => !state.execution")
+                for control in ("#copy-all", "#copy-five"):
+                    page.locator(control).click()
+                    page.wait_for_function(
+                        "async () => (await navigator.clipboard.readText()) === "
+                        "'You:\\nDiscuss the project.\\n\\nAI Manager:\\nSaved streamed answer'"
+                    )
                 page.locator("#archive-chat").click()
                 page.locator("#chat-archive-name").fill("Fixture archive")
                 page.locator("#chat-confirm-submit").click()
@@ -73,16 +96,79 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("#editor-form button[type=submit],#editor-form button.primary").click()
                 page.locator("#editor").wait_for(state="hidden")
                 page.locator("[data-view=chat]").click()
-                for width, height, label in [(1440, 1000, "desktop"), (393, 851, "mobile")]:
+                page.locator("#projects button").filter(has_text="Beta").click()
+                page.wait_for_function("() => state.history?.messages.length === 200")
+                # Select by dragging, then leave the regular three-second refresh running.
+                content = page.locator("#messages .message-content").last
+                content.scroll_into_view_if_needed()
+                box = content.bounding_box()
+                page.mouse.move(box["x"] + 2, box["y"] + 10)
+                page.mouse.down()
+                page.mouse.move(box["x"] + 115, box["y"] + 10, steps=12)
+                page.mouse.up()
+                selected = page.evaluate("window.getSelection().toString()")
+                assert selected
+                page.evaluate("window.selectedNode = window.getSelection().anchorNode")
+                request = page.evaluate("state.loadHistoryRequest")
+                page.wait_for_function("() => state.loadHistoryRequest >= " + str(request + 2))
+                assert page.evaluate("window.getSelection().toString()") == selected
+                assert page.evaluate("window.getSelection().anchorNode === window.selectedNode")
+                # Appending streamed text must also retain the selected text node.
+                page.evaluate(
+                    "const node=window.selectedNode.parentElement;"
+                    "updateMessageContent(node,node.textContent+' streamed suffix');"
+                )
+                assert page.evaluate("window.getSelection().toString()") == selected
+                assert page.evaluate("window.getSelection().anchorNode === window.selectedNode")
+                page.locator("#copy-five").click()
+                expected = "\n\n".join(
+                    f"{'You' if i % 2 == 0 else 'AI Manager'}:\nFixture message {i}\nSecond line {i}"
+                    for i in range(420, 425)
+                )
+                page.wait_for_function("async text => (await navigator.clipboard.readText()) === text", arg=expected)
+                page.locator("#copy-all").click()
+                expected = "\n\n".join(
+                    f"{'You' if i % 2 == 0 else 'AI Manager'}:\nFixture message {i}\nSecond line {i}"
+                    for i in range(425)
+                )
+                page.wait_for_function("async text => (await navigator.clipboard.readText()) === text", arg=expected)
+                # Preserve selection when falling back after a clipboard API rejection.
+                page.evaluate(
+                    "window.testClipboard=navigator.clipboard;"
+                    "Object.defineProperty(navigator,'clipboard',{configurable:true,value:"
+                    "{writeText:async()=>{throw new Error('Fixture clipboard rejection');}}});"
+                    "const node=document.querySelector('#messages .message-content').firstChild;"
+                    "const range=document.createRange();range.setStart(node,0);range.setEnd(node,7);"
+                    "window.getSelection().removeAllRanges();window.getSelection().addRange(range);"
+                )
+                page.locator("#copy-five").click()
+                page.wait_for_function("() => !state.copyingChat")
+                assert page.evaluate("window.getSelection().toString()") == "Fixture"
+                assert page.evaluate("document.querySelectorAll('.clipboard-fallback').length") == 0
+                assert "Fixture message 424" in page.evaluate("window.testClipboard.readText()")
+                page.evaluate("delete navigator.clipboard;window.getSelection().removeAllRanges()")
+                # Reading older messages must not jump back to the bottom during polling.
+                page.evaluate("document.getElementById('messages').scrollTop=100")
+                scroll = page.evaluate("document.getElementById('messages').scrollTop")
+                page.evaluate("loadHistory()")
+                assert page.evaluate("document.getElementById('messages').scrollTop") == scroll
+                for width, height, label in [
+                    (1440, 1000, "desktop"), (393, 851, "mobile"), (320, 700, "narrow")
+                ]:
                     page.set_viewport_size({"width": width, "height": height})
                     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                    assert page.locator("#chat-mode").bounding_box()["width"] <= 112
+                    for control in ("#copy-all", "#copy-five", "#archive-chat", "#clear-chat"):
+                        assert page.locator(control).bounding_box()["height"] <= 30
                     page.screenshot(path=f"/tmp/linko-minimal-{label}.png", full_page=True)
                 assert not errors, errors
                 assert page.locator("#chat-mode option").count() == 3
                 assert not page.locator("#configure-verification,#configure-scheduler").count()
                 browser.close()
             print(
-                "Browser passed: login, chat, archive/search, rename, two model roles, desktop/mobile without JS errors or overflow."
+                "Browser passed: login, chat, selection across refresh/streaming, copy all 425 messages, "
+                "copy five, clipboard fallback, scroll preservation, archive/search, rename, model roles, "
+                "desktop/mobile/narrow controls without JS errors or overflow."
             )
         finally:
             process.terminate()
