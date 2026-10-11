@@ -55,3 +55,22 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .task-controls .record-time{margin-right:auto}
 
 .todo-details{white-space:pre-wrap;overflow-wrap:anywhere}#todo-list label{display:flex;align-items:center;gap:.65rem}#todo-list input[type=checkbox]{width:auto;min-width:24px;min-height:24px}#view-todo .section-head{flex-wrap:wrap;gap:.5rem}
+
+/* Markdown shares the same constrained message column in live and saved chat. */
+.message-content.markdown{white-space:normal;line-height:1.65;min-width:0}
+.message-content.markdown>:first-child{margin-top:0}
+.message-content.markdown>:last-child{margin-bottom:0}
+.message-content.markdown p{margin:.65em 0}
+.message-content.markdown :is(h1,h2,h3,h4,h5,h6){line-height:1.3;margin:1em 0 .5em;font-size:1.15em}
+.message-content.markdown h1{font-size:1.45em}.message-content.markdown h2{font-size:1.3em}
+.message-content.markdown :is(ul,ol){padding-left:1.6em;margin:.65em 0}
+.message-content.markdown li+li{margin-top:.25em}
+.message-content.markdown blockquote{margin:.7em 0;border-left:3px solid var(--accent);padding-left:1em;color:var(--muted)}
+.message-content.markdown a{color:var(--accent);text-decoration:underline;overflow-wrap:anywhere}
+.message-content.markdown code{font: .9em/1.6 ui-monospace,monospace;white-space:pre-wrap;background:var(--panel);border-radius:4px;padding:.1em .3em}
+.message-content.markdown pre{max-width:100%;overflow:auto;white-space:pre;background:var(--panel);border:1px solid var(--border);border-radius:8px;padding:12px}
+.message-content.markdown pre code{white-space:pre;overflow-wrap:normal;padding:0;background:none}
+.message-content.markdown :is(a,pre,table):focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.message-content.markdown table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;margin:.75em 0}
+.message-content.markdown :is(th,td){border:1px solid var(--border);padding:.4em .65em;min-width:5em}
+.message-content.markdown hr{border:0;border-top:1px solid var(--border);margin:1em 0}

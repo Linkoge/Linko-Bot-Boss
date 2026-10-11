@@ -118,7 +118,8 @@ async function loadHistory(selection=state.selection){
   for(const m of history.messages){
     let row=rows.get(m.id);
     if(!row){row=element('article',undefined,`message ${m.role}`);const body=element('div'),label=element('div',undefined,'message-label');label.append(element('strong',messageAuthor(m)),element('span',m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status,`badge ${m.status}`));body.append(label,element('div',messageText(m),'message-content'));row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);row.dataset.message=m.id;messages.append(row);}
-    else{const badge=row.querySelector('.badge');if(badge.textContent!==(m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status)){badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;badge.className=`badge ${m.status}`;}updateMessageContent(row.querySelector('.message-content'),messageText(m));}
+    else{const badge=row.querySelector('.badge');if(badge.textContent!==(m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status)){badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;badge.className=`badge ${m.status}`;}}
+    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);
 
   }
   const active=history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
@@ -133,11 +134,23 @@ function messageText(m){return m.content||(m.status==='failed'?(m.execution_erro
 function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Codex result':'AI Manager';}
 function chatHasSelection(node=$('messages')){const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&selection.containsNode(node,true);}
 function shouldFollowChat(){const messages=$('messages');return !state.selectingChat&&!chatHasSelection()&&messages.scrollHeight-messages.clientHeight-messages.scrollTop<48;}
-function updateMessageContent(node,text){
-  if(node.textContent===text)return;
-  if(node.firstChild?.nodeType===Node.TEXT_NODE&&text.startsWith(node.textContent))node.firstChild.appendData(text.slice(node.textContent.length));
-  else if(!chatHasSelection(node))node.textContent=text;
+function updateMessageContent(node,text,role='assistant'){
+  const markdown=role==='assistant'||role==='worker';
+  if(node._messageSource===text&&node.classList.contains('markdown')===markdown){delete node._pendingMessage;return;}
+  if(chatHasSelection(node)){node._pendingMessage={text,role};return;}
+  delete node._pendingMessage;
+  if(markdown)node.replaceChildren(renderChatMarkdown(text));
+  else if(node.firstChild?.nodeType===Node.TEXT_NODE&&text.startsWith(node.textContent))node.firstChild.appendData(text.slice(node.textContent.length));
+  else node.textContent=text;
+  node.classList.toggle('markdown',markdown);node._messageSource=text;
 }
+// Rendering waits while text is selected; apply the latest authoritative source
+// after selection clears, including a final history refresh that arrived earlier.
+document.addEventListener('selectionchange',()=>{
+  for(const node of document.querySelectorAll('.message-content')){
+    const pending=node._pendingMessage;if(pending&&!chatHasSelection(node))updateMessageContent(node,pending.text,pending.role);
+  }
+});
 $('messages').addEventListener('pointerdown',()=>{state.selectingChat=true;});
 for(const event of ['pointerup','pointercancel'])document.addEventListener(event,()=>{state.selectingChat=false;});
 function attachStream(execution,messageId,cursor=0){
@@ -151,7 +164,7 @@ function attachStream(execution,messageId,cursor=0){
     const data=JSON.parse(event.data),follow=shouldFollowChat(),message=state.history?.messages.find(m=>m.id===messageId);
     if(!message)return;message.content=data.reset?data.delta:message.content+data.delta;
     const content=document.querySelector(`[data-message="${messageId}"] .message-content`);
-    if(content)updateMessageContent(content,message.content);if(follow)$('messages').scrollTop=$('messages').scrollHeight;
+    if(content)updateMessageContent(content,message.content,message.role);if(follow)$('messages').scrollTop=$('messages').scrollHeight;
   });
   source.addEventListener('chat.started',reconcile);
   source.addEventListener('recovery.scheduled',reconcile);
@@ -240,7 +253,7 @@ async function openSavedHistory(id,older=false,search=''){
   $('history-detail-meta').textContent=`${projectName(state.project)} · ${data.conversation.archived_at?'Archived '+new Date(data.conversation.archived_at*1000).toLocaleString():'Active conversation'}${data.search?' · Messages matching “'+data.search+'”':''}`;
   $('history-full').hidden=!data.search;
   $('history-detail-messages').replaceChildren();
-  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');body.append(element('strong',m.role==='user'?'You':m.role==='worker'?'Codex result':'AI Manager'),element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',m.content,'message-content'));row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);$('history-detail-messages').append(row);}
+  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');body.append(element('strong',m.role==='user'?'You':m.role==='worker'?'Codex result':'AI Manager'),element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',undefined,'message-content'));updateMessageContent(body.querySelector('.message-content'),m.content,m.role);row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);$('history-detail-messages').append(row);}
   if(!state.savedHistory.messages.length)$('history-detail-messages').append(element('p','This chat is empty.','empty'));
   $('history-older').hidden=!data.has_more;$('history-detail').hidden=false;
   if(!older)$('history-detail').scrollIntoView({block:'start'});

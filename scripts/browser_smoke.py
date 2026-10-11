@@ -147,7 +147,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                     "window.testClipboard=navigator.clipboard;"
                     "Object.defineProperty(navigator,'clipboard',{configurable:true,value:"
                     "{writeText:async()=>{throw new Error('Fixture clipboard rejection');}}});"
-                    "const node=document.querySelector('#messages .message-content').firstChild;"
+                    "const node=document.createTreeWalker(document.querySelector('#messages .message-content'),NodeFilter.SHOW_TEXT).nextNode();"
                     "const range=document.createRange();range.setStart(node,0);range.setEnd(node,7);"
                     "window.getSelection().removeAllRanges();window.getSelection().addRange(range);"
                 )
