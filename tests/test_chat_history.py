@@ -134,21 +134,22 @@ def test_archive_transaction_rolls_back_if_recording_fails(chat, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_submit_waiting_for_routes_cannot_append_to_archived_chat(chat, monkeypatch):
-    old, last = seed(chat)
+async def test_durable_submission_blocks_archive_while_model_setup_is_waiting(chat, monkeypatch):
+    old, _ = seed(chat)
     ready, resume = asyncio.Event(), asyncio.Event()
 
-    async def routes():
+    async def start():
         ready.set()
         await resume.wait()
-        return {"interactive": {"model": "test-model", "effort": "low"}}
 
-    monkeypatch.setattr(chat, "routes", routes)
-    pending = asyncio.create_task(chat.submit(None, "new message"))
+    monkeypatch.setattr(chat.server, "start", start)
+    request = await chat.submit(None, "new message")
     await ready.wait()
-    chat.reset(None, old, last, True, archive=True)
+    with pytest.raises(ValueError, match="response to finish"):
+        chat.reset(None, old, request["message_id"], True, archive=True)
+    assert len(chat.history()["messages"]) == 4
     resume.set()
-    with pytest.raises(ValueError, match="Chat changed"):
-        await pending
-    assert len(chat.saved_history(old)["messages"]) == 2
+    await asyncio.gather(*list(chat.jobs.values()))
+    chat.reset(None, old, request["message_id"], True, archive=True)
+    assert len(chat.saved_history(old)["messages"]) == 4
     assert chat.history()["messages"] == []

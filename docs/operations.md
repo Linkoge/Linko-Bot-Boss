@@ -14,9 +14,9 @@ Historical unfinished tasks remain waiting after the simplification migration. C
 
 ## Restart and recovery
 
-The dedicated service uses its existing restart policy. On startup, unfinished native attempts are inspected for terminal results. Recorded completion is delivered without rerunning work. An interrupted authorized worker resumes through the ordinary queue. An observed detached process keeps the project claimed until accounted for. Unknown launch identity remains waiting; do not launch a second writer to clear a status badge.
+Temporary network/process failures and account usage limits now recover automatically through the existing scheduler. Tasks keep their original assignment/thread and project claim while waiting; manager responses and pending results remain in the exact original conversation. Persisted backoff and an account-wide single-probe gate prevent repeated model calls while unavailable. Stop and deliberate pauses remain deliberate; permanent errors are reported without an endless retry loop.
 
-Manager result delivery is persisted transactionally with worker output. Pending deliveries resume when the originating conversation is free. Known completed manager turns are recovered from native history. Uncertain manager delivery is retained with its execution references; a database association is not a guarantee of exactly-once inference across every crash window.
+Startup reconciles native outcomes before resuming coding. Surviving proven owned App Server groups are stopped before another writer starts; uncertain unprovable ownership remains exclusive. See [automatic recovery](AUTOMATIC_RECOVERY.md) for error handling, schema 9, backoff, tests, limits and deployment evidence.
 
 ## Backups and restoration
 

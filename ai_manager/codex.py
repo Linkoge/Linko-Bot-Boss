@@ -11,7 +11,9 @@ from .config import Settings
 
 
 class CodexError(RuntimeError):
-    pass
+    def __init__(self, message, details=None):
+        super().__init__(message)
+        self.details = details or {}
 
 
 class TurnUsage:
@@ -34,7 +36,8 @@ class TurnUsage:
 def process_start(pid: int) -> str | None:
     try:
         # comm can contain spaces and parentheses; starttime is field 22.
-        return Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
+        fields = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()
+        return fields[19] if fields[0] != "Z" else None
     except (OSError, IndexError):
         return None
 
@@ -91,11 +94,13 @@ class AppServer:
         self.account_type = None
         self.tool_handlers = {}
         self.tool_jobs = set()
+        self.rate_limits = {}
 
     async def start(self):
         async with self.start_lock:
-            if self.process and self.process.returncode is None:
+            if self.process and self.process.returncode is None and self.reader and not self.reader.done():
                 return
+            await self.close()
             args = [self.settings.codex_bin, "app-server", "--listen", "stdio://"]
             for key, value in self.config.items():
                 args += ["-c", f"{key}={json.dumps(value)}"]
@@ -142,7 +147,7 @@ class AppServer:
     async def send(self, message):
         async with self.write_lock:
             if not self.process or self.process.returncode is not None:
-                raise CodexError("Codex App Server is unavailable")
+                raise CodexError("Codex App Server is unavailable", {"codexErrorInfo": "transportLost"})
             self.process.stdin.write((json.dumps(message) + "\n").encode())
             await self.process.stdin.drain()
 
@@ -175,21 +180,30 @@ class AppServer:
                     future = self.pending.get(message["id"])
                     if future and not future.done():
                         if "error" in message:
-                            future.set_exception(CodexError(str(message["error"].get("message", "RPC failed"))))
+                            future.set_exception(
+                                CodexError(str(message["error"].get("message", "RPC failed")), message["error"])
+                            )
                         else:
                             future.set_result(message.get("result", {}))
                 else:
                     params = message.get("params", {})
+                    if message.get("method") == "account/rateLimits/updated":
+                        self.rate_limits = params
                     thread_id = params.get("threadId") or params.get("thread_id")
                     if thread_id in self.queues:
                         self.queues[thread_id].put_nowait(message)
-        except (OSError, ValueError) as error:
+        except Exception as error:
             reason = type(error).__name__
         else:
             reason = "connection closed"
         for future in list(self.pending.values()):
             if not future.done():
-                future.set_exception(CodexError(f"App Server transport lost ({reason}); outcome must be reconciled"))
+                future.set_exception(
+                    CodexError(
+                        f"App Server transport lost ({reason}); outcome must be reconciled",
+                        {"codexErrorInfo": "transportLost"},
+                    )
+                )
         for queue in list(self.queues.values()):
             queue.put_nowait({"method": "transport/lost", "params": {"reason": reason}})
 

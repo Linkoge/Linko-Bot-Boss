@@ -3,6 +3,7 @@
 import time
 
 from .db import new_id
+from .recovery import gate_available
 
 
 class Tasks:
@@ -14,7 +15,10 @@ class Tasks:
         return {**row, "legacy_status": row["status"], "status": row["lifecycle"]}
 
     def get(self, task_id):
-        row = self.db.one("SELECT * FROM tasks WHERE id=?", (task_id,))
+        row = self.db.one(
+            "SELECT t.*,e.retry_at,e.recovery_reason FROM tasks t LEFT JOIN executions e ON e.id=t.lease_owner WHERE t.id=?",
+            (task_id,),
+        )
         if not row:
             raise ValueError("Unknown assignment")
         return self.record(row)
@@ -25,7 +29,9 @@ class Tasks:
 
     def list(self, project_id=None):
         rows = self.db.all(
-            "SELECT * FROM tasks" + (" WHERE project_id=?" if project_id else "") + " ORDER BY created_at DESC",
+            "SELECT t.*,e.retry_at,e.recovery_reason FROM tasks t LEFT JOIN executions e ON e.id=t.lease_owner"
+            + (" WHERE t.project_id=?" if project_id else "")
+            + " ORDER BY t.created_at DESC",
             (project_id,) if project_id else (),
         )
         return [self.record(row) for row in rows]
@@ -85,7 +91,13 @@ class Tasks:
 
     def claim(self, max_workers):
         with self.db.transaction() as conn:
-            if conn.execute("SELECT count(*) FROM tasks WHERE lease_owner IS NOT NULL").fetchone()[0] >= max_workers:
+            if not gate_available(conn):
+                return None
+            if (
+                conn.execute("""SELECT count(*) FROM tasks t LEFT JOIN executions e ON e.id=t.lease_owner
+                WHERE t.lease_owner IS NOT NULL AND (e.id IS NULL OR e.status!='recovering')""").fetchone()[0]
+                >= max_workers
+            ):
                 return None
             row = conn.execute("""SELECT t.*,p.path FROM tasks t JOIN projects p ON p.id=t.project_id
                 WHERE t.lifecycle='queued' AND p.status='active'
@@ -94,13 +106,15 @@ class Tasks:
             if not row:
                 return None
             execution_id = new_id()
+            if not gate_available(conn, execution_id, True):
+                return None
             conn.execute(
                 "UPDATE tasks SET lifecycle='running',lease_owner=?,revision=revision+1,updated_at=? WHERE id=?",
                 (execution_id, time.time(), row["id"]),
             )
             conn.execute(
-                """INSERT INTO executions(id,task_id,project_id,agent_id,status,started_at,worktree)
-                            VALUES(?,?,?,'execution','queued',?,?)""",
+                """INSERT INTO executions(id,task_id,project_id,agent_id,status,started_at,worktree,launch_key)
+                            VALUES(?,?,?,'execution','queued',?,?,'not-started')""",
                 (
                     execution_id,
                     row["id"],

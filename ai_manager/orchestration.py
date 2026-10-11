@@ -57,6 +57,9 @@ class Scheduler:
         if params["tool"] != "manager_action":
             raise ValueError("Unknown manager action")
         action = args["action"]
+        execution = self.db.one("SELECT stop_requested,finished_at FROM executions WHERE id=?", (params.get("manager_execution_id"),))
+        if execution and (execution["stop_requested"] or execution["finished_at"] is not None):
+            raise ValueError("This manager execution has stopped")
         offset = args.get("offset", 0)
         if not isinstance(offset, int) or offset < 0:
             raise ValueError("Offset must be a nonnegative integer")
@@ -132,8 +135,8 @@ class Scheduler:
                 raise ValueError("Assignment belongs to another project")
             with self.db.transaction() as conn:
                 previous = conn.execute(
-                    "SELECT payload FROM events WHERE kind='manager.continued' AND execution_id=? AND json_extract(payload,'$.call_id')=?",
-                    (params["manager_execution_id"], params["callId"]),
+                    "SELECT payload FROM events WHERE kind='manager.continued' AND execution_id=? AND task_id=?",
+                    (params["manager_execution_id"], task["id"]),
                 ).fetchone()
                 if previous:
                     return self.tasks.context(self.tasks.get(task["id"]))
@@ -208,6 +211,7 @@ class Scheduler:
     async def tick(self):
         async with self.lock:
             await self.workers.recover()
+            await self.chat.recover()
             while task := self.tasks.claim(self.settings.max_workers):
                 self.workers.launch(task)
             await self.chat.deliver_results()

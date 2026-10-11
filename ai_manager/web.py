@@ -102,8 +102,6 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             auth.bootstrap()
-            await chat.recover()
-            await workers.recover()
             registry.discover()
             settings.max_workers = db.setting("max_workers", settings.max_workers)
             scheduler.start()

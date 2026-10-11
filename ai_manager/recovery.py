@@ -1,0 +1,345 @@
+"""Deterministic retry policy and native outcome reconciliation; no inference here."""
+
+import errno
+import json
+import os
+import random
+import signal
+import socket
+import time
+from dataclasses import dataclass
+from datetime import datetime
+from email.utils import parsedate_to_datetime
+from pathlib import Path
+
+from .codex import CodexError, process_start
+from .db import new_id
+
+GATE = "recovery_account_gate"
+REASONS = {
+    "connection": "Waiting for connection",
+    "usage": "Waiting for usage limit",
+    "interrupted": "Recovering interrupted execution",
+}
+
+
+@dataclass
+class Failure:
+    kind: str
+    retry_at: float | None = None
+
+
+def classify(error):
+    """Prefer native enums, HTTP status and OS codes. Unknown errors are permanent."""
+    if isinstance(error, (TimeoutError, ConnectionError, socket.gaierror)):
+        return Failure("connection")
+    if isinstance(error, OSError) and error.errno in {
+        errno.ENETUNREACH,
+        errno.EHOSTUNREACH,
+        errno.ECONNRESET,
+        errno.ECONNREFUSED,
+        errno.ETIMEDOUT,
+        errno.EPIPE,
+        errno.ENETDOWN,
+    }:
+        return Failure("connection")
+    details = error.details if isinstance(error, CodexError) else error if isinstance(error, dict) else {}
+    data = details.get("data") or {}
+    if not isinstance(data, dict):
+        data = {}
+    info = details.get("codexErrorInfo") or data.get("codexErrorInfo") or data.get("code") or details.get("code")
+    status = details.get("httpStatusCode") or data.get("httpStatusCode") or details.get("status")
+    if isinstance(info, dict):
+        name = next(iter(info), "")
+        value = info.get(name)
+        status = value.get("httpStatusCode") if isinstance(value, dict) else status
+        info = name
+    if info in {
+        "unauthorized",
+        "badRequest",
+        "contextWindowExceeded",
+        "sessionBudgetExceeded",
+        "cyberPolicy",
+        "misalignmentPolicyViolation",
+        "tooManyDenials",
+        -32600,
+        -32601,
+        -32602,
+    } or status in {400, 401, 403, 404}:
+        return None
+    if (
+        info
+        in {
+            "usageLimitExceeded",
+            "rateLimitExceeded",
+            "usage_limit_exceeded",
+            "rate_limit_exceeded",
+            "insufficient_quota",
+            "slow_down",
+        }
+        or status == 429
+    ):
+        return Failure("usage", reset_time({**data, **details}))
+    if info in {
+        "transportLost",
+        "httpConnectionFailed",
+        "responseStreamConnectionFailed",
+        "responseStreamDisconnected",
+        "responseTooManyFailedAttempts",
+        "internalServerError",
+        "flexUnavailable",
+        "serverOverloaded",
+        "server_is_overloaded",
+    } or status in {408, 500, 502, 503, 504}:
+        return Failure("connection", reset_time({**data, **details}))
+    # Compatibility for older servers that returned only a message; deliberately narrow.
+    message = str(details.get("message", str(error))).lower()
+    if not info or info in {"other", -32000}:
+        if any(s in message for s in ("usage limit", "rate limit", "quota exceeded")):
+            return Failure("usage")
+        if any(
+            s in message
+            for s in (
+                "connection reset",
+                "connection lost",
+                "connection closed",
+                "network is unreachable",
+                "temporary failure in name resolution",
+                "connection timed out",
+                "temporary manager outage",
+            )
+        ):
+            return Failure("connection")
+    return None
+
+
+def reset_time(details):
+    now = time.time()
+    for key in ("retryAt", "retry_at", "resetsAt", "reset_at"):
+        value = details.get(key)
+        if isinstance(value, (int, float)) and value > now:
+            return float(value)
+        if isinstance(value, str):
+            try:
+                value = datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp()
+                if value > now:
+                    return value
+            except ValueError:
+                pass
+    headers = details.get("headers") or {}
+    value = (
+        details.get("retryAfter")
+        or details.get("retry_after")
+        or headers.get("retry-after")
+        or headers.get("Retry-After")
+    )
+    if value is not None:
+        try:
+            return now + max(0, float(value))
+        except (ValueError, TypeError):
+            try:
+                return max(now, parsedate_to_datetime(value).timestamp())
+            except (ValueError, TypeError):
+                pass
+    return None
+
+
+async def with_reset(server, failure):
+    if not failure or failure.kind != "usage" or failure.retry_at:
+        return failure
+    # One metadata request after an actual limit, never a speculative model request.
+    try:
+        limits = await server.request("account/rateLimits/read", {"excludeResetCreditDetails": True}, timeout=5)
+    except Exception:
+        limits = server.rate_limits
+    snapshot = limits.get("rateLimits") or {}
+    resets = [
+        w["resetsAt"]
+        for w in (snapshot.get("primary"), snapshot.get("secondary"))
+        if isinstance(w, dict)
+        and w.get("usedPercent", 0) >= 100
+        and isinstance(w.get("resetsAt"), (int, float))
+        and w["resetsAt"] > time.time()
+    ]
+    if resets:
+        failure.retry_at = max(resets)
+    return failure
+
+
+def delay(count, kind):
+    base, cap = (300, 21600) if kind == "usage" else (5, 300)
+    return min(cap, base * 2 ** min(count - 1, 16)) * random.uniform(0.8, 1.0)
+
+
+def gate_available(conn, execution_id=None, reserve=False):
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
+    if not row:
+        return True
+    gate = json.loads(row["value"])
+    if gate["retry_at"] > time.time():
+        return False
+    probe = gate.get("probe")
+    if probe and probe != execution_id:
+        active = conn.execute(
+            "SELECT 1 FROM executions WHERE id=? AND finished_at IS NULL AND status!='recovering'", (probe,)
+        ).fetchone()
+        if active:
+            return False
+    if reserve:
+        gate["probe"] = execution_id
+        conn.execute("UPDATE settings SET value=? WHERE key=?", (json.dumps(gate), GATE))
+    return True
+
+
+def reserve(db, execution_id):
+    with db.transaction() as conn:
+        return gate_available(conn, execution_id, True)
+
+
+def wait_for_gate(db, execution_id):
+    with db.transaction() as conn:
+        gate = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
+        retry_at = max(time.time() + 5, json.loads(gate["value"])["retry_at"] if gate else 0)
+        conn.execute(
+            "UPDATE executions SET status='recovering',retry_at=?,recovery_reason='usage' WHERE id=? AND finished_at IS NULL",
+            (retry_at, execution_id),
+        )
+        conn.execute("UPDATE messages SET status='waiting' WHERE execution_id=? AND role='assistant'", (execution_id,))
+        conn.execute(
+            "UPDATE tasks SET lifecycle='waiting',blocker=? WHERE lease_owner=?", (REASONS["usage"], execution_id)
+        )
+
+
+def release_gate(conn, execution_id, success=False):
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
+    if row and json.loads(row["value"]).get("probe") == execution_id:
+        if success:
+            conn.execute("DELETE FROM settings WHERE key=?", (GATE,))
+        else:
+            gate = json.loads(row["value"])
+            gate["probe"] = None
+            conn.execute("UPDATE settings SET value=? WHERE key=?", (json.dumps(gate), GATE))
+
+
+def defer(db, execution_id, failure, error="", output=None):
+    with db.transaction() as conn:
+        row = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
+        if not row or row["finished_at"] is not None:
+            return
+        count = row["retry_count"] + 1
+        gate_row = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
+        gate = json.loads(gate_row["value"]) if gate_row else {}
+        if failure.kind == "usage":
+            count = max(count, gate.get("count", 0) + 1)
+        retry_at = (
+            max(time.time() + 1, failure.retry_at) if failure.retry_at else time.time() + delay(count, failure.kind)
+        )
+        conn.execute(
+            """UPDATE executions SET status='recovering',retry_at=?,retry_count=?,recovery_reason=?,error=?,
+                     output=COALESCE(?,output) WHERE id=?""",
+            (retry_at, count, failure.kind, error[:2000], output, execution_id),
+        )
+        if row["task_id"]:
+            conn.execute(
+                "UPDATE tasks SET lifecycle='waiting',blocker=?,updated_at=? WHERE id=? AND lease_owner=?",
+                (REASONS[failure.kind], time.time(), row["task_id"], execution_id),
+            )
+        else:
+            conn.execute(
+                "UPDATE messages SET status='waiting' WHERE execution_id=? AND role='assistant'", (execution_id,)
+            )
+        if failure.kind == "usage":
+            gate = {
+                "retry_at": max(retry_at, gate.get("retry_at", 0)),
+                "count": count,
+                "probe": None,
+                "known_reset": failure.retry_at,
+            }
+            conn.execute(
+                "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (GATE, json.dumps(gate)),
+            )
+        else:
+            release_gate(conn, execution_id)
+        db.event(
+            conn,
+            "recovery.scheduled",
+            {"reason": failure.kind, "retry_at": retry_at, "known_reset": failure.retry_at, "attempt": count},
+            row["project_id"],
+            row["task_id"],
+            execution_id,
+        )
+
+
+def owned_alive(row):
+    return bool(row["pid"] and row["process_start"] and process_start(row["pid"]) == row["process_start"])
+
+
+def reap_orphan(row):
+    """Only signal a verified, dedicated App Server group from our durable receipt."""
+    if not owned_alive(row):
+        return False
+    pid = row["pid"]
+    try:
+        args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        if os.getpgid(pid) != pid or b"app-server" not in args or Path(f"/proc/{pid}").stat().st_uid != os.getuid():
+            return True  # Cannot prove ownership of the whole group; keep exclusivity.
+        os.killpg(
+            pid, signal.SIGKILL if row["recovery_reason"] == "interrupted" and row["retry_count"] else signal.SIGTERM
+        )
+    except ProcessLookupError:
+        return False
+    except (OSError, PermissionError):
+        return True
+    return True  # Recheck identity on the next eligible scheduler pass.
+
+
+async def inspect(server, row):
+    if not row["thread_id"] or row["status"] == "queued":
+        return None
+    await server.start()
+    saved = await server.request("thread/read", {"threadId": row["thread_id"], "includeTurns": True}, timeout=10)
+    turns = saved["thread"].get("turns", [])
+    if row["turn_id"]:
+        turn = next((t for t in turns if t["id"] == row["turn_id"]), None)
+        if turn:
+            return turn
+        raise CodexError("Persisted native turn is missing; outcome uncertain", {"code": "uncertain"})
+    for turn in reversed(turns):
+        for item in turn.get("items", []):
+            if row["launch_key"] and item.get("clientId") == row["launch_key"]:
+                return turn
+    for turn in reversed(turns):
+        for item in turn.get("items", []):
+            if item.get("type") != "userMessage":
+                continue
+            text = "".join(c.get("text", "") for c in item.get("content", []))
+            if not item.get("clientId") and row["launch_input"]:
+                try:
+                    same = json.loads(text) == json.loads(row["launch_input"])
+                except ValueError:
+                    same = text == row["launch_input"]
+                if same:
+                    return turn
+    if row["launch_key"] and not (row["launch_key"] == "not-started" and row["status"] == "starting"):
+        # Original owned process is gone and its authoritative history has no accepted input.
+        return None
+    if row["status"] == "starting" or (row["recovery_reason"] and row["thread_id"] and not row["launch_input"]):
+        raise CodexError(
+            "Launch outcome uncertain; retained thread must be inspected before continuation", {"code": "uncertain"}
+        )
+    return None
+
+
+def turn_output(turn):
+    return "\n".join(x.get("text", "") for x in turn.get("items", []) if x.get("type") == "agentMessage")
+
+
+def launching(db, execution_id, prompt):
+    with db.transaction() as conn:
+        key = f"linko:{execution_id}:{new_id()}"
+        conn.execute(
+            "UPDATE executions SET status='starting',turn_id=NULL,launch_key=?,launch_input=?,retry_at=NULL WHERE id=?",
+            (key, prompt, execution_id),
+        )
+    return key

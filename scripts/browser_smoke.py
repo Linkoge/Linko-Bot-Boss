@@ -15,7 +15,7 @@ def main():
     with tempfile.TemporaryDirectory(prefix="linko-browser-") as temporary:
         root = Path(temporary)
         projects = root / "projects"
-        for name in ("Alpha", "Beta"):
+        for name in ("Alpha", "Beta", "Recovery Fixture"):
             (projects / name).mkdir(parents=True)
         env = {
             **os.environ,
@@ -25,12 +25,21 @@ def main():
         }
         program = """import sys
 sys.path.insert(0,'tests')
-import uvicorn
+import uvicorn, time
 from fake_codex import FakeServer
 from ai_manager.config import Settings
 from ai_manager.web import create_app
 s=Settings();app=create_app(s,FakeServer(s))
-for name in ('Alpha','Beta'):app.state.registry.add(s.project_roots[0]/name)
+for name in ('Alpha','Beta','Recovery Fixture'):app.state.registry.add(s.project_roots[0]/name)
+recovery=app.state.db.one("SELECT id FROM projects WHERE name='Recovery Fixture'")
+recovery_chat=app.state.chat.conversation(recovery['id'])
+app.state.scheduler.tasks.add(recovery['id'],'Retain partial development during outage',recovery_chat['id'])
+recovery_task=app.state.scheduler.tasks.claim(2)
+with app.state.db.transaction() as conn:
+    conn.execute("UPDATE tasks SET lifecycle='waiting',blocker='Waiting for connection' WHERE id=?",(recovery_task['id'],))
+    conn.execute("UPDATE executions SET status='recovering',retry_at=?,retry_count=1,recovery_reason='connection' WHERE id=?",(time.time()+3600,recovery_task['lease_owner']))
+    conn.execute("INSERT INTO executions(id,agent_id,status,started_at,conversation_id,retry_at,recovery_reason) VALUES('recovery-reply','manager','recovering',?,?,?,'usage')",(time.time(),recovery_chat['id'],time.time()+3600))
+    conn.execute("INSERT INTO messages VALUES('recovery-message',?,'assistant','Partial response is preserved','waiting','recovery-reply',?)",(recovery_chat['id'],time.time()))
 beta=app.state.db.one("SELECT id FROM projects WHERE name='Beta'")
 conversation=app.state.chat.conversation(beta['id'])
 with app.state.db.transaction() as conn:
@@ -164,10 +173,24 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 assert not errors, errors
                 assert page.locator("#chat-mode option").count() == 3
                 assert not page.locator("#configure-verification,#configure-scheduler").count()
+                page.set_viewport_size({"width": 1440, "height": 1000})
+                page.locator("#projects button").filter(has_text="Recovery Fixture").click()
+                page.locator("#messages .badge").filter(has_text="Waiting for usage limit").wait_for()
+                assert "Next attempt" in page.locator("#messages .badge").inner_text()
+                assert page.locator("#send").is_disabled()
+                assert page.locator("#archive-chat").is_disabled()
+                page.locator("[data-view=tasks]").click()
+                page.locator("#task-list").get_by_text("Waiting for connection", exact=False).wait_for()
+                assert "Next attempt" in page.locator("#task-list").inner_text()
+                page.locator("[data-view=chat]").click()
+                for width in (1440, 393, 320):
+                    page.set_viewport_size({"width": width, "height": 851})
+                    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
+                assert not errors, errors
                 browser.close()
             print(
                 "Browser passed: login, chat, selection across refresh/streaming, copy all 425 messages, "
-                "copy five, clipboard fallback, scroll preservation, archive/search, rename, model roles, "
+                "copy five, clipboard fallback, scroll preservation, archive/search, rename, model roles, recovery reasons/timing, "
                 "desktop/mobile/narrow controls without JS errors or overflow."
             )
         finally:

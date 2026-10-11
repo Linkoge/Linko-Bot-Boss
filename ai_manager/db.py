@@ -93,6 +93,13 @@ class Database:
                 ("delivery_execution", "TEXT"),
                 ("conversation_id", "TEXT"),
                 ("input", "TEXT NOT NULL DEFAULT ''"),
+                ("retry_at", "REAL"),
+                ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("recovery_reason", "TEXT NOT NULL DEFAULT ''"),
+                ("mode", "TEXT NOT NULL DEFAULT 'auto'"),
+                ("launch_input", "TEXT"),
+                ("launch_key", "TEXT"),
+                ("stop_requested", "INTEGER NOT NULL DEFAULT 0"),
             ):
                 if name not in execution_columns:
                     conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {definition}")
@@ -109,6 +116,14 @@ class Database:
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS project_worker ON tasks(project_id) WHERE lifecycle='running'"
             )
+            if not conn.execute("SELECT 1 FROM schema_version WHERE version=9").fetchone():
+                conn.execute("""UPDATE executions SET
+                    mode=COALESCE((SELECT json_extract(payload,'$.prompt.mode') FROM events
+                        WHERE execution_id=executions.id AND kind='model.context' ORDER BY seq DESC LIMIT 1),'auto'),
+                    launch_input=(SELECT json_extract(payload,'$.prompt') FROM events
+                        WHERE execution_id=executions.id AND kind='model.context' ORDER BY seq DESC LIMIT 1)
+                    WHERE finished_at IS NULL""")
+                conn.execute("INSERT INTO schema_version VALUES(9)")
             conn.commit()
         self.path.chmod(0o600)
 

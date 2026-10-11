@@ -6,6 +6,20 @@ from datetime import datetime, timezone
 
 from .codex import MANAGER_INSTRUCTIONS, AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
+from .recovery import (
+    Failure,
+    classify,
+    defer,
+    inspect,
+    launching,
+    owned_alive,
+    reap_orphan,
+    release_gate,
+    reserve,
+    turn_output,
+    wait_for_gate,
+    with_reset,
+)
 from .registry import Registry
 from .tasks import Tasks
 
@@ -36,7 +50,7 @@ class Chat:
     def history(self, project_id=None, search=""):
         conversation = self.conversation(project_id)
         rows = self.db.all(
-            "SELECT m.*, (SELECT COALESCE(max(seq),0) FROM events e WHERE e.execution_id=m.execution_id) AS stream_cursor FROM messages m WHERE conversation_id=? AND instr(lower(content),lower(?))>0 ORDER BY created_at DESC,m.rowid DESC LIMIT 200",
+            "SELECT m.*,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND instr(lower(m.content),lower(?))>0 ORDER BY m.created_at DESC,m.rowid DESC LIMIT 200",
             (conversation["id"], search),
         )
         return {"conversation": conversation, "messages": list(reversed(rows))}
@@ -240,7 +254,7 @@ class Chat:
         )
         if not conversation or (conversation_id and conversation["id"] != conversation_id):
             raise ValueError("Chat changed. Refresh before sending")
-        route = (await self.routes())["interactive"]
+        route = self.db.setting("model_routes", {}).get("interactive", {"effort": "low"})
         execution_id, response_id, now = new_id(), new_id(), time.time()
         with self.db.transaction() as conn:
             if not conn.execute(
@@ -249,7 +263,7 @@ class Chat:
             ).fetchone():
                 raise ValueError("Chat changed. Refresh before sending")
             if conn.execute(
-                "SELECT 1 FROM messages WHERE conversation_id=? AND status IN ('queued','streaming')",
+                "SELECT 1 FROM executions e JOIN messages m ON m.execution_id=e.id WHERE m.conversation_id=? AND e.agent_id='manager' AND e.finished_at IS NULL",
                 (conversation["id"],),
             ).fetchone():
                 raise ValueError("A response is already running in this conversation")
@@ -270,9 +284,18 @@ class Chat:
                 (response_id, conversation["id"], "assistant", "", "queued", execution_id, now + 0.0001),
             )
             conn.execute(
-                """INSERT INTO executions(id,project_id,agent_id,model,effort,status,started_at,conversation_id,input)
-                         VALUES(?,?,'manager',?,?,'queued',?,?,?)""",
-                (execution_id, project_id, route["model"], route["effort"], now, conversation["id"], content),
+                """INSERT INTO executions(id,project_id,agent_id,model,effort,status,started_at,conversation_id,input,mode,launch_key)
+                         VALUES(?,?,'manager',?,?,'queued',?,?,?,?,'not-started')""",
+                (
+                    execution_id,
+                    project_id,
+                    route.get("model"),
+                    route.get("effort"),
+                    now,
+                    conversation["id"],
+                    content,
+                    mode,
+                ),
             )
             if delivery:
                 cursor = conn.execute(
@@ -285,15 +308,32 @@ class Chat:
                 if cursor.rowcount != 1:
                     raise ValueError("Result already claimed")
             self.db.event(conn, "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
+        self.launch(execution_id, response_id, conversation, content, route, mode)
+        return {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
+
+    def launch(self, execution_id, response_id, conversation, content, route, mode):
+        if execution_id in self.jobs:
+            return
         job = asyncio.create_task(self._run(execution_id, response_id, conversation, content, route, mode))
         self.jobs[execution_id] = job
         job.add_done_callback(lambda _: self.jobs.pop(execution_id, None))
-        return {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
 
     async def _run(self, execution_id, response_id, conversation, content, route, mode):
         thread_id, output = None, ""
+        output = self.db.one("SELECT output FROM executions WHERE id=?", (execution_id,))["output"]
+        new_output = False
         usage = TurnUsage()
         try:
+            if not reserve(self.db, execution_id):
+                wait_for_gate(self.db, execution_id)
+                return
+            await self.server.start()
+            route = self.server.route(**route)
+            with self.db.transaction() as conn:
+                conn.execute(
+                    "UPDATE executions SET model=?,effort=?,status='queued',retry_at=NULL WHERE id=?",
+                    (route["model"], route["effort"], execution_id),
+                )
             from .orchestration import MANAGER_TOOL
 
             schema = hashlib.sha256(json.dumps(MANAGER_TOOL, sort_keys=True).encode()).hexdigest()
@@ -312,7 +352,7 @@ class Chat:
             with self.db.transaction() as conn:
                 conn.execute("UPDATE conversations SET thread_id=? WHERE id=?", (thread_id, conversation["id"]))
                 conn.execute(
-                    "UPDATE executions SET thread_id=?,pid=?,process_start=?,status='starting' WHERE id=?",
+                    "UPDATE executions SET thread_id=?,pid=?,process_start=?,status='queued' WHERE id=?",
                     (thread_id, self.server.process.pid, process_start(self.server.process.pid), execution_id),
                 )
                 conn.execute("UPDATE messages SET status='streaming' WHERE id=?", (response_id,))
@@ -321,14 +361,21 @@ class Chat:
                     ("manager_tool_schema:" + conversation["id"], json.dumps(schema)),
                 )
             prompt, context = self.prompt(conversation, content, mode, execution_id, thread_id, prior)
+            execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
+            if execution["retry_count"]:
+                prompt["recovery"] = (
+                    "Continue this interrupted response from retained history. Reconcile previously delegated assignments; do not repeat completed actions."
+                )
             with self.db.transaction() as conn:
                 self.db.event(
                     conn, "model.context", {"prompt": prompt}, conversation["project_id"], execution_id=execution_id
                 )
+            launch_key = launching(self.db, execution_id, json.dumps(prompt))
             turn = await self.server.request(
                 "turn/start",
                 {
                     "threadId": thread_id,
+                    "clientUserMessageId": launch_key,
                     "input": [{"type": "text", "text": json.dumps(prompt)}],
                     **route,
                     "serviceTierForTurn": "default",
@@ -341,11 +388,18 @@ class Chat:
                 event = await queue.get()
                 method, params = event["method"], event.get("params", {})
                 if method == "transport/lost":
-                    raise CodexError("Manager connection lost; inspect saved thread before retry")
+                    raise CodexError(
+                        "Manager connection lost; inspect saved thread before retry",
+                        {"codexErrorInfo": "transportLost"},
+                    )
                 if params.get("turnId") and params["turnId"] != turn_id:
                     continue
                 with self.db.transaction() as conn:
                     if method == "item/agentMessage/delta":
+                        if not new_output:
+                            if output:
+                                params = {**params, "reset": True}
+                            output, new_output = "", True
                         output = (output + params.get("delta", ""))[-1000000:]
                         conn.execute("UPDATE messages SET content=? WHERE id=?", (output, response_id))
                         conn.execute("UPDATE executions SET output=? WHERE id=?", (output, execution_id))
@@ -366,19 +420,46 @@ class Chat:
                         self.db.set_setting(
                             "manager_context:" + conversation["id"], {"thread_id": thread_id, "context": context}
                         )
-                    self._finish(
-                        execution_id,
-                        response_id,
-                        params["turn"]["status"],
-                        (params["turn"].get("error") or {}).get("message", ""),
-                        output,
-                    )
+                    turn = params["turn"]
+                    error = turn.get("error") or {}
+                    failure = classify(error) if turn["status"] == "failed" else None
+                    if (
+                        turn["status"] == "interrupted"
+                        and not self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))[
+                            "stop_requested"
+                        ]
+                    ):
+                        failure = Failure("interrupted")
+                    if failure:
+                        defer(
+                            self.db,
+                            execution_id,
+                            await with_reset(self.server, failure),
+                            error.get("message", ""),
+                            output,
+                        )
+                    else:
+                        self._finish(execution_id, response_id, turn["status"], error.get("message", ""), output)
                     return
         except asyncio.CancelledError:
-            self._finish(execution_id, response_id, "interrupted", "Service stopped or turn interrupted", output)
+            execution = self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))
+            if execution["stop_requested"]:
+                self._finish(execution_id, response_id, "interrupted", "Stopped by user", output)
+            else:
+                defer(self.db, execution_id, Failure("interrupted"), "Service stopped", output)
             raise
         except Exception as error:
-            self._finish(execution_id, response_id, "failed", str(error)[:2000], output)
+            failure = classify(error)
+            if failure:
+                if isinstance(error, CodexError) and error.details.get("code") in {-32600, -32601, -32602, -32000}:
+                    with self.db.transaction() as conn:
+                        conn.execute(
+                            "UPDATE executions SET turn_id=NULL,launch_key='not-started',launch_input=NULL WHERE id=?",
+                            (execution_id,),
+                        )
+                defer(self.db, execution_id, await with_reset(self.server, failure), str(error), output)
+            else:
+                self._finish(execution_id, response_id, "failed", str(error)[:2000], output)
         finally:
             if thread_id:
                 self.server.queues.pop(thread_id, None)
@@ -396,8 +477,9 @@ class Chat:
             conn.execute("UPDATE messages SET status=?,content=? WHERE id=?", (status, output, response_id))
             conn.execute(
                 "UPDATE executions SET delivery=? WHERE delivery_execution=?",
-                ("delivered" if status == "completed" else "pending", execution_id),
+                ("delivered" if status == "completed" else "blocked", execution_id),
             )
+            release_gate(conn, execution_id, status == "completed")
             self.db.event(conn, "chat.finished", {"status": status, "error": error}, execution_id=execution_id)
 
     async def deliver_results(self):
@@ -422,7 +504,7 @@ class Chat:
             else:
                 conversation = self.conversation(result["project_id"])
             if self.db.one(
-                "SELECT 1 FROM messages WHERE conversation_id=? AND status IN ('queued','streaming')",
+                "SELECT 1 FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND (m.status IN ('queued','streaming') OR (e.agent_id='manager' AND e.finished_at IS NULL))",
                 (conversation["id"],),
             ):
                 continue
@@ -452,30 +534,98 @@ class Chat:
         row = self.db.one("SELECT * FROM executions WHERE id=? AND agent_id='manager'", (execution_id,))
         if not row or row["finished_at"]:
             raise ValueError("No active manager turn")
-        if row["turn_id"]:
+        with self.db.transaction() as conn:
+            conn.execute("UPDATE executions SET stop_requested=1,retry_at=NULL WHERE id=?", (execution_id,))
+        if row["status"] == "recovering" and execution_id not in self.jobs:
+            if row["turn_id"] and self.server.process and row["pid"] == self.server.process.pid:
+                try:
+                    await self.server.interrupt(row["thread_id"], row["turn_id"])
+                except CodexError:
+                    pass  # Already terminal or disconnected; explicit stop remains durable.
+            message = self.db.one("SELECT id FROM messages WHERE execution_id=? AND role='assistant'", (execution_id,))
+            self._finish(
+                execution_id, message["id"] if message else "", "interrupted", "Stopped by user", row["output"]
+            )
+        elif row["turn_id"]:
             await self.server.interrupt(row["thread_id"], row["turn_id"])
         elif execution_id in self.jobs:
             self.jobs[execution_id].cancel()
 
     async def recover(self):
-        for row in self.db.all("SELECT * FROM executions WHERE agent_id='manager' AND finished_at IS NULL"):
-            status, output, error = "interrupted", row["output"], "Service restarted; turn outcome uncertain"
-            if row["thread_id"]:
-                try:
-                    await self.server.start()
-                    saved = await self.server.request(
-                        "thread/read", {"threadId": row["thread_id"], "includeTurns": True}
-                    )
-                    turn = next((x for x in saved["thread"].get("turns", []) if x["id"] == row["turn_id"]), None)
-                    if turn and turn["status"] == "completed":
-                        status, error = "completed", ""
-                        output = "\n".join(
-                            x.get("text", "") for x in turn.get("items", []) if x.get("type") == "agentMessage"
+        for row in self.db.all(
+            "SELECT * FROM executions WHERE agent_id='manager' AND finished_at IS NULL ORDER BY started_at"
+        ):
+            if row["id"] in self.jobs or (row["retry_at"] and row["retry_at"] > time.time()):
+                continue
+            message = self.db.one("SELECT * FROM messages WHERE execution_id=? AND role='assistant'", (row["id"],))
+            response_id = message["id"] if message else ""
+            own_process = self.server.process and row["pid"] == self.server.process.pid
+            if not own_process and owned_alive(row) and reap_orphan(row):
+                defer(self.db, row["id"], Failure("interrupted"), "Previous manager process is still present")
+                continue
+            if row["stop_requested"]:
+                self._finish(row["id"], response_id, "interrupted", "Stopped by user", row["output"])
+                continue
+            if not reserve(self.db, row["id"]):
+                continue
+            try:
+                turn = await inspect(self.server, row)
+                if turn and not row["turn_id"]:
+                    with self.db.transaction() as conn:
+                        conn.execute("UPDATE executions SET turn_id=? WHERE id=?", (turn["id"], row["id"]))
+                if turn and turn["status"] == "completed":
+                    self._finish(row["id"], response_id, "completed", "", turn_output(turn))
+                    continue
+                if turn and turn["status"] == "inProgress" and own_process:
+                    # A timed-out start may still be running in the shared server.
+                    # Stop that exact turn before any follow-up inference.
+                    await self.server.interrupt(row["thread_id"], turn["id"])
+                    defer(self.db, row["id"], Failure("interrupted"), "Reconciling a still-active native turn")
+                    continue
+                if turn and turn["status"] == "failed":
+                    error = turn.get("error") or {}
+                    failure = classify(error)
+                    if not failure:
+                        self._finish(
+                            row["id"], response_id, "failed", error.get("message", "Manager failed"), turn_output(turn)
                         )
-                except Exception:
-                    pass
-            message = self.db.one("SELECT id FROM messages WHERE execution_id=? AND role='assistant'", (row["id"],))
-            self._finish(row["id"], message["id"] if message else "", status, error, output)
+                        continue
+                    if not row["retry_count"]:
+                        defer(self.db, row["id"], await with_reset(self.server, failure), error.get("message", ""))
+                        continue
+                conversation = self.db.one(
+                    "SELECT * FROM conversations WHERE id=?",
+                    (row["conversation_id"] or (message["conversation_id"] if message else ""),),
+                )
+                if not conversation:
+                    self._finish(
+                        row["id"], response_id, "interrupted", "Original conversation was deleted", row["output"]
+                    )
+                    continue
+                with self.db.transaction() as conn:
+                    conn.execute(
+                        "UPDATE executions SET status='queued',retry_at=NULL,retry_count=MAX(retry_count,1) WHERE id=?",
+                        (row["id"],),
+                    )
+                    self.db.event(
+                        conn,
+                        "recovery.resuming",
+                        {"previous_turn": row["turn_id"]},
+                        row["project_id"],
+                        execution_id=row["id"],
+                    )
+                route = (
+                    {"model": row["model"], "effort": row["effort"]}
+                    if row["model"]
+                    else self.db.setting("model_routes", {}).get("interactive", {"effort": "low"})
+                )
+                self.launch(row["id"], response_id, conversation, row["input"], route, row["mode"])
+            except Exception as error:
+                failure = classify(error)
+                if failure:
+                    defer(self.db, row["id"], await with_reset(self.server, failure), str(error))
+                else:
+                    self._finish(row["id"], response_id, "failed", str(error)[:2000], row["output"])
 
     async def close(self):
         for job in list(self.jobs.values()):

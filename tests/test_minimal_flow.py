@@ -276,8 +276,9 @@ async def test_shutdown_continues_active_work_but_preserves_user_wait(system):
         workers.launch(task)
         await asyncio.sleep(0.03)
         await workers.close()
-        assert Tasks(db).get(task["id"])["status"] == "queued"
-        assert Tasks(db).get(task["id"])["lease_owner"] is None
+        assert Tasks(db).get(task["id"])["status"] == "waiting"
+        assert Tasks(db).get(task["id"])["lease_owner"] == task["lease_owner"]
+        assert Tasks(db).get(task["id"])["retry_at"] > time.time()
         assert Tasks(db).get(task["id"])["native_thread"]
         waiting = Tasks(db).add(registry.list()[1]["id"], "paused objective")
         Tasks(db).control(waiting["id"], "pause", waiting["revision"])
@@ -385,17 +386,17 @@ async def test_failed_manager_delivery_retries_after_restart_without_duplicate_w
     await settled(workers)
 
     async def fail(*args, **kwargs):
-        raise RuntimeError("Temporary manager outage")
+        raise ConnectionError("Temporary manager outage")
 
     monkeypatch.setattr(chat.server, "thread", fail)
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
     result = db.one("SELECT * FROM executions WHERE task_id=?", (task["id"],))
-    assert result["delivery"] == "pending"
+    assert result["delivery"] == "running"
     await chat.deliver_results()
     assert not chat.jobs  # Persisted backoff prevents a model call every scheduler tick.
     with db.transaction() as conn:
-        conn.execute("UPDATE executions SET finished_at=? WHERE id=?", (time.time() - 31, result["delivery_execution"]))
+        conn.execute("UPDATE executions SET retry_at=0 WHERE id=?", (result["delivery_execution"],))
     restored = Chat(Database(db.path), registry, FakeServer(settings))
     await restored.recover()
     await restored.deliver_results()

@@ -10,7 +10,7 @@ The input contains the original execution objective, current task status/blocker
 
 - A transaction claims each pending result and creates its manager execution and chat messages together. The worker message uses a stable `result:<execution_id>` ID.
 - Successful manager completion marks the result delivered. Repeated worker or manager finish handling cannot reopen it.
-- Failed/interrupted manager deliveries return to pending and retry after a persisted 30-second delay. Failed attempts remain in history; the worker message is not duplicated.
+- Stage 3 temporary failures retain the same unfinished manager execution and response, with persisted backoff and account-wide usage gating. Permanent manager failures retain the worker result with blocked delivery instead of retrying indefinitely. The historical 30-second eligibility rule remains for already-finished older delivery attempts. See [automatic recovery](AUTOMATIC_RECOVERY.md).
 - Startup uses the existing native-thread recovery to reconcile unfinished turns. A recovered completed manager report is marked delivered rather than replayed. Pending results are picked up by the scheduler; schema migration 8 also recovers old stranded `delivery='waiting'` records.
 - Results resume their exact origin, including global and archived conversations, rather than being redirected to a project's newest chat. A deliberately cleared/deleted origin is discarded rather than inserted into its replacement. Assignments without an origin use their project chat.
 
