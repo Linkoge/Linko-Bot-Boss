@@ -43,6 +43,9 @@ CREATE TABLE IF NOT EXISTS messages(
  content TEXT NOT NULL, status TEXT NOT NULL, execution_id TEXT, created_at REAL NOT NULL);
 CREATE INDEX IF NOT EXISTS events_execution ON events(execution_id, seq);
 CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id,created_at);
+CREATE TABLE IF NOT EXISTS chat_requests(
+ owner_id INTEGER NOT NULL, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL,
+ receipt TEXT NOT NULL, created_at REAL NOT NULL, PRIMARY KEY(owner_id,request_id));
 CREATE TABLE IF NOT EXISTS chat_archives(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
  title TEXT NOT NULL, archived_at REAL NOT NULL);
@@ -124,6 +127,7 @@ class Database:
                         WHERE execution_id=executions.id AND kind='model.context' ORDER BY seq DESC LIMIT 1)
                     WHERE finished_at IS NULL""")
                 conn.execute("INSERT INTO schema_version VALUES(9)")
+            conn.execute("INSERT OR IGNORE INTO schema_version VALUES(10)")
             conn.commit()
         self.path.chmod(0o600)
 

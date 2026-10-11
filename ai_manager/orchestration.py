@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 
+from .recovery import SilentObserver
 from .tasks import Tasks
 
 MANAGER_TOOL = {
@@ -46,6 +47,7 @@ MANAGER_TOOL = {
 class Scheduler:
     def __init__(self, db, registry, settings, workers, chat):
         self.db, self.registry, self.settings, self.workers, self.chat = db, registry, settings, workers, chat
+        self.observer = SilentObserver(db)
         self.tasks, self.job = Tasks(db), None
         self.lock = asyncio.Lock()
         self.error = ""
@@ -57,7 +59,9 @@ class Scheduler:
         if params["tool"] != "manager_action":
             raise ValueError("Unknown manager action")
         action = args["action"]
-        execution = self.db.one("SELECT stop_requested,finished_at FROM executions WHERE id=?", (params.get("manager_execution_id"),))
+        execution = self.db.one(
+            "SELECT stop_requested,finished_at FROM executions WHERE id=?", (params.get("manager_execution_id"),)
+        )
         if execution and (execution["stop_requested"] or execution["finished_at"] is not None):
             raise ValueError("This manager execution has stopped")
         offset = args.get("offset", 0)
@@ -210,6 +214,12 @@ class Scheduler:
 
     async def tick(self):
         async with self.lock:
+            await self.observer.observe(
+                {
+                    **{key: self.chat.server for key in self.chat.jobs},
+                    **{key: server for key, server in self.workers.servers.items() if key in self.workers.jobs},
+                }
+            )
             await self.workers.recover()
             await self.chat.recover()
             while task := self.tasks.claim(self.settings.max_workers):

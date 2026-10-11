@@ -51,9 +51,14 @@ class Chat:
     def history(self, project_id=None, search=""):
         conversation = self.conversation(project_id)
         rows = self.db.all(
-            "SELECT m.*,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND instr(lower(m.content),lower(?))>0 ORDER BY m.created_at DESC,m.rowid DESC LIMIT 200",
+            """SELECT m.*,CASE WHEN m.role!='assistant' OR e.id IS NULL THEN m.status
+            WHEN e.finished_at IS NOT NULL THEN e.status WHEN e.status='recovering' THEN 'waiting'
+            WHEN e.status='running' THEN 'streaming' ELSE 'queued' END AS authoritative_status,e.status AS execution_status,
+            e.finished_at,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND instr(lower(m.content),lower(?))>0 ORDER BY m.created_at DESC,m.rowid DESC LIMIT 200""",
             (conversation["id"], search),
         )
+        for row in rows:
+            row["status"] = row.pop("authoritative_status")
         return {"conversation": conversation, "messages": list(reversed(rows))}
 
     def reset(self, project_id, conversation_id, last_message_id, confirmed, archive=False, title=""):
@@ -243,7 +248,23 @@ class Chat:
             for role, effort in ROLES.items()
         }
 
-    async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto"):
+    def request_receipt(self, conn, request_id, payload_hash):
+        row = conn.execute("SELECT * FROM chat_requests WHERE owner_id=1 AND request_id=?", (request_id,)).fetchone()
+        if row:
+            if row["payload_hash"] != payload_hash:
+                raise ValueError("Request ID already used with different message or context")
+            return json.loads(row["receipt"])
+
+    async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto", request_id=None):
+        payload_hash = hashlib.sha256(
+            json.dumps([project_id, conversation_id, content, mode], ensure_ascii=False).encode()
+        ).hexdigest()
+        if request_id:
+            if delivery or not 16 <= len(request_id) <= 100 or not all(c.isalnum() or c in "-_" for c in request_id):
+                raise ValueError("Invalid owner request ID")
+            with self.db.transaction() as conn:
+                if receipt := self.request_receipt(conn, request_id, payload_hash):
+                    return receipt
         if mode not in {"conversation", "auto", "execute"}:
             raise ValueError("Unknown chat mode")
         if not content.strip() or (not delivery and len(content) > 48000):
@@ -257,7 +278,10 @@ class Chat:
             raise ValueError("Chat changed. Refresh before sending")
         route = self.db.setting("model_routes", {}).get("interactive", {"effort": "low"})
         execution_id, response_id, now = new_id(), new_id(), time.time()
+        receipt = {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
         with self.db.transaction() as conn:
+            if request_id and (original := self.request_receipt(conn, request_id, payload_hash)):
+                return original
             if not conn.execute(
                 "SELECT 1 FROM conversations WHERE id=? AND project_id IS ? AND (? OR context=?)",
                 (conversation["id"], project_id, bool(delivery), project_id or "global"),
@@ -308,9 +332,13 @@ class Chat:
                 )
                 if cursor.rowcount != 1:
                     raise ValueError("Result already claimed")
+            if request_id:
+                conn.execute(
+                    "INSERT INTO chat_requests VALUES(1,?,?,?,?)", (request_id, payload_hash, json.dumps(receipt), now)
+                )
             self.db.event(conn, "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
         self.launch(execution_id, response_id, conversation, content, route, mode)
-        return {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
+        return receipt
 
     def launch(self, execution_id, response_id, conversation, content, route, mode):
         if execution_id in self.jobs:
@@ -385,6 +413,7 @@ class Chat:
             turn_id = turn["turn"]["id"]
             with self.db.transaction() as conn:
                 conn.execute("UPDATE executions SET turn_id=?,status='running' WHERE id=?", (turn_id, execution_id))
+                self.db.event(conn, "chat.started", {"status": "running"}, execution_id=execution_id)
             while True:
                 event = await queue.get()
                 method, params = event["method"], event.get("params", {})
@@ -423,6 +452,8 @@ class Chat:
                             "manager_context:" + conversation["id"], {"thread_id": thread_id, "context": context}
                         )
                     turn = params["turn"]
+                    if "reconciled_output" in params:
+                        output = params["reconciled_output"]
                     error = turn_error(self.db, execution_id, turn) if turn["status"] != "completed" else {}
                     failure = classify(error) if turn["status"] == "failed" else None
                     if (

@@ -169,6 +169,10 @@ class AppServer:
             while line := await process.stdout.readline():
                 message = json.loads(line)
                 if "method" in message and "id" in message:
+                    params = message.get("params", {})
+                    queue = self.queues.get(params.get("threadId"))
+                    if queue is not None:
+                        queue.put_nowait({"method": message["method"], "params": params})
                     if message["method"] == "item/tool/call":
                         job = asyncio.create_task(self._tool_call(message))
                         self.tool_jobs.add(job)

@@ -207,6 +207,8 @@ class Workers:
                     self.db.event(conn, method, params, project["id"], task["id"], execution_id)
                 if method == "turn/completed":
                     turn = params["turn"]
+                    if "reconciled_output" in params:
+                        output = params["reconciled_output"]
                     state = {"completed": "completed", "interrupted": "waiting"}.get(turn["status"], "failed")
                     error = turn_error(self.db, execution_id, turn) if turn["status"] != "completed" else {}
                     failure = classify(error) if state == "failed" else None

@@ -17,7 +17,7 @@ def client(tmp_path):
         (root / name).mkdir()
     settings = Settings(data_dir=tmp_path / "data", project_roots=(root,), secure_cookie=False)
     app = create_app(settings, FakeServer(settings))
-    with TestClient(app) as client:
+    with TestClient(app, base_url="http://localhost") as client:
         yield client, app, settings
 
 
@@ -98,3 +98,17 @@ def test_chat_modes_stale_origin_and_history_without_supervision_tables(client):
         conn.execute("INSERT INTO verification_results VALUES(?,?)", (task["id"], "Historical evidence"))
     response = browser.get(f"/api/tasks/{task['id']}/execution-records")
     assert response.json()["historical_verification"] == [{"task_id": task["id"], "evidence": "Historical evidence"}]
+
+
+def test_owner_request_receipt_replay_and_changed_payload_conflict(client):
+    browser, app, settings = client
+    body = {"request_id": "http-owner-request-1", "content": "Discuss", "mode": "conversation"}
+    assert browser.post("/api/chat", json=body).status_code == 401
+    sign_in(browser, app, settings)
+    original = browser.post("/api/chat", json=body)
+    assert original.status_code == 200
+    time.sleep(0.05)
+    assert browser.post("/api/chat", json=body).json() == original.json()
+    assert browser.post("/api/chat", json=body | {"content": "Changed"}).status_code == 409
+    assert len(app.state.db.all("SELECT * FROM messages WHERE role='user'")) == 1
+    assert len(app.state.db.all("SELECT * FROM executions")) == 1

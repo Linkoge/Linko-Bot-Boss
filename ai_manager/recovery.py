@@ -1,5 +1,6 @@
 """Deterministic retry policy and native outcome reconciliation; no inference here."""
 
+import asyncio
 import errno
 import json
 import os
@@ -356,3 +357,60 @@ def launching(db, execution_id, prompt):
             (key, prompt, execution_id),
         )
     return key
+
+
+class SilentObserver:
+    """Silence is only a reason to read history, never evidence of failure."""
+
+    def __init__(self, db):
+        self.db = db
+        self.checked = {}
+
+    async def observe(self, attached):
+        now = time.time()
+        self.checked = {key: at for key, at in self.checked.items() if key in attached}
+        for execution_id, server in attached.items():
+            row = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
+            if not row or row["finished_at"] is not None or row["status"] != "running" or not row["turn_id"]:
+                continue
+            if now - self.checked.get(execution_id, row["started_at"]) < 60:
+                continue
+            activity = self.db.one(
+                """SELECT created_at AS at FROM events WHERE execution_id=? AND
+                (kind='chat.delta' OR kind LIKE 'item/%' OR kind IN ('turn/started','chat.started','worker.started','error'))
+                ORDER BY seq DESC LIMIT 1""",
+                (execution_id,),
+            )
+            activity = activity["at"] if activity else row["started_at"]
+            if now - max(activity, self.checked.get(execution_id, row["started_at"])) < 60:
+                continue
+            self.checked[execution_id] = now
+            if self.db.one("SELECT 1 FROM questions WHERE execution_id=? AND status='pending'", (execution_id,)):
+                continue
+            try:
+                # Bounded metadata read only; do not reserve a gate or touch ownership.
+                turn = await asyncio.wait_for(inspect(server, row), 10)
+                current = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
+                queue = server.queues.get(row["thread_id"])
+                if not current or current["finished_at"] is not None or current["turn_id"] != row["turn_id"]:
+                    continue
+                if turn and turn["status"] in {"completed", "failed", "interrupted"} and queue is not None:
+                    # The attached runner retains its cleanup, retry, stop and delivery protections.
+                    queue.put_nowait(
+                        {
+                            "method": "turn/completed",
+                            "params": {
+                                "turn": turn,
+                                "reconciled_output": turn_output(turn),
+                            },
+                        }
+                    )
+                outcome = turn["status"] if turn else "uncertain"
+            except Exception as error:
+                # An inspection error says nothing about the running turn.
+                outcome = "inspection_failed:" + type(error).__name__
+            with self.db.transaction() as conn:
+                self.db.event(
+                    conn, "recovery.observed", {"outcome": outcome}, row["project_id"], row["task_id"], execution_id
+                )
+            return  # At most one bounded read per scheduler tick.

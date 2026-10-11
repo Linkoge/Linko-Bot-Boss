@@ -107,6 +107,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("[data-view=chat]").click()
                 page.locator("#projects button").filter(has_text="Beta").click()
                 page.wait_for_function("() => state.history?.messages.length === 200")
+                assert page.locator("#send").is_enabled() and page.locator("#stop-chat").is_hidden()
                 # Select by dragging, then leave the regular three-second refresh running.
                 content = page.locator("#messages .message-content").last
                 content.scroll_into_view_if_needed()

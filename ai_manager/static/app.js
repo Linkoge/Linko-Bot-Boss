@@ -1,6 +1,9 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(), pending:new Set()};
+const submissionKey = 'linko-chat-submissions-v1';
+const submissions = new Map(JSON.parse(sessionStorage.getItem(submissionKey)||'[]'));
+function saveSubmissions(){sessionStorage.setItem(submissionKey,JSON.stringify([...submissions]));}
 const element = (tag, text, cls) => {const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
 function notice(text){$('notice').textContent=text;$('notice').hidden=!text;}
 async function api(path, options={}){
@@ -8,12 +11,12 @@ async function api(path, options={}){
   if(options.method && options.method!=='GET')headers['X-CSRF-Token']=state.csrf||'';
   const response=await fetch(path,{...options,headers});
   const result=await response.json();
-  if(!response.ok){if(response.status===401 && !path.includes('login'))showAuth();const error=new Error(result.detail||result.message||'Request failed');error.result=result.result||(response.status<500?'rejected':'failed');throw error;}
+  if(!response.ok){if(response.status===401 && !path.includes('login'))showAuth();const error=new Error(result.detail||result.message||'Request failed');error.status=response.status;error.result=result.result||(response.status<500?'rejected':'failed');throw error;}
   return result;
 }
-function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice('Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
+function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
-function showAuth(){state.source?.close();$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
+function showAuth(){state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh();await selectProject(state.project);}
 async function refresh(){state.portfolio=await api('/api/portfolio');renderProjects();renderTasks();renderAgents();renderQuestions();$('task-count').textContent=state.portfolio.tasks.filter(t=>['queued','running','waiting'].includes(t.status)).length;if(state.portfolio.queue_error)notice(state.portfolio.queue_error);if(!state.source&&!state.pending.has(state.project))await loadHistory();}
@@ -55,7 +58,7 @@ $('project-menu').onkeydown=event=>{
   if(event.key==='Tab')closeProjectMenu();
 };
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#project-menu')&&!event.target.closest('#project-menu-button'))closeProjectMenu();});
-async function selectProject(id){state.drafts.set(state.project,$('message-input').value);const selection=++state.selection;state.project=id;state.detail=null;state.source?.close();state.source=null;state.execution=null;state.history=null;$('messages').replaceChildren();$('message-input').value=state.drafts.get(id)||'';$('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderProjects();renderTasks();renderAgents();renderQuestions();if(state.view==='memory')await loadMemory(selection);if(state.view==='search')await searchHistory();await loadHistory(selection);}
+async function selectProject(id){state.drafts.set(state.project,$('message-input').value);const selection=++state.selection;state.project=id;state.detail=null;state.source?.close();state.source=null;state.execution=null;state.history=null;$('messages').replaceChildren();$('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';$('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderProjects();renderTasks();renderAgents();renderQuestions();if(state.view==='memory')await loadMemory(selection);if(state.view==='search')await searchHistory();await loadHistory(selection);if(selection===state.selection&&submissions.has(id))await sendSubmission();}
 function projectName(id){const p=state.portfolio?.projects.find(p=>p.id===id);return p?displayName(p):'All Projects';}
 async function loadMemory(selection=state.selection){if(!state.project)return;const detail=await api(`/api/projects/${state.project}`);if(selection!==state.selection)return;state.detail=detail;renderMemory();}
 function renderMemory(){$('memory-list').replaceChildren();if(!state.detail){$('memory-list').append(element('p','Select a project to read historical owner notes.'));return;}for(const m of state.detail.memory){const d=element('details');d.append(element('summary',m.name),element('pre',m.content));$('memory-list').append(d);}if(!state.detail.memory.length)$('memory-list').append(element('p','Project context comes from its repository and instructions.'));}
@@ -65,6 +68,7 @@ function renderAgents(){$('agent-list').replaceChildren();for(const e of state.p
 function renderQuestions(){$('questions').replaceChildren();for(const q of state.portfolio.questions.filter(q=>!state.project||q.project_id===state.project)){const request=JSON.parse(q.request),form=element('form',undefined,'panel');form.append(element('h3','Codex needs your answer · '+projectName(q.project_id)));if(q.kind==='item/tool/requestUserInput'){for(const question of request.questions){const label=element('label',question.question),input=element('input');input.name=question.id;input.required=true;if(question.options)label.append(element('small',question.options.map(x=>x.label).join(' / ')));label.append(input);form.append(label);}form.append(element('button','Send answer','primary'));form.onsubmit=action(async event=>{event.preventDefault();await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:Object.fromEntries(new FormData(form))})});await refresh();});}else{form.append(element('pre',JSON.stringify(request,null,2)));for(const [label,approve] of [['Confirm exact action',true],['Decline',false]]){const b=element('button',label);b.type='button';b.onclick=action(async()=>{await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:{approve}})});await refresh();});form.append(b);}}$('questions').append(form);}}
 async function loadHistory(selection=state.selection){
   const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);
+  state.source?.close();state.source=null;
   const request=state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
   const history=await api(`/api/history?${query}`);if(selection!==state.selection||request!==state.loadHistoryRequest)return;
   const messages=$('messages'),follow=shouldFollowChat(),fresh=state.history?.conversation.id!==history.conversation.id;
@@ -77,12 +81,19 @@ async function loadHistory(selection=state.selection){
   for(const [id,row] of rows)if(!ids.has(id))row.remove();
   for(const m of history.messages){
     let row=rows.get(m.id);
-    if(!row){row=element('article',undefined,`message ${m.role}`);const body=element('div'),label=element('div',undefined,'message-label');label.append(element('strong',messageAuthor(m)),element('span',m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status,`badge ${m.status}`));body.append(label,element('div',m.content||(m.status==='failed'?m.execution_error:'')||'Connecting to Codex…','message-content'));row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);row.dataset.message=m.id;messages.append(row);}
-    else{const badge=row.querySelector('.badge');if(badge.textContent!==(m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status)){badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;badge.className=`badge ${m.status}`;}updateMessageContent(row.querySelector('.message-content'),m.content||(m.status==='failed'?m.execution_error:'')||'Connecting to Codex…');}
-    if(m.role==='assistant'&&['queued','streaming','waiting'].includes(m.status))attachStream(m.execution_id,m.id,m.stream_cursor);
+    if(!row){row=element('article',undefined,`message ${m.role}`);const body=element('div'),label=element('div',undefined,'message-label');label.append(element('strong',messageAuthor(m)),element('span',m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status,`badge ${m.status}`));body.append(label,element('div',messageText(m),'message-content'));row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);row.dataset.message=m.id;messages.append(row);}
+    else{const badge=row.querySelector('.badge');if(badge.textContent!==(m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status)){badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;badge.className=`badge ${m.status}`;}updateMessageContent(row.querySelector('.message-content'),messageText(m));}
+
   }
+  const active=history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
+  state.execution=active?.execution_id||null;
+  $('stop-chat').hidden=!active;$('send').disabled=!!active||state.pending.has(state.project);
+  $('status-label').textContent=active?(active.status==='waiting'?recoveryLabel(active):active.status==='queued'?'Queued / connecting':'Thinking / responding'):'Ready to help';
+  if(active)attachStream(active.execution_id,active.id,active.stream_cursor);
+  updateChatActions();
   if(fresh||follow)messages.scrollTop=messages.scrollHeight;
 }
+function messageText(m){return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Connecting to Codex…':'Thinking…');}
 function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Codex result':'AI Manager';}
 function chatHasSelection(node=$('messages')){const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&selection.containsNode(node,true);}
 function shouldFollowChat(){const messages=$('messages');return !state.selectingChat&&!chatHasSelection()&&messages.scrollHeight-messages.clientHeight-messages.scrollTop<48;}
@@ -94,15 +105,27 @@ function updateMessageContent(node,text){
 $('messages').addEventListener('pointerdown',()=>{state.selectingChat=true;});
 for(const event of ['pointerup','pointercancel'])document.addEventListener(event,()=>{state.selectingChat=false;});
 function attachStream(execution,messageId,cursor=0){
-  state.source?.close();state.execution=execution;$('stop-chat').hidden=false;$('send').disabled=true;$('status-label').textContent='Thinking / responding';
-  updateChatActions();
+  state.source?.close();state.execution=execution;
+  const selection=state.selection,conversation=state.history?.conversation.id;
   const source=new EventSource(`/api/executions/${execution}/events?after=${cursor}`);state.source=source;
-  source.addEventListener('chat.delta',event=>{const data=JSON.parse(event.data),follow=shouldFollowChat();const message=state.history?.messages.find(m=>m.id===messageId);if(message)message.content=data.reset?data.delta:message.content+data.delta;const content=document.querySelector(`[data-message="${messageId}"] .message-content`);if(content)updateMessageContent(content,message?.content||((content.textContent==='Connecting to Codex…'?'':content.textContent)+data.delta));if(follow)$('messages').scrollTop=$('messages').scrollHeight;});
-  source.addEventListener('recovery.scheduled',()=>{$('status-label').textContent='Waiting for automatic recovery';loadHistory().catch(error=>notice(error.message));});
-  source.addEventListener('chat.finished',event=>{const data=JSON.parse(event.data);if(data.error)notice(data.error);});
-  source.addEventListener('stream.end',action(async()=>{source.close();if(state.source!==source)return;state.source=null;state.execution=null;$('stop-chat').hidden=true;$('send').disabled=false;$('status-label').textContent='Ready to help';await loadHistory();await refresh();}));
-  source.addEventListener('stream.auth_expired',()=>{source.close();showAuth();});
-  source.onerror=()=>{if(state.source===source)$('status-label').textContent='Reconnecting to saved stream…';};
+  const current=()=>state.source===source&&selection===state.selection&&conversation===state.history?.conversation.id&&!$('app').hidden;
+  const reconcile=()=>{if(!current())return;source.close();state.source=null;loadHistory(selection).catch(error=>notice(error.message));};
+  source.addEventListener('chat.delta',event=>{
+    if(!current()||Number(event.lastEventId)<=cursor)return;cursor=Number(event.lastEventId);
+    const data=JSON.parse(event.data),follow=shouldFollowChat(),message=state.history?.messages.find(m=>m.id===messageId);
+    if(!message)return;message.content=data.reset?data.delta:message.content+data.delta;
+    const content=document.querySelector(`[data-message="${messageId}"] .message-content`);
+    if(content)updateMessageContent(content,message.content);if(follow)$('messages').scrollTop=$('messages').scrollHeight;
+  });
+  source.addEventListener('chat.started',reconcile);
+  source.addEventListener('recovery.scheduled',reconcile);
+  source.addEventListener('chat.finished',reconcile);
+  source.addEventListener('stream.end',reconcile);
+  source.addEventListener('stream.auth_expired',()=>{if(current())showAuth();});
+  source.onerror=()=>{
+    if(!current())return;$('status-label').textContent='Checking saved response…';
+    clearTimeout(state.reconcileTimer);state.reconcileTimer=setTimeout(()=>{if(current())reconcile();},1000);
+  };
 }
 function updateChatActions(){
   const disabled=!state.history?.messages.length||state.pending.has(state.project)||!!state.execution||state.history.messages.some(m=>['queued','streaming','waiting'].includes(m.status));
@@ -197,7 +220,24 @@ function editor(title,fields,onSave){
 }
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:['active','paused','archived','removed'].map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
-$('chat-form').onsubmit=action(async event=>{event.preventDefault();const project=state.project,selection=state.selection,content=$('message-input').value;state.pending.add(project);$('send').disabled=true;try{await api('/api/chat',{method:'POST',body:JSON.stringify({project_id:project,content,conversation_id:state.history?.conversation.id,mode:$('chat-mode').value})});state.drafts.set(project,'');if(selection===state.selection){$('message-input').value='';await loadHistory(selection);}}finally{state.pending.delete(project);if(selection===state.selection&&!state.execution)$('send').disabled=false;updateChatActions();}});
+async function sendSubmission(){
+  const project=state.project,selection=state.selection;
+  if(state.pending.has(project))return;
+  let submission=submissions.get(project);
+  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:$('message-input').value,conversation_id:state.history?.conversation.id,mode:$('chat-mode').value};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
+  state.pending.add(project);$('send').disabled=true;
+  try{
+    await api('/api/chat',{method:'POST',body:JSON.stringify(submission)});
+    submissions.delete(project);saveSubmissions();
+    if(state.drafts.get(project)===submission.content)state.drafts.set(project,'');
+    if(selection===state.selection){if($('message-input').value===submission.content)$('message-input').value='';await loadHistory(selection);}
+  }catch(error){
+    if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){submissions.delete(project);saveSubmissions();}
+    else{error.ambiguous=true;error.message='Acceptance is unconfirmed. Your saved request will be checked on return or Send.';}
+    throw error;
+  }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=!!state.execution;updateChatActions();}}
+}
+$('chat-form').onsubmit=action(async event=>{event.preventDefault();await sendSubmission();});
 $('message-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('send').disabled)$('chat-form').requestSubmit();}};
 $('stop-chat').onclick=action(()=>api(`/api/executions/${state.execution}/interrupt`,{method:'POST'}));
 $('all-projects').onclick=action(()=>selectProject(null));

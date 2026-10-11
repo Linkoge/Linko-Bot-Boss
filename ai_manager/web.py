@@ -53,6 +53,7 @@ class ProjectUpdate(BaseModel):
 
 
 class MessageBody(BaseModel):
+    request_id: str | None = Field(default=None, min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     project_id: str | None = None
     content: str = Field(min_length=1, max_length=24000)
     conversation_id: str | None = None
@@ -336,7 +337,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
 
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
-        return await chat.submit(body.project_id, body.content, body.conversation_id, mode=body.mode)
+        return await chat.submit(
+            body.project_id, body.content, body.conversation_id, mode=body.mode, request_id=body.request_id
+        )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
     def task_control(task_id: str, body: TaskControl):
