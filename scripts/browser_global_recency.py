@@ -65,6 +65,9 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.locator('#login-button').click()
                 page.locator('#app').wait_for(state='visible')
                 page.wait_for_function('() => state.history')
+                assert page.evaluate('state.project') == page.evaluate("state.portfolio.projects.find(p=>p.name==='Alpha').id")
+                page.evaluate('selectProject(null)')
+                page.wait_for_function('() => state.history?.conversation.project_id === null')
                 ids = page.evaluate("Object.fromEntries(state.portfolio.projects.map(p=>[p.name,p.id]))")
                 def order():
                     return page.locator('#projects button').evaluate_all('(buttons)=>buttons.map(b=>b.dataset.project)')
@@ -127,6 +130,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                     nav = page.locator('.navigation').bounding_box()
                     assert nav['height'] <= 100
+                    page.wait_for_function("() => $('send').getBoundingClientRect().bottom <= innerHeight")
                     composer = page.locator('#send').bounding_box()
                     assert composer['y'] + composer['height'] <= height
                     page.evaluate("$('project-tabs').scrollLeft=10000")
@@ -144,6 +148,9 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.wait_for_function('() => state.history')
                 assert order()[:2] == [ids['Alpha'], '']
                 assert before == page.evaluate('JSON.stringify([state.portfolio.global_last_used_at,state.portfolio.projects])')
+                assert page.evaluate('state.project') == ids['Alpha']
+                page.evaluate('selectProject(null)')
+                page.wait_for_function('() => state.history?.conversation.project_id === null')
                 assert page.evaluate('state.history.conversation.id') == global_id
                 assert not errors, errors
                 browser.close()

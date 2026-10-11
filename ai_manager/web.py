@@ -25,6 +25,7 @@ from .execution_ui import execution_summary
 from .orchestration import Scheduler
 from .registry import Registry, git
 from .tasks import Tasks
+from .todos import Todos
 from .workers import Workers
 
 
@@ -76,6 +77,23 @@ class ChatResetBody(BaseModel):
 
 class InstructionsBody(BaseModel):
     content: str = Field(max_length=10000)
+
+
+class TodoBody(BaseModel):
+    project_id: str
+    title: str = Field(min_length=1, max_length=200)
+    details: str = Field(default="", max_length=24000)
+    revision: int | None = None
+
+
+class TodoSelection(BaseModel):
+    id: str
+    revision: int
+
+
+class TodoArchive(BaseModel):
+    project_id: str | None = None
+    selected: list[TodoSelection] = Field(min_length=1, max_length=200)
 
 
 class TaskControl(BaseModel):
@@ -301,6 +319,24 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     @app.get("/")
     def index():
         return FileResponse(static / "index.html")
+
+    @app.get("/api/todos", dependencies=[Depends(require_owner)])
+    def todo_list(project_id: str | None = None):
+        if project_id:
+            registry.get(project_id)
+        return {"entries": Todos(db).list(project_id)}
+
+    @app.post("/api/todos", dependencies=[Depends(require_owner)])
+    def todo_add(body: TodoBody):
+        return Todos(db).save(body.project_id, body.title, body.details)
+
+    @app.patch("/api/todos/{entry_id}", dependencies=[Depends(require_owner)])
+    def todo_update(entry_id: str, body: TodoBody):
+        return Todos(db).save(body.project_id, body.title, body.details, entry_id, body.revision)
+
+    @app.post("/api/todos/archive", dependencies=[Depends(require_owner)])
+    def todo_archive(body: TodoArchive):
+        return Todos(db).archive([e.model_dump() for e in body.selected], body.project_id)
 
     @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
     def portfolio(project_id: str | None = None):

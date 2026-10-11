@@ -576,6 +576,7 @@ def test_fresh_schema_contains_only_current_storage(system):
         "messages",
         "chat_archives",
         "chat_requests",
+        "todos",
         "questions",
         "sqlite_sequence",
     }

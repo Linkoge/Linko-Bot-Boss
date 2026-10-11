@@ -6,17 +6,20 @@ import logging
 
 from .recovery import SilentObserver
 from .tasks import Tasks
+from .todos import Todos
 
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Delegate or continue work, wait with a reason, pause/resume a project, or retrieve project documents, saved memory, assignments and conversation history. Read actions support offset pagination; history query searches older messages.",
+    "description": "Record/update deferred ideas with save_todo (never schedules execution), retrieve list_todos, delegate or continue work, wait with a reason, pause/resume a project, or retrieve project documents, saved memory, assignments and conversation history. Read actions support offset pagination; history query searches older messages.",
     "inputSchema": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": [
+                    "list_todos",
+                    "save_todo",
                     "delegate",
                     "continue",
                     "wait",
@@ -32,6 +35,10 @@ MANAGER_TOOL = {
             "project_id": {"type": "string"},
             "objective": {"type": "string"},
             "task_id": {"type": "string"},
+            "todo_id": {"type": "string"},
+            "title": {"type": "string"},
+            "details": {"type": "string"},
+            "revision": {"type": "integer", "minimum": 0},
             "path": {"type": "string"},
             "reason": {"type": "string"},
             "query": {"type": "string"},
@@ -99,10 +106,21 @@ class Scheduler:
                 ],
                 "next_offset": offset + 5 if len(rows) > 5 else None,
             }
+        if action == "list_todos":
+            project_id = args.get("project_id") or selected_project
+            if selected_project and selected_project != project_id:
+                raise ValueError("To-Do belongs to another project")
+            rows = Todos(self.db).list(project_id)
+            rows = [r for r in rows if args.get("query", "").lower() in (r['title']+' '+r['details']).lower()]
+            return {"entries": rows[offset:offset+20], "next_offset": offset+20 if len(rows)>offset+20 else None}
         project_id = args.get("project_id") or selected_project
         if not project_id or (selected_project and selected_project != project_id):
             raise ValueError("Select the intended project; cross-project work requires All Projects context")
         project = self.registry.get(project_id)
+        if action == "save_todo":
+            # Deferred recording is allowed in every mode and never calls Tasks.add/control.
+            return Todos(self.db).save(project_id, args["title"], args.get("details", ""),
+                                       args.get("todo_id"), args.get("revision"))
         if params.get("mode") == "conversation" and action not in {
             "read_document",
             "read_memory",

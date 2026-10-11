@@ -1,3 +1,13 @@
+# Startup / To-Do candidate — activation pending, 2026-10-12
+
+Read [docs/STARTUP_TODO.md](docs/STARTUP_TODO.md) and the linked private REPORT.md for the reviewed isolated
+candidate, current live baseline, preservation, verified backup/migration receipts and authorized external cutover.
+Actual live release is 9e5c518, schema10; the older mobile-patch “pending” text below is historical.
+The worker belongs to the manager service cgroup and cannot safely activate itself. No live assets/service or
+production schema were modified. Startup follows durable context recency including global; zero Tasks badges are
+hidden; durable To-Do is separate from execution and retains the deferred memory proposal via a source link.
+Preserve the dirty live TASKS.md preimage before integration; no unrelated files may be reset. No remote push.
+
 # Prepared mobile/project UI patch — 2026-10-12
 
 This delivery is prepared in the private standalone checkout, not activated in the live source/service. Base is the already deployed combined chat-reliability/All Projects release bd757456ecc81d495270c5619b5f8da3fa76abc8. Preserve later external integration changes; apply/review this focused commit or patch against the actual live HEAD. No worker service restart or live asset modification was performed.

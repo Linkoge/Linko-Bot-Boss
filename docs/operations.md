@@ -4,13 +4,23 @@ The existing dedicated `linko-bot-manager.service` serves the repository using i
 
 ## Daily use
 
-Choose a project and describe the objective naturally. Conversation is read-only; Auto delegates requested work; Execute sends an objective through the same manager path. Discussion does not require a coding assignment. Requested coding work is delegated as one complete objective; results return automatically in chat. Different projects execute concurrently, one worker per project. No scheduler scope, batch budget, permission profile or verification commands need configuration.
+Choose a project and describe the objective naturally. Conversation allows deferred To-Do recording and otherwise is read-only; Auto delegates requested work; Execute sends an objective through the same manager path. Discussion does not require a coding assignment. Requested coding work is delegated as one complete objective; results return automatically in chat. Different projects execute concurrently, one worker per project. No scheduler scope, batch budget, permission profile or verification commands need configuration.
 
 Tasks shows durable objectives and waiting reasons. Continue resumes the same objective with a new attempt and retained native thread; Stop interrupts live execution. Pause preserves deliberate waiting. Cancel is terminal. Project pause prevents future dispatch; stop an active worker separately when needed. Agents retains native output, errors and thread/turn references. Completed means worker-reported completion, not independent certification.
 
 Question prompts bind the exact native request to the execution. Explicit answers are required. Stale questions expire when the worker ends; continuation asks afresh. Archived origin results are delivered in that exact archived conversation. Clearing a conversation preserves its assignments but discards later delivery to the deleted origin.
 
 Historical unfinished tasks remain waiting after the simplification migration. Continue explicitly only when that objective is still wanted; Codex receives historical workspace/output references and inspects actual source before proceeding. Old completed/cancelled/failed dispositions and supervision evidence remain historical. There is no automatic clone merge or old-operation replay.
+
+## Future ideas
+
+To-Do immediately follows Agents. It is the authoritative project backlog, distinct from executable Tasks.
+All Projects lists every project's ideas; adding there requires a project. Add/Edit records future work without
+scheduling it. Select entries and Delete selected to archive only those ideas, retaining their data and audit.
+Changed revisions reject stale edits/deletion atomically. The manager uses list_todos/save_todo in every mode
+for future requests; explicit later scheduling is a separate assignment. The linked memory-compaction proposal
+remains deferred. Startup chooses the highest existing meaningful-use context, including global, with the same
+name/ID tie ordering as navigation; viewing, reloading, polling and To-Do edits do not manufacture recency.
 
 ## Restart and recovery
 

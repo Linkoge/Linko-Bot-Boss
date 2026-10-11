@@ -63,6 +63,8 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.locator('#password').fill('fixture-private-password')
                 page.locator('#setup-token').fill((root/'data/setup-token').read_text())
                 page.locator('#login-button').click()
+                page.wait_for_function('() => state.history')
+                page.evaluate('selectProject(null)')
                 page.wait_for_function('() => state.history && state.portfolio.tasks.length===2')
                 # Observe the untouched baseline with a keyboard overlay simulation.
                 baseline = page.context.new_page()

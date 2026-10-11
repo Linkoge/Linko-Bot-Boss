@@ -46,6 +46,12 @@ CREATE INDEX IF NOT EXISTS messages_conversation ON messages(conversation_id,cre
 CREATE TABLE IF NOT EXISTS chat_requests(
  owner_id INTEGER NOT NULL, request_id TEXT NOT NULL, payload_hash TEXT NOT NULL,
  receipt TEXT NOT NULL, created_at REAL NOT NULL, PRIMARY KEY(owner_id,request_id));
+CREATE TABLE IF NOT EXISTS todos(
+ id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL,
+ details TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0,
+ source_task_id TEXT UNIQUE REFERENCES tasks(id), created_at REAL NOT NULL, updated_at REAL NOT NULL,
+ archived_at REAL);
+CREATE INDEX IF NOT EXISTS todos_project ON todos(project_id,archived_at);
 CREATE TABLE IF NOT EXISTS chat_archives(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
  title TEXT NOT NULL, archived_at REAL NOT NULL);
@@ -134,6 +140,10 @@ class Database:
                     WHERE finished_at IS NULL""")
                 conn.execute("INSERT INTO schema_version VALUES(9)")
             conn.execute("INSERT OR IGNORE INTO schema_version VALUES(10)")
+            if not conn.execute("SELECT 1 FROM schema_version WHERE version=11").fetchone():
+                from .todos import migrate_deferred
+                migrate_deferred(conn)
+                conn.execute("INSERT INTO schema_version VALUES(11)")
             conn.commit()
         self.path.chmod(0o600)
 

@@ -309,7 +309,12 @@ class AppServer:
 
 MANAGER_INSTRUCTIONS = """Delegate requested work to Codex as one complete objective with relevant conversational decisions.
 Assignments need only the objective, user constraints and necessary dependencies. Honor explicitly requested distinct workers.
-Conversation mode is read-only. Auto delegates requested work; Execute treats the message as a work objective.
+Future ideas, backlog requests, "later", "not now" and deferred work must be recorded or updated with manager_action
+save_todo, never delegate/continue/wait or schedule execution. First use list_todos to reuse the existing entry;
+keep its details and source references when updating. In All Projects, choose the intended project or ask if unclear.
+To-Do is the authoritative durable backlog, distinct from execution Tasks. Implement a To-Do only after explicit
+owner scheduling as a separate assignment; recording, opening, editing and deleting To-Do never dispatches work.
+Conversation mode permits deferred recording with save_todo, otherwise is read-only. Auto delegates requested work; Execute treats the message as a work objective.
 Reuse unfinished assignments for repeated requests; continue the same assignment when its objective needs more work.
 After delegation or continuation, acknowledge it and end the turn: worker results automatically resume this conversation.
 Report the actual worker result and status. If it needs confirmation or cannot proceed, record wait with a reason
