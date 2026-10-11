@@ -43,7 +43,10 @@ async def test_only_accepted_submissions_and_assignments_update_recency(system, 
     registry.update(project['id'], project['revision'], {'display_name': 'Renamed'})
     db.set_setting('unrelated', 'preserved')
     assert db.setting('global_last_used_at') == 0
-    assert registry.get(project['id'])['last_used_at'] == 0
+    renamed = registry.get(project['id'])
+    assert renamed['last_used_at'] == 0
+    for field in ('id', 'name', 'path', 'repository', 'agent_id', 'created_at'):
+        assert renamed[field] == project[field]
     with pytest.raises(ValueError):
         await chat.submit(None, ' ')
     await chat.submit(None, 'Portfolio discussion', mode='conversation')

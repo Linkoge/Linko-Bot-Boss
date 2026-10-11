@@ -55,7 +55,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
         try:
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch()
-                page = browser.new_page()
+                page = browser.new_page(has_touch=True)
                 errors = []
                 page.on('pageerror', lambda error: errors.append(str(error)))
                 page.goto(base)
@@ -89,6 +89,9 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 assert page.evaluate('document.activeElement.dataset.project') == ''
                 page.keyboard.press('Escape')
                 assert page.locator('#project-menu').is_hidden()
+                page.locator('#all-projects').focus()
+                page.evaluate('refresh()')
+                assert page.evaluate('document.activeElement.id') == 'all-projects'
                 page.locator('#message-input').fill('Global meaningful submission')
                 page.locator('#send').click()
                 page.wait_for_function("() => state.history?.messages.some(m=>m.content==='Saved streamed answer') && !state.execution")
@@ -127,8 +130,8 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     composer = page.locator('#send').bounding_box()
                     assert composer['y'] + composer['height'] <= height
                     page.evaluate("$('project-tabs').scrollLeft=10000")
-                    page.locator('#project-menu-button').click()
-                    page.locator('#project-menu [data-project=""]').click()
+                    page.locator('#project-menu-button').tap()
+                    page.locator('#project-menu [data-project=""]').tap()
                     assert page.locator('#project-menu').is_hidden()
                     assert page.evaluate('state.project') is None
                     page.screenshot(path=f'/tmp/linko-global-recency-{width}x{height}.png')
