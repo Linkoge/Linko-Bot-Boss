@@ -80,6 +80,7 @@ class AppServer:
     def __init__(self, settings: Settings, native=False):
         self.settings = settings
         self.process = None
+        self.process_identity = None
         self.pending = {}
         self.queues = {}
         self.serial = 0
@@ -112,6 +113,7 @@ class AppServer:
                 start_new_session=True,
                 limit=8 * 1024 * 1024,
             )
+            self.process_identity = process_start(self.process.pid)
             self.reader = asyncio.create_task(self._read(self.process))
             # Drain stderr without storing arbitrary inherited diagnostics or credentials.
             self.stderr_reader = asyncio.create_task(self._drain(self.process.stderr))
@@ -273,6 +275,10 @@ class AppServer:
         for job in list(self.tool_jobs):
             job.cancel()
         await asyncio.gather(*list(self.tool_jobs), return_exceptions=True)
+        if self.process and self.process_identity:
+            current = process_start(self.process.pid)
+            if current and current != self.process_identity:
+                return  # Never signal a recycled PID's unrelated group.
         if self.process and self.process.returncode is None:
             # Terminate only the dedicated process group this instance created.
             try:
@@ -284,6 +290,13 @@ class AppServer:
             except TimeoutError:
                 os.killpg(self.process.pid, signal.SIGKILL)
                 await self.process.wait()
+        if self.process and self.process.returncode is not None:
+            # The parent can exit before its command children. Clear the dedicated
+            # group before the caller releases the project claim, even after EOF.
+            try:
+                os.killpg(self.process.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
         if self.reader and self.reader is not asyncio.current_task():
             await asyncio.gather(self.reader, return_exceptions=True)
         if self.stderr_reader:

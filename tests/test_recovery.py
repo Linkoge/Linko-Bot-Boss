@@ -912,3 +912,54 @@ async def test_native_internal_retry_success_does_not_schedule_application_retry
     row = db.one("SELECT * FROM executions WHERE agent_id=?", ("execution" if role == "worker" else "manager",))
     assert row["status"] == "completed" and row["retry_count"] == 0 and row["error"] == ""
     assert len(faults.calls) == 1 and not db.all("SELECT * FROM events WHERE kind='recovery.scheduled'")
+
+
+@pytest.mark.asyncio
+async def test_close_reaps_owned_group_children_after_app_server_parent_death(system, tmp_path):
+    import sys
+
+    _, _, _, settings = system
+    ready = tmp_path / "child.pid"
+    program = "import subprocess,sys,time; from pathlib import Path; child=subprocess.Popen([sys.executable,'-c','import time; time.sleep(60)'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL); Path(sys.argv[1]).write_text(str(child.pid)); time.sleep(60)"
+    server = AppServer(settings)
+    server.process = await asyncio.create_subprocess_exec(
+        sys.executable, "-c", program, str(ready), start_new_session=True
+    )
+    server.process_identity = process_start(server.process.pid)
+    try:
+        for _ in range(200):
+            if ready.exists():
+                break
+            await asyncio.sleep(0.01)
+        child_pid = int(ready.read_text())
+        assert os.getpgid(child_pid) == server.process.pid
+        os.kill(server.process.pid, signal.SIGKILL)
+        await server.process.wait()
+        assert process_start(child_pid) is not None
+        await server.close()
+        for _ in range(100):
+            if process_start(child_pid) is None:
+                break
+            await asyncio.sleep(0.01)
+        assert process_start(child_pid) is None, "Owned command child survived its App Server and could still write"
+    finally:
+        try:
+            os.killpg(server.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        await server.process.wait()
+
+
+@pytest.mark.asyncio
+async def test_close_never_signals_recycled_parent_pid(system, monkeypatch):
+    _, _, _, settings = system
+    server = AppServer(settings)
+    server.process = SimpleNamespace(pid=12345, returncode=0)
+    server.process_identity = "original-birth"
+    monkeypatch.setattr("ai_manager.codex.process_start", lambda pid: "recycled-birth")
+
+    def unexpected_signal(*args):
+        raise AssertionError("Unrelated recycled process group was signalled")
+
+    monkeypatch.setattr("ai_manager.codex.os.killpg", unexpected_signal)
+    await server.close()
