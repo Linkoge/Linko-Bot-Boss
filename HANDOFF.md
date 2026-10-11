@@ -1,3 +1,13 @@
+# Prepared mobile/project UI patch — 2026-10-12
+
+This delivery is prepared in the private standalone checkout, not activated in the live source/service. Base is the already deployed combined chat-reliability/All Projects release bd757456ecc81d495270c5619b5f8da3fa76abc8. Preserve later external integration changes; apply/review this focused commit or patch against the actual live HEAD. No worker service restart or live asset modification was performed.
+
+Composer now measures the visual viewport once and flexes below the measured navigation. Tasks/Agents refresh requests bind to the selected project with stale-response guards. Task creation and confirmed agent work-start timestamps display minutes in Asia/Tbilisi; Agents counts only confirmed running turns without pending questions or paused task state. A single durable execution predicate drives the count, independently of the displayed history limit.
+
+Authorized archival is already persisted: all 65 pre-request inactive objectives remain in SQLite/audit history; unfinished old work was cancelled, completed work retained its lifecycle. Current/new/running work and the pending external release assignment are preserved. The clear-visible filter takes effect with this patch; do not dispatch/resume archived work. Future execution routes are now explicitly gpt-6.1-sol/medium; the active turn was preserved. Global instructions/native history/artifacts/dependencies were retained.
+
+Full implementation, self-review, validation, cleanup receipts, verified pre-cleanup backup, model catalog, screenshots and external activation instructions: /home/codex/.local/share/linko-bot-manager/deployments/mobile-project-ui-20261012/REPORT.md. Task-linked evidence is retained for assignment 184139effe324fc7a3ae6a46e8834137. Physical Android/iOS keyboard behavior and the unavailable owner screenshot were not reproduced; Chromium covers reduced, overlay, panned and simulated safe-area viewports. Deployment remains an external-session action after the current worker finishes.
+
 # Operations handoff
 
 Read [README.md](README.md), [docs/operations.md](docs/operations.md) and [docs/AUTOMATIC_RECOVERY.md](docs/AUTOMATIC_RECOVERY.md) for the current workflow, deployment and validation.

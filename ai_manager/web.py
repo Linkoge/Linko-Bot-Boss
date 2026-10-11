@@ -21,6 +21,7 @@ from .chat import ROLES, Chat
 from .codex import AppServer, CodexError
 from .config import Settings
 from .db import Database
+from .execution_ui import execution_summary
 from .orchestration import Scheduler
 from .registry import Registry, git
 from .tasks import Tasks
@@ -302,14 +303,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
         return FileResponse(static / "index.html")
 
     @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
-    def portfolio():
+    def portfolio(project_id: str | None = None):
+        if project_id:
+            registry.get(project_id)
         return {
+            "scope_project_id": project_id,
             "projects": registry.list(),
             "global_last_used_at": db.setting("global_last_used_at", 0),
-            "tasks": tasks.list(),
-            "executions": db.all("SELECT * FROM executions ORDER BY started_at DESC LIMIT 100"),
+            "tasks": tasks.list(project_id),
+            **execution_summary(db, project_id),
             "questions": db.all(
                 "SELECT q.*,e.project_id,e.task_id FROM questions q JOIN executions e ON e.id=q.execution_id WHERE q.status='pending'"
+                + (" AND e.project_id=?" if project_id else ""),
+                (project_id,) if project_id else (),
             ),
             "capacity": settings.max_workers,
             "queue_error": scheduler.error,
@@ -356,6 +362,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
         }
         return {
             "task": tasks.get(task_id),
+            "evidence": db.all(
+                "SELECT payload,created_at FROM events WHERE task_id=? AND kind='task.evidence' ORDER BY seq DESC LIMIT 5",
+                (task_id,),
+            ),
             "executions": db.all("SELECT * FROM executions WHERE task_id=? ORDER BY started_at", (task_id,)),
             **historical,
         }

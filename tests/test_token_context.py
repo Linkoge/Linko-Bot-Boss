@@ -92,6 +92,11 @@ async def test_old_history_tasks_and_memory_are_retrievable_in_conversation_mode
     assert history["messages"][0]["id"] == "message-0"
     assert (await read("read_history", message_id="message-0"))["content"] == "original authorized goal"
     assert len((await read("read_task", task_id=task["id"]))["description"]) > 1000
+    with db.transaction() as conn:
+        db.event(conn, "task.evidence", {"report": "/private/report.md", "status": "prepared"}, project["id"], task["id"])
+    assert (await read("read_task", task_id=task["id"]))["evidence"] == [
+        {"report": "/private/report.md", "status": "prepared"}
+    ]
     assert (await read("list_tasks"))["assignments"][0]["description_truncated"]
     assert (await read("read_memory", path="DECISIONS.md"))["next_offset"] == 12000
     assert (await read("read_memory", path="DECISIONS.md", offset=12000))["content"]

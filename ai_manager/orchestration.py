@@ -193,7 +193,11 @@ class Scheduler:
                 output = result["output"]
                 result["output"] = output[offset : offset + 12000]
                 result["next_offset"] = offset + 12000 if len(output) > offset + 12000 else None
-            return {**self.tasks.context(task), "result": result}
+            evidence = self.db.all(
+                "SELECT payload FROM events WHERE task_id=? AND kind='task.evidence' ORDER BY seq DESC LIMIT 5",
+                (task["id"],),
+            )
+            return {**self.tasks.context(task), "result": result, "evidence": [json.loads(e["payload"]) for e in evidence]}
         if action == "read_memory":
             row = self.db.one("SELECT content FROM memory WHERE project_id=? AND name=?", (project_id, args["path"]))
             if not row:

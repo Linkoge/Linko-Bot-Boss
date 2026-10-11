@@ -1,5 +1,6 @@
 """Durable objectives and exclusive project claims. Legacy columns are history only."""
 
+import json
 import time
 
 from .db import new_id
@@ -34,7 +35,36 @@ class Tasks:
             + " ORDER BY t.created_at DESC",
             (project_id,) if project_id else (),
         )
-        return [self.record(row) for row in rows]
+        archived = self.db.setting("archived_tasks", {})
+        return [self.record(row) for row in rows if row["id"] not in archived]
+
+    def archive_before(self, cutoff, preserve=()):
+        """Clear old inactive objectives without deleting history or changing dependencies.
+
+        A fixed creation cutoff protects this request and later descendants. Leases
+        and unfinished executions are checked under the same write lock as archival.
+        """
+        with self.db.transaction() as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='archived_tasks'").fetchone()
+            archived = json.loads(row[0]) if row else {}
+            candidates = conn.execute("""SELECT * FROM tasks t WHERE created_at<?
+                AND lifecycle IN ('waiting','queued','failed','cancelled','completed') AND lease_owner IS NULL
+                AND NOT EXISTS(SELECT 1 FROM executions e WHERE e.task_id=t.id AND e.finished_at IS NULL)
+                ORDER BY created_at,id""", (cutoff,)).fetchall()
+            cleared = []
+            for task in candidates:
+                if task["id"] in preserve or task["id"] in archived:
+                    continue
+                archived[task["id"]] = {"at": time.time(), "previous_lifecycle": task["lifecycle"], "cutoff": cutoff}
+                # Never leave hidden legacy work eligible for a future dispatch.
+                if task["lifecycle"] in {"waiting", "queued", "failed"}:
+                    conn.execute("""UPDATE tasks SET lifecycle='cancelled',revision=revision+1,
+                        updated_at=? WHERE id=?""", (time.time(), task["id"]))
+                self.db.event(conn, "task.archived", archived[task["id"]], task["project_id"], task["id"])
+                cleared.append(task["id"])
+            conn.execute("""INSERT INTO settings VALUES('archived_tasks',?)
+                ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (json.dumps(archived),))
+            return cleared
 
     def add(self, project_id, description, origin_conversation=None, request_key=None):
         if not description.strip() or len(description) > 24000:
@@ -77,6 +107,8 @@ class Tasks:
                 raise ValueError("Assignment changed; refresh before editing")
             if task["lifecycle"] == "running" or task["lease_owner"]:
                 raise ValueError("Stop the active worker before changing this assignment")
+            if task_id in self.db.setting("archived_tasks", {}):
+                raise ValueError("Assignment was archived; its history is preserved")
             if task["lifecycle"] == "cancelled":
                 raise ValueError("Assignment was cancelled")
             status = {"continue": "queued", "pause": "waiting", "cancel": "cancelled"}.get(action)
@@ -101,6 +133,8 @@ class Tasks:
                 return None
             row = conn.execute("""SELECT t.*,p.path FROM tasks t JOIN projects p ON p.id=t.project_id
                 WHERE t.lifecycle='queued' AND p.status='active'
+                AND NOT EXISTS(SELECT 1 FROM settings s,json_each(s.value) a
+                    WHERE s.key='archived_tasks' AND a.key=t.id)
                 AND NOT EXISTS(SELECT 1 FROM tasks busy WHERE busy.project_id=t.project_id AND busy.lease_owner IS NOT NULL)
                 ORDER BY p.priority DESC,t.created_at LIMIT 1""").fetchone()
             if not row:

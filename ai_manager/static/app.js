@@ -19,7 +19,21 @@ function actionResult(result){notice(`${result.result||'accepted'}: ${result.mes
 function showAuth(){state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh();await selectProject(state.project);}
-async function refresh(){state.portfolio=await api('/api/portfolio');renderProjects();renderTasks();renderAgents();renderQuestions();$('task-count').textContent=state.portfolio.tasks.filter(t=>['queued','running','waiting'].includes(t.status)).length;if(state.portfolio.queue_error)notice(state.portfolio.queue_error);if(!state.source&&!state.pending.has(state.project))await loadHistory();}
+let refreshVersion=0;
+async function refresh(loadChat=true){
+  const version=++refreshVersion,selection=state.selection,project=state.project;
+  const portfolio=await api('/api/portfolio'+(project?'?project_id='+encodeURIComponent(project):''));
+  if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return;
+  state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();
+  if(portfolio.queue_error)notice(portfolio.queue_error);
+  if(loadChat&&!state.source&&!state.pending.has(project))await loadHistory(selection);
+}
+function localTime(timestamp){
+  if(timestamp===null||timestamp===undefined)return 'Not recorded';
+  return new Intl.DateTimeFormat(undefined,{timeZone:'Asia/Tbilisi',year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(timestamp*1000))+' · Tbilisi';
+}
+function timestamp(label,value){const time=element('time',label+' '+localTime(value),'record-time');if(value!==null&&value!==undefined)time.dateTime=new Date(value*1000).toISOString();return time;}
+
 const displayName = p => p ? p.display_name || p.name : 'All Projects';
 const compareContexts = (a,b) => displayName(a).localeCompare(displayName(b),undefined,{sensitivity:'base'})||(a?.id||'').localeCompare(b?.id||'');
 const contextRecency = p => p ? p.last_used_at||0 : state.portfolio.global_last_used_at||0;
@@ -61,13 +75,29 @@ $('project-menu').onkeydown=event=>{
   if(event.key==='Tab')closeProjectMenu();
 };
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#project-menu')&&!event.target.closest('#project-menu-button'))closeProjectMenu();});
-async function selectProject(id){state.drafts.set(state.project,$('message-input').value);const selection=++state.selection;state.project=id;state.detail=null;state.source?.close();state.source=null;state.execution=null;state.history=null;$('messages').replaceChildren();$('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';$('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderProjects();renderTasks();renderAgents();renderQuestions();if(state.view==='memory')await loadMemory(selection);if(state.view==='search')await searchHistory();await loadHistory(selection);if(selection===state.selection&&submissions.has(id))await sendSubmission();}
+async function selectProject(id){
+  state.drafts.set(state.project,$('message-input').value);
+  const selection=++state.selection;
+  state.project=id;state.detail=null;state.source?.close();state.source=null;
+  state.execution=null;state.history=null;$('messages').replaceChildren();
+  $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';
+  $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);
+  state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],active_agents:0};
+  renderProjects();renderTasks();renderAgents();renderQuestions();
+  await refresh(false);
+  if(selection!==state.selection)return;
+  if(state.view==='memory')await loadMemory(selection);
+  if(state.view==='search')await searchHistory();
+  await loadHistory(selection);
+  if(selection===state.selection&&submissions.has(id))await sendSubmission();
+}
+
 function projectName(id){const p=state.portfolio?.projects.find(p=>p.id===id);return p?displayName(p):'All Projects';}
 async function loadMemory(selection=state.selection){if(!state.project)return;const detail=await api(`/api/projects/${state.project}`);if(selection!==state.selection)return;state.detail=detail;renderMemory();}
 function renderMemory(){$('memory-list').replaceChildren();if(!state.detail){$('memory-list').append(element('p','Select a project to read historical owner notes.'));return;}for(const m of state.detail.memory){const d=element('details');d.append(element('summary',m.name),element('pre',m.content));$('memory-list').append(d);}if(!state.detail.memory.length)$('memory-list').append(element('p','Project context comes from its repository and instructions.'));}
 function recoveryLabel(record){const reasons={connection:'Waiting for connection',usage:'Waiting for usage limit',interrupted:'Recovering interrupted execution'};return (reasons[record.recovery_reason]||'Waiting')+(record.retry_at?' · Next attempt '+new Date(record.retry_at*1000).toLocaleString():'');}
-function renderTasks(){$('task-list').replaceChildren();for(const t of state.portfolio.tasks.filter(t=>!state.project||t.project_id===state.project)){const row=element('article',undefined,'panel');row.append(element('h3',`${t.status} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.retry_at?recoveryLabel(t):t.blocker));if(t.legacy&&!['completed','cancelled','failed'].includes(t.status))row.append(element('small','Historical work: continuation inspects existing source and saved results.'));if(!t.lease_owner&&t.status!=='cancelled'){for(const a of ['continue','pause','cancel']){if(a==='continue'&&t.status==='queued')continue;const b=element('button',a);b.onclick=action(async()=>{await api(`/api/tasks/${t.id}`,{method:'PATCH',body:JSON.stringify({action:a,revision:t.revision})});await refresh();});row.append(b);}}const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});row.append(records);$('task-list').append(row);}}
-function renderAgents(){$('agent-list').replaceChildren();for(const e of state.portfolio.executions.filter(e=>!state.project||e.project_id===state.project)){const row=element('article',undefined,'panel');row.append(element('h3',`${e.agent_id} · ${e.status} · ${projectName(e.project_id)}`));const d=element('details');d.append(element('summary','Output and execution references'),element('pre',[e.output,e.error,e.thread_id,e.turn_id].filter(Boolean).join('\n')));row.append(d);if(!e.finished_at){const b=element('button','Stop');b.onclick=action(async()=>{await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});await refresh();});row.append(b);}$('agent-list').append(row);}}
+function renderTasks(){$('task-count').textContent=state.portfolio.tasks.filter(t=>(!state.project||t.project_id===state.project)&&['queued','running','waiting'].includes(t.status)).length;$('task-list').replaceChildren();for(const t of state.portfolio.tasks.filter(t=>!state.project||t.project_id===state.project)){const row=element('article',undefined,'panel');row.append(element('h3',`${t.status} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.retry_at?recoveryLabel(t):t.blocker));if(t.legacy&&!['completed','cancelled','failed'].includes(t.status))row.append(element('small','Historical work: continuation inspects existing source and saved results.'));const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));if(!t.lease_owner&&t.status!=='cancelled'){for(const a of ['continue','pause','cancel']){if(a==='continue'&&t.status==='queued')continue;const b=element('button',a);b.onclick=action(async()=>{await api(`/api/tasks/${t.id}`,{method:'PATCH',body:JSON.stringify({action:a,revision:t.revision})});await refresh();});controls.append(b);}}const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});controls.append(records);row.append(controls);$('task-list').append(row);}}
+function renderAgents(){const count=state.portfolio.active_agents||0,badge=$('agent-count'),scope=projectName(state.project);badge.textContent=count;badge.hidden=count===0;badge.title=`${count} working · ${scope}`;document.querySelector('[data-view=agents]').setAttribute('aria-label',`Agents · ${scope}${count?' · '+count+' working':''}`);$('agent-list').replaceChildren();for(const e of state.portfolio.executions.filter(e=>!state.project||e.project_id===state.project)){const row=element('article',undefined,'panel');row.append(element('h3',`${e.agent_id} · ${e.status} · ${projectName(e.project_id)}`));row.append(e.work_started_at!=null?timestamp('Work started',e.work_started_at):element('small',['queued','starting'].includes(e.status)?'Work has not started':'Work start not recorded'));row.append(timestamp('Queued',e.started_at));const d=element('details');d.append(element('summary','Output and execution references'),element('pre',[e.output,e.error,e.thread_id,e.turn_id].filter(Boolean).join('\n')));row.append(d);if(!e.finished_at){const b=element('button','Stop');b.onclick=action(async()=>{await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});await refresh();});row.append(b);}$('agent-list').append(row);}}
 function renderQuestions(){$('questions').replaceChildren();for(const q of state.portfolio.questions.filter(q=>!state.project||q.project_id===state.project)){const request=JSON.parse(q.request),form=element('form',undefined,'panel');form.append(element('h3','Codex needs your answer · '+projectName(q.project_id)));if(q.kind==='item/tool/requestUserInput'){for(const question of request.questions){const label=element('label',question.question),input=element('input');input.name=question.id;input.required=true;if(question.options)label.append(element('small',question.options.map(x=>x.label).join(' / ')));label.append(input);form.append(label);}form.append(element('button','Send answer','primary'));form.onsubmit=action(async event=>{event.preventDefault();await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:Object.fromEntries(new FormData(form))})});await refresh();});}else{form.append(element('pre',JSON.stringify(request,null,2)));for(const [label,approve] of [['Confirm exact action',true],['Decline',false]]){const b=element('button',label);b.type='button';b.onclick=action(async()=>{await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:{approve}})});await refresh();});form.append(b);}}$('questions').append(form);}}
 async function loadHistory(selection=state.selection){
   if(selection!==state.selection)return;
@@ -216,7 +246,7 @@ async function openSavedHistory(id,older=false,search=''){
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
-function showView(view){state.view=view;if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));}
+function showView(view){state.view=view;$('app').classList.toggle('chat-layout',view==='chat');if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));}
 function editor(title,fields,onSave){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}
@@ -260,3 +290,17 @@ setInterval(()=>{if(!$('app').hidden)refresh().catch(error=>notice(error.message
 boot().catch(error=>notice(error.message));
 
 function renameProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'display_name',label:'Display name',value:p.display_name||''}],values=>api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,revision:p.revision})}));}
+
+// Use the visible viewport once: do not subtract keyboard height or safe area twice.
+function updateViewport(){
+  const viewport=window.visualViewport;
+  // Pinch zoom should retain normal document navigation rather than resize chat.
+  const unzoomed=!viewport||Math.abs(viewport.scale-1)<0.01;
+  const height=unzoomed&&viewport?viewport.height:window.innerHeight;
+  document.documentElement.style.setProperty('--app-height',height+'px');
+  document.documentElement.style.setProperty('--viewport-top',(unzoomed&&viewport?viewport.offsetTop:0)+'px');
+}
+window.addEventListener('resize',updateViewport);
+window.visualViewport?.addEventListener('resize',updateViewport);
+window.visualViewport?.addEventListener('scroll',updateViewport);
+updateViewport();

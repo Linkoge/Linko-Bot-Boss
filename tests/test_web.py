@@ -112,3 +112,28 @@ def test_owner_request_receipt_replay_and_changed_payload_conflict(client):
     assert browser.post("/api/chat", json=body | {"content": "Changed"}).status_code == 409
     assert len(app.state.db.all("SELECT * FROM messages WHERE role='user'")) == 1
     assert len(app.state.db.all("SELECT * FROM executions")) == 1
+
+
+def test_portfolio_project_scope_never_reassigns_tasks(client):
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    one = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    two = app.state.registry.add(settings.project_roots[0] / 'two')['id']
+    tasks = app.state.scheduler.tasks
+    a, b = tasks.add(one, 'A'), tasks.add(two, 'B')
+    # Keep this read-only scope fixture independent of scheduler dispatch.
+    with app.state.db.transaction() as conn:
+        conn.execute("UPDATE tasks SET lifecycle='waiting'")
+    assert {t['id'] for t in browser.get('/api/portfolio').json()['tasks']} == {a['id'], b['id']}
+    for project, expected in ((one, a['id']), (two, b['id']), (one, a['id'])):
+        result = browser.get('/api/portfolio', params={'project_id': project}).json()
+        assert result['scope_project_id'] == project
+        assert [t['id'] for t in result['tasks']] == [expected]
+        assert all(e['project_id'] == project for e in result['executions'])
+    with app.state.db.transaction() as conn:
+        app.state.db.event(conn, 'task.evidence', {'report': '/private/report.md'}, one, a['id'])
+    evidence = browser.get(f"/api/tasks/{a['id']}/execution-records").json()['evidence']
+    assert '/private/report.md' in evidence[0]['payload']
+    assert tasks.get(a['id'])['project_id'] == one
+    assert tasks.get(b['id'])['project_id'] == two
+    assert browser.get('/api/portfolio?project_id=unknown').status_code == 409

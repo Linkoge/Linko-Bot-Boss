@@ -160,6 +160,7 @@ def main():
                     state.view='memory';
                     window.delayedNavigation=selectProject(alpha.id);
                 }""")
+                page.wait_for_function("() => typeof window.releaseNavigation === 'function'")
                 page.evaluate("""async () => {
                     state.view='chat';
                     await selectProject(state.portfolio.projects.find(p=>p.name==='Beta').id);

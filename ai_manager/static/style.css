@@ -42,3 +42,14 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 #chat-notice{position:fixed;top:calc(100px + env(safe-area-inset-top));right:12px;z-index:25;max-width:min(420px,calc(100vw - 24px));padding:10px 14px;border:1px solid #365449;border-radius:8px;background:#213932;color:#bdf4de;box-shadow:0 6px 20px #0006;font-size:12px;overflow-wrap:anywhere;pointer-events:none}
 
 .clipboard-fallback{position:fixed;left:-9999px;top:0;width:1px;height:1px;opacity:0}
+
+/* Chat fills the visible viewport; flex measures navigation and toolbar naturally. */
+.app.chat-layout{position:fixed;inset-inline:0;top:var(--viewport-top,0px);height:var(--app-height,100dvh);min-height:0;overflow:hidden}
+.chat-layout main{height:100%;display:flex;flex-direction:column;padding-bottom:0}
+.chat-layout .navigation{flex:none}
+.chat-layout .chat-view{flex:1;height:auto;min-height:0;overflow:hidden}
+.chat-layout .composer-area{padding-bottom:max(6px,env(safe-area-inset-bottom))}
+.composer textarea{font-size:16px}
+.task-controls{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.record-time{display:block;color:var(--muted);font-size:12px}
+.task-controls .record-time{margin-right:auto}
