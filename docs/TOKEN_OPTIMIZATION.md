@@ -133,4 +133,16 @@ Validation:
 
 Release implementation is prepared and validated in a separate checkout. Deployment follows `docs/operations.md`: verified online database backup and startup rehearsal, idle-execution check, stop only the dedicated user service, fast-forward the installed repository, start the same backend, verify commit/scheduler through the API, private HTTPS, assets and all preserved database records. No frontend rebuild or separate frontend restart is necessary: this backend serves the unchanged static frontend.
 
-Deployment receipt and implementation commit will be appended after the actual restart and checks.
+**Implementation commit:** `fb5fa2c570f89969eb966c4e6e89077d8878f1a2`.
+
+**Deployed and verified:** the installed repository was fast-forwarded and `linko-bot-manager.service` safely restarted at **2026-10-11 19:07:15 +04**. The backend is active/running with exit status 0. Loopback and existing private HTTPS returned HTTP 200 for the web interface and API. The API reported the implementation commit and an active scheduler; served HTML/JavaScript/CSS matched release files. Startup/shutdown logs contained no errors. The existing daily backup timer remains active. Automatic continuation was validated by the real acceptance chain and persisted-delivery regression tests; no inference test was run on production data.
+
+Backup, startup rehearsal, complete before/after database hashes and raw benchmark summaries are retained privately at:
+
+```text
+/home/codex/.local/share/linko-bot-manager/backups/token-optimization-20261011/
+```
+
+Production integrity and foreign keys passed. **Every original table, column, row count and row-value hash matched** after restart: 11 projects, 56 tasks, 10 conversations, 66 messages, 117 executions, 111,118 events, 55 memory rows, all settings/authentication/session records and historical diagnostics. No schema/data migration or historical usage rewrite was introduced. Tailscale listeners, unrelated processes, project files, task dispositions and settings were retained.
+
+This deployment receipt is committed after the implementation. The final release includes that documentation-only follow-up; its exact running hash and service checks are recorded in private `after.json` and exposed as startup-captured `release_commit` by `/api/auth-status`. The final release uses the identical tested implementation above.
