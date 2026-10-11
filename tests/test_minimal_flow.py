@@ -360,10 +360,12 @@ async def test_terminal_result_is_reasoning_input_and_finish_is_idempotent(syste
     assert evidence["objective"] == "Original objective"
     assert evidence["task_status"] == status
     assert evidence["output"] == "Actual worker result"
-    assert evidence["execution"]["status"] == status
-    assert evidence["execution"]["error"] == error
-    assert evidence["execution"]["thread_id"] == "worker-thread"
-    assert evidence["execution"]["turn_id"] == "worker-turn"
+    assert evidence["status"] == status
+    assert evidence["error"] == error
+    assert "execution" not in evidence
+    diagnostic = db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],))
+    assert diagnostic["thread_id"] == "worker-thread"
+    assert diagnostic["turn_id"] == "worker-turn"
     before = db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],))
     workers.finish(task["lease_owner"], "failed", "Duplicate event", "Duplicate error")
     assert db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],)) == before

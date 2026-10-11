@@ -4,7 +4,7 @@ import json
 import time
 from datetime import datetime, timezone
 
-from .codex import MANAGER_INSTRUCTIONS, AppServer, CodexError, process_start
+from .codex import MANAGER_INSTRUCTIONS, AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
 from .registry import Registry
 from .tasks import Tasks
@@ -87,6 +87,7 @@ class Chat:
                 conn.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
                 conn.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
                 conn.execute("DELETE FROM settings WHERE key=?", ("manager_tool_schema:" + conversation_id,))
+                conn.execute("DELETE FROM settings WHERE key=?", ("manager_context:" + conversation_id,))
             fresh_id = new_id()
             conn.execute(
                 "INSERT INTO conversations(id,context,project_id,created_at) VALUES(?,?,?,?)",
@@ -164,7 +165,10 @@ class Chat:
     def context(self, project_id):
         if not project_id:
             return {
-                "projects": [{k: p[k] for k in ("id", "name", "objective", "status")} for p in self.registry.list()],
+                "projects": [
+                    {k: p[k] for k in ("id", "name", "objective", "status")}
+                    for p in sorted(self.registry.list(), key=lambda p: p["id"])
+                ],
                 "instructions": self.db.setting("global_instructions", ""),
             }
         p = self.registry.get(project_id)
@@ -173,10 +177,49 @@ class Chat:
             "instructions": self.db.setting("global_instructions", ""),
             "owner_notes": self.registry.notes(project_id),
             "assignments": [
-                {k: t[k] for k in ("id", "description", "status", "blocker")}
-                for t in Tasks(self.db).list(project_id)[:20]
+                {
+                    **Tasks.context(t),
+                    "description": t["description"][:300],
+                    "description_truncated": len(t["description"]) > 300,
+                }
+                for t in Tasks(self.db).list(project_id)
+                if t["status"] in {"queued", "running", "waiting"}
             ],
         }
+
+    def prompt(self, conversation, content, mode, execution_id, thread_id, prior):
+        context = self.context(conversation["project_id"])
+        saved = self.db.setting("manager_context:" + conversation["id"], {})
+        prompt = {"mode": mode, "message": content}
+        if prior and saved.get("thread_id") == thread_id:
+            updates = {k: v for k, v in context.items() if saved.get("context", {}).get(k) != v}
+            if updates:
+                prompt["context_updates"] = updates
+        else:
+            prompt["context"] = context
+        if not prior:
+            rows = self.db.all(
+                """SELECT id,role,content FROM messages WHERE conversation_id=? AND execution_id IS NOT ?
+                ORDER BY created_at DESC,rowid DESC LIMIT 16""",
+                (conversation["id"], execution_id),
+            )
+            # Keep the latest owner request even across a long automatic worker chain.
+            owner = self.db.one(
+                """SELECT id,role,content FROM messages WHERE conversation_id=? AND role='user'
+                AND execution_id IS NOT ? ORDER BY created_at DESC,rowid DESC LIMIT 1""",
+                (conversation["id"], execution_id),
+            )
+            if owner and owner["id"] not in {r["id"] for r in rows}:
+                rows.append(owner)
+            prompt["conversation_history"] = [
+                {
+                    **r,
+                    "content": r["content"] if r["role"] == "user" else r["content"][-8000:],
+                    "content_truncated": r["role"] != "user" and len(r["content"]) > 8000,
+                }
+                for r in reversed(rows)
+            ]
+        return prompt, context
 
     async def routes(self):
         await self.server.start()
@@ -249,6 +292,7 @@ class Chat:
 
     async def _run(self, execution_id, response_id, conversation, content, route, mode):
         thread_id, output = None, ""
+        usage = TurnUsage()
         try:
             from .orchestration import MANAGER_TOOL
 
@@ -276,13 +320,11 @@ class Chat:
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     ("manager_tool_schema:" + conversation["id"], json.dumps(schema)),
                 )
-            prompt = {"context": self.context(conversation["project_id"]), "mode": mode, "message": content}
-            if not prior:
-                rows = self.db.all(
-                    "SELECT role,content FROM messages WHERE conversation_id=? AND execution_id!=? ORDER BY created_at DESC LIMIT 16",
-                    (conversation["id"], execution_id),
+            prompt, context = self.prompt(conversation, content, mode, execution_id, thread_id, prior)
+            with self.db.transaction() as conn:
+                self.db.event(
+                    conn, "model.context", {"prompt": prompt}, conversation["project_id"], execution_id=execution_id
                 )
-                prompt["conversation_history"] = list(reversed(rows))
             turn = await self.server.request(
                 "turn/start",
                 {
@@ -307,6 +349,11 @@ class Chat:
                         output = (output + params.get("delta", ""))[-1000000:]
                         conn.execute("UPDATE messages SET content=? WHERE id=?", (output, response_id))
                         conn.execute("UPDATE executions SET output=? WHERE id=?", (output, execution_id))
+                    if method == "thread/tokenUsage/updated":
+                        conn.execute(
+                            "UPDATE executions SET usage=? WHERE id=?",
+                            (json.dumps(usage.record(params.get("tokenUsage", {}))), execution_id),
+                        )
                     self.db.event(
                         conn,
                         "chat.delta" if method == "item/agentMessage/delta" else method,
@@ -315,6 +362,10 @@ class Chat:
                         execution_id=execution_id,
                     )
                 if method == "turn/completed":
+                    if params["turn"]["status"] == "completed":
+                        self.db.set_setting(
+                            "manager_context:" + conversation["id"], {"thread_id": thread_id, "context": context}
+                        )
                     self._finish(
                         execution_id,
                         response_id,
@@ -339,8 +390,8 @@ class Chat:
             if not execution or execution["finished_at"] is not None:
                 return
             conn.execute(
-                "UPDATE executions SET status=?,error=?,output=?,finished_at=? WHERE id=?",
-                (status, error, output, time.time(), execution_id),
+                "UPDATE executions SET status=?,error=?,output=?,finished_at=?,latency_ms=(?-started_at)*1000 WHERE id=?",
+                (status, error, output, time.time(), time.time(), execution_id),
             )
             conn.execute("UPDATE messages SET status=?,content=? WHERE id=?", (status, output, response_id))
             conn.execute(
@@ -387,25 +438,8 @@ class Chat:
                     "blocker": result["blocker"],
                     "output": result["output"][-24000:],
                     "output_truncated": len(result["output"]) > 24000,
-                    "execution": {
-                        k: result[k]
-                        for k in (
-                            "id",
-                            "status",
-                            "error",
-                            "thread_id",
-                            "turn_id",
-                            "worktree",
-                            "branch",
-                            "commit_ref",
-                            "model",
-                            "effort",
-                            "started_at",
-                            "finished_at",
-                            "latency_ms",
-                            "usage",
-                        )
-                    },
+                    "status": result["status"],
+                    "error": result["error"],
                 },
                 ensure_ascii=False,
             )

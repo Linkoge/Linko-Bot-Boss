@@ -22,7 +22,7 @@ from .codex import AppServer, CodexError
 from .config import Settings
 from .db import Database
 from .orchestration import Scheduler
-from .registry import Registry
+from .registry import Registry, git
 from .tasks import Tasks
 from .workers import Workers
 
@@ -94,6 +94,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     workers = Workers(db, registry, settings, worker_factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
+    release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
 
     @asynccontextmanager
     async def lifespan(app):
@@ -162,6 +163,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
             "setup_required": not bool(db.one("SELECT id FROM owner")),
             "authenticated": bool(session),
             "csrf": session["csrf"] if session else None,
+            "release_commit": release_commit,
+            "scheduler_running": bool(scheduler.job and not scheduler.job.done()),
         }
 
     @app.post("/api/setup")

@@ -19,6 +19,10 @@ class Tasks:
             raise ValueError("Unknown assignment")
         return self.record(row)
 
+    @staticmethod
+    def context(task):
+        return {k: task[k] for k in ("id", "description", "status", "blocker")}
+
     def list(self, project_id=None):
         rows = self.db.all(
             "SELECT * FROM tasks" + (" WHERE project_id=?" if project_id else "") + " ORDER BY created_at DESC",
