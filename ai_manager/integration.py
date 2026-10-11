@@ -55,15 +55,16 @@ class Integrator:
     async def integrate(self, task, verified_evidence=None):
         policy = self.db.setting(f"integration_policy:{task['project_id']}", {})
         configured_policy = dict(policy)
-        if not policy:
-            policy = {
-                "auto_commit": Policies(self.db).profile(task["project_id"]) in {"high_autonomy", "maximum_autonomy"}
-                and Policies(self.db).effective(task["project_id"], "create_commits")["mode"] == "ALLOW",
-                "auto_merge": False,
-            }
         requirement = json.loads(task.get("verification_spec") or "{}").get("integration", "none")
-        if requirement == "merge" and not policy.get("auto_merge"):
-            raise ValueError("Task requires merge; owner must authorize an explicit project target branch")
+        if not policy:
+            policy = {"auto_commit": requirement in {"commit", "merge"}, "auto_merge": requirement == "merge"}
+        if requirement in {"commit", "merge"}:
+            policy["auto_commit"] = True
+        if requirement == "merge":
+            policy["auto_merge"] = True
+            if not policy.get("target_branch"):
+                source = self.registry.allowed_path(self.registry.get(task["project_id"])["path"])
+                policy["target_branch"] = git(source, "branch", "--show-current")
         if not policy.get("auto_commit") and not policy.get("auto_merge") and requirement == "none":
             return {"status": "skipped"}
         worker = self.db.one(

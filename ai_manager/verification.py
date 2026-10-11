@@ -1,4 +1,4 @@
-"""Static discovery and owner-bound reusable command approvals; no repository code runs here."""
+"""Automatic verification selection; legacy command decisions remain readable."""
 
 import hashlib
 import json
@@ -100,10 +100,17 @@ class VerificationCommands:
             raise ValueError("Command discovery workspace outside isolation")
         return root
 
-    def discover(self, project_id, execution_id=None):
-        root, found = self.execution_root(project_id, execution_id) if execution_id else self.root(project_id), {}
+    def discover(self, project_id, execution_id=None, root=None, automatic=False):
+        root, found = (
+            root or (self.execution_root(project_id, execution_id) if execution_id else self.root(project_id)),
+            {},
+        )
         existing = self.db.setting(f"verification_commands:{project_id}", [])
-        if existing and not self.db.one("SELECT id FROM verification_commands WHERE project_id=?", (project_id,)):
+        if (
+            not automatic
+            and existing
+            and not self.db.one("SELECT id FROM verification_commands WHERE project_id=?", (project_id,))
+        ):
             self.register(project_id, existing)
         config = configuration(root)
 
@@ -112,6 +119,8 @@ class VerificationCommands:
             directory = safe_file(root, cwd)
             if not directory.is_dir():
                 return
+            if argv[0] == "python3" and (root / ".venv/bin/python").exists():
+                argv = ["/workspace/.venv/bin/python", *argv[1:]]
             key = identity(argv, cwd, config)
             found[key] = {
                 "id": key,
@@ -152,7 +161,15 @@ class VerificationCommands:
         for path in tests[:30]:
             if "unittest" in content(str(path.relative_to(root))):
                 add(
-                    ["python3", "-m", "unittest", "discover", "-v"],
+                    [
+                        "python3",
+                        "-m",
+                        "unittest",
+                        "discover",
+                        "-s",
+                        "tests" if path.parent.name == "tests" else ".",
+                        "-v",
+                    ],
                     str(path.relative_to(root)),
                     "Discover and run unittest tests",
                 )
@@ -190,6 +207,8 @@ class VerificationCommands:
                     f"Run Makefile {target} target (repository code executes in isolation)",
                 )
         docs = ["README.md", "PROJECT.md", "HANDOFF.md", "docs/verification.md"] + list(config)
+        if automatic and any(item["purpose"] == "verification" for item in found.values()):
+            docs = []  # Prefer manifest checks over alternative setup commands copied into documentation.
         for name in dict.fromkeys(docs):
             for line in content(name).splitlines():
                 line = re.sub(r"^\s*(?:-\s*run:\s*|run:\s*|\$\s*)", "", line).strip().strip("`")
@@ -221,6 +240,8 @@ class VerificationCommands:
                     add(
                         record["argv"], "successful execution history", "Previously successful independent verification"
                     )
+        if automatic:
+            return list(found.values())
         with self.db.transaction() as conn:
             for item in found.values():
                 conn.execute(
@@ -366,6 +387,83 @@ class VerificationCommands:
             "message": "Trusted command configuration saved; only confirmed missing-configuration verification can recover automatically",
             "workspace": str(root),
         }
+
+    def selected(self, project_id, root=None, purpose="verification"):
+        """Choose checks from current workspace metadata; registration is optional."""
+        root = root or self.root(project_id)
+        config = configuration(root)
+        candidates = self.discover(project_id, root=root, automatic=True)
+        # Retain custom commands, including worker-selected tests, without trusting old config hashes.
+        for row in self.db.all(
+            "SELECT definition FROM verification_commands WHERE project_id=? AND status NOT IN ('revoked','rejected')",
+            (project_id,),
+        ):
+            item = json.loads(row["definition"])
+            execution_id = item.get("execution_id")
+            if execution_id:
+                try:
+                    if self.execution_root(project_id, execution_id).resolve() != root.resolve():
+                        continue
+                except ValueError:
+                    continue
+            if item.get("source") in {"owner proposal", "owner registration", "worker verification"}:
+                item["config"] = config
+                candidates.append(item)
+        commands = {}
+        for item in candidates:
+            if item.get("purpose") == purpose:
+                key = identity(item["argv"], item["cwd"], config)
+                commands[key] = {**item, "id": key, "automatic": True}
+        if purpose == "verification" and not commands:
+            # File-only tasks still receive independent content review plus a whitespace check.
+            argv = ["git", "-c", "core.hooksPath=/dev/null", "diff", "--check", "HEAD"]
+            key = identity(argv, ".", config)
+            commands[key] = {
+                "id": key,
+                "argv": argv,
+                "cwd": ".",
+                "automatic": True,
+                "config": config,
+                "purpose": purpose,
+            }
+        if purpose == "verification" and all(c["argv"][0] == "git" for c in commands.values()):
+            files = sorted(
+                p.relative_to(root).as_posix()
+                for p in root.rglob("*.py")
+                if not any(part.startswith(".") or part == "node_modules" for part in p.relative_to(root).parts)
+            )[:100]
+            if files:
+                argv = [
+                    "python3",
+                    "-c",
+                    "import ast,os,pathlib\n"
+                    "for directory,folders,names in os.walk('.'):\n"
+                    " folders[:]=[p for p in folders if not p.startswith('.') and p != 'node_modules']\n"
+                    " for name in names:\n"
+                    "  if name.endswith('.py'):\n"
+                    "   p=pathlib.Path(directory)/name; ast.parse(p.read_text(),filename=str(p))",
+                ]
+                key = identity(argv, ".", config)
+                commands[key] = {
+                    "id": key,
+                    "argv": argv,
+                    "cwd": ".",
+                    "automatic": True,
+                    "config": config,
+                    "purpose": purpose,
+                }
+        return list(commands.values())
+
+    def assert_selected(self, project_id, records, root, purpose="verification"):
+        if not records:
+            return
+        current = self.selected(project_id, root, purpose)
+        for record in records:
+            if not any(
+                c["id"] == record.get("id") and c["argv"] == record["argv"] and c["cwd"] == record["cwd"]
+                for c in current
+            ):
+                raise ValueError("Verification inputs changed; choose checks again")
 
     def approved(self, project_id, root=None, purpose="verification"):
         rows = self.db.all(

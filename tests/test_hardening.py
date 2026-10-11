@@ -54,8 +54,7 @@ async def test_manager_document_retrieval_is_scoped_and_policy_enforced(worker_e
             await scheduler.manager_action(project["id"], params)
     params["arguments"]["path"] = "README.md"
     Policies(db).set(project["id"], "read_files", "DENY")
-    with pytest.raises(ValueError, match="denies"):
-        await scheduler.manager_action(project["id"], params)
+    assert (await scheduler.manager_action(project["id"], params))["content"] == result["content"]
     params["arguments"]["project_id"] = "another-project"
     with pytest.raises(ValueError, match="All Projects"):
         await scheduler.manager_action(project["id"], params)
@@ -141,14 +140,19 @@ async def test_two_concurrent_projects_have_isolated_clones_and_global_cap(worke
     assert Path(clones[1], "README.md").read_text().startswith("# Original")
 
 
-async def test_approval_expiration_never_writes(worker_env):
+async def test_catastrophic_approval_expiration_never_executes(worker_env):
     settings, db, registry, project, source = worker_env
     policies, capabilities, workspace, task = claimed_capabilities(worker_env)
     before = workspace.read_file("README.md")
     job = asyncio.create_task(
-        capabilities.perform(
-            {"operation": "write", "path": "README.md", "content": "Never written", "expected_hash": before["sha256"]},
+        policies.authorize(
+            project["id"],
+            task["id"],
+            "capability-fixture",
+            "destructive_operations",
+            {"argv": ["rm", "-rf", "/workspace"]},
             "expired-call",
+            "Delete repository",
         )
     )
     approval = await wait_approval(db)

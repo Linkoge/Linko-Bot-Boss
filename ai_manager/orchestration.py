@@ -54,7 +54,7 @@ PLAN_SCHEMA = {
                             "integration": {
                                 "type": "string",
                                 "enum": ["none", "commit", "merge"],
-                                "description": "Required integration from the owner objective. Merge needs a configured project target branch.",
+                                "description": "Required integration from the owner objective. Merge uses the project current branch unless a target branch is configured.",
                             },
                         },
                         "required": [
@@ -397,10 +397,10 @@ class Verifier:
             or not (root / ".git").is_dir()
         ):
             raise ValueError("Verification workspace is missing or outside isolation")
-        if requires_commands(task) and not VerificationCommands(self.db, self.registry).approved(
+        if requires_commands(task) and not VerificationCommands(self.db, self.registry).selected(
             task["project_id"], root
         ):
-            raise ValueError("Owner must configure trusted project verification commands before completion")
+            raise ValueError("No applicable independent verification could be selected")
         with self.db.transaction() as conn:
             if (
                 conn.execute(
@@ -454,9 +454,13 @@ class Verifier:
         if not workspace.root.resolve().is_relative_to((self.settings.data_dir / "workspaces").resolve()):
             raise ValueError("Verification workspace outside isolation")
         try:
-            commands = VerificationCommands(self.db, self.registry).approved(task["project_id"], workspace.root)
+            commands = (
+                VerificationCommands(self.db, self.registry).selected(task["project_id"], workspace.root)
+                if requires_commands(task)
+                else []
+            )
             if requires_commands(task) and not commands:
-                raise ValueError("Owner must configure trusted project verification commands before completion")
+                raise ValueError("No applicable independent verification could be selected")
         except ValueError as error:
             self.tasks.transition(
                 task_id,
@@ -493,22 +497,29 @@ class Verifier:
         try:
             from .verification_runtime import VerificationRuntime
 
-            await VerificationRuntime(self.db, self.settings).provision(task["project_id"], workspace, task_id, lease)
-            dependency_commands = VerificationCommands(self.db, self.registry).approved(
-                task["project_id"], workspace.root, "dependency"
+            if commands:
+                await VerificationRuntime(self.db, self.settings).provision(
+                    task["project_id"], workspace, task_id, lease
+                )
+            dependency_commands = (
+                VerificationCommands(self.db, self.registry).selected(task["project_id"], workspace.root, "dependency")
+                if commands
+                else []
             )
             for command in dependency_commands:
+                from .capabilities import catastrophic_command
+
                 await Policies(self.db).authorize(
                     task["project_id"],
                     task_id,
                     lease,
-                    "install_dependencies",
+                    "destructive_operations" if catastrophic_command(command["argv"]) else "install_dependencies",
                     command,
                     "provision-" + command["id"],
                     "Provision project-local offline dependencies inside the same no-network/no-host-home sandbox",
                     resume_status="verifying",
                 )
-                VerificationCommands(self.db, self.registry).assert_current(
+                VerificationCommands(self.db, self.registry).assert_selected(
                     task["project_id"], [command], workspace.root, "dependency"
                 )
                 record = await workspace.isolated_test(command["argv"], cwd=command["cwd"], writable=True)
@@ -534,7 +545,20 @@ class Verifier:
                 await asyncio.to_thread(prepare_copy, self.settings.data_dir, lease, workspace) if commands else None
             )
             for command in commands:
-                VerificationCommands(self.db, self.registry).assert_current(
+                from .capabilities import catastrophic_command
+
+                if catastrophic_command(command["argv"]):
+                    await Policies(self.db).authorize(
+                        task["project_id"],
+                        task_id,
+                        lease,
+                        "destructive_operations",
+                        command,
+                        "catastrophic-verification-" + command["id"],
+                        "Catastrophic verification command in disposable isolation",
+                        resume_status="verifying",
+                    )
+                VerificationCommands(self.db, self.registry).assert_selected(
                     task["project_id"], [command], workspace.root
                 )
                 record = await run_checked(test_workspace, command["argv"], command["cwd"], baseline)
@@ -643,7 +667,7 @@ class Verifier:
                 "base_commit": execution.get("base_commit") or execution["commit_ref"],
                 "review_execution_id": review_id,
             }
-            VerificationCommands(self.db, self.registry).assert_current(task["project_id"], commands, workspace.root)
+            VerificationCommands(self.db, self.registry).assert_selected(task["project_id"], commands, workspace.root)
             if self.db.setting("policy_epoch", 0) != authorization_epoch:
                 raise ValueError("Policy changed during verification; renewed authorization required")
             from .integration import Integrator

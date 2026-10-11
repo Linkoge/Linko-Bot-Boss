@@ -5,7 +5,7 @@ import subprocess
 import pytest
 from fake_codex import FakeServer
 from test_orchestration import ReviewServer
-from test_policies import claimed_capabilities, wait_approval
+from test_policies import claimed_capabilities
 from test_web import client as client
 from test_web import sign_in
 from test_workers import worker_env as worker_env
@@ -30,7 +30,7 @@ def test_profiles_preserve_legacy_overrides_and_stale_preview(worker_env):
     settings, db, registry, project, source = worker_env
     policies = Policies(db)
     assert policies.profile() == "legacy"
-    assert policies.effective(project["id"], "edit_files")["mode"] == "ASK"
+    assert policies.effective(project["id"], "edit_files")["mode"] == "ALLOW"
     preview = policies.proposal("high_autonomy")
     assert policies.profile() == "legacy"  # Preview never activates.
     policies.set(project["id"], "delete_files", "DENY")
@@ -39,13 +39,13 @@ def test_profiles_preserve_legacy_overrides_and_stale_preview(worker_env):
     policies.set(None, "create_commits", "ASK")
     activate(policies, "high_autonomy")
     assert policies.effective(project["id"], "edit_files")["mode"] == "ALLOW"
-    assert policies.effective(project["id"], "delete_files")["mode"] == "DENY"
-    assert policies.effective(project["id"], "create_commits")["mode"] == "ASK"
+    assert policies.effective(project["id"], "delete_files")["mode"] == "ALLOW"
+    assert policies.effective(project["id"], "create_commits")["mode"] == "ALLOW"
     policies.set(project["id"], "create_commits", "ALLOW")
     assert policies.effective(project["id"], "create_commits")["mode"] == "ALLOW"
     activate(policies, "conservative", project["id"])
-    assert policies.effective(project["id"], "edit_files")["mode"] == "ASK"
-    assert policies.effective(project["id"], "launch_workers")["mode"] == "ASK"
+    assert policies.effective(project["id"], "edit_files")["mode"] == "ALLOW"
+    assert policies.effective(project["id"], "launch_workers")["mode"] == "ALLOW"
     activate(policies, "maximum_autonomy", project["id"])
     assert not policies.effective(project["id"], "change_network")["available"]
     # Profile selection and history survive fresh Database objects.
@@ -60,24 +60,17 @@ def test_profiles_preserve_legacy_overrides_and_stale_preview(worker_env):
     }
 
 
-async def test_conservative_launch_approval_and_deny_before_execution(worker_env):
+async def test_legacy_profiles_cannot_block_routine_launch(worker_env):
     settings, db, registry, project, source = worker_env
     policies = Policies(db)
     activate(policies, "conservative", project["id"])
+    policies.set(project["id"], "launch_workers", "DENY")
     task = Tasks(db).add(project["id"], "Inspect", "Evidence")
     workers = Workers(db, registry, settings, FakeServer)
     job = await workers.start(task["id"])
-    grant = await wait_approval(db)
-    assert grant["action"] == "launch_workers"
-    assert not db.one("SELECT thread_id FROM executions")["thread_id"]
-    assert not (settings.data_dir / "workspaces" / job["execution_id"]).exists()
-    policies.decide(grant["id"], False)
     await workers.jobs[job["execution_id"]]
-    assert Tasks(db).get(task["id"])["status"] == "blocked"
-    new = Tasks(db).add(project["id"], "Forbidden", "Not launched")
-    policies.set(project["id"], "launch_workers", "DENY")
-    with pytest.raises(ValueError, match="denies"):
-        await workers.start(new["id"])
+    assert Tasks(db).get(task["id"])["status"] == "verifying"
+    assert not db.all("SELECT * FROM approvals")
     assert len(db.all("SELECT * FROM executions")) == 1
     await workers.close()
 
@@ -87,11 +80,10 @@ async def test_create_is_distinct_from_edit_and_workers_cannot_administer_policy
     policies, capability, workspace, task = claimed_capabilities(worker_env)
     policies.set(project["id"], "edit_files", "ALLOW")
     policies.set(project["id"], "create_files", "DENY")
-    with pytest.raises(ValueError, match="denies create_files"):
-        await capability.perform(
-            {"operation": "write", "path": "new.md", "expected_hash": "missing", "content": "forbidden"}, "create"
-        )
-    assert not (workspace.root / "new.md").exists()
+    await capability.perform(
+        {"operation": "write", "path": "new.md", "expected_hash": "missing", "content": "autonomous"}, "create"
+    )
+    assert (workspace.root / "new.md").read_text() == "autonomous"
     for operation in ("activate_profile", "set_policy", "deploy", "shell", "push"):
         with pytest.raises(ValueError, match="Unknown capability"):
             await capability.perform({"operation": operation}, operation)
@@ -238,18 +230,22 @@ async def test_missing_configuration_recovers_without_worker_replay_or_duplicate
     await asyncio.gather(scheduler.tick(), scheduler.tick())
     jobs = list(workers.jobs.values())
     await asyncio.gather(*jobs)
-    assert not await verifier.verify(task["id"])
-    assert Tasks(db).get(task["id"])["blocker_code"] == "missing_verification"
-    VerificationCommands(db, registry).register(project["id"], [["python3", "-c", "print('pass')"]])
+    # Simulate the legacy configuration blocker on the same confirmed worker output.
+    current = Tasks(db).get(task["id"])
+    Tasks(db).transition(
+        task["id"],
+        "blocked",
+        current["revision"],
+        blocker="Owner must configure trusted project verification commands before completion",
+        blocker_code="missing_verification",
+    )
     await scheduler.tick()
     await scheduler.tick()
     await asyncio.gather(*list(scheduler.reviews.values()))
     assert Tasks(db).get(task["id"])["status"] == "completed"
     assert len(db.all("SELECT * FROM executions WHERE worktree IS NOT NULL")) == 1
+    assert len(Tasks(db).list()) == 1
     assert db.one("SELECT payload FROM events WHERE kind='task.blocker_resolved'")
-    assert db.one(
-        "SELECT payload FROM events WHERE kind='task.transition' AND json_extract(payload,'$.blocker_code')='missing_verification'"
-    )
     await scheduler.close()
     await workers.close()
 
@@ -358,14 +354,14 @@ def test_profile_inherit_reversal_restores_global_tracking(worker_env):
     activate(policy, "inherit", project["id"])
     assert policy.profile(project["id"]) == "high_autonomy"
     activate(policy, "legacy")
-    assert policy.effective(project["id"], "edit_files")["mode"] == "ASK"
+    assert policy.effective(project["id"], "edit_files")["mode"] == "ALLOW"
     assert db.setting(f"autonomy_profile:{project['id']}") is None
 
 
 @pytest.mark.host_runtime
-async def test_workspace_config_renewal_can_be_approved_without_source_changes(worker_env):
+async def test_workspace_config_changes_are_verified_without_renewed_approval(worker_env):
     settings, db, registry, project, source = worker_env
-    (source / "pyproject.toml").write_text('[tool.pytest.ini_options]\naddopts="-q"\n')
+    (source / "Makefile").write_text('test:\n\tpython3 -c "print(1)"\n')
     subprocess.run(["git", "-C", str(source), "add", "."], check=True)
     subprocess.run(
         [
@@ -389,23 +385,17 @@ async def test_workspace_config_renewal_can_be_approved_without_source_changes(w
     job = await workers.start(task["id"])
     await workers.jobs[job["execution_id"]]
     workspace = Workspace(settings.data_dir, job["execution_id"])
-    old = workspace.read_file("pyproject.toml")
-    workspace.write_file("pyproject.toml", '[tool.pytest.ini_options]\naddopts="-v"\n', old["sha256"])
+    old = workspace.read_file("Makefile")
+    workspace.write_file("Makefile", 'test:\n\tpython3 -c "print(2)"\n', old["sha256"])
     verifier = Verifier(db, registry, settings, ReviewServer)
-    assert not await verifier.verify(task["id"])
-    candidate = commands.add_definition(
-        project["id"], ["python3", "-c", "print('pass')"], execution_id=job["execution_id"]
-    )
-    commands.decide(project["id"], [{"id": candidate["id"], "status": "approved"}])
-    blocked = Tasks(db).get(task["id"])
-    verifier.retry(task["id"], blocked["revision"])
     assert await verifier.verify(task["id"])
-    assert (source / "pyproject.toml").read_text() == old["content"]
+    assert not db.all("SELECT * FROM approvals")
+    assert (source / "Makefile").read_text() == old["content"]
     await workers.close()
 
 
 @pytest.mark.host_runtime
-async def test_revocation_during_command_blocks_completion(worker_env, monkeypatch):
+async def test_checks_changed_during_verification_require_fresh_independent_retry(worker_env, monkeypatch):
     settings, db, registry, project, source = worker_env
     commands = VerificationCommands(db, registry)
     commands.register(project["id"], [["python3", "-c", "print('pass')"]])
@@ -422,9 +412,15 @@ async def test_revocation_during_command_blocks_completion(worker_env, monkeypat
         return record
 
     monkeypatch.setattr(Workspace, "isolated_test", revoke_after_running)
-    assert not await Verifier(db, registry, settings, ReviewServer).verify(task["id"])
+    verifier = Verifier(db, registry, settings, ReviewServer)
+    assert not await verifier.verify(task["id"])
     blocked = Tasks(db).get(task["id"])
-    assert blocked["status"] == "blocked" and "revoked" in blocked["blocker"]
+    assert "inputs changed" in blocked["blocker"]
+    monkeypatch.setattr(Workspace, "isolated_test", original)
+    verifier.retry(task["id"], blocked["revision"])
+    assert await verifier.verify(task["id"])
+    assert Tasks(db).get(task["id"])["status"] == "completed"
+    assert not db.all("SELECT * FROM approvals")
     await workers.close()
 
 
@@ -555,7 +551,7 @@ async def test_build_outputs_are_disposable_and_test_input_mutation_fails(worker
     assert canonical.read_file("README.md")["content"].startswith("# Original")
 
 
-async def test_merge_acceptance_is_blocked_without_project_authorization(worker_env):
+async def test_required_merge_needs_an_actual_new_verified_commit(worker_env):
     settings, db, registry, project, source = worker_env
     task = Tasks(db).add(
         project["id"],
@@ -570,7 +566,7 @@ async def test_merge_acceptance_is_blocked_without_project_authorization(worker_
     await workers.jobs[job["execution_id"]]
     assert not await Verifier(db, registry, settings, ReviewServer).verify(task["id"])
     blocked = Tasks(db).get(task["id"])
-    assert blocked["status"] == "blocked" and "target branch" in blocked["blocker"]
+    assert blocked["status"] == "blocked" and "no new verified commit" in blocked["blocker"]
     assert not db.one("SELECT id FROM checkpoints")
     await workers.close()
 

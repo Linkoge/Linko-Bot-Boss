@@ -6,6 +6,7 @@ import time
 from .db import new_id
 
 DEFAULTS = {
+    "execute_commands": "ALLOW",
     "read_files": "ALLOW",
     "edit_files": "ASK",
     "run_tests": "ALLOW",
@@ -41,6 +42,8 @@ SUPPORTED = {
     "create_branches",
     "install_dependencies",
     "merge_branches",
+    "execute_commands",
+    "destructive_operations",
 }
 # Stable identifiers preserve existing stored policies. New IDs describe formerly implicit gates.
 ROUTINE = {
@@ -55,6 +58,7 @@ ROUTINE = {
     "create_branches",
     "create_commits",
     "merge_branches",
+    "execute_commands",
 }
 PROFILES = {
     "legacy": DEFAULTS,
@@ -68,9 +72,9 @@ PROFILES = {
     },
 }
 BOUNDARY = (
-    "Assigned isolated project only; approved commands; no host home, secrets or network. "
-    "Merge requires explicit project integration policy. Offline dependencies require owner-approved provisioning. "
-    "Host/infrastructure/external/spending capabilities remain unavailable."
+    "Routine development is autonomous globally, including existing and new projects. "
+    "Commands run in recoverable isolated workspaces without host data or credentials. "
+    "Catastrophic actions require exact owner confirmation; host destruction is unavailable."
 )
 
 
@@ -98,6 +102,11 @@ class Policies:
         selected = profile or self.profile(project_id)
         source = "project" if local else "global" if global_policy else "profile:" + selected
         mode = local["mode"] if local else global_policy["mode"] if global_policy else PROFILES[selected][action]
+        # One global execution policy supersedes legacy profiles/overrides without deleting them.
+        if action in ROUTINE:
+            mode, source = "ALLOW", "global:autonomous"
+        elif action == "destructive_operations":
+            mode, source = "ASK", "global:catastrophic-boundary"
         available = action in SUPPORTED
         return {
             "action": action,
@@ -174,9 +183,7 @@ class Policies:
                 (json.dumps(proposal["epoch"] + 1),),
             )
             conn.execute("UPDATE approvals SET status='invalidated' WHERE status IN ('pending','approved')")
-            self.db.event(
-                conn, "policy.profile_activated", {**proposal, "authorized_by": authorized_by}, project_id
-            )
+            self.db.event(conn, "policy.profile_activated", {**proposal, "authorized_by": authorized_by}, project_id)
         return {
             "result": "accepted",
             "profile": profile,

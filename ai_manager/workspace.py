@@ -1,6 +1,7 @@
-"""Workspace capabilities never accept an unrestricted shell command."""
+"""Recoverable project workspaces and resource-limited OS command isolation."""
 
 import asyncio
+import configparser
 import hashlib
 import os
 import shutil
@@ -30,6 +31,33 @@ def safe_file(root: Path, relative: str) -> Path:
             raise ValueError("Symlinks are not permitted by file capabilities")
         current = current.parent
     return path
+
+
+def validate_git_admin(root):
+    """Commands can use Git, but cannot redirect subsequent controller Git onto host data."""
+    admin = root / ".git"
+    if admin.is_symlink() or not admin.is_dir():
+        raise ValueError("Workspace Git administration is missing or redirected; recover checkpoint")
+    if (admin / "commondir").exists():
+        raise ValueError("Workspace Git administration cannot share an external common directory")
+    if any(p.is_symlink() for p in admin.rglob("*")):
+        raise ValueError("Workspace Git administration contains symlinks; recover checkpoint")
+    if any((admin / "objects/info" / name).exists() for name in ("alternates", "http-alternates")):
+        raise ValueError("Workspace Git object store cannot reference external data")
+    config = admin / "config"
+    if not config.is_file() or config.stat().st_size > 100000:
+        raise ValueError("Invalid workspace Git configuration")
+    parser = configparser.ConfigParser(interpolation=None, strict=False)
+    try:
+        parser.read_string(config.read_text())
+    except configparser.Error as error:
+        raise ValueError("Invalid workspace Git configuration; recover checkpoint") from error
+    for section in parser.sections():
+        name = section.casefold()
+        if name.startswith(("include", "filter")) or any(
+            key.casefold() in {"worktree", "attributesfile", "textconv", "external"} for key in parser[section]
+        ):
+            raise ValueError("Workspace Git configuration redirects controller access; recover checkpoint")
 
 
 def fingerprint(path: Path) -> str:
@@ -122,7 +150,9 @@ class Workspace:
         temporary.replace(file)
         return {"sha256": fingerprint(file)}
 
-    async def isolated_test(self, argv: list[str], timeout=120, cwd=".", writable=False):
+    async def isolated_test(
+        self, argv: list[str], timeout=120, cwd=".", writable=False, network=False, git_writable=False
+    ):
         if not argv or not all(isinstance(a, str) and len(a) <= 1000 for a in argv):
             raise ValueError("Invalid test command")
         directory = safe_file(self.root, cwd)
@@ -168,13 +198,18 @@ class Workspace:
             "--tmpfs",
             "/tmp",
             "--dir",
+            "/tmp/linko-bin",
+            "--symlink",
+            "/usr/bin/python3",
+            "/tmp/linko-bin/python",
+            "--dir",
             "/home",
             "--dir",
             "/workspace",
             "--bind" if writable else "--ro-bind",
             str(self.root),
             "/workspace",
-            "--ro-bind",
+            "--bind" if git_writable else "--ro-bind",
             str(self.root / ".git"),
             "/workspace/.git",
             "--chdir",
@@ -182,7 +217,7 @@ class Workspace:
             "--clearenv",
             "--setenv",
             "PATH",
-            "/usr/bin:/bin",
+            "/workspace/.venv/bin:/tmp/linko-bin:/usr/bin:/bin",
             "--setenv",
             "HOME",
             "/tmp",
@@ -207,6 +242,28 @@ class Workspace:
             "--",
             *argv,
         ]
+        if network:
+            # Dependency downloads share only networking, never host home/credentials or services.
+            position = args.index("--chdir")
+            mounts = ["--share-net", "--dir", "/etc"]
+            for name in ("/etc/resolv.conf", "/etc/ssl", "/etc/ca-certificates.conf"):
+                if Path(name).exists():
+                    mounts += ["--ro-bind", name, name]
+            args[position:position] = mounts
+            args[args.index("GOPROXY") + 1] = "https://proxy.golang.org,direct"
+        if git_writable:
+            position = args.index("--chdir")
+            args[position:position] = [
+                "--setenv",
+                "GIT_CONFIG_GLOBAL",
+                "/dev/null",
+                "--setenv",
+                "GIT_CONFIG_SYSTEM",
+                "/dev/null",
+                "--setenv",
+                "GIT_TERMINAL_PROMPT",
+                "0",
+            ]
         runtime = self.root / ".linko-runtime"
         if runtime.is_symlink():
             raise ValueError("Verification runtime cannot be a symlink")
@@ -233,7 +290,9 @@ class Workspace:
                 "argv": argv,
                 "exit_code": process.returncode,
                 "output": output.decode(errors="replace")[-20000:],
-                "sandbox": "bubblewrap/no-network/no-host-home",
+                "sandbox": "bubblewrap/no-host-home" if network else "bubblewrap/no-network/no-host-home",
+                "network": network,
+                "git_writable": git_writable,
                 "cwd": cwd,
                 "environment": "bubblewrap-v2",
                 "resources": {

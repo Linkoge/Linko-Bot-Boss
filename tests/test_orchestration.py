@@ -99,15 +99,15 @@ async def test_evidence_based_auto_completion(worker_env):
     )
 
 
-async def test_missing_verification_blocks_and_freeze_persists(worker_env):
+async def test_automatic_verification_and_freeze_persist(worker_env):
     settings, db, registry, project, source = worker_env
     task = Tasks(db).add(project["id"], "Inspect", "Evidence")
     workers = Workers(db, registry, settings, FakeServer)
     job = await workers.start(task["id"])
     await workers.jobs[job["execution_id"]]
     verifier = Verifier(db, registry, settings, ReviewServer)
-    assert not await verifier.verify(task["id"])
-    assert Tasks(db).get(task["id"])["status"] == "blocked"
+    assert await verifier.verify(task["id"])
+    assert Tasks(db).get(task["id"])["status"] == "completed"
     scheduler = Scheduler(db, registry, settings, workers, verifier, Planner(db, registry, settings))
     await scheduler.manager_action(
         project["id"], {"tool": "manager_action", "callId": "freeze", "arguments": {"action": "freeze_projects"}}

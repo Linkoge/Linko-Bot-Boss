@@ -3,6 +3,7 @@ import time
 
 import pytest
 from fake_codex import FakeServer
+from test_orchestration import ReviewServer
 from test_workers import InterruptedServer
 from test_workers import worker_env as fixture_worker_env
 
@@ -22,15 +23,18 @@ async def test_verification_retry_does_not_replay_worker(worker_env):
     job = await workers.start(task["id"])
     assert job["result"] == "accepted" and job["status"] == "queued"
     await workers.jobs[job["execution_id"]]
-    verifier = Verifier(db, registry, settings)
-    assert not await verifier.verify(task["id"])
+    verifier = Verifier(db, registry, settings, ReviewServer)
+    current = tasks.get(task["id"])
+    tasks.transition(
+        task["id"],
+        "blocked",
+        current["revision"],
+        blocker="Legacy configuration blocker",
+        blocker_code="missing_verification",
+    )
     blocked = tasks.get(task["id"])
     with pytest.raises(ValueError, match="retry verification"):
         await workers.resume(task["id"], blocked["revision"])
-    with pytest.raises(ValueError, match="trusted project verification"):
-        verifier.retry(task["id"], blocked["revision"])
-    assert tasks.get(task["id"]) == blocked
-    db.set_setting(f"verification_commands:{project['id']}", [["python3", "-m", "unittest"]])
     assert verifier.retry(task["id"], blocked["revision"])["result"] == "accepted"
     assert tasks.get(task["id"])["status"] == "verifying"
     assert len(db.all("SELECT * FROM executions")) == 1

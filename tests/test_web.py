@@ -157,7 +157,7 @@ def test_policy_api_is_authenticated_and_audited(client):
     sign_in(browser, app, settings)
     assert {p["action"] for p in browser.get("/api/policies").json()} == set(__import__("ai_manager.policies", fromlist=["DEFAULTS"]).DEFAULTS)
     assert browser.put("/api/policies/edit_files", json={"mode": "DENY"}).status_code == 200
-    assert next(p for p in browser.get("/api/policies").json() if p["action"] == "edit_files")["mode"] == "DENY"
+    assert next(p for p in browser.get("/api/policies").json() if p["action"] == "edit_files")["mode"] == "ALLOW"
     assert browser.put("/api/policies/paid_services", json={"mode": "ALLOW"}).status_code == 409
     assert (
         browser.put("/api/policies/paid_services", json={"mode": "ALLOW", "risk_accepted": True}).json()["available"]

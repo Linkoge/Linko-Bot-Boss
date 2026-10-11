@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from .registry import git
-from .workspace import fingerprint, safe_file
+from .workspace import fingerprint, safe_file, validate_git_admin
 
 KINDS = {"code", "documentation", "research", "infrastructure", "investigation"}
 
@@ -40,6 +40,7 @@ def requires_commands(task):
 
 
 def changed_files(workspace, baseline):
+    validate_git_admin(workspace.root)
     return sorted(
         set(
             filter(
@@ -52,6 +53,7 @@ def changed_files(workspace, baseline):
 
 
 def content_digest(workspace, baseline):
+    validate_git_admin(workspace.root)
     names = set(filter(None, git(workspace.root, "ls-files", "-z").split("\0"))) | set(
         changed_files(workspace, baseline)
     )

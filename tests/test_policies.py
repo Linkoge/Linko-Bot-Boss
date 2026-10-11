@@ -39,64 +39,67 @@ async def wait_approval(db):
     raise AssertionError("Approval was not persisted")
 
 
-async def test_exact_edit_approval_no_write_before_grant_and_source_preserved(worker_env):
+async def test_exact_catastrophic_approval_preserves_source(worker_env):
     settings, db, registry, project, source = worker_env
     policies, capabilities, workspace, task = claimed_capabilities(worker_env)
-    old = workspace.read_file("README.md")
-    args = {
-        "operation": "write",
-        "path": "README.md",
-        "content": "Approved new content",
-        "expected_hash": old["sha256"],
-    }
-    job = asyncio.create_task(capabilities.perform(args, "exact-call"))
+    args = {"argv": ["rm", "-rf", "/workspace"]}
+    job = asyncio.create_task(
+        policies.authorize(
+            project["id"],
+            task["id"],
+            "capability-fixture",
+            "destructive_operations",
+            args,
+            "exact-call",
+            "Delete entire repository",
+        )
+    )
     approval = await wait_approval(db)
-    assert workspace.read_file("README.md")["content"] == old["content"]
+    assert workspace.read_file("README.md")["content"] == (source / "README.md").read_text()
     assert Tasks(db).get(task["id"])["status"] == "awaiting_approval"
-    assert json.loads(approval["arguments"])["content"] == args["content"]
+    assert json.loads(approval["arguments"]) == args
     policies.decide(approval["id"], True)
-    await job
-    assert workspace.read_file("README.md")["content"] == "Approved new content"
-    assert (source / "README.md").read_text() == old["content"]
+    assert await job == approval["operation_key"]
     assert db.one("SELECT status FROM approvals")["status"] == "consumed"
     with pytest.raises(ValueError):
         policies.decide(approval["id"], True)
     assert db.one("SELECT kind FROM notifications")["kind"] == "approval"
 
 
-async def test_policy_change_invalidates_approval_and_deny_cannot_execute(worker_env):
+async def test_policy_change_invalidates_catastrophic_approval(worker_env):
     settings, db, registry, project, source = worker_env
     policies, capabilities, workspace, task = claimed_capabilities(worker_env)
     original = workspace.read_file("README.md")
     job = asyncio.create_task(
-        capabilities.perform(
-            {"operation": "write", "path": "README.md", "content": "Denied", "expected_hash": original["sha256"]},
+        policies.authorize(
+            project["id"],
+            task["id"],
+            "capability-fixture",
+            "destructive_operations",
+            {"argv": ["rm", "-rf", "/workspace"]},
             "stale-call",
+            "Delete entire repository",
         )
     )
     approval = await wait_approval(db)
-    policies.set(project["id"], "edit_files", "DENY")
+    policies.set(project["id"], "destructive_operations", "ALLOW")
     with pytest.raises(ValueError, match="invalidated"):
         await job
+    assert policies.effective(project["id"], "destructive_operations")["mode"] == "ASK"
     assert workspace.read_file("README.md")["content"] == original["content"]
     with pytest.raises(ValueError):
         policies.decide(approval["id"], True)
-    with pytest.raises(ValueError, match="denies"):
-        await capabilities.perform(
-            {"operation": "write", "path": "README.md", "content": "Denied", "expected_hash": original["sha256"]},
-            "new-call",
-        )
 
 
 def test_inheritance_and_unavailable_actions_require_risk_acceptance(worker_env):
     settings, db, registry, project, source = worker_env
     policies = Policies(db)
     policies.set(None, "edit_files", "DENY")
-    assert policies.effective(project["id"], "edit_files")["mode"] == "DENY"
+    assert policies.effective(project["id"], "edit_files")["mode"] == "ALLOW"
     policies.set(project["id"], "edit_files", "ALLOW")
-    assert policies.effective(project["id"], "edit_files")["source"] == "project"
+    assert policies.effective(project["id"], "edit_files")["source"] == "global:autonomous"
     policies.set(project["id"], "edit_files", None)
-    assert policies.effective(project["id"], "edit_files")["mode"] == "DENY"
+    assert policies.effective(project["id"], "edit_files")["mode"] == "ALLOW"
     with pytest.raises(ValueError, match="risk"):
         policies.set(None, "paid_services", "ALLOW")
     policies.set(None, "paid_services", "ALLOW", risk_accepted=True)
