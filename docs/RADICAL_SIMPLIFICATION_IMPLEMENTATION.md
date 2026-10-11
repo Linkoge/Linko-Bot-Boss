@@ -40,4 +40,8 @@ Catastrophic confirmation is agent-recognized. Native full access cannot determi
 
 ## Deployment
 
-Release validation and migration rehearsal are complete. Production cutover results are appended after the dedicated service is restarted and checked. No network listeners, dependencies, credentials or unrelated services need changes.
+Release `9e246c2d3a905e5cdecf52a8daba343621f0caff` was fast-forwarded into the live repository. Only the dedicated `linko-bot-manager.service` was stopped/started, entering active/running state at **2026-10-11 12:30:37 +04**, PID **1656742**, exit status **0** (previous PID 1585576). No active execution existed immediately before cutover. No network listeners, dependency environment, credentials or unrelated services were changed.
+
+Post-deployment loopback and private HTTPS health returned **200**; unauthenticated portfolio returned **401**. Served HTML/JavaScript/CSS hashes exactly matched the tested release. SQLite schema is **7**; integrity and foreign-key checks passed. Every original row and original column value outside the schema-version marker matched the predeployment hash manifest: **11 projects, 45 tasks, 56 messages, 87 executions, 108,619 events, one owner and two sessions** preserved, along with historical evidence/settings/notes. No coding worker was active and no legacy objective was replayed. New lifecycle counts match the rehearsal: 21 cancelled, 3 completed, 3 failed, 18 waiting.
+
+Private `before.json`, `after.json`, the integrity-checked predeployment backup and migrated rehearsal copy remain in the backup directory named above. No production test message, password/session mutation, remote push or merge of legacy clone output was performed. The complete behavioral smoke and authenticated browser checks ran only against disposable fixtures. This deployment check confirms health/assets/data preservation, not a new real production user assignment.
