@@ -335,6 +335,19 @@ def turn_output(turn):
     return "\n".join(x.get("text", "") for x in turn.get("items", []) if x.get("type") == "agentMessage")
 
 
+def turn_error(db, execution_id, turn):
+    if turn.get("error"):
+        return turn["error"]
+    # Some transports expose details in an error notification only. It is already
+    # durable in events, so recover the exact turn's last error without inference.
+    row = db.one(
+        """SELECT payload FROM events WHERE execution_id=? AND kind='error'
+        AND json_extract(payload,'$.turnId')=? ORDER BY seq DESC LIMIT 1""",
+        (execution_id, turn["id"]),
+    )
+    return (json.loads(row["payload"]).get("error") or {}) if row else {}
+
+
 def launching(db, execution_id, prompt):
     with db.transaction() as conn:
         key = f"linko:{execution_id}:{new_id()}"

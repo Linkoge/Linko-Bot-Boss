@@ -15,6 +15,7 @@ from .recovery import (
     reap_orphan,
     release_gate,
     reserve,
+    turn_error,
     turn_output,
     wait_for_gate,
     with_reset,
@@ -189,7 +190,8 @@ class Workers:
                         "Worker connection lost; retained thread will be inspected before continuation",
                         {"codexErrorInfo": "transportLost"},
                     )
-                if params.get("turnId") and params["turnId"] != turn_id:
+                event_turn = params.get("turnId") or (params.get("turn") or {}).get("id")
+                if event_turn and event_turn != turn_id:
                     continue
                 with self.db.transaction() as conn:
                     if method == "item/agentMessage/delta":
@@ -206,7 +208,7 @@ class Workers:
                 if method == "turn/completed":
                     turn = params["turn"]
                     state = {"completed": "completed", "interrupted": "waiting"}.get(turn["status"], "failed")
-                    error = turn.get("error") or {}
+                    error = turn_error(self.db, execution_id, turn) if turn["status"] != "completed" else {}
                     failure = classify(error) if state == "failed" else None
                     if (
                         state == "waiting"
@@ -348,20 +350,20 @@ class Workers:
                 server = self.factory(self.settings, native=True)
                 try:
                     turn = await inspect(server, row)
+                    error = turn_error(self.db, execution_id, turn) if turn and turn["status"] != "completed" else {}
                     if turn and not row["turn_id"]:
                         with self.db.transaction() as conn:
                             conn.execute("UPDATE executions SET turn_id=? WHERE id=?", (turn["id"], execution_id))
                     if turn and turn["status"] == "completed":
                         self.finish(execution_id, "completed", turn_output(turn), "")
-                    elif turn and turn["status"] == "failed" and not classify(turn.get("error") or {}):
+                    elif turn and turn["status"] == "failed" and not classify(error):
                         self.finish(
                             execution_id,
                             "failed",
                             turn_output(turn),
-                            (turn.get("error") or {}).get("message", "Worker failed"),
+                            error.get("message", "Worker failed"),
                         )
                     elif turn and turn["status"] == "failed" and not row["retry_count"]:
-                        error = turn.get("error") or {}
                         defer(
                             self.db, execution_id, await with_reset(server, classify(error)), error.get("message", "")
                         )

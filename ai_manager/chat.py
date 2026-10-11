@@ -16,6 +16,7 @@ from .recovery import (
     reap_orphan,
     release_gate,
     reserve,
+    turn_error,
     turn_output,
     wait_for_gate,
     with_reset,
@@ -392,7 +393,8 @@ class Chat:
                         "Manager connection lost; inspect saved thread before retry",
                         {"codexErrorInfo": "transportLost"},
                     )
-                if params.get("turnId") and params["turnId"] != turn_id:
+                event_turn = params.get("turnId") or (params.get("turn") or {}).get("id")
+                if event_turn and event_turn != turn_id:
                     continue
                 with self.db.transaction() as conn:
                     if method == "item/agentMessage/delta":
@@ -421,7 +423,7 @@ class Chat:
                             "manager_context:" + conversation["id"], {"thread_id": thread_id, "context": context}
                         )
                     turn = params["turn"]
-                    error = turn.get("error") or {}
+                    error = turn_error(self.db, execution_id, turn) if turn["status"] != "completed" else {}
                     failure = classify(error) if turn["status"] == "failed" else None
                     if (
                         turn["status"] == "interrupted"
@@ -583,7 +585,7 @@ class Chat:
                     defer(self.db, row["id"], Failure("interrupted"), "Reconciling a still-active native turn")
                     continue
                 if turn and turn["status"] == "failed":
-                    error = turn.get("error") or {}
+                    error = turn_error(self.db, row["id"], turn)
                     failure = classify(error)
                     if not failure:
                         self._finish(

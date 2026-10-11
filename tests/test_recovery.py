@@ -785,3 +785,130 @@ async def test_completed_claim_is_retained_until_old_process_is_accounted_for(sy
     assert not workers.jobs
     assert Tasks(db).get(task["id"])["lease_owner"] is None
     assert Tasks(db).claim(2)["description"] == "Second writer must wait"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["worker", "manager"])
+async def test_delayed_completion_from_previous_native_turn_cannot_finish_retry(system, role):
+    db, registry, chat, settings = system
+    faults = Faults(["network", "success"])
+
+    async def stale_completion(server, params, prompt):
+        if len(faults.calls) == 2:
+            server.queues[params["threadId"]].put_nowait(
+                {
+                    "method": "turn/completed",
+                    "params": {
+                        "turn": {
+                            "id": "turn-1",
+                            "status": "failed",
+                            "error": {"codexErrorInfo": "badRequest", "message": "stale turn"},
+                        }
+                    },
+                }
+            )
+
+    faults.on_start = stale_completion
+    if role == "worker":
+        task, _, _ = task_in(system)
+        component = Workers(db, registry, settings, faults.factory)
+        component.launch(Tasks(db).claim(2))
+    else:
+        chat.server = faults.factory(settings)
+        component = chat
+        await chat.submit(registry.list()[0]["id"], "Original request")
+    await settle(component)
+    eligible(db)
+    await component.recover()
+    await settle(component)
+    assert len(faults.calls) == 2
+    row = db.one("SELECT * FROM executions WHERE agent_id=?", ("execution" if role == "worker" else "manager",))
+    assert row["status"] == "completed" and row["turn_id"] == "turn-2" and row["output"] == "Result 2"
+    assert row["error"] == ""
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["worker", "manager"])
+async def test_notification_only_usage_error_recovers_after_restart(system, role):
+    db, registry, chat, settings = system
+    faults = Faults(["usage", "success"])
+
+    class NotificationOnly(FaultServer):
+        async def request(self, method, params, timeout=30):
+            result = await super().request(method, params, timeout)
+            if method == "turn/start" and len(faults.calls) == 1:
+                queue = self.queues[params["threadId"]]
+                events = []
+                while not queue.empty():
+                    events.append(queue.get_nowait())
+                for event in events:
+                    if event["method"] == "turn/completed":
+                        turn = event["params"]["turn"]
+                        queue.put_nowait(
+                            {
+                                "method": "error",
+                                "params": {"turnId": turn["id"], "error": turn["error"], "willRetry": False},
+                            }
+                        )
+                        turn["error"] = None
+                    queue.put_nowait(event)
+            return result
+
+    def factory(settings, native=False):
+        return NotificationOnly(settings, faults, native)
+
+    if role == "worker":
+        task, _, _ = task_in(system)
+        component = Workers(db, registry, settings, factory)
+        component.launch(Tasks(db).claim(2))
+    else:
+        chat.server = factory(settings)
+        component = chat
+        await chat.submit(registry.list()[0]["id"], "Preserve original request")
+    await settle(component)
+    row = db.one("SELECT * FROM executions WHERE agent_id=?", ("execution" if role == "worker" else "manager",))
+    assert row["status"] == "recovering" and row["recovery_reason"] == "usage"
+    assert db.setting(GATE)
+    eligible(db)
+    component = (
+        Workers(Database(db.path), registry, settings, factory)
+        if role == "worker"
+        else Chat(Database(db.path), registry, factory(settings))
+    )
+    await component.recover()
+    await settle(component)
+    assert db.one("SELECT status FROM executions WHERE id=?", (row["id"],))["status"] == "completed"
+    assert len(faults.calls) == 2 and db.setting(GATE) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", ["worker", "manager"])
+async def test_native_internal_retry_success_does_not_schedule_application_retry(system, role):
+    db, registry, chat, settings = system
+    faults = Faults(["success"])
+
+    async def retry_notification(server, params, prompt):
+        server.queues[params["threadId"]].put_nowait(
+            {
+                "method": "error",
+                "params": {
+                    "turnId": "turn-1",
+                    "willRetry": True,
+                    "error": {"message": "Native retry handled it", "codexErrorInfo": "internalServerError"},
+                },
+            }
+        )
+
+    faults.on_start = retry_notification
+    if role == "worker":
+        task, _, _ = task_in(system)
+        component = Workers(db, registry, settings, faults.factory)
+        component.launch(Tasks(db).claim(2))
+    else:
+        chat.server = faults.factory(settings)
+        component = chat
+        await chat.submit(registry.list()[0]["id"], "Healthy native retry")
+    await settle(component)
+    row = db.one("SELECT * FROM executions WHERE agent_id=?", ("execution" if role == "worker" else "manager",))
+    assert row["status"] == "completed" and row["retry_count"] == 0 and row["error"] == ""
+    assert len(faults.calls) == 1 and not db.all("SELECT * FROM events WHERE kind='recovery.scheduled'")
