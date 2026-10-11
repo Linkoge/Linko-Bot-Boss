@@ -1,6 +1,6 @@
 # Codebase cleanup
 
-Date: 2026-10-11. Baseline: `20f008f` (automatic manager continuation). Implementation and deployment receipt are recorded below after cutover.
+Date: 2026-10-11. Baseline: `20f008f` (automatic manager continuation). Implementation and verified deployment receipt are recorded below.
 
 ## Findings and changes
 
@@ -82,4 +82,8 @@ Frozen historical columns/tables remain physically present in production because
 
 ## Commit and deployment
 
-Implementation commit: pending final commit. Deployment/restart: pending the completed checks above. The final receipt will record the actual code commit, running PID/version, web checks, scheduler startup and preserved production records; a commit alone is not deployment evidence.
+Implementation/running application code commit: **`e21241b3b31c6c74abe05f326f28e6d17ef71cbb`**. The existing live `main` checkout was fast-forwarded to this tested release. Only `linko-bot-manager.service` was stopped/started, with no active execution or claim at cutover. It is active/running, PID **1806541** (previous **1728649**), started **2026-10-11 17:19:29 +04**, exit status **0**, using `/home/codex/projects/Linko-Bot-Manager` and its existing Python environment. This follow-up documentation receipt advances repository HEAD without changing the running application tree.
+
+Both loopback and [private HTTPS](https://codex-server.tail5ebb9d.ts.net:8787/) returned **200** for the interface and `/api/auth-status`, and **401** for unauthenticated portfolio access. Served HTML/JavaScript/CSS bytes matched the committed files on both routes. Process working directory and restart timestamp confirm the new application was loaded. Application startup completed through scheduler initialization; ten subsequent idle scheduling intervals produced no queue failure or traceback. The real disposable end-to-end run separately demonstrated background scheduling and automatic manager continuation; no artificial production assignment was created.
+
+After restart, SQLite integrity/foreign keys passed and **every original table, column, row and hash matched the predeployment snapshot**, including all 11 projects, 51 tasks, 10 conversations, 64 messages, 105 executions and 109,981 events, owner/sessions, settings, private notes and historical evidence. Schema remains **8**. Backup/rehearsal and private `before.json`/`after.json` receipts remain in the backup directory above. No project permission/scheduler setup, database reset, task replay, native-thread deletion, backup-timer change, remote push or unrelated service/listener change occurred.
