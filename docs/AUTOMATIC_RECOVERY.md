@@ -71,4 +71,18 @@ Real installed Codex acceptance passed in **45.5 seconds**, with one coding task
 
 ## Release
 
-Release version: **Stage 3 — automatic recovery, schema 9**. The implementation commit and actual deployed commit, backup location, preservation checks and service verification will be appended after the documented deployment procedure completes.
+Implementation commit: **`299013ad20fd9657f54ee99051c42fe2c9cded94`**. Deployed version: **`automatic-recovery-stage3-20261011`**, schema **9**, which includes the implementation and this documentation receipt. The exact release commit is resolved by that Git tag, exposed as startup-captured `/api/auth-status.release_commit`, and recorded in the private `running-release.json` receipt below.
+
+The documented separate-checkout/verified-backup/idle-cutover procedure was used. The implementation cutover at **2026-10-11 20:54:42 +04** changed service PID **1871357 → 1934152**. Only `linko-bot-manager.service` was stopped/started. Its existing environment, Python dependencies, service unit, daily backup timer and Tailscale listener were retained. This documentation follow-up contains no executable changes; the final tagged release uses the same tested application files.
+
+Verified private backup:
+
+```text
+/home/codex/.local/share/linko-bot-manager/backups/automatic-recovery-20261011T165252Z/
+```
+
+It contains the integrity/foreign-key-checked `manager.sqlite3`, copied service/environment settings, native state/history SQLite backups, **all 63 referenced native rollout histories**, and private hash/HTTP/cutover receipts. There were no missing native references. Schema migration and complete application startup were rehearsed against separate copies using mock workers and a disposable allowed project root.
+
+After deployment, integrity and foreign keys passed. **Every original table, column value and row hash remained identical**, including **11 projects, 57 tasks, 10 conversations, 56 messages, 120 executions and 111,352 events**, plus owner/sessions, settings, notes and historical evidence. Schema 9 is the only new schema-version entry. No unfinished execution, held project claim or pending/running completion delivery was introduced; all previous task dispositions were preserved.
+
+The backend reports the release commit and an active scheduler. Loopback and existing private HTTPS returned **200** for the API status and interface; protected portfolio requests remained **401** without authentication. Served HTML, JavaScript and CSS matched the committed application files. Startup completed without errors; subsequent idle scheduling intervals produced no queue failure. The deployed checkout's real disposable Codex acceptance passed in **47.5 seconds**, with one worker, preserved tests, local edits/commit and automatic manager continuation in the originating conversation, without approvals or duplicate reporting. No production acceptance task, chat reset, model/account change or unrelated service restart was used.
