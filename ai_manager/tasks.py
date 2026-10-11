@@ -1,168 +1,99 @@
-import json
+"""Durable objectives and exclusive project claims. Legacy columns are history only."""
+
 import time
 
-from .db import Database, new_id
-from .verification_strategies import validate_spec
+from .db import new_id
 
-TRANSITIONS = {
-    "pending": {"running", "paused", "blocked", "awaiting_approval", "cancelled"},
-    "running": {"verifying", "paused", "blocked", "failed", "awaiting_approval"},
-    "verifying": {"completed", "failed", "blocked", "paused"},
-    "paused": {"pending", "cancelled"},
-    "blocked": {"pending", "cancelled"},
-    "awaiting_approval": {"pending", "blocked", "cancelled"},
-    "failed": {"pending", "cancelled"},
-    "completed": set(),
-    "cancelled": set(),
-}
+STATUSES = {"queued", "running", "waiting", "completed", "failed", "cancelled"}
 
 
 class Tasks:
-    def __init__(self, db: Database):
+    def __init__(self, db):
         self.db = db
 
-    def add(
-        self,
-        project_id,
-        description,
-        acceptance,
-        priority=50,
-        dependencies=(),
-        verification="",
-        permissions=(),
-        kind="code",
-        verification_spec=None,
-    ):
-        if not description.strip() or not acceptance.strip():
-            raise ValueError("Tasks need description and acceptance criteria")
-        validate_spec(kind, verification_spec or {})
-        task_id, now = new_id(), time.time()
-        with self.db.transaction() as conn:
-            for dep in dependencies:
-                row = conn.execute("SELECT project_id FROM tasks WHERE id=?", (dep,)).fetchone()
-                if not row or row["project_id"] != project_id:
-                    raise ValueError("Dependency must exist in the same project")
-            conn.execute(
-                "INSERT INTO tasks(id,project_id,description,priority,acceptance,verification,permissions,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?,?)",
-                (
-                    task_id,
-                    project_id,
-                    description,
-                    priority,
-                    acceptance,
-                    verification,
-                    json.dumps(permissions),
-                    now,
-                    now,
-                ),
-            )
-            conn.execute(
-                "UPDATE tasks SET kind=?,verification_spec=? WHERE id=?",
-                (kind, json.dumps(verification_spec or {}), task_id),
-            )
-            conn.executemany("INSERT INTO dependencies VALUES(?,?)", [(task_id, d) for d in dependencies])
-            self.db.event(conn, "task.created", {"description": description}, project_id, task_id)
-        self.sync(project_id)
-        return self.get(task_id)
+    @staticmethod
+    def record(row):
+        return {**row, "legacy_status": row["status"], "status": row["lifecycle"]}
 
     def get(self, task_id):
         row = self.db.one("SELECT * FROM tasks WHERE id=?", (task_id,))
         if not row:
-            raise ValueError("Unknown task")
-        return row
+            raise ValueError("Unknown assignment")
+        return self.record(row)
 
     def list(self, project_id=None):
-        return self.db.all(
-            "SELECT * FROM tasks"
-            + (" WHERE project_id=?" if project_id else "")
-            + " ORDER BY priority DESC,created_at",
+        rows = self.db.all(
+            "SELECT * FROM tasks" + (" WHERE project_id=?" if project_id else "") + " ORDER BY created_at DESC",
             (project_id,) if project_id else (),
         )
+        return [self.record(row) for row in rows]
 
-    def transition(self, task_id, status, revision, evidence=None, blocker="", blocker_code=""):
+    def add(self, project_id, description, origin_conversation=None, request_key=None):
+        if not description.strip() or len(description) > 24000:
+            raise ValueError("Objective must be 1–24000 characters")
+        now, task_id = time.time(), new_id()
         with self.db.transaction() as conn:
-            row = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-            if not row or row["revision"] != revision:
-                raise ValueError("Task changed; refresh before editing")
-            if status not in TRANSITIONS[row["status"]]:
-                raise ValueError(f"Cannot transition {row['status']} to {status}")
-            if status == "completed" and not evidence:
-                raise ValueError("Completion requires independent verification evidence")
+            if request_key:
+                previous = conn.execute(
+                    "SELECT id,project_id FROM tasks WHERE request_key=?", (request_key,)
+                ).fetchone()
+                if previous:
+                    if previous["project_id"] != project_id:
+                        raise ValueError("Delegation belongs to another project")
+                    return self.get(previous["id"])
             conn.execute(
-                "UPDATE tasks SET status=?,blocker=?,blocker_code=?,revision=revision+1,updated_at=?,lease_owner=NULL,lease_until=NULL WHERE id=?",
-                (status, blocker, blocker_code, time.time(), task_id),
+                """INSERT INTO tasks(id,project_id,description,acceptance,created_at,updated_at,
+                         lifecycle,origin_conversation,request_key,legacy)
+                         VALUES(?,?,?,'',?,?,'queued',?,?,0)""",
+                (task_id, project_id, description, now, now, origin_conversation, request_key),
             )
-            self.db.event(
-                conn,
-                "task.transition",
-                {
-                    "from": row["status"],
-                    "to": status,
-                    "evidence": evidence,
-                    "blocker": blocker,
-                    "blocker_code": blocker_code,
-                    "previous_blocker": row["blocker"],
-                },
-                row["project_id"],
-                task_id,
-            )
-        self.sync(row["project_id"])
+            self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
         return self.get(task_id)
 
-    def claim(self, owner, max_workers=2, lease_seconds=90):
+    def control(self, task_id, action, revision):
         with self.db.transaction() as conn:
-            if (
-                conn.execute(
-                    "SELECT count(*) FROM tasks WHERE status IN ('running','verifying','awaiting_approval')"
-                ).fetchone()[0]
-                >= max_workers
-            ):
+            task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
+            if not task or task["revision"] != revision:
+                raise ValueError("Assignment changed; refresh before editing")
+            if task["lifecycle"] == "running" or task["lease_owner"]:
+                raise ValueError("Stop the active worker before changing this assignment")
+            if task["lifecycle"] == "cancelled":
+                raise ValueError("Assignment was cancelled")
+            status = {"continue": "queued", "pause": "waiting", "cancel": "cancelled"}.get(action)
+            if not status:
+                raise ValueError("Unknown assignment action")
+            conn.execute(
+                "UPDATE tasks SET lifecycle=?,blocker=?,revision=revision+1,updated_at=? WHERE id=?",
+                (status, "Paused by user" if action == "pause" else "", time.time(), task_id),
+            )
+            self.db.event(conn, "task." + action, {}, task["project_id"], task_id)
+        return self.get(task_id)
+
+    def claim(self, max_workers):
+        with self.db.transaction() as conn:
+            if conn.execute("SELECT count(*) FROM tasks WHERE lease_owner IS NOT NULL").fetchone()[0] >= max_workers:
                 return None
             row = conn.execute("""SELECT t.* FROM tasks t JOIN projects p ON p.id=t.project_id
-                WHERE t.status='pending' AND p.status='active'
-                AND NOT EXISTS(SELECT 1 FROM dependencies d JOIN tasks prerequisite ON prerequisite.id=d.depends_on
-                    WHERE d.task_id=t.id AND prerequisite.status!='completed')
-                AND NOT EXISTS(SELECT 1 FROM tasks active WHERE active.project_id=t.project_id AND active.status IN ('running','verifying','awaiting_approval'))
-                ORDER BY p.priority DESC,t.priority DESC,t.created_at LIMIT 1""").fetchone()
+                WHERE t.lifecycle='queued' AND p.status='active'
+                AND NOT EXISTS(SELECT 1 FROM tasks busy WHERE busy.project_id=t.project_id AND busy.lease_owner IS NOT NULL)
+                ORDER BY p.priority DESC,t.created_at LIMIT 1""").fetchone()
             if not row:
                 return None
-            now = time.time()
+            execution_id = new_id()
             conn.execute(
-                "UPDATE tasks SET status='running',lease_owner=?,lease_until=?,revision=revision+1,updated_at=? WHERE id=?",
-                (owner, now + lease_seconds, now, row["id"]),
+                "UPDATE tasks SET lifecycle='running',lease_owner=?,revision=revision+1,updated_at=? WHERE id=?",
+                (execution_id, time.time(), row["id"]),
             )
-            self.db.event(conn, "task.claimed", {"owner": owner}, row["project_id"], row["id"])
-            return dict(conn.execute("SELECT * FROM tasks WHERE id=?", (row["id"],)).fetchone())
-
-    def heartbeat(self, task_id, owner, lease_seconds=90):
-        with self.db.transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE tasks SET lease_until=? WHERE id=? AND lease_owner=? AND status IN ('running','verifying','awaiting_approval')",
-                (time.time() + lease_seconds, task_id, owner),
+            conn.execute(
+                """INSERT INTO executions(id,task_id,project_id,agent_id,status,started_at,worktree)
+                            VALUES(?,?,?,'execution','queued',?,?)""",
+                (
+                    execution_id,
+                    row["id"],
+                    row["project_id"],
+                    time.time(),
+                    conn.execute("SELECT path FROM projects WHERE id=?", (row["project_id"],)).fetchone()[0],
+                ),
             )
-            if cursor.rowcount != 1:
-                raise ValueError("Task lease lost")
-
-    def recover_expired(self):
-        # Uncertain outcomes block instead of replaying operations.
-        with self.db.transaction() as conn:
-            rows = conn.execute(
-                "SELECT * FROM tasks WHERE status IN ('running','verifying','awaiting_approval') AND lease_until < ?",
-                (time.time(),),
-            ).fetchall()
-            for row in rows:
-                conn.execute(
-                    "UPDATE tasks SET status='blocked',blocker='Lease expired; reconcile process and workspace before retry',revision=revision+1 WHERE id=?",
-                    (row["id"],),
-                )
-                self.db.event(conn, "task.recovery_required", {}, row["project_id"], row["id"])
-            return len(rows)
-
-    def sync(self, project_id):
-        from .memory import sync_project
-
-        try:
-            sync_project(self.db, project_id)
-        except OSError:
-            with self.db.transaction() as conn:
-                self.db.event(conn, "memory.export_retry_required", {}, project_id)
+            self.db.event(conn, "worker.queued", {}, row["project_id"], row["id"], execution_id)
+        return self.get(row["id"])

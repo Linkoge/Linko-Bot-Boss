@@ -1,4 +1,3 @@
-import json
 import subprocess
 import time
 from pathlib import Path
@@ -62,8 +61,6 @@ class Registry:
         existing = self.db.one("SELECT * FROM projects WHERE path=?", (str(path),))
         if existing:
             return existing
-        if self.db.setting("freeze_projects_until", 0) > time.time():
-            raise ValueError("New project registrations are paused by the owner")
         project_id, now = new_id(), time.time()
         with self.db.transaction() as conn:
             conn.execute(
@@ -78,22 +75,9 @@ class Registry:
                     now,
                 ),
             )
-            for filename in MEMORY_NAMES:
-                source = path / filename
-                # Existing files are read only; symlinks cannot bring private files into memory.
-                content = (
-                    source.read_text(errors="replace")[:24000]
-                    if source.is_file() and not source.is_symlink()
-                    else f"# {filename[:-3].title()} — {name or path.name}\n\nNo verified information recorded yet.\n"
-                )
-                conn.execute(
-                    "INSERT INTO memory(project_id,name,content,updated_at) VALUES(?,?,?,?)",
-                    (project_id, filename, content, now),
-                )
             self.db.event(conn, "project.registered", {"path": str(path)}, project_id)
         if name:
             self.update(project_id, 0, {"display_name": name})
-        self.export_memory(project_id)
         return self.get(project_id)
 
     def discover(self) -> list[dict]:
@@ -105,10 +89,7 @@ class Registry:
             if depth > 3 or not path.is_dir() or path.is_symlink():
                 return
             if (path / ".git").exists():
-                if self.db.setting("freeze_projects_until", 0) <= time.time() or self.db.one(
-                    "SELECT id FROM projects WHERE path=?", (str(path.resolve()),)
-                ):
-                    found.append(self.add(path))
+                found.append(self.add(path))
                 return
             for child in sorted(path.iterdir()):
                 if not child.name.startswith(".") and child.name not in skip:
@@ -147,38 +128,22 @@ class Registry:
             if cursor.rowcount != 1:
                 raise ValueError("Project changed; refresh before editing")
             self.db.event(conn, "project.updated", changes, project_id)
-        from .memory import sync_project
-
-        sync_project(self.db, project_id)
         return self.get(project_id)
 
     def memory(self, project_id):
         self.get(project_id)
         return self.db.all("SELECT * FROM memory WHERE project_id=? ORDER BY name", (project_id,))
 
-    def update_memory(self, project_id, name, content, revision):
-        if name not in MEMORY_NAMES or len(content) > 100000:
-            raise ValueError("Invalid memory document")
-        with self.db.transaction() as conn:
-            cursor = conn.execute(
-                "UPDATE memory SET content=?,revision=revision+1,updated_at=? WHERE project_id=? AND name=? AND revision=?",
-                (content, time.time(), project_id, name, revision),
-            )
-            if cursor.rowcount != 1:
-                raise ValueError("Memory changed; refresh before editing")
-            self.db.event(conn, "memory.updated", {"name": name, "revision": revision + 1}, project_id)
-        self.export_memory(project_id)
-
-    def export_memory(self, project_id):
-        # Lock while projecting the authoritative DB to human-readable files.
-        directory = self.db.path.parent / "memory" / project_id
-        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
-        with self.db.transaction() as conn:
-            for row in conn.execute("SELECT * FROM memory WHERE project_id=?", (project_id,)):
-                temporary = directory / (row["name"] + ".tmp")
-                temporary.write_text(row["content"])
-                temporary.chmod(0o600)
-                temporary.replace(directory / row["name"])
+    def notes(self, project_id):
+        notes = {}
+        for row in self.memory(project_id):
+            content = row["content"]
+            before, marker, rest = content.partition("<!-- AI_MANAGER_GENERATED_START -->")
+            if marker and "<!-- AI_MANAGER_GENERATED_END -->" in rest:
+                content = before + rest.split("<!-- AI_MANAGER_GENERATED_END -->", 1)[1]
+            if content.strip():
+                notes[row["name"]] = content[:2000]
+        return notes
 
     def reconcile(self, project_id):
         project = self.get(project_id)
@@ -204,21 +169,3 @@ class Registry:
         with self.db.transaction() as conn:
             self.db.event(conn, "project.reconciled", result, project_id)
         return result
-
-    def checkpoint(self, project_id, summary, evidence, commit_ref="", task_id=None):
-        if not evidence or not summary:
-            raise ValueError("Verified checkpoints require evidence and summary")
-        checkpoint_id = new_id()
-        with self.db.transaction() as conn:
-            conn.execute(
-                "INSERT INTO checkpoints VALUES(?,?,?,?,?,?,?)",
-                (checkpoint_id, project_id, task_id, commit_ref, summary, json.dumps(evidence), time.time()),
-            )
-            self.db.event(
-                conn,
-                "checkpoint.recorded",
-                {"id": checkpoint_id, "summary": summary, "evidence": evidence},
-                project_id,
-                task_id,
-            )
-        return checkpoint_id

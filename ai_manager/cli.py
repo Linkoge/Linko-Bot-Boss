@@ -19,8 +19,6 @@ def main():
     reconcile.add_argument("project_id")
     backup = commands.add_parser("backup")
     backup.add_argument("destination", type=Path)
-    administration = commands.add_parser("owner-admin", help="Scoped owner administration using a JSON request file")
-    administration.add_argument("request", type=Path)
     restore = commands.add_parser("restore")
     restore.add_argument("source", type=Path)
     restore.add_argument("destination", type=Path)
@@ -35,23 +33,7 @@ def main():
         return
     db = Database(settings.db_path)
     registry = Registry(db, settings.project_roots)
-    if args.command == "owner-admin":
-        from .administration import Administration
-
-        admin = Administration(db, registry, settings)
-        request = json.loads(args.request.read_text())
-        if request.get("operation") == "grant":
-            result = admin.grant(
-                request["id"], request.get("project_id"), request["actions"], request["authorization"], "local_owner"
-            )
-        elif request.get("operation") == "revoke":
-            result = admin.revoke(request["id"], "local_owner")
-        else:
-            result = admin.execute(request, "local_owner")
-        print(json.dumps(result, indent=2))
-        if result.get("status") == "failed" or result.get("result") == "rejected":
-            raise SystemExit(1)
-    elif args.command == "discover":
+    if args.command == "discover":
         print(json.dumps(registry.discover(), indent=2))
     elif args.command == "overview":
         for project in registry.list():

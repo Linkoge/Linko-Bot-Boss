@@ -1,15 +1,16 @@
 import asyncio
 import fcntl
 import hmac
+import json
 import logging
 import shutil
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -19,13 +20,10 @@ from .chat import ROLES, Chat
 from .codex import AppServer, CodexError
 from .config import Settings
 from .db import Database
-from .orchestration import Planner, Scheduler, Verifier
-from .policies import Policies
-from .registry import Registry, git
+from .orchestration import Scheduler
+from .registry import Registry
 from .tasks import Tasks
-from .verification import VerificationCommands
 from .workers import Workers
-from .workspace import safe_file
 
 
 class LoginBody(BaseModel):
@@ -53,27 +51,9 @@ class ProjectUpdate(BaseModel):
     status: str | None = None
 
 
-class MemoryBody(BaseModel):
-    revision: int
-    content: str = Field(max_length=100000)
-
-
-class TaskBody(BaseModel):
-    project_id: str
-    description: str = Field(min_length=1, max_length=10000)
-    acceptance: str = Field(min_length=1, max_length=10000)
-    priority: int = Field(default=50, ge=0, le=100)
-    dependencies: list[str] = Field(default_factory=list, max_length=50)
-    verification: str = Field(default="", max_length=5000)
-    permissions: list[str] = Field(default_factory=list, max_length=30)
-    kind: Literal["code", "documentation", "research", "infrastructure", "investigation"] = "code"
-    verification_spec: dict = Field(default_factory=dict)
-
-
 class MessageBody(BaseModel):
     project_id: str | None = None
     content: str = Field(min_length=1, max_length=24000)
-    mode: Literal["auto", "conversation", "execute"] = "auto"
 
 
 class RouteBody(BaseModel):
@@ -95,119 +75,34 @@ class InstructionsBody(BaseModel):
 
 class TaskControl(BaseModel):
     revision: int
-    status: str
+    action: str
 
 
-class ResumeBody(BaseModel):
-    revision: int
-    reconciled: bool = False
-    reconciliation: str = Field(default="", max_length=3000)
+class AnswerBody(BaseModel):
+    answers: dict
 
 
-class GoalBody(BaseModel):
-    project_id: str
-    goal: str = Field(min_length=1, max_length=10000)
-    request_key: str = Field(min_length=8, max_length=100)
-
-
-class SchedulerBody(BaseModel):
-    enabled: bool
-    project_id: str | None = None
-    limit: int | None = Field(default=None, ge=1, le=100)
-    max_workers: int = Field(default=2, ge=1, le=8)
-
-
-class VerificationCommandsBody(BaseModel):
-    commands: list[list[str]] = Field(max_length=10)
-
-
-class PolicyBody(BaseModel):
-    mode: str | None
-    risk_accepted: bool = False
-
-
-class ApprovalBody(BaseModel):
-    approve: bool
-
-
-class ProfileBody(BaseModel):
-    profile: str
-    project_id: str | None = None
-    proposal_hash: str = Field(min_length=64, max_length=64)
-
-
-class CommandDecision(BaseModel):
-    id: str
-    status: Literal["approved", "rejected", "revoked"]
-
-
-class CommandDecisions(BaseModel):
-    decisions: list[CommandDecision] = Field(min_length=1, max_length=100)
-
-
-class CommandDefinition(BaseModel):
-    argv: list[str] = Field(min_length=1, max_length=30)
-    cwd: str = Field(default=".", max_length=1000)
-    purpose: Literal["verification", "dependency"] = "verification"
-    execution_id: str | None = None
-
-
-class IntegrationPolicy(BaseModel):
-    auto_commit: bool = False
-    auto_merge: bool = False
-    target_branch: str = Field(default="", max_length=200)
-
-
-class NotificationSettings(BaseModel):
-    daily_summaries: bool
-
-
-class AdministrationGrant(BaseModel):
-    id: str = Field(min_length=1, max_length=100)
-    project_id: str | None = None
-    actions: list[str] = Field(min_length=1, max_length=20)
-    authorization: str = Field(min_length=1, max_length=5000)
-
-
-def create_app(settings: Settings | None = None, server=None):
+def create_app(settings: Settings | None = None, server=None, worker_factory=AppServer):
     settings = settings or Settings()
     settings.prepare()
     db = Database(settings.db_path)
     registry, tasks, auth = Registry(db, settings.project_roots), Tasks(db), Auth(db, settings)
     chat = Chat(db, registry, server or AppServer(settings))
-    workers = Workers(db, registry, settings)
-    planner, verifier = Planner(db, registry, settings), Verifier(db, registry, settings)
-    scheduler = Scheduler(db, registry, settings, workers, verifier, planner)
+    workers = Workers(db, registry, settings, worker_factory)
+    scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
-    chat.receipt_provider = scheduler.receipts
-    policies = Policies(db)
-    verification = VerificationCommands(db, registry)
 
     @asynccontextmanager
     async def lifespan(app):
         lock_file = (settings.data_dir / "manager.lock").open("a")
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except OSError:
-            lock_file.close()
-            raise RuntimeError("Another manager instance owns this data directory")
-        auth.bootstrap()
-        chat.recover()
-        workers.recover()
-        scheduler.recover()
-        registry.discover()
-        for project in registry.list():
-            tasks.sync(project["id"])
-            try:
-                verification.discover(project["id"])
-            except (ValueError, OSError) as error:
-                with db.transaction() as conn:
-                    db.event(conn, "verification.discovery_blocked", {"reason": str(error)}, project["id"])
-        with db.transaction() as conn:
-            conn.execute("UPDATE approvals SET status='cancelled' WHERE status IN ('pending','approved')")
-        settings.max_workers = db.setting("max_workers", settings.max_workers)
-        scheduler.start()
-        try:
+            auth.bootstrap()
+            await chat.recover()
+            await workers.recover()
+            registry.discover()
+            settings.max_workers = db.setting("max_workers", settings.max_workers)
+            scheduler.start()
             yield
         finally:
             await scheduler.close()
@@ -215,10 +110,9 @@ def create_app(settings: Settings | None = None, server=None):
             await chat.close()
             lock_file.close()
 
-    app = FastAPI(title="AI Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Linko Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
-    app.state.workers = workers
-    app.state.scheduler = scheduler
+    app.state.workers, app.state.scheduler = workers, scheduler
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
     @app.middleware("http")
@@ -248,31 +142,6 @@ def create_app(settings: Settings | None = None, server=None):
             raise HTTPException(401, "Login required")
         return session
 
-    from .administration import Administration
-
-    administration = Administration(db, registry, settings, verifier)
-
-    @app.get("/api/administration", dependencies=[Depends(require_owner)])
-    def administration_status():
-        return {
-            "grants": administration.grants(),
-            "receipts": db.all(
-                "SELECT seq,payload FROM events WHERE kind LIKE 'owner_admin.%' ORDER BY seq DESC LIMIT 50"
-            ),
-        }
-
-    @app.post("/api/administration/grants", dependencies=[Depends(require_owner)])
-    def administration_grant(body: AdministrationGrant):
-        return administration.grant(**body.model_dump(exclude={"id"}), grant_id=body.id, actor="authenticated_owner")
-
-    @app.delete("/api/administration/grants/{grant_id}", dependencies=[Depends(require_owner)])
-    def administration_revoke(grant_id: str):
-        return administration.revoke(grant_id, "authenticated_owner")
-
-    @app.post("/api/administration/actions", dependencies=[Depends(require_owner)])
-    def administration_action(body: dict):
-        return administration.execute(body, "authenticated_owner")
-
     @app.exception_handler(ValueError)
     async def invalid(request, error):
         logging.getLogger(__name__).warning("action.rejected path=%s reason=%s", request.url.path, str(error))
@@ -295,7 +164,6 @@ def create_app(settings: Settings | None = None, server=None):
     @app.post("/api/setup")
     async def setup(body: SetupBody, request: Request):
         # Bootstrap token checks are also throttled, with no remote password reset path.
-        import time
 
         ip = request.client.host if request.client else "unknown"
         with db.transaction() as conn:
@@ -340,207 +208,6 @@ def create_app(settings: Settings | None = None, server=None):
             db.event(conn, "owner.sessions_revoked", {})
         return {"revoked": True}
 
-    @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
-    def portfolio():
-        projects = registry.list()
-        storage = shutil.disk_usage(settings.data_dir)
-        return {
-            "projects": projects,
-            "tasks": [{**task, "readiness": workers.readiness(task["id"])} for task in tasks.list()],
-            "executions": db.all("SELECT * FROM executions ORDER BY started_at DESC LIMIT 50"),
-            "checkpoints": db.all("SELECT * FROM checkpoints ORDER BY created_at DESC LIMIT 20"),
-            "recommendation": "Focus on fewer active projects"
-            if sum(p["status"] == "active" for p in projects) > 3
-            else "Continue the highest priority unblocked task",
-            "automation_enabled": db.setting("scheduler_enabled", False),
-            "scheduler": scheduler.snapshot(),
-            "autonomy_profile": policies.profile(),
-            "integration": db.all("SELECT * FROM integration_results ORDER BY created_at DESC LIMIT 30"),
-            "approvals": db.all("SELECT * FROM approvals WHERE status='pending' ORDER BY created_at"),
-            "notifications": db.all("SELECT * FROM notifications ORDER BY created_at DESC LIMIT 30"),
-            "storage": {
-                "free_bytes": storage.free,
-                "total_bytes": storage.total,
-                "low_space": storage.free < 1024 * 1024 * 1024,
-            },
-        }
-
-    @app.post("/api/projects/discover", dependencies=[Depends(require_owner)])
-    def discover():
-        return registry.discover()
-
-    @app.post("/api/projects", dependencies=[Depends(require_owner)])
-    def add_project(body: ProjectBody):
-        project = registry.add(body.path, body.name)
-        try:
-            verification.discover(project["id"])
-        except (ValueError, OSError):
-            pass
-        return project
-
-    @app.patch("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
-    def update_project(project_id: str, body: ProjectUpdate):
-        return registry.update(project_id, body.revision, body.model_dump(exclude={"revision"}, exclude_none=True))
-
-    @app.get("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
-    def detail(project_id: str):
-        return {
-            "project": registry.get(project_id),
-            "memory": registry.memory(project_id),
-            "tasks": tasks.list(project_id),
-            "checkpoint": db.one(
-                "SELECT * FROM checkpoints WHERE project_id=? ORDER BY created_at DESC LIMIT 1", (project_id,)
-            ),
-            "observation": registry.reconcile(project_id),
-        }
-
-    @app.put("/api/projects/{project_id}/memory/{name}", dependencies=[Depends(require_owner)])
-    def update_memory(project_id: str, name: str, body: MemoryBody):
-        registry.update_memory(project_id, name, body.content, body.revision)
-        return {"updated": True}
-
-    @app.post("/api/tasks", dependencies=[Depends(require_owner)])
-    async def add_task(body: TaskBody):
-        task = tasks.add(**body.model_dump())
-        await scheduler.tick()
-        return {**tasks.get(task["id"]), "result": "accepted", "receipt": scheduler.receipts([task["id"]])[0]}
-
-    @app.post("/api/tasks/{task_id}/start", dependencies=[Depends(require_owner)])
-    async def start_task(task_id: str):
-        return await workers.start(task_id)
-
-    @app.post("/api/goals", dependencies=[Depends(require_owner)])
-    async def goal(body: GoalBody):
-        result = await planner.plan(body.project_id, body.goal, body.request_key)
-        await scheduler.tick()
-        return {
-            **result,
-            "result": "accepted",
-            "tasks": scheduler.receipts(result.get("task_ids", [])),
-            "scheduler": scheduler.snapshot(),
-        }
-
-    @app.put("/api/scheduler", dependencies=[Depends(require_owner)])
-    def configure_scheduler(body: SchedulerBody):
-        if body.project_id:
-            registry.get(body.project_id)
-        db.set_setting("scheduler_scope", body.project_id)
-        db.set_setting("scheduler_batch", {"limit": body.limit, "task_ids": []})
-        db.set_setting("scheduler_enabled", body.enabled)
-        db.set_setting("max_workers", body.max_workers)
-        settings.max_workers = body.max_workers
-        return {
-            "configured": True,
-            "result": "accepted",
-            "message": "Scheduler enabled" if body.enabled else "Scheduler paused",
-            "scheduler": scheduler.snapshot(),
-        }
-
-    @app.get("/api/projects/{project_id}/verification", dependencies=[Depends(require_owner)])
-    def get_verification(project_id: str):
-        registry.get(project_id)
-        return verification.snapshot(project_id)
-
-    @app.put("/api/projects/{project_id}/verification", dependencies=[Depends(require_owner)])
-    def verification_commands(project_id: str, body: VerificationCommandsBody):
-        registry.get(project_id)
-        return verification.register(project_id, body.commands)
-
-    @app.post("/api/projects/{project_id}/verification/discover", dependencies=[Depends(require_owner)])
-    def discover_verification(project_id: str, execution_id: str | None = None):
-        return verification.discover(project_id, execution_id)
-
-    @app.post("/api/projects/{project_id}/verification/commands", dependencies=[Depends(require_owner)])
-    def propose_command(project_id: str, body: CommandDefinition):
-        return verification.add_definition(project_id, **body.model_dump())
-
-    @app.post("/api/projects/{project_id}/verification/decisions", dependencies=[Depends(require_owner)])
-    async def command_decisions(project_id: str, body: CommandDecisions):
-        registry.get(project_id)
-        result = verification.decide(project_id, [d.model_dump() for d in body.decisions])
-        await scheduler.tick()
-        return result
-
-    @app.get("/api/verification", dependencies=[Depends(require_owner)])
-    def all_verification():
-        return [
-            {"project_id": p["id"], "project": p["display_name"] or p["name"], **verification.snapshot(p["id"])}
-            for p in registry.list()
-            if p["status"] != "removed"
-        ]
-
-    @app.get("/api/projects/{project_id}/integration", dependencies=[Depends(require_owner)])
-    def integration_policy(project_id: str):
-        registry.get(project_id)
-        return db.setting(
-            f"integration_policy:{project_id}", {"auto_commit": False, "auto_merge": False, "target_branch": ""}
-        )
-
-    @app.put("/api/projects/{project_id}/integration", dependencies=[Depends(require_owner)])
-    def configure_integration(project_id: str, body: IntegrationPolicy):
-        registry.get(project_id)
-        if body.auto_merge and (
-            not body.auto_commit
-            or not body.target_branch
-            or body.target_branch.startswith("-")
-            or ".." in body.target_branch
-        ):
-            raise ValueError("Verified automatic merge requires automatic commits and an explicit target branch")
-        old = db.setting(f"integration_policy:{project_id}", {})
-        db.set_setting(f"integration_policy:{project_id}", body.model_dump())
-        with db.transaction() as conn:
-            db.event(
-                conn,
-                "policy.integration_changed",
-                {"old": old, "new": body.model_dump(), "authorized_by": "authenticated_owner"},
-                project_id,
-            )
-        return {
-            "result": "accepted",
-            "message": "Owner integration policy saved for future verified tasks; existing integration outcomes are never replayed",
-        }
-
-    @app.post("/api/tasks/{task_id}/resume", dependencies=[Depends(require_owner)])
-    async def resume_task(task_id: str, body: ResumeBody):
-        return await workers.resume(task_id, body.revision, body.reconciled, body.reconciliation)
-
-    @app.post("/api/tasks/{task_id}/retry", dependencies=[Depends(require_owner)])
-    async def retry_task(task_id: str, body: ResumeBody):
-        return await workers.retry(task_id, body.revision)
-
-    @app.post("/api/tasks/{task_id}/verify", dependencies=[Depends(require_owner)])
-    async def retry_verification(task_id: str, body: ResumeBody):
-        result = verifier.retry(task_id, body.revision)
-        await scheduler.tick()
-        return result
-
-    @app.post("/api/tasks/{task_id}/integration/reconcile", dependencies=[Depends(require_owner)])
-    async def reconcile_integration(task_id: str, body: ResumeBody):
-        if not body.reconciled:
-            raise ValueError("Explicit owner reconciliation is required")
-        from .integration import Integrator
-
-        result = Integrator(db, registry, settings).reconcile(tasks.get(task_id), body.revision, body.reconciliation)
-        result["verification"] = verifier.retry(task_id, body.revision)
-        await scheduler.tick()
-        return result
-
-    @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
-    def task_control(task_id: str, body: TaskControl):
-        task = tasks.get(task_id)
-        if task["status"] in {"running", "verifying", "awaiting_approval"} or body.status not in {
-            "pending",
-            "paused",
-            "cancelled",
-        }:
-            raise ValueError("Use worker interruption controls for active work; completion requires verification")
-        if body.status == "pending" and workers.latest_worker(task_id):
-            raise ValueError(
-                "Use Retry launch, Resume persisted worker, or Retry verification; existing executions must not be replayed by a generic state change"
-            )
-        result = tasks.transition(task_id, body.status, body.revision)
-        return {**result, "result": "accepted", "message": f"Task {task_id[:8]} is {result['status']}"}
-
     @app.get("/api/history", dependencies=[Depends(require_owner)])
     def history(project_id: str | None = None, search: str = ""):
         return chat.history(project_id, search)
@@ -571,95 +238,6 @@ def create_app(settings: Settings | None = None, server=None):
         return chat.reset(
             body.project_id, body.conversation_id, body.last_message_id, body.confirmed, archive=True, title=body.title
         )
-
-    @app.get("/api/tasks/{task_id}/evidence", dependencies=[Depends(require_owner)])
-    def evidence(task_id: str):
-        tasks.get(task_id)
-        return db.all("SELECT * FROM verification_results WHERE task_id=? ORDER BY created_at DESC", (task_id,))
-
-    @app.get("/api/tasks/{task_id}/execution-records", dependencies=[Depends(require_owner)])
-    def execution_records(task_id: str):
-        return {
-            "task": tasks.get(task_id),
-            "readiness": workers.readiness(task_id),
-            "executions": db.all("SELECT * FROM executions WHERE task_id=? ORDER BY started_at", (task_id,)),
-            "operations": db.all(
-                "SELECT o.* FROM operations o JOIN executions e ON e.id=o.execution_id WHERE e.task_id=? ORDER BY o.created_at",
-                (task_id,),
-            ),
-            "approvals": db.all("SELECT * FROM approvals WHERE task_id=? ORDER BY created_at", (task_id,)),
-            "verification": db.all(
-                "SELECT * FROM verification_results WHERE task_id=? ORDER BY created_at", (task_id,)
-            ),
-            "integration": db.all("SELECT * FROM integration_results WHERE task_id=? ORDER BY created_at", (task_id,)),
-        }
-
-    @app.get("/api/executions/{execution_id}/patch", dependencies=[Depends(require_owner)])
-    def download_patch(execution_id: str):
-        execution = db.one("SELECT * FROM executions WHERE id=? AND task_id IS NOT NULL", (execution_id,))
-        if not execution or not execution["worktree"] or tasks.get(execution["task_id"])["status"] != "completed":
-            raise HTTPException(409, "A patch is available only after verified completion")
-        root = Path(execution["worktree"])
-        if not root.resolve().is_relative_to((settings.data_dir / "workspaces").resolve()):
-            raise ValueError("Result is outside isolated storage")
-        baseline = execution.get("base_commit") or execution["commit_ref"]
-        changed = git(root, "diff", baseline, "--name-only", "-z").split("\0")
-        untracked = git(root, "ls-files", "--others", "--exclude-standard", "-z").split("\0")
-        for path in changed + untracked:
-            if path:
-                safe_file(root, path)
-        patch = git(root, "diff", "--binary", baseline, "--")
-        import subprocess
-
-        for path in untracked:
-            if path:
-                result = subprocess.run(
-                    [
-                        "git",
-                        "-C",
-                        str(root),
-                        "-c",
-                        "core.hooksPath=/dev/null",
-                        "diff",
-                        "--no-index",
-                        "--binary",
-                        "--",
-                        "/dev/null",
-                        path,
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=15,
-                    env={
-                        "PATH": "/usr/bin:/bin",
-                        "GIT_CONFIG_GLOBAL": "/dev/null",
-                        "GIT_CONFIG_SYSTEM": "/dev/null",
-                        "GIT_CONFIG_NOSYSTEM": "1",
-                    },
-                )
-                patch += "\n" + result.stdout
-        return PlainTextResponse(
-            patch + "\n",
-            headers={"Content-Disposition": f'attachment; filename="ai-manager-{execution_id[:12]}.patch"'},
-        )
-
-    @app.post("/api/chat", dependencies=[Depends(require_owner)])
-    async def submit(body: MessageBody):
-        return await chat.submit(body.project_id, body.content, body.mode)
-
-    @app.post("/api/executions/{execution_id}/interrupt", dependencies=[Depends(require_owner)])
-    async def interrupt(execution_id: str):
-        execution = db.one("SELECT task_id FROM executions WHERE id=?", (execution_id,))
-        if execution and execution["task_id"]:
-            await workers.interrupt(execution_id)
-        else:
-            await chat.interrupt(execution_id)
-        return {
-            "requested": True,
-            "result": "accepted",
-            "status": "interruption_requested",
-            "message": "Interruption requested; waiting for confirmed turn outcome",
-        }
 
     @app.get("/api/executions/{execution_id}/events", dependencies=[Depends(require_owner)])
     async def execution_events(execution_id: str, request: Request, after: int = 0):
@@ -713,95 +291,106 @@ def create_app(settings: Settings | None = None, server=None):
         db.set_setting("model_routes", routes)
         return route
 
-    @app.get("/api/settings", dependencies=[Depends(require_owner)])
-    def get_settings():
-        return {
-            "autonomy_upgrade_available": True,
-            "owner_administration_available": True,
-            "chat_history_available": True,
-            "global_instructions": db.setting("global_instructions", ""),
-            "max_workers": settings.max_workers,
-            "project_roots": [str(p) for p in settings.project_roots],
-            "scheduler_enabled": db.setting("scheduler_enabled", False),
-            "scheduler_scope": db.setting("scheduler_scope", None),
-            "scheduler_batch": db.setting("scheduler_batch", {}),
-            "daily_summaries": db.setting("daily_summaries", False),
-        }
-
     @app.put("/api/settings/instructions", dependencies=[Depends(require_owner)])
     def global_instructions(body: InstructionsBody):
         db.set_setting("global_instructions", body.content)
         return {"updated": True}
 
-    @app.get("/api/autonomy", dependencies=[Depends(require_owner)])
-    def autonomy(project_id: str | None = None):
-        if project_id:
-            registry.get(project_id)
-        from .policies import PROFILES
-
-        return {
-            "active_profile": policies.profile(project_id),
-            "profiles": list(PROFILES) + (["inherit"] if project_id else []),
-            "recommended": "high_autonomy",
-            "policies": policies.list(project_id),
-            "history": policies.history(),
-        }
-
-    @app.get("/api/autonomy/proposal", dependencies=[Depends(require_owner)])
-    def autonomy_proposal(profile: str, project_id: str | None = None):
-        if project_id:
-            registry.get(project_id)
-        return policies.proposal(profile, project_id)
-
-    @app.post("/api/autonomy/activate", dependencies=[Depends(require_owner)])
-    def activate_autonomy(body: ProfileBody):
-        if body.project_id:
-            registry.get(body.project_id)
-        return policies.activate(body.profile, body.project_id, body.proposal_hash)
-
-    @app.get("/api/policies", dependencies=[Depends(require_owner)])
-    def get_policies(project_id: str | None = None):
-        if project_id:
-            registry.get(project_id)
-        return policies.list(project_id)
-
-    @app.put("/api/policies/{action}", dependencies=[Depends(require_owner)])
-    def set_policy(action: str, body: PolicyBody, project_id: str | None = None):
-        if project_id:
-            registry.get(project_id)
-        return policies.set(project_id, action, body.mode, body.risk_accepted)
-
-    @app.get("/api/approvals", dependencies=[Depends(require_owner)])
-    def get_approvals():
-        return db.all("SELECT * FROM approvals ORDER BY created_at DESC LIMIT 100")
-
-    @app.post("/api/approvals/{approval_id}/decision", dependencies=[Depends(require_owner)])
-    def decide(approval_id: str, body: ApprovalBody):
-        policies.decide(approval_id, body.approve)
-        return {"decided": True}
-
-    @app.put("/api/settings/notifications", dependencies=[Depends(require_owner)])
-    def notification_settings(body: NotificationSettings):
-        db.set_setting("daily_summaries", body.daily_summaries)
-        return {"updated": True}
-
-    @app.post("/api/notifications/{notification_id}/read", dependencies=[Depends(require_owner)])
-    def read_notification(notification_id: str):
-        import time
-
-        with db.transaction() as conn:
-            conn.execute("UPDATE notifications SET read_at=? WHERE id=?", (time.time(), notification_id))
-        return {"read": True}
-
     @app.get("/api/audit", dependencies=[Depends(require_owner)])
     def audit(after: int = 0):
         return db.all("SELECT * FROM events WHERE seq>? ORDER BY seq DESC LIMIT 100", (after,))
-
-    static = Path(__file__).parent / "static"
-    app.mount("/static", StaticFiles(directory=static), name="static")
 
     @app.get("/")
     def index():
         return FileResponse(static / "index.html")
 
+    @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
+    def portfolio():
+        return {
+            "projects": registry.list(),
+            "tasks": tasks.list(),
+            "executions": db.all("SELECT * FROM executions ORDER BY started_at DESC LIMIT 100"),
+            "questions": db.all(
+                "SELECT q.*,e.project_id,e.task_id FROM questions q JOIN executions e ON e.id=q.execution_id WHERE q.status='pending'"
+            ),
+            "capacity": settings.max_workers,
+            "queue_error": scheduler.error,
+            "storage_free": shutil.disk_usage(settings.data_dir).free,
+        }
+
+    @app.post("/api/projects/discover", dependencies=[Depends(require_owner)])
+    def discover():
+        return registry.discover()
+
+    @app.post("/api/projects", dependencies=[Depends(require_owner)])
+    def add_project(body: ProjectBody):
+        return registry.add(body.path, body.name)
+
+    @app.patch("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
+    def update_project(project_id: str, body: ProjectUpdate):
+        return registry.update(project_id, body.revision, body.model_dump(exclude={"revision"}, exclude_none=True))
+
+    @app.get("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
+    def detail(project_id: str):
+        return {
+            "project": registry.get(project_id),
+            "memory": registry.memory(project_id),
+            "tasks": tasks.list(project_id),
+        }
+
+    @app.post("/api/chat", dependencies=[Depends(require_owner)])
+    async def submit(body: MessageBody):
+        return await chat.submit(body.project_id, body.content)
+
+    @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
+    def task_control(task_id: str, body: TaskControl):
+        return tasks.control(task_id, body.action, body.revision)
+
+    @app.get("/api/tasks/{task_id}/execution-records", dependencies=[Depends(require_owner)])
+    def records(task_id: str):
+        return {
+            "task": tasks.get(task_id),
+            "executions": db.all("SELECT * FROM executions WHERE task_id=? ORDER BY started_at", (task_id,)),
+            "historical_verification": db.all("SELECT * FROM verification_results WHERE task_id=?", (task_id,)),
+            "historical_integration": db.all("SELECT * FROM integration_results WHERE task_id=?", (task_id,)),
+        }
+
+    @app.post("/api/executions/{execution_id}/interrupt", dependencies=[Depends(require_owner)])
+    async def interrupt(execution_id: str):
+        execution = db.one("SELECT task_id FROM executions WHERE id=?", (execution_id,))
+        if execution and execution["task_id"]:
+            await workers.interrupt(execution_id)
+        else:
+            await chat.interrupt(execution_id)
+        return {"result": "accepted"}
+
+    @app.post("/api/questions/{question_id}/answer", dependencies=[Depends(require_owner)])
+    def answer(question_id: str, body: AnswerBody):
+        with db.transaction() as conn:
+            question = conn.execute(
+                "SELECT q.* FROM questions q JOIN executions e ON e.id=q.execution_id WHERE q.id=? AND q.status='pending' AND e.finished_at IS NULL",
+                (question_id,),
+            ).fetchone()
+            if not question:
+                raise ValueError("Question is no longer pending")
+            if question["kind"] == "item/tool/requestUserInput":
+                required = {x["id"] for x in json.loads(question["request"])["questions"]}
+                if set(body.answers) != required or not all(
+                    isinstance(x, str) and x.strip() and len(x) <= 10000 for x in body.answers.values()
+                ):
+                    raise ValueError("Provide an answer to each question")
+            elif set(body.answers) != {"approve"} or not isinstance(body.answers["approve"], bool):
+                raise ValueError("Choose approve or decline for the exact action")
+            conn.execute(
+                "UPDATE questions SET answer=?,status='answered' WHERE id=?", (json.dumps(body.answers), question_id)
+            )
+            db.event(conn, "question.answered", {"question_id": question_id}, execution_id=question["execution_id"])
+        return {"result": "accepted"}
+
+    @app.get("/api/settings", dependencies=[Depends(require_owner)])
+    def get_settings():
+        return {"global_instructions": db.setting("global_instructions", ""), "max_workers": settings.max_workers}
+
+    static = Path(__file__).parent / "static"
+    app.mount("/static", StaticFiles(directory=static), name="static")
     return app

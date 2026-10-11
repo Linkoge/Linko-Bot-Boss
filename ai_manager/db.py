@@ -116,14 +116,39 @@ class Database:
             ):
                 if name not in task_columns:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
-            # Persist global, continuous scheduling defaults without overriding owner settings.
-            conn.executemany(
-                "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
-                (
-                    ("scheduler_enabled", "true"),
-                    ("scheduler_scope", "null"),
-                    ("scheduler_batch", '{"limit": null, "task_ids": []}'),
-                ),
+            # Old supervision records remain historical. Only lifecycle drives new execution.
+            for name, definition in (
+                ("lifecycle", "TEXT NOT NULL DEFAULT 'waiting'"),
+                ("origin_conversation", "TEXT"),
+                ("request_key", "TEXT"),
+                ("native_thread", "TEXT"),
+                ("legacy", "INTEGER NOT NULL DEFAULT 1"),
+            ):
+                if name not in task_columns:
+                    conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+            conn.executescript("""
+                CREATE UNIQUE INDEX IF NOT EXISTS task_request ON tasks(request_key) WHERE request_key IS NOT NULL;
+                CREATE TABLE IF NOT EXISTS questions(
+                    id TEXT PRIMARY KEY, execution_id TEXT NOT NULL REFERENCES executions(id),
+                    request TEXT NOT NULL, kind TEXT NOT NULL, answer TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending', created_at REAL NOT NULL);
+            """)
+            execution_columns = {r[1] for r in conn.execute("PRAGMA table_info(executions)")}
+            for name, definition in (
+                ("delivery", "TEXT"),
+                ("delivery_execution", "TEXT"),
+                ("conversation_id", "TEXT"),
+                ("input", "TEXT NOT NULL DEFAULT ''"),
+            ):
+                if name not in execution_columns:
+                    conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {definition}")
+            if not conn.execute("SELECT 1 FROM schema_version WHERE version=7").fetchone():
+                conn.execute(
+                    "UPDATE tasks SET lifecycle=CASE WHEN status IN ('completed','cancelled','failed') THEN status ELSE 'waiting' END"
+                )
+                conn.execute("INSERT INTO schema_version VALUES(7)")
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS project_worker ON tasks(project_id) WHERE lifecycle='running'"
             )
             conn.commit()
         self.path.chmod(0o600)
