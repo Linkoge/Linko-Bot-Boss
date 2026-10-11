@@ -66,6 +66,7 @@ async def main(output_path):
             settings = Settings(data_dir=root / "data", project_roots=(root,))
             settings.prepare()
             db = Database(settings.db_path)
+            db.set_setting("scheduler_enabled", False)  # This fixture inspects plans without dispatch.
             registry = Registry(db, (root,))
             project = registry.add(source)
             server = AppServer(settings)

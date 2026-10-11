@@ -15,7 +15,7 @@ function action(fn){return async event=>{const button=event?.currentTarget;if(bu
 function taskFeedback(id,text){state.taskFeedback.set(id,text);const feedback=document.querySelector(`[data-task="${id}"] .task-feedback`);if(feedback){feedback.textContent=text;feedback.hidden=!text;if(text&&!$('editor').open)feedback.scrollIntoView({block:'nearest'});}}
 function taskAction(task,fn){return async event=>{const button=event.currentTarget;if(state.busyTasks.has(task.id))return;state.busyTasks.add(task.id);button.disabled=true;taskFeedback(task.id,`${button.textContent} requested…`);try{await fn(event);}catch(error){const text=`${error.result||'failed'}: ${error.message}`;taskFeedback(task.id,text);notice(text);}finally{state.busyTasks.delete(task.id);document.querySelectorAll(`[data-task="${task.id}"] button`).forEach(b=>b.disabled=false);}};}
 function actionResult(result,taskId){const text=`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}${result.execution_id?' · Execution '+result.execution_id.slice(0,8):''}`;notice(text);if(taskId)taskFeedback(taskId,text);}
-function showAuth(){state.source?.close();$('app').hidden=true;$('auth-screen').hidden=false;}
+function showAuth(){state.source?.close();$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){
   const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;
   $('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;
@@ -27,6 +27,7 @@ async function boot(){
 async function enter(){
   $('auth-screen').hidden=true;$('app').hidden=false;notice('');
   const settings=await api('/api/settings');state.upgradeAvailable=settings.autonomy_upgrade_available===true;$('owner-administration').hidden=settings.owner_administration_available!==true;for(const id of ['switch-profile','policy-history','configure-integration','discover-verification','verification-overview','propose-command','batch-approvals'])$(id).hidden=!state.upgradeAvailable;$('global-instructions').value=settings.global_instructions;$('scheduler-status').textContent=settings.scheduler_enabled?'Scheduler enabled':'Scheduler paused';
+  state.historyAvailable=settings.chat_history_available===true;document.querySelector('[data-view="search"]').hidden=!state.historyAvailable;document.querySelector('.chat-actions').hidden=!state.historyAvailable;
   await refresh();await selectProject(state.project);
 }
 async function refresh(){
@@ -76,9 +77,10 @@ async function selectProject(id){
   $('messages').replaceChildren();$('message-input').value=state.drafts.get(id)||'';
   $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderProjects();
   (id?$('projects').querySelector(`[data-project="${id}"]`):$('all-projects'))?.scrollIntoView({block:'nearest',inline:'nearest'});
-  clearTimeout(searchTimer);$('history-search').value='';
+  clearTimeout(searchTimer);$('history-search').value='';state.historyRequest=(state.historyRequest||0)+1;state.detailRequest=(state.detailRequest||0)+1;state.history=null;$('history-detail').hidden=true;updateChatActions();
   renderDashboard();renderTasks();renderAgents();renderMemory();
   if(state.view==='memory')await loadMemory(selection);
+  if(state.view==='search')await searchHistory();
   await loadHistory(selection);
 }
 async function loadMemory(selection=state.selection){
@@ -160,8 +162,10 @@ function renderMemory(){
   const observation=element('article',undefined,'panel');observation.append(element('h2','Current Git observation'),element('pre',(state.detail.observation.commits||[]).join('\n')||'No Git commits observed.'));$('memory-list').append(observation);
 }
 async function loadHistory(selection=state.selection){
-  const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);if($('history-search').value)query.set('search',$('history-search').value);
-  const history=await api(`/api/history?${query}`);if(selection!==state.selection)return;
+  const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);
+  const request=state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
+  const history=await api(`/api/history?${query}`);if(selection!==state.selection||request!==state.loadHistoryRequest)return;
+  state.history=history;updateChatActions();
   $('messages').replaceChildren();
   if(!history.messages.length){const welcome=element('div',undefined,'welcome');welcome.append(element('div','Ai','mark'),element('h2','What should we move forward?'),element('p','Talk through a goal, review project state, or plan the next useful step. Your context stays with each project.'));const suggestions=element('div',undefined,'suggestions');for(const text of ['What needs my attention?','Summarize current project state','Help me prioritize the next tasks','Brainstorm a plan for this project']){const b=element('button',text);b.onclick=()=>{$('message-input').value=text;$('message-input').focus();};suggestions.append(b);}welcome.append(suggestions);$('messages').append(welcome);}
   for(const m of history.messages){
@@ -172,6 +176,7 @@ async function loadHistory(selection=state.selection){
 }
 function attachStream(execution,messageId,cursor=0){
   state.source?.close();state.execution=execution;$('stop-chat').hidden=false;$('send').disabled=true;$('status-label').textContent='Thinking / responding';
+  updateChatActions();
   const source=new EventSource(`/api/executions/${execution}/events?after=${cursor}`);state.source=source;
   source.addEventListener('chat.delta',event=>{const data=JSON.parse(event.data);const content=document.querySelector(`[data-message="${messageId}"] .message-content`);if(content){if(content.textContent==='Connecting to Codex…')content.textContent='';content.textContent+=data.delta;}$('messages').scrollTop=$('messages').scrollHeight;});
   source.addEventListener('chat.finished',event=>{const data=JSON.parse(event.data);if(data.error)notice(data.error);});
@@ -179,7 +184,64 @@ function attachStream(execution,messageId,cursor=0){
   source.addEventListener('stream.auth_expired',()=>{source.close();showAuth();});
   source.onerror=()=>{if(state.source===source)$('status-label').textContent='Reconnecting to saved stream…';};
 }
-function showView(view){state.view=view;if(view==='memory')loadMemory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));}
+function updateChatActions(){
+  const disabled=!state.historyAvailable||!state.history?.messages.length||state.pending.has(state.project)||!!state.execution||state.history.messages.some(m=>['queued','streaming'].includes(m.status));
+  for(const id of ['archive-chat','clear-chat'])$(id).disabled=disabled;
+}
+function confirmChatReset(archive){
+  if(!state.history?.messages.length)return;
+  const project=state.project,selection=state.selection,history=state.history;
+  $('chat-confirm-title').textContent=archive?'Archive this chat?':'Clear this chat?';
+  $('chat-confirm-description').textContent=archive?`Save the entire ${projectName(project)} conversation in a searchable archive and start a fresh chat.`:`Remove all messages from the current ${projectName(project)} chat? This cannot be undone. Existing archives, tasks and project memory are preserved.`;
+  $('chat-archive-label').hidden=!archive;
+  $('chat-archive-name').value=`${projectName(project)} · ${new Date().toLocaleString()}`.slice(0,120);
+  $('chat-confirm-submit').textContent=archive?'Archive chat':'Clear chat';
+  $('chat-confirm-submit').className=archive?'primary':'danger';$('chat-confirm-error').textContent='';
+  $('chat-confirm-form').onsubmit=async event=>{
+    event.preventDefault();const button=$('chat-confirm-submit');if(button.disabled)return;button.disabled=true;
+    try{
+      const result=await api(archive?'/api/chat/archive':'/api/chat/clear',{method:'POST',body:JSON.stringify({project_id:project,conversation_id:history.conversation.id,last_message_id:history.messages.at(-1).id,confirmed:true,title:archive?$('chat-archive-name').value:''})});
+      $('chat-confirm').close();$('chat-notice').textContent=result.message;$('chat-notice').hidden=false;clearTimeout(state.chatNoticeTimer);state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,8000);
+      if(selection===state.selection){state.source?.close();state.source=null;state.execution=null;$('stop-chat').hidden=true;$('send').disabled=false;await loadHistory(selection);}
+    }catch(error){$('chat-confirm-error').textContent=error.message;}finally{button.disabled=false;}
+  };
+  $('chat-confirm').showModal();
+}
+$('archive-chat').onclick=()=>confirmChatReset(true);$('clear-chat').onclick=()=>confirmChatReset(false);
+$('chat-confirm-cancel').onclick=()=>$('chat-confirm').close();
+function historyQuery(){const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);return query;}
+async function searchHistory(append=false){
+  const request=state.historyRequest=(state.historyRequest||0)+1,query=historyQuery(),offset=append?state.historyOffset||0:0;
+  query.set('search',$('history-search').value);query.set('offset',offset);
+  $('history-scope').textContent=projectName(state.project);$('history-search-status').textContent='Searching…';
+  if(!append){$('history-results').replaceChildren();$('history-more').hidden=true;$('history-detail').hidden=true;state.detailRequest=(state.detailRequest||0)+1;}
+  const data=await api('/api/chat-history?'+query);if(request!==state.historyRequest)return;
+  for(const chat of data.conversations){
+    const row=element('article',undefined,'history-result'),button=element('button',chat.archived_at?chat.title:'Current chat');
+    button.onclick=action(()=>openSavedHistory(chat.id,false,chat.match_count?$('history-search').value:''));row.append(button,element('small',`${chat.archived_at?'Archived '+new Date(chat.archived_at*1000).toLocaleString():'Active conversation'} · ${chat.message_count} messages${$('history-search').value?' · '+chat.match_count+' matching messages':''}`));$('history-results').append(row);
+  }
+  state.historyOffset=offset+data.conversations.length;$('history-more').hidden=!data.has_more;
+  $('history-search-status').textContent=state.historyOffset?`${state.historyOffset} chat${state.historyOffset===1?'':'s'}${data.has_more?' shown':''}. Select a chat to read its history.`:'No matching chats in this context.';
+}
+async function openSavedHistory(id,older=false,search=''){
+  const request=state.detailRequest=(state.detailRequest||0)+1,query=historyQuery();
+  if(older&&state.savedHistory?.messages.length)query.set('before',state.savedHistory.messages[0].id);
+  query.set('search',older?state.savedHistory.search:search);
+  const data=await api(`/api/chat-history/${encodeURIComponent(id)}?${query}`);if(request!==state.detailRequest)return;
+  state.savedHistory=older?{...data,messages:[...data.messages,...state.savedHistory.messages]}:data;
+  $('history-detail-title').textContent=data.conversation.title||'Current chat';
+  $('history-detail-meta').textContent=`${projectName(state.project)} · ${data.conversation.archived_at?'Archived '+new Date(data.conversation.archived_at*1000).toLocaleString():'Active conversation'}${data.search?' · Messages matching “'+data.search+'”':''}`;
+  $('history-full').hidden=!data.search;
+  $('history-detail-messages').replaceChildren();
+  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');body.append(element('strong',m.role==='user'?'You':'AI Manager'),element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',m.content,'message-content'));row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);$('history-detail-messages').append(row);}
+  if(!state.savedHistory.messages.length)$('history-detail-messages').append(element('p','This chat is empty.','empty'));
+  $('history-older').hidden=!data.has_more;$('history-detail').hidden=false;
+  if(!older)$('history-detail').scrollIntoView({block:'start'});
+}
+$('history-more').onclick=action(()=>searchHistory(true));
+$('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
+$('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
+function showView(view){state.view=view;if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));}
 function editor(title,fields,onSave){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}
@@ -192,12 +254,13 @@ $('chat-form').onsubmit=action(async event=>{
   event.preventDefault();const content=$('message-input').value.trim(),project=state.project,selection=state.selection;
   if(!content||$('send').disabled||state.pending.has(project))return;
   state.pending.add(project);$('send').disabled=true;
+  updateChatActions();
   try{
     await api('/api/chat',{method:'POST',body:JSON.stringify({project_id:project,content,mode:$('chat-mode').value})});
     state.drafts.set(project,'');
     if(selection===state.selection){$('message-input').value='';await loadHistory(selection);}
     await refresh();
-  }finally{state.pending.delete(project);if(selection===state.selection&&!state.execution)$('send').disabled=false;}
+  }finally{state.pending.delete(project);if(selection===state.selection&&!state.execution)$('send').disabled=false;updateChatActions();}
 });
 $('message-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!$('send').disabled)$('chat-form').requestSubmit();}};
 $('all-projects').onclick=action(()=>selectProject(null));$('discover').onclick=action(async()=>{await api('/api/projects/discover',{method:'POST'});await refresh();notice('Project discovery complete.');});
@@ -205,7 +268,7 @@ $('logout').onclick=action(async()=>{await api('/api/logout',{method:'POST'});st
 $('revoke-sessions').onclick=action(async()=>{await api('/api/sessions/revoke',{method:'POST'});showAuth();});
 $('stop-chat').onclick=action(async()=>{if(state.execution)await api(`/api/executions/${state.execution}/interrupt`,{method:'POST'});notice('Interruption requested.');});
 document.querySelectorAll('.tabs button').forEach(b=>b.onclick=()=>showView(b.dataset.view));
-let searchTimer;$('history-search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(action(()=>loadHistory()),250);};
+let searchTimer;$('history-search').oninput=()=>{clearTimeout(searchTimer);state.historyRequest=(state.historyRequest||0)+1;state.detailRequest=(state.detailRequest||0)+1;$('history-detail').hidden=true;searchTimer=setTimeout(action(()=>searchHistory()),250);};
 $('editor-cancel').onclick=()=>$('editor').close();
 $('add-project').onclick=()=>editor('Add an existing project',[{name:'path',label:'Directory inside a configured project root',required:true},{name:'name',label:'Name (optional)'}],values=>api('/api/projects',{method:'POST',body:JSON.stringify({...values,name:values.name||null})}));
 $('add-task').onclick=()=>editor('Add a persistent task',[{name:'project_id',label:'Project',value:state.project,options:state.portfolio.projects.filter(p=>p.status!=='removed').map(p=>[p.id,projectLabel(p)]),required:true},{name:'description',label:'What should be done?',long:true,required:true},{name:'acceptance',label:'How will we know it succeeded?',long:true,required:true},{name:'verification',label:'Independent verification requirements',long:true},{name:'kind',label:'Task type',value:'code',options:['code','documentation','research','infrastructure','investigation'].map(x=>[x,x])},{name:'verification_spec',label:'Task evidence specification (JSON: files, sections, allowed_paths, evidence_file)',long:true,value:'{}'},{name:'priority',label:'Priority',type:'number',value:50,min:0,max:100},{name:'dependencies',label:'Dependency task IDs, separated by commas'}].filter(f=>state.upgradeAvailable||!['kind','verification_spec'].includes(f.name)),values=>api('/api/tasks',{method:'POST',body:JSON.stringify({...values,verification_spec:values.verification_spec?JSON.parse(values.verification_spec):{},priority:Number(values.priority),dependencies:values.dependencies.split(',').map(s=>s.trim()).filter(Boolean)})}));

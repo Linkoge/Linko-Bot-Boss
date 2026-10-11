@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import time
+from datetime import datetime, timezone
 
 from .codex import MANAGER_INSTRUCTIONS, AppServer, CodexError, process_start
 from .db import Database, new_id
@@ -43,10 +44,130 @@ class Chat:
     def history(self, project_id=None, search=""):
         conversation = self.conversation(project_id)
         rows = self.db.all(
-            "SELECT m.*, (SELECT COALESCE(max(seq),0) FROM events e WHERE e.execution_id=m.execution_id) AS stream_cursor FROM messages m WHERE conversation_id=? AND instr(lower(content),lower(?))>0 ORDER BY created_at DESC LIMIT 200",
+            "SELECT m.*, (SELECT COALESCE(max(seq),0) FROM events e WHERE e.execution_id=m.execution_id) AS stream_cursor FROM messages m WHERE conversation_id=? AND instr(lower(content),lower(?))>0 ORDER BY created_at DESC,m.rowid DESC LIMIT 200",
             (conversation["id"], search),
         )
         return {"conversation": conversation, "messages": list(reversed(rows))}
+
+    def reset(self, project_id, conversation_id, last_message_id, confirmed, archive=False, title=""):
+        if not confirmed:
+            raise ValueError("Confirm before clearing or archiving a chat")
+        if project_id:
+            self.registry.get(project_id)
+        title = title.strip()
+        if len(title) > 120 or any(ord(c) < 32 for c in title):
+            raise ValueError("Archive name must be at most 120 characters on one line")
+        now = time.time()
+        with self.db.transaction() as conn:
+            conversation = conn.execute(
+                "SELECT * FROM conversations WHERE context=?", (project_id or "global",)
+            ).fetchone()
+            if not conversation or conversation["id"] != conversation_id:
+                raise ValueError("Chat changed. Refresh and confirm the current chat again")
+            last = conn.execute(
+                "SELECT id FROM messages WHERE conversation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                (conversation_id,),
+            ).fetchone()
+            if not last:
+                raise ValueError("This chat is already empty")
+            if last["id"] != last_message_id:
+                raise ValueError("New messages arrived. Refresh and confirm the current chat again")
+            if conn.execute(
+                """SELECT 1 FROM messages m LEFT JOIN executions e ON e.id=m.execution_id
+                WHERE m.conversation_id=? AND (m.status IN ('queued','streaming')
+                OR (e.id IS NOT NULL AND e.finished_at IS NULL)) LIMIT 1""",
+                (conversation_id,),
+            ).fetchone():
+                raise ValueError("Wait for the response to finish or stop it before changing this chat")
+            count = conn.execute(
+                "SELECT count(*) FROM messages WHERE conversation_id=?", (conversation_id,)
+            ).fetchone()[0]
+            if archive:
+                if not title:
+                    project = self.registry.get(project_id) if project_id else None
+                    label = (project["display_name"] or project["name"]) if project else "All Projects"
+                    title = f"{label} · {datetime.fromtimestamp(now, timezone.utc):%Y-%m-%d %H:%M UTC}"
+                conn.execute(
+                    "UPDATE conversations SET context=? WHERE id=?", ("archive:" + conversation_id, conversation_id)
+                )
+                conn.execute("INSERT INTO chat_archives VALUES(?,?,?)", (conversation_id, title, now))
+            else:
+                conn.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
+                conn.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
+                conn.execute("DELETE FROM settings WHERE key=?", ("manager_tool_schema:" + conversation_id,))
+            fresh_id = new_id()
+            conn.execute(
+                "INSERT INTO conversations(id,context,project_id,created_at) VALUES(?,?,?,?)",
+                (fresh_id, project_id or "global", project_id, now),
+            )
+            self.db.event(
+                conn,
+                "chat.archived" if archive else "chat.cleared",
+                {
+                    "conversation_id": conversation_id,
+                    "new_conversation_id": fresh_id,
+                    "message_count": count,
+                    "title": title if archive else None,
+                },
+                project_id,
+            )
+        return {
+            "result": "accepted",
+            "message": f"Chat archived as “{title}”. A fresh chat is ready."
+            if archive
+            else "Chat cleared. A fresh chat is ready.",
+            "conversation_id": fresh_id,
+        }
+
+    def search_history(self, project_id=None, search="", offset=0):
+        if project_id:
+            self.registry.get(project_id)
+        rows = self.db.all(
+            """SELECT c.id, c.project_id, c.created_at, a.title, a.archived_at,
+            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id) AS message_count,
+            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id
+             AND instr(lower(m.content),lower(?))>0) AS match_count
+            FROM conversations c LEFT JOIN chat_archives a ON a.conversation_id=c.id
+            WHERE c.project_id IS ? AND (c.context=? OR a.conversation_id IS NOT NULL)
+            AND (instr(lower(COALESCE(a.title,'Current chat')),lower(?))>0 OR EXISTS
+              (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND instr(lower(m.content),lower(?))>0))
+            ORDER BY COALESCE(a.archived_at,c.created_at) DESC,c.id LIMIT 101 OFFSET ?""",
+            (search, project_id, project_id or "global", search, search, offset),
+        )
+        return {"conversations": rows[:100], "has_more": len(rows) > 100}
+
+    def saved_history(self, conversation_id, project_id=None, before=None, search=""):
+        conversation = self.db.one(
+            """SELECT c.*,a.title,a.archived_at FROM conversations c
+            LEFT JOIN chat_archives a ON a.conversation_id=c.id
+            WHERE c.id=? AND c.project_id IS ? AND (c.context=? OR a.conversation_id IS NOT NULL)""",
+            (conversation_id, project_id, project_id or "global"),
+        )
+        if not conversation:
+            raise ValueError("Chat was not found in the selected context")
+        boundary = None
+        if before:
+            boundary = self.db.one(
+                "SELECT rowid AS position FROM messages WHERE id=? AND conversation_id=?", (before, conversation_id)
+            )
+            if not boundary:
+                raise ValueError("Message was not found in this chat")
+        rows = self.db.all(
+            """SELECT * FROM messages WHERE conversation_id=? AND (? IS NULL OR rowid<?)
+            AND instr(lower(content),lower(?))>0 ORDER BY rowid DESC LIMIT 201""",
+            (
+                conversation_id,
+                boundary["position"] if boundary else None,
+                boundary["position"] if boundary else None,
+                search,
+            ),
+        )
+        return {
+            "conversation": conversation,
+            "messages": list(reversed(rows[:200])),
+            "has_more": len(rows) > 200,
+            "search": search,
+        }
 
     def context(self, project_id):
         from .administration import Administration
@@ -130,6 +251,10 @@ class Chat:
         routes = await self.routes()
         execution_id, response_id, now = new_id(), new_id(), time.time()
         with self.db.transaction() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM conversations WHERE id=? AND context=?", (conversation["id"], project_id or "global")
+            ).fetchone():
+                raise ValueError("Chat changed. Please send your message in the fresh chat")
             if conn.execute(
                 "SELECT id FROM messages WHERE conversation_id=? AND status IN ('queued','streaming')",
                 (conversation["id"],),

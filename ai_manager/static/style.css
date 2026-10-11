@@ -31,3 +31,17 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .sr-only{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 @media(min-width:901px){main{padding:0 24px 12px}.navigation{margin:0 -24px}.project-row{padding:2px 16px}.tabs{padding:0 18px;gap:20px}}
 @media(max-width:600px){main{padding:0 10px 6px}.navigation{margin:0 -10px}.project-button{max-width:180px}.chat-toolbar{display:flex}.chat-toolbar input{width:100%}.composer-footer span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}.composer-note{display:none}.chat-view{height:calc(var(--app-height,100dvh) - 94px - env(safe-area-inset-top) - env(safe-area-inset-bottom))}.suggestions button{min-height:42px}.route-row{min-width:0}.route-row>*{min-width:0}}
+/* History controls share the former search field's space. */
+.chat-toolbar{gap:8px;min-width:0;letter-spacing:0}
+.chat-toolbar #chat-mode{flex:1;min-width:0;padding:5px 8px;font-size:12px;text-overflow:ellipsis}
+.chat-actions{display:flex;flex:none;gap:4px;max-width:160px}
+.chat-actions button{min-height:34px;padding:5px 9px;font-size:12px}
+.danger{color:#f3b4b5;border-color:#895057;background:#412b30}
+#chat-confirm-error{color:#f2a7a7;font-size:12px}
+#history-search{max-width:640px;margin-bottom:8px}
+.history-result{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid var(--border);padding:8px 0}
+.history-result button{text-align:left;overflow-wrap:anywhere;max-width:100%}
+#history-detail{margin-top:16px;scroll-margin-top:100px}
+.history-time{display:block;margin:2px 0 8px}
+@media(max-width:600px){.chat-actions button{padding:5px 7px}.history-result{gap:4px}.history-result small{flex-basis:100%}}
+#chat-notice{position:fixed;top:calc(100px + env(safe-area-inset-top));right:12px;z-index:25;max-width:min(420px,calc(100vw - 24px));padding:10px 14px;border:1px solid #365449;border-radius:8px;background:#213932;color:#bdf4de;box-shadow:0 6px 20px #0006;font-size:12px;overflow-wrap:anywhere;pointer-events:none}

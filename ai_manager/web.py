@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -79,6 +79,14 @@ class MessageBody(BaseModel):
 class RouteBody(BaseModel):
     model: str
     effort: str
+
+
+class ChatResetBody(BaseModel):
+    project_id: str | None = None
+    conversation_id: str = Field(min_length=1, max_length=100)
+    last_message_id: str = Field(min_length=1, max_length=100)
+    confirmed: bool = False
+    title: str = Field(default="", max_length=120)
 
 
 class InstructionsBody(BaseModel):
@@ -537,6 +545,33 @@ def create_app(settings: Settings | None = None, server=None):
     def history(project_id: str | None = None, search: str = ""):
         return chat.history(project_id, search)
 
+    @app.get("/api/chat-history", dependencies=[Depends(require_owner)])
+    def search_history(
+        project_id: str | None = None,
+        search: str = Query(default="", max_length=500),
+        offset: int = Query(default=0, ge=0),
+    ):
+        return chat.search_history(project_id, search, offset)
+
+    @app.get("/api/chat-history/{conversation_id}", dependencies=[Depends(require_owner)])
+    def saved_history(
+        conversation_id: str,
+        project_id: str | None = None,
+        before: str | None = None,
+        search: str = Query(default="", max_length=500),
+    ):
+        return chat.saved_history(conversation_id, project_id, before, search)
+
+    @app.post("/api/chat/clear", dependencies=[Depends(require_owner)])
+    def clear_chat(body: ChatResetBody):
+        return chat.reset(body.project_id, body.conversation_id, body.last_message_id, body.confirmed)
+
+    @app.post("/api/chat/archive", dependencies=[Depends(require_owner)])
+    def archive_chat(body: ChatResetBody):
+        return chat.reset(
+            body.project_id, body.conversation_id, body.last_message_id, body.confirmed, archive=True, title=body.title
+        )
+
     @app.get("/api/tasks/{task_id}/evidence", dependencies=[Depends(require_owner)])
     def evidence(task_id: str):
         tasks.get(task_id)
@@ -683,6 +718,7 @@ def create_app(settings: Settings | None = None, server=None):
         return {
             "autonomy_upgrade_available": True,
             "owner_administration_available": True,
+            "chat_history_available": True,
             "global_instructions": db.setting("global_instructions", ""),
             "max_workers": settings.max_workers,
             "project_roots": [str(p) for p in settings.project_roots],

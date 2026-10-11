@@ -46,6 +46,7 @@ async def main():
         settings = Settings(data_dir=root / "data", project_roots=(root,))
         settings.prepare()
         db = Database(settings.db_path)
+        db.set_setting("scheduler_enabled", False)  # Inspect delegation before explicit fixture launch.
         registry = Registry(db, (root,))
         project = registry.add(source)
         db.set_setting(f"verification_commands:{project['id']}", [["python3", "-m", "unittest", "discover", "-v"]])

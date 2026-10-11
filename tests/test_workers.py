@@ -40,6 +40,7 @@ def worker_env(tmp_path):
     settings = Settings(data_dir=tmp_path / "data", project_roots=(root,))
     settings.prepare()
     db = Database(settings.db_path)
+    db.set_setting("scheduler_enabled", False)  # These fixtures explicitly control worker launch.
     registry = Registry(db, (root,))
     project = registry.add(source)
     return settings, db, registry, project, source

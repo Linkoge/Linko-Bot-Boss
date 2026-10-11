@@ -20,6 +20,7 @@ def client(tmp_path):
         (root / name).mkdir()
     settings = Settings(data_dir=tmp_path / "data", project_roots=(root,), secure_cookie=False)
     app = create_app(settings, FakeServer(settings))
+    app.state.db.set_setting("scheduler_enabled", False)  # API fixtures launch work explicitly.
     with TestClient(app) as client:
         yield client, app, settings
 
@@ -155,7 +156,9 @@ def test_policy_api_is_authenticated_and_audited(client):
     browser, app, settings = client
     assert browser.get("/api/policies").status_code == 401
     sign_in(browser, app, settings)
-    assert {p["action"] for p in browser.get("/api/policies").json()} == set(__import__("ai_manager.policies", fromlist=["DEFAULTS"]).DEFAULTS)
+    assert {p["action"] for p in browser.get("/api/policies").json()} == set(
+        __import__("ai_manager.policies", fromlist=["DEFAULTS"]).DEFAULTS
+    )
     assert browser.put("/api/policies/edit_files", json={"mode": "DENY"}).status_code == 200
     assert next(p for p in browser.get("/api/policies").json() if p["action"] == "edit_files")["mode"] == "ALLOW"
     assert browser.put("/api/policies/paid_services", json={"mode": "ALLOW"}).status_code == 409
@@ -231,3 +234,30 @@ def test_explicit_task_controls_and_verification_config_audit(client):
     assert browser.get(f"/api/tasks/{task['id']}/execution-records").json()["task"]["status"] == "cancelled"
     blocked = browser.post("/api/chat", json={"content": "Do action", "mode": "execute"})
     assert blocked.status_code == 409 and "Select a project" in blocked.json()["detail"]
+
+
+def test_chat_archive_clear_auth_confirmation_and_search(client):
+    browser, app, settings = client
+    assert browser.get("/api/chat-history").status_code == 401
+    assert browser.post("/api/chat/archive", json={}).status_code == 401
+    sign_in(browser, app, settings)
+    from test_chat_history import seed
+
+    old, last = seed(app.state.chat)
+    body = {"conversation_id": old, "last_message_id": last, "title": "Saved decisions"}
+    assert browser.post("/api/chat/archive", json=body).status_code == 409
+    body["confirmed"] = True
+    assert browser.post("/api/chat/archive", json=body, headers={"X-CSRF-Token": "bad"}).status_code == 403
+    archived = browser.post("/api/chat/archive", json=body)
+    assert archived.status_code == 200 and archived.json()["result"] == "accepted"
+    assert browser.get("/api/history").json()["messages"] == []
+    assert browser.get("/api/chat-history", params={"search": "decisions"}).json()["conversations"][0]["id"] == old
+    assert len(browser.get(f"/api/chat-history/{old}").json()["messages"]) == 2
+    assert browser.get("/api/chat-history", params={"offset": -1}).status_code == 422
+    assert browser.get("/api/chat-history", params={"search": "x" * 501}).status_code == 422
+    current, last = seed(app.state.chat)
+    body = {"conversation_id": current, "last_message_id": last, "confirmed": True}
+    assert browser.post("/api/chat/clear", json=body).status_code == 200
+    assert browser.get("/api/history").json()["messages"] == []
+    assert browser.get(f"/api/chat-history/{old}").json()["messages"]
+    assert {"chat.archived", "chat.cleared"} <= {r["kind"] for r in app.state.db.all("SELECT kind FROM events")}

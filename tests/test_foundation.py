@@ -161,6 +161,8 @@ def test_navigation_migration_preserves_legacy_project_and_history(tmp_path):
     path = tmp_path / "legacy.sqlite3"
     with sqlite3.connect(path) as conn:
         conn.executescript(SCHEMA)
+        conn.execute("DROP TABLE chat_archives")
+        conn.execute("DELETE FROM schema_version WHERE version=6")
         conn.execute(
             "INSERT INTO projects(id,name,path,agent_id,created_at,updated_at) VALUES('stable','legacy',?,'agent',1,1)",
             (str(tmp_path / "legacy"),),
@@ -172,10 +174,13 @@ def test_navigation_migration_preserves_legacy_project_and_history(tmp_path):
         conn.execute(
             "INSERT INTO conversations(id,context,project_id,thread_id,created_at) VALUES('conversation','stable','stable','thread',1)"
         )
+        conn.execute("INSERT INTO messages VALUES('saved','conversation','user','Original history','completed',NULL,1)")
     db = Database(path)
-    assert db.one("SELECT MAX(version) AS version FROM schema_version")["version"] == 5
+    assert db.one("SELECT MAX(version) AS version FROM schema_version")["version"] == 6
     project = db.one("SELECT * FROM projects")
     assert project["id"] == "stable" and project["name"] == "legacy" and project["last_used_at"] == 123
     assert project["display_name"] is None
     assert db.one("SELECT thread_id FROM conversations")["thread_id"] == "thread"
+    assert db.one("SELECT content FROM messages WHERE id='saved'")["content"] == "Original history"
+    assert db.all("SELECT * FROM chat_archives") == []
     assert Database(path).one("SELECT last_used_at FROM projects")["last_used_at"] == 123

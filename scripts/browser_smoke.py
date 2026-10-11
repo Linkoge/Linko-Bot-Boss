@@ -12,6 +12,8 @@ from pathlib import Path
 import httpx
 from playwright.sync_api import sync_playwright
 
+from ai_manager.policies import DEFAULTS
+
 
 def main():
     with tempfile.TemporaryDirectory(prefix="ai-manager-browser-") as data:
@@ -194,7 +196,7 @@ def main():
                 page.locator('[data-view="settings"]').click()
                 page.locator("#load-policies").click()
                 page.locator("#policy-list .route-row").first.wait_for()
-                assert page.locator("#policy-list .route-row").count() == 15
+                assert page.locator("#policy-list .route-row").count() == len(DEFAULTS)
                 page.locator('[data-view="approvals"]').click()
                 assert "Nothing waiting" in page.locator("#approval-list").inner_text()
                 assert not errors, errors

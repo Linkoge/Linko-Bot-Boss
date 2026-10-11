@@ -77,6 +77,10 @@ CREATE TABLE IF NOT EXISTS integration_results(
  id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id), execution_id TEXT NOT NULL,
  status TEXT NOT NULL, evidence TEXT NOT NULL, created_at REAL NOT NULL);
 INSERT OR IGNORE INTO schema_version VALUES(5);
+CREATE TABLE IF NOT EXISTS chat_archives(
+ conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
+ title TEXT NOT NULL, archived_at REAL NOT NULL);
+INSERT OR IGNORE INTO schema_version VALUES(6);
 """
 
 
@@ -112,6 +116,15 @@ class Database:
             ):
                 if name not in task_columns:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+            # Persist global, continuous scheduling defaults without overriding owner settings.
+            conn.executemany(
+                "INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)",
+                (
+                    ("scheduler_enabled", "true"),
+                    ("scheduler_scope", "null"),
+                    ("scheduler_batch", '{"limit": null, "task_ids": []}'),
+                ),
+            )
             conn.commit()
         self.path.chmod(0o600)
 

@@ -153,6 +153,7 @@ async def capture():
             settings = Settings(data_dir=root / "data", project_roots=(repo.parent,))
             settings.prepare()
             db = Database(settings.db_path)
+            db.set_setting("scheduler_enabled", False)  # Capture manager behavior without dispatch.
             registry = Registry(db, settings.project_roots)
             project = registry.add(repo)
             registry.update(project["id"], project["revision"], {"objective": "Build a local project dashboard"})
