@@ -4,6 +4,7 @@ Current architecture, superseding prior supervision requirements as authorized o
 
 **User → AI Manager → Codex worker → AI Manager → User**
 
+- Conversation mode is read-only; Auto delegates requested work; Execute treats the message as an objective through the same manager path.
 - Natural conversational requests; the manager decides when requested work should be delegated.
 - One ordinary request becomes one complete objective, with necessary project/conversation context.
 - Native Codex tools handle investigation, editing, commands, dependency installation, builds, testing, debugging and Git.

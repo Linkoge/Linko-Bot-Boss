@@ -81,6 +81,11 @@ def test_legacy_migration_preserves_rows_and_history(system):
     db, registry, _, _ = system
     project = registry.list()[0]
     with db.transaction() as conn:
+        conn.execute("DROP TABLE tasks")
+        conn.execute("""CREATE TABLE tasks(
+            id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), description TEXT NOT NULL,
+            acceptance TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', blocker TEXT NOT NULL DEFAULT '',
+            lease_owner TEXT, revision INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL, updated_at REAL NOT NULL)""")
         conn.execute(
             "INSERT INTO tasks(id,project_id,description,acceptance,status,created_at,updated_at) VALUES('old',?,'old objective','criteria','verifying',?,?)",
             (project["id"], time.time(), time.time()),
@@ -137,18 +142,22 @@ async def test_direct_delegation_native_execution_and_return(system):
     }
     task = await scheduler.manager_action(p["id"], params)
     assert (await scheduler.manager_action(p["id"], params))["id"] == task["id"]
+    assert (await scheduler.manager_action(p["id"], {**params, "callId": "second-call"}))["id"] == task["id"]
+    repeated = {**params, "manager_execution_id": "next-request", "callId": "new-call"}
+    assert (await scheduler.manager_action(p["id"], repeated))["id"] == task["id"]
     await scheduler.tick()
     await settled(workers)
     result = db.one("SELECT * FROM executions WHERE task_id=?", (task["id"],))
     assert result["worktree"] == p["path"]
     assert Tasks(db).get(task["id"])["status"] == "completed"
+    assert (await scheduler.manager_action(p["id"], repeated))["id"] == task["id"]
     assert result["delivery"] == "pending"
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
     assert db.one("SELECT delivery FROM executions WHERE id=?", (result["id"],))["delivery"] == "delivered"
     assert [m["role"] for m in chat.history(p["id"])["messages"]] == ["worker", "assistant"]
     assert len(Tasks(db).list()) == 1
-    assert db.all("SELECT * FROM verification_results") == []
+    assert not db.one("SELECT 1 FROM sqlite_master WHERE name='verification_results'")
     assert len(chat.server.prompts) == 1
     assert len(db.all("SELECT * FROM executions")) == 2
 
@@ -347,7 +356,7 @@ async def test_terminal_result_is_reasoning_input_and_finish_is_idempotent(syste
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
     content = json.loads(chat.server.prompts[0])["message"]
-    evidence = json.loads(content.split("\n", 1)[1].split("\nReport", 1)[0])
+    evidence = json.loads(content.split("\n", 1)[1])
     assert evidence["objective"] == "Original objective"
     assert evidence["task_status"] == status
     assert evidence["output"] == "Actual worker result"
@@ -482,7 +491,7 @@ async def test_manager_can_continue_incomplete_work_from_result(system):
     assert Tasks(db).get(task["id"])["status"] == "queued"
     assert Tasks(db).get(task["id"])["origin_conversation"] == origin
     assert len(Tasks(db).list()) == 1
-    assert not db.all("SELECT * FROM verification_results")
+    assert not db.one("SELECT 1 FROM sqlite_master WHERE name='verification_results'")
 
 
 @pytest.mark.asyncio
@@ -503,3 +512,110 @@ async def test_large_result_and_concurrent_delivery_claims(system):
     assert '"output_truncated": true' in prompt["message"]
     assert "Final result" in prompt["message"]
     assert len(db.all("SELECT id FROM messages WHERE role='worker'")) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["conversation", "auto", "execute"])
+async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
+    db, registry, chat, settings = system
+    project = registry.list()[0]
+    (settings.project_roots[0] / project["name"] / "notes.txt").write_text("Project notes")
+    workers = Workers(db, registry, settings, NativeFixture)
+    scheduler = Scheduler(db, registry, settings, workers, chat)
+    chat.action_handler = scheduler.manager_action
+
+    class ModeServer(FakeServer):
+        async def request(self, method, params, timeout=30):
+            if method == "turn/start":
+                assert json.loads(params["input"][0]["text"])["mode"] == mode
+                handler = self.tool_handlers[params["threadId"]]
+                call = {"tool": "manager_action", "callId": "mode-call"}
+                assert await handler({**call, "arguments": {"action": "read_document", "path": "notes.txt"}}) == {
+                    "path": "notes.txt",
+                    "content": "Project notes",
+                }
+                for action in (
+                    "delegate",
+                    "pause_project",
+                    "resume_project",
+                    *(["wait", "continue"] if mode == "conversation" else []),
+                ):
+                    mutation = {**call, "arguments": {"action": action, "objective": "Complete objective"}}
+                    if mode == "conversation":
+                        with pytest.raises(ValueError, match="read-only"):
+                            await handler(mutation)
+                    else:
+                        await handler(mutation)
+            return await super().request(method, params, timeout)
+
+    chat.server = ModeServer(settings)
+    await chat.submit(project["id"], "Complete objective", mode=mode)
+    await asyncio.gather(*list(chat.jobs.values()))
+    assert len(Tasks(db).list()) == (0 if mode == "conversation" else 1)
+    assert len(chat.server.prompts) == 1
+
+
+def test_fresh_schema_contains_only_current_storage(system):
+    db, _, _, _ = system
+    tables = {r["name"] for r in db.all("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert tables == {
+        "schema_version",
+        "projects",
+        "tasks",
+        "executions",
+        "memory",
+        "events",
+        "settings",
+        "owner",
+        "sessions",
+        "login_attempts",
+        "conversations",
+        "messages",
+        "chat_archives",
+        "questions",
+        "sqlite_sequence",
+    }
+    columns = {r["name"] for r in db.all("PRAGMA table_info(tasks)")}
+    assert not columns & {
+        "verification",
+        "permissions",
+        "kind",
+        "verification_spec",
+        "verification_status",
+        "blocker_code",
+        "recovery_identity",
+        "lease_until",
+        "priority",
+    }
+
+
+@pytest.mark.asyncio
+async def test_background_queue_runs_projects_concurrently_with_capacity(system):
+    db, registry, chat, settings = system
+    for project in registry.list():
+        Tasks(db).add(project["id"], "Independent work", chat.conversation(project["id"])["id"])
+    NativeFixture.release = asyncio.Event()
+    workers = Workers(db, registry, settings, NativeFixture)
+    scheduler = Scheduler(db, registry, settings, workers, chat)
+    try:
+        await scheduler.tick()
+        await asyncio.sleep(0.03)
+        assert len(workers.jobs) == 2
+        assert len({t["project_id"] for t in Tasks(db).list() if t["lease_owner"]}) == 2
+        directory = settings.project_roots[0] / "new-project"
+        directory.mkdir()
+        future = registry.add(directory)
+        Tasks(db).add(future["id"], "New project work")
+        await scheduler.tick()
+        assert len(workers.jobs) == 2
+        NativeFixture.release.set()
+        await settled(workers)
+        await scheduler.tick()
+        await settled(workers)
+        assert all(t["status"] == "completed" for t in Tasks(db).list())
+        assert len(db.all("SELECT id FROM executions WHERE task_id IS NOT NULL")) == 3
+    finally:
+        NativeFixture.release.set()
+        NativeFixture.release = None
+        await workers.close()
+        await chat.close()

@@ -6,6 +6,6 @@ The current architecture is User → AI Manager → native Codex worker → AI M
 
 FastAPI, plain browser assets, SQLite and Codex App Server remain. Authentication, durable history, project registry, exclusive project claims, process ownership, native thread continuation and backups are essential infrastructure. Planning, DAGs, independent verification/review, capability brokers, permission profiles, command registration, custom command isolation and integration controllers have been removed.
 
-MASTER_SPEC.md describes current requirements. The radical simplification plan and implementation record describe the change. Older STATE/HANDOFF/stage reports retain historical observations. Runtime state is outside Git; historical SQLite evidence and private owner notes are preserved.
+MASTER_SPEC.md describes current requirements. The cleanup report records current validation and deployment. Historical milestones remain in Git. Runtime state is outside Git; historical SQLite evidence and private owner notes are preserved.
 
 The existing private hosting and unrelated projects/services remain intact. Deployment affects only the dedicated manager service.

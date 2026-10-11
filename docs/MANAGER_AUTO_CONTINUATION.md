@@ -22,10 +22,10 @@ Run the regression suite and the real disposable-project acceptance test from th
 
 ```sh
 .venv/bin/pytest -q
-.venv/bin/ruff check ai_manager tests scripts/smoke_manager_continuation.py
-PYTHONPATH=. .venv/bin/python scripts/smoke_manager_continuation.py
+.venv/bin/ruff check ai_manager tests scripts/smoke_minimal.py
+PYTHONPATH=. .venv/bin/python scripts/smoke_minimal.py
 ```
 
-The acceptance script creates temporary project/data directories, asks the actual manager to create `hello.txt`, and runs the normal background scheduler. With exactly one user message, Codex created `Automatic continuation works.\n` and the manager automatically reported completion in the original conversation. The first successful run took 31.5 seconds. Replaying completion did not create another report. Temporary files are removed afterward; production service/data are untouched.
+The consolidated acceptance script runs the normal background scheduler against temporary project/data directories. One manager request delegates a complete calculator fix, file creation, command/test run and local Git commit. It checks automatic delivery in the original conversation and idempotent completion. Production service/data are untouched. Current results are in [CODEBASE_CLEANUP.md](CODEBASE_CLEANUP.md).
 
 Regression coverage includes success/failure/interruption evidence, retries after restart, recovery of completed manager turns, repeated/concurrent delivery, busy and archived conversations, separate project/global origins, cleared origins, large output, and continuing an incomplete assignment through the existing tool.

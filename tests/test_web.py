@@ -75,3 +75,26 @@ def test_bruteforce_throttle_and_expiration(client):
     for _ in range(10):
         browser.post("/api/login", json={"username": "owner", "password": "wrong"})
     assert browser.post("/api/login", json={"username": "owner", "password": "wrong"}).status_code == 429
+
+
+def test_chat_modes_stale_origin_and_history_without_supervision_tables(client):
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    project = app.state.registry.add(settings.project_roots[0] / "one")
+    origin = app.state.chat.conversation(project["id"])["id"]
+    response = browser.post(
+        "/api/chat",
+        json={"project_id": project["id"], "content": "Discuss", "conversation_id": "stale", "mode": "conversation"},
+    )
+    assert response.status_code == 409
+    assert not app.state.db.all("SELECT * FROM messages")
+    assert browser.post("/api/chat", json={"content": "Discuss", "mode": "planning"}).status_code == 422
+    task = app.state.scheduler.tasks.add(project["id"], "History fixture", origin)
+    response = browser.get(f"/api/tasks/{task['id']}/execution-records")
+    assert response.status_code == 200
+    assert response.json()["historical_verification"] == response.json()["historical_integration"] == []
+    with app.state.db.transaction() as conn:
+        conn.execute("CREATE TABLE verification_results(task_id TEXT, evidence TEXT)")
+        conn.execute("INSERT INTO verification_results VALUES(?,?)", (task["id"], "Historical evidence"))
+    response = browser.get(f"/api/tasks/{task['id']}/execution-records")
+    assert response.json()["historical_verification"] == [{"task_id": task["id"], "evidence": "Historical evidence"}]

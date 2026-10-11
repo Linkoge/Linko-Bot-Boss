@@ -4,8 +4,6 @@ import time
 
 from .db import new_id
 
-STATUSES = {"queued", "running", "waiting", "completed", "failed", "cancelled"}
-
 
 class Tasks:
     def __init__(self, db):
@@ -35,17 +33,29 @@ class Tasks:
         with self.db.transaction() as conn:
             if request_key:
                 previous = conn.execute(
-                    "SELECT id,project_id FROM tasks WHERE request_key=?", (request_key,)
+                    """SELECT id,project_id FROM tasks WHERE request_key=? OR id=(
+                        SELECT task_id FROM events WHERE kind='task.reused' AND json_extract(payload,'$.request_key')=?
+                        ORDER BY seq DESC LIMIT 1)""",
+                    (request_key, request_key),
                 ).fetchone()
                 if previous:
                     if previous["project_id"] != project_id:
                         raise ValueError("Delegation belongs to another project")
                     return self.get(previous["id"])
+            previous = conn.execute(
+                """SELECT id FROM tasks WHERE project_id=? AND description=? AND origin_conversation IS ?
+                AND lifecycle IN ('queued','running','waiting') AND legacy=0 ORDER BY created_at DESC LIMIT 1""",
+                (project_id, description.strip(), origin_conversation),
+            ).fetchone()
+            if previous:
+                if request_key:
+                    self.db.event(conn, "task.reused", {"request_key": request_key}, project_id, previous["id"])
+                return self.get(previous["id"])
             conn.execute(
                 """INSERT INTO tasks(id,project_id,description,acceptance,created_at,updated_at,
                          lifecycle,origin_conversation,request_key,legacy)
                          VALUES(?,?,?,'',?,?,'queued',?,?,0)""",
-                (task_id, project_id, description, now, now, origin_conversation, request_key),
+                (task_id, project_id, description.strip(), now, now, origin_conversation, request_key),
             )
             self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
         return self.get(task_id)
@@ -73,7 +83,7 @@ class Tasks:
         with self.db.transaction() as conn:
             if conn.execute("SELECT count(*) FROM tasks WHERE lease_owner IS NOT NULL").fetchone()[0] >= max_workers:
                 return None
-            row = conn.execute("""SELECT t.* FROM tasks t JOIN projects p ON p.id=t.project_id
+            row = conn.execute("""SELECT t.*,p.path FROM tasks t JOIN projects p ON p.id=t.project_id
                 WHERE t.lifecycle='queued' AND p.status='active'
                 AND NOT EXISTS(SELECT 1 FROM tasks busy WHERE busy.project_id=t.project_id AND busy.lease_owner IS NOT NULL)
                 ORDER BY p.priority DESC,t.created_at LIMIT 1""").fetchone()
@@ -92,7 +102,7 @@ class Tasks:
                     row["id"],
                     row["project_id"],
                     time.time(),
-                    conn.execute("SELECT path FROM projects WHERE id=?", (row["project_id"],)).fetchone()[0],
+                    row["path"],
                 ),
             )
             self.db.event(conn, "worker.queued", {}, row["project_id"], row["id"], execution_id)

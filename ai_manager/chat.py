@@ -185,7 +185,9 @@ class Chat:
             for role, effort in ROLES.items()
         }
 
-    async def submit(self, project_id, content, conversation_id=None, delivery=None):
+    async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto"):
+        if mode not in {"conversation", "auto", "execute"}:
+            raise ValueError("Unknown chat mode")
         if not content.strip() or (not delivery and len(content) > 48000):
             raise ValueError("Message must be 1–48000 characters")
         conversation = (
@@ -240,12 +242,12 @@ class Chat:
                 if cursor.rowcount != 1:
                     raise ValueError("Result already claimed")
             self.db.event(conn, "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
-        job = asyncio.create_task(self._run(execution_id, response_id, conversation, content, route))
+        job = asyncio.create_task(self._run(execution_id, response_id, conversation, content, route, mode))
         self.jobs[execution_id] = job
         job.add_done_callback(lambda _: self.jobs.pop(execution_id, None))
         return {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
 
-    async def _run(self, execution_id, response_id, conversation, content, route):
+    async def _run(self, execution_id, response_id, conversation, content, route, mode):
         thread_id, output = None, ""
         try:
             from .orchestration import MANAGER_TOOL
@@ -261,7 +263,7 @@ class Chat:
             self.server.queues[thread_id] = queue
             self.server.tool_handlers[thread_id] = lambda params: self.action_handler(
                 conversation["project_id"],
-                {**params, "manager_execution_id": execution_id, "conversation_id": conversation["id"]},
+                {**params, "manager_execution_id": execution_id, "conversation_id": conversation["id"], "mode": mode},
             )
             with self.db.transaction() as conn:
                 conn.execute("UPDATE conversations SET thread_id=? WHERE id=?", (thread_id, conversation["id"]))
@@ -274,7 +276,7 @@ class Chat:
                     "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                     ("manager_tool_schema:" + conversation["id"], json.dumps(schema)),
                 )
-            prompt = {"context": self.context(conversation["project_id"]), "message": content}
+            prompt = {"context": self.context(conversation["project_id"]), "mode": mode, "message": content}
             if not prior:
                 rows = self.db.all(
                     "SELECT role,content FROM messages WHERE conversation_id=? AND execution_id!=? ORDER BY created_at DESC LIMIT 16",
@@ -377,43 +379,35 @@ class Chat:
                 objective = json.loads(result["input"]).get("objective", result["description"])
             except (ValueError, AttributeError):
                 objective = result["description"]
-            content = (
-                "Codex result:\n"
-                + json.dumps(
-                    {
-                        "task_id": result["task_id"],
-                        "objective": objective,
-                        "task_status": result["task_status"],
-                        "blocker": result["blocker"],
-                        "output": result["output"][-24000:],
-                        "output_truncated": len(result["output"]) > 24000,
-                        "execution": {
-                            k: result[k]
-                            for k in (
-                                "id",
-                                "status",
-                                "error",
-                                "thread_id",
-                                "turn_id",
-                                "worktree",
-                                "branch",
-                                "commit_ref",
-                                "model",
-                                "effort",
-                                "started_at",
-                                "finished_at",
-                                "latency_ms",
-                                "usage",
-                            )
-                        },
+            content = "Codex result:\n" + json.dumps(
+                {
+                    "task_id": result["task_id"],
+                    "objective": objective,
+                    "task_status": result["task_status"],
+                    "blocker": result["blocker"],
+                    "output": result["output"][-24000:],
+                    "output_truncated": len(result["output"]) > 24000,
+                    "execution": {
+                        k: result[k]
+                        for k in (
+                            "id",
+                            "status",
+                            "error",
+                            "thread_id",
+                            "turn_id",
+                            "worktree",
+                            "branch",
+                            "commit_ref",
+                            "model",
+                            "effort",
+                            "started_at",
+                            "finished_at",
+                            "latency_ms",
+                            "usage",
+                        )
                     },
-                    ensure_ascii=False,
-                )
-                + (
-                    "\nReport completion, failure, or partial progress naturally to the user in this conversation. "
-                    "Use the actual worker result. Continue the same assignment only if the authorized objective "
-                    "still needs work; do not independently review or certify it."
-                )
+                },
+                ensure_ascii=False,
             )
             try:
                 await self.submit(conversation["project_id"], content, conversation["id"], result["id"])

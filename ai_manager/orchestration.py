@@ -9,7 +9,7 @@ from .tasks import Tasks
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Delegate one complete objective to native Codex, continue an existing assignment, mark incomplete work waiting with a reason, read a project document, or pause/resume a project. Only delegate work the user requested. Codex results return automatically. No planning or verification setup is needed.",
+    "description": "Delegate one complete objective to native Codex, continue an existing assignment, mark incomplete work waiting with a reason, read a project document, or pause/resume a project.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -47,12 +47,14 @@ class Scheduler:
             raise ValueError("Select the intended project; cross-project work requires All Projects context")
         project = self.registry.get(project_id)
         action = args["action"]
+        if params.get("mode") == "conversation" and action != "read_document":
+            raise ValueError("Conversation mode is read-only; use Auto or Execute for work")
         if action == "delegate":
             return self.tasks.add(
                 project_id,
                 args["objective"],
                 params["conversation_id"],
-                params["manager_execution_id"] + ":" + params["callId"],
+                params["manager_execution_id"] + ":" + project_id,
             )
         if action == "wait":
             task = self.tasks.get(args["task_id"])

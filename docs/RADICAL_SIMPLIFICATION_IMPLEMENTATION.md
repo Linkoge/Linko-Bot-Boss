@@ -1,5 +1,7 @@
 # Radical simplification implementation
 
+Historical deployment record. Current modes, schema creation and validation are described in [CODEBASE_CLEANUP.md](CODEBASE_CLEANUP.md); archived results now stay in their exact origin and cleared origins are discarded.
+
 Date: 2026-10-11. Implements [the audited proposal](RADICAL_SIMPLIFICATION_PLAN.md).
 
 ## Delivered architecture

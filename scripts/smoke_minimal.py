@@ -1,4 +1,4 @@
-"""Real native Codex and browser acceptance in disposable project/data directories."""
+"""Real manager → Codex → manager acceptance in disposable project/data directories."""
 
 import argparse
 import asyncio
@@ -59,13 +59,14 @@ async def main():
         chat.action_handler = scheduler.manager_action
         try:
             started = time.monotonic()
+            origin = chat.conversation(project["id"])["id"]
+            scheduler.start()
             await chat.submit(
                 project["id"],
-                "Please fix calculator.add in this project so it adds rather than subtracts. Preserve the tests. Run the tests, create a Git commit locally, and complete the assignment. Do not push. Delegate this complete objective to Codex now.",
+                "Please fix calculator.add in this project so it adds rather than subtracts. Preserve the tests. Create hello.txt containing exactly Hello World followed by a newline. Run the tests, create a Git commit locally, and complete the assignment. Do not push. Delegate this complete objective to Codex now.",
             )
             deadline = time.monotonic() + 300
             while time.monotonic() < deadline:
-                await scheduler.tick()
                 tasks = Tasks(db).list(project["id"])
                 if db.one("SELECT id FROM questions WHERE status='pending'"):
                     raise AssertionError("Routine native development requested approval")
@@ -79,7 +80,12 @@ async def main():
                     )
                     assert check.returncode == 0, check.stderr
                     assert int(subprocess.check_output(["git", "-C", str(source), "rev-list", "--count", "HEAD"])) == 2
-                    assert not db.all("SELECT * FROM verification_results")
+                    assert (source / "hello.txt").read_text() == "Hello World\n"
+                    reply = db.one("SELECT * FROM executions WHERE id=?", (result["delivery_execution"],))
+                    assert reply["conversation_id"] == origin and reply["output"].strip()
+                    assert db.all("SELECT name FROM sqlite_master WHERE name='verification_results'") == []
+                    workers.finish(result["id"], "completed", "Repeated event", "")
+                    await scheduler.tick()
                     assert len(db.all("SELECT * FROM executions WHERE agent_id='manager'")) == 2
                     print(
                         json.dumps(
@@ -107,6 +113,7 @@ async def main():
                 )
             )
         finally:
+            await scheduler.close()
             await workers.close()
             await chat.close()
 

@@ -58,10 +58,11 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("#send").click()
                 page.get_by_text("Saved streamed answer", exact=True).wait_for()
                 page.locator("#archive-chat").click()
+                page.locator("#chat-archive-name").fill("Fixture archive")
                 page.locator("#chat-confirm-submit").click()
                 page.locator("#chat-confirm").wait_for(state="hidden")
                 page.locator("[data-view=search]").click()
-                page.locator("#history-results button").first.click()
+                page.locator("#history-results button").filter(has_text="Fixture archive").click()
                 page.locator("#history-detail-messages").get_by_text("Saved streamed answer", exact=True).wait_for()
                 page.locator("[data-view=settings]").click()
                 page.locator("#load-models").click()
@@ -77,7 +78,8 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
                     page.screenshot(path=f"/tmp/linko-minimal-{label}.png", full_page=True)
                 assert not errors, errors
-                assert not page.locator("#configure-verification,#configure-scheduler,#chat-mode").count()
+                assert page.locator("#chat-mode option").count() == 3
+                assert not page.locator("#configure-verification,#configure-scheduler").count()
                 browser.close()
             print(
                 "Browser passed: login, chat, archive/search, rename, two model roles, desktop/mobile without JS errors or overflow."

@@ -4,7 +4,7 @@ A private conversational manager for software projects:
 
 **User → AI Manager → native Codex worker → AI Manager → User**
 
-Discuss work naturally in a project context. The manager delegates a complete objective when requested. Codex investigates, edits, installs dependencies, runs commands, builds, tests, debugs and uses Git in the registered project directory. Results return automatically to the originating conversation. Codex chooses its own validation; there is no planner, independent reviewer, verification controller, command registry or permission-profile setup.
+Use Conversation for discussion, Auto to delegate requested work, or Execute to send a work objective through the same manager path. Discuss work naturally in a project context. The manager delegates a complete objective when requested. Codex investigates, edits, installs dependencies, runs commands, builds, tests, debugs and uses Git in the registered project directory. Results return automatically to the originating conversation. Codex chooses its own validation; there is no planner, independent reviewer, verification controller, command registry or permission-profile setup.
 
 Different projects run concurrently, with one coding worker per project and a global capacity default of two. Projects participate automatically. Tasks, conversations, native thread references, questions and execution history persist in SQLite. Restart handling inspects native outcomes and retains uncertain launches instead of blindly duplicating them.
 
@@ -33,4 +33,4 @@ PYTHONPATH=. uv run python scripts/smoke_minimal.py
 
 The real Codex smoke uses a disposable calculator repository and database, fixes code, runs tests, commits locally and checks automatic manager delivery. It invokes the existing subscription. Browser acceptance uses an isolated local HTTP fixture. Neither script uses the production database.
 
-See [operations](docs/operations.md), [the architecture proposal](docs/RADICAL_SIMPLIFICATION_PLAN.md) and [implementation/deployment evidence](docs/RADICAL_SIMPLIFICATION_IMPLEMENTATION.md). Earlier stage documents describe historical behavior.
+See [operations](docs/operations.md), [autonomy](docs/AUTONOMY_POLICY.md) and [cleanup/deployment evidence](docs/CODEBASE_CLEANUP.md). Historical reports link to their complete versions in Git.

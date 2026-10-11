@@ -7,6 +7,7 @@ import shutil
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
@@ -54,6 +55,8 @@ class ProjectUpdate(BaseModel):
 class MessageBody(BaseModel):
     project_id: str | None = None
     content: str = Field(min_length=1, max_length=24000)
+    conversation_id: str | None = None
+    mode: Literal["conversation", "auto", "execute"] = "auto"
 
 
 class RouteBody(BaseModel):
@@ -274,10 +277,6 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
             "models": chat.server.catalog,
             "routes": routes,
             "account_type": chat.server.account_type,
-            "catalog_is_entitlement_check": False,
-            "verified_usage": db.all(
-                "SELECT model,effort,status,latency_ms,usage FROM executions WHERE finished_at IS NOT NULL ORDER BY started_at DESC LIMIT 30"
-            ),
         }
 
     @app.put("/api/models/{role}", dependencies=[Depends(require_owner)])
@@ -295,10 +294,6 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     def global_instructions(body: InstructionsBody):
         db.set_setting("global_instructions", body.content)
         return {"updated": True}
-
-    @app.get("/api/audit", dependencies=[Depends(require_owner)])
-    def audit(after: int = 0):
-        return db.all("SELECT * FROM events WHERE seq>? ORDER BY seq DESC LIMIT 100", (after,))
 
     @app.get("/")
     def index():
@@ -340,7 +335,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
 
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
-        return await chat.submit(body.project_id, body.content)
+        return await chat.submit(body.project_id, body.content, body.conversation_id, mode=body.mode)
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
     def task_control(task_id: str, body: TaskControl):
@@ -348,11 +343,16 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
 
     @app.get("/api/tasks/{task_id}/execution-records", dependencies=[Depends(require_owner)])
     def records(task_id: str):
+        historical = {
+            "historical_" + label: db.all(f"SELECT * FROM {table} WHERE task_id=?", (task_id,))
+            if db.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
+            else []
+            for label, table in (("verification", "verification_results"), ("integration", "integration_results"))
+        }
         return {
             "task": tasks.get(task_id),
             "executions": db.all("SELECT * FROM executions WHERE task_id=? ORDER BY started_at", (task_id,)),
-            "historical_verification": db.all("SELECT * FROM verification_results WHERE task_id=?", (task_id,)),
-            "historical_integration": db.all("SELECT * FROM integration_results WHERE task_id=?", (task_id,)),
+            **historical,
         }
 
     @app.post("/api/executions/{execution_id}/interrupt", dependencies=[Depends(require_owner)])
