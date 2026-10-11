@@ -75,7 +75,8 @@ def main():
                     window.attachments=[];
                     const NativeSource=window.EventSource;
                     window.EventSource=class extends NativeSource {
-                        constructor(url){super(url);this.handlers={};window.attachments.push(this);}
+                        constructor(url){super(url);this.handlers={};this.closeCalls=0;window.attachments.push(this);}
+                        close(){this.closeCalls++;super.close();}
                         addEventListener(name,handler){this.handlers[name]=handler;super.addEventListener(name,handler);}
                     };
                 """)
@@ -151,12 +152,42 @@ def main():
                 }""")
                 assert page.locator("#app").is_visible()
                 assert "STALE" not in page.locator("#messages").inner_text()
+                # Older navigation resumes after a newer chat has attached its SSE.
+                page.evaluate("""() => {
+                    const alpha=state.portfolio.projects.find(p=>p.name==='Alpha');
+                    window.savedLoadMemory=loadMemory;
+                    loadMemory=()=>new Promise(resolve=>{window.releaseNavigation=resolve;});
+                    state.view='memory';
+                    window.delayedNavigation=selectProject(alpha.id);
+                }""")
+                page.evaluate("""async () => {
+                    state.view='chat';
+                    await selectProject(state.portfolio.projects.find(p=>p.name==='Beta').id);
+                }""")
                 # Snapshot replacement cursor rejects replayed chunks on the same attachment.
                 page.locator("#message-input").fill("Replay")
                 page.locator("#send").click()
                 page.wait_for_function("() => !!state.source && state.history?.messages.at(-1).content==='Exact '")
+                unchanged = page.evaluate("""async () => {
+                    const before={source:state.source,closeCalls:state.source.closeCalls,
+                        request:state.loadHistoryRequest,history:state.history,project:state.project,
+                        selection:state.selection,execution:state.execution,
+                        messages:$('messages').innerHTML,status:$('status-label').textContent};
+                    window.releaseNavigation();
+                    await window.delayedNavigation;
+                    loadMemory=window.savedLoadMemory;
+                    return state.source===before.source&&before.source.closeCalls===before.closeCalls
+                        &&state.loadHistoryRequest===before.request&&state.history===before.history
+                        &&state.project===before.project&&state.selection===before.selection
+                        &&state.execution===before.execution&&$('messages').innerHTML===before.messages
+                        &&$('status-label').textContent===before.status;
+                }""")
+                assert unchanged, "Delayed stale navigation changed the newer selected chat or SSE attachment"
                 page.evaluate("""async () => {
+                    const before=state.loadHistoryRequest,previous=state.source,closed=previous.closeCalls;
                     await loadHistory();
+                    if(state.loadHistoryRequest!==before+1||previous.closeCalls!==closed+1||state.source===previous)
+                        throw new Error('Current default history load must still refresh its attachment');
                     const m=state.history.messages.at(-1),source=state.source;
                     const data=JSON.stringify({delta:'Exact '});
                     source.handlers['chat.delta']({lastEventId:String(m.stream_cursor),data});
@@ -185,7 +216,8 @@ def main():
                 assert not errors, errors
                 browser.close()
             print(
-                "Browser chat reliability faults passed: lost HTTP, reload, broken SSE, exact text/cursor, switching, empty/stop, expiry"
+                "Browser chat reliability faults passed: lost HTTP, reload, broken SSE, exact text/cursor, "
+                "switching, delayed navigation, empty/stop, expiry"
             )
         finally:
             process.terminate()
