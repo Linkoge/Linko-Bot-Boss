@@ -169,7 +169,7 @@ async def test_pending_result_restart_archive_and_busy_conversation(system):
     # A queued user turn must serialize result delivery, without losing it.
     current = restored.conversation(p["id"])["id"]
     with db.transaction() as conn:
-        conn.execute("INSERT INTO messages VALUES('busy',?,'assistant','','queued',NULL,?)", (current, time.time()))
+        conn.execute("INSERT INTO messages VALUES('busy',?,'assistant','','queued',NULL,?)", (origin, time.time()))
     await restored.deliver_results()
     assert not restored.jobs
     with db.transaction() as conn:
@@ -178,7 +178,11 @@ async def test_pending_result_restart_archive_and_busy_conversation(system):
     await asyncio.gather(*list(restored.jobs.values()))
     await restored.deliver_results()
     assert len(restored.server.prompts) == 1
-    assert "Codex result" in restored.saved_history(origin, p["id"])["messages"][-1]["content"]
+    messages = restored.saved_history(origin, p["id"])["messages"]
+    assert messages[-2]["role"] == "worker" and "Codex result" in messages[-2]["content"]
+    assert messages[-1]["role"] == "assistant" and messages[-1]["status"] == "completed"
+    assert restored.history(p["id"])["messages"] == []
+    assert current != origin
     assert Tasks(db).get(task["id"])["status"] == "completed"
 
 
@@ -321,3 +325,181 @@ async def test_manager_completion_after_crash_delivers_once(system):
     assert restored.history(task["project_id"])["messages"][-1]["content"] == "Recovered outcome"
     await restored.deliver_results()
     assert not restored.jobs
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,error", [("completed", ""), ("failed", "Disk full"), ("waiting", "Interrupted")])
+async def test_terminal_result_is_reasoning_input_and_finish_is_idempotent(system, status, error):
+    db, registry, chat, settings = system
+    project = registry.list()[0]
+    origin = chat.conversation(project["id"])["id"]
+    tasks = Tasks(db)
+    tasks.add(project["id"], "Create requested text file", origin)
+    task = tasks.claim(2)
+    workers = Workers(db, registry, settings, NativeFixture)
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE executions SET input=?,thread_id='worker-thread',turn_id='worker-turn' WHERE id=?",
+            (json.dumps({"objective": "Original objective"}), task["lease_owner"]),
+        )
+        conn.execute("UPDATE tasks SET description='Later objective',lease_owner=NULL WHERE id=?", (task["id"],))
+    workers.finish(task["lease_owner"], status, "Actual worker result", error)
+    await chat.deliver_results()
+    await asyncio.gather(*list(chat.jobs.values()))
+    content = json.loads(chat.server.prompts[0])["message"]
+    evidence = json.loads(content.split("\n", 1)[1].split("\nReport", 1)[0])
+    assert evidence["objective"] == "Original objective"
+    assert evidence["task_status"] == status
+    assert evidence["output"] == "Actual worker result"
+    assert evidence["execution"]["status"] == status
+    assert evidence["execution"]["error"] == error
+    assert evidence["execution"]["thread_id"] == "worker-thread"
+    assert evidence["execution"]["turn_id"] == "worker-turn"
+    before = db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],))
+    workers.finish(task["lease_owner"], "failed", "Duplicate event", "Duplicate error")
+    assert db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],)) == before
+    await chat.deliver_results()
+    assert len(chat.server.prompts) == 1
+    assert len(db.all("SELECT * FROM events WHERE kind='worker.finished'")) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_manager_delivery_retries_after_restart_without_duplicate_worker_message(system, monkeypatch):
+    db, registry, chat, settings = system
+    project = registry.list()[0]
+    origin = chat.conversation(project["id"])["id"]
+    task = Tasks(db).add(project["id"], "Create a file", origin)
+    workers = Workers(db, registry, settings, NativeFixture)
+    workers.launch(Tasks(db).claim(2))
+    await settled(workers)
+
+    async def fail(*args, **kwargs):
+        raise RuntimeError("Temporary manager outage")
+
+    monkeypatch.setattr(chat.server, "thread", fail)
+    await chat.deliver_results()
+    await asyncio.gather(*list(chat.jobs.values()))
+    result = db.one("SELECT * FROM executions WHERE task_id=?", (task["id"],))
+    assert result["delivery"] == "pending"
+    await chat.deliver_results()
+    assert not chat.jobs  # Persisted backoff prevents a model call every scheduler tick.
+    with db.transaction() as conn:
+        conn.execute("UPDATE executions SET finished_at=? WHERE id=?", (time.time() - 31, result["delivery_execution"]))
+    restored = Chat(Database(db.path), registry, FakeServer(settings))
+    await restored.recover()
+    await restored.deliver_results()
+    await asyncio.gather(*list(restored.jobs.values()))
+    assert db.one("SELECT delivery FROM executions WHERE id=?", (result["id"],))["delivery"] == "delivered"
+    assert len(db.all("SELECT id FROM messages WHERE role='worker'")) == 1
+    assert len(db.all("SELECT id FROM messages WHERE role='assistant' AND status='completed'")) == 1
+    await restored.deliver_results()
+    assert len(restored.server.prompts) == 1
+
+
+@pytest.mark.asyncio
+async def test_results_stay_in_their_project_or_global_origin(system):
+    db, registry, chat, settings = system
+    projects = registry.list()
+    origins = [chat.conversation(projects[0]["id"])["id"], chat.conversation()["id"]]
+    workers = Workers(db, registry, settings, NativeFixture)
+    for project, origin in zip(projects, origins, strict=True):
+        Tasks(db).add(project["id"], "Result for " + project["name"], origin)
+        workers.launch(Tasks(db).claim(2))
+    await settled(workers)
+    await chat.deliver_results()
+    await asyncio.gather(*list(chat.jobs.values()))
+    for project, origin in zip(projects, origins, strict=True):
+        messages = db.all("SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at", (origin,))
+        assert [m["role"] for m in messages] == ["worker", "assistant"]
+        assert "Result for " + project["name"] in messages[0]["content"]
+    assert chat.history(projects[1]["id"])["messages"] == []
+
+
+@pytest.mark.asyncio
+async def test_cleared_origin_does_not_receive_results_in_new_chat(system):
+    db, registry, chat, settings = system
+    project = registry.list()[0]
+    origin = chat.conversation(project["id"])["id"]
+    Tasks(db).add(project["id"], "Original request", origin)
+    workers = Workers(db, registry, settings, NativeFixture)
+    workers.launch(Tasks(db).claim(2))
+    await settled(workers)
+    with db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO messages VALUES('prior',?,'user','request','completed',NULL,?)", (origin, time.time())
+        )
+    chat.reset(project["id"], origin, "prior", True)
+    await chat.deliver_results()
+    assert not chat.jobs
+    assert chat.history(project["id"])["messages"] == []
+    assert db.one("SELECT delivery FROM executions WHERE task_id IS NOT NULL")["delivery"] == "discarded"
+
+
+def test_migration_recovers_previously_stranded_deliveries(system):
+    db, registry, _, _ = system
+    Tasks(db).add(registry.list()[0]["id"], "Stranded result")
+    task = Tasks(db).claim(2)
+    with db.transaction() as conn:
+        conn.execute(
+            "UPDATE executions SET finished_at=?,delivery='waiting' WHERE id=?", (time.time(), task["lease_owner"])
+        )
+        conn.execute("DELETE FROM schema_version WHERE version=8")
+    restored = Database(db.path)
+    assert restored.one("SELECT delivery FROM executions WHERE id=?", (task["lease_owner"],))["delivery"] == "pending"
+
+
+@pytest.mark.asyncio
+async def test_manager_can_continue_incomplete_work_from_result(system):
+    db, registry, chat, settings = system
+    project = registry.list()[0]
+    origin = chat.conversation(project["id"])["id"]
+    task = Tasks(db).add(project["id"], "Create the requested file", origin)
+    task = Tasks(db).claim(2)
+    workers = Workers(db, registry, settings, NativeFixture)
+    workers.finish(task["lease_owner"], "failed", "File creation needs another attempt", "Temporary error")
+    with db.transaction() as conn:
+        conn.execute("UPDATE tasks SET lease_owner=NULL WHERE id=?", (task["id"],))
+
+    class ContinueServer(FakeServer):
+        async def request(self, method, params, timeout=30):
+            if method == "turn/start":
+                prompt = json.loads(params["input"][0]["text"])
+                assert "File creation needs another attempt" in prompt["message"]
+                await self.tool_handlers[params["threadId"]](
+                    {
+                        "tool": "manager_action",
+                        "arguments": {"action": "continue", "task_id": task["id"]},
+                        "callId": "continue-incomplete",
+                    }
+                )
+            return await super().request(method, params, timeout)
+
+    chat.server = ContinueServer(settings)
+    scheduler = Scheduler(db, registry, settings, workers, chat)
+    chat.action_handler = scheduler.manager_action
+    await chat.deliver_results()
+    await asyncio.gather(*list(chat.jobs.values()))
+    assert Tasks(db).get(task["id"])["status"] == "queued"
+    assert Tasks(db).get(task["id"])["origin_conversation"] == origin
+    assert len(Tasks(db).list()) == 1
+    assert not db.all("SELECT * FROM verification_results")
+
+
+@pytest.mark.asyncio
+async def test_large_result_and_concurrent_delivery_claims(system):
+    db, registry, chat, settings = system
+    project = registry.list()[0]
+    origin = chat.conversation(project["id"])["id"]
+    Tasks(db).add(project["id"], "a" * 24000, origin)
+    task = Tasks(db).claim(2)
+    workers = Workers(db, registry, settings, NativeFixture)
+    workers.finish(task["lease_owner"], "completed", "前" * 100000 + "Final result", "")
+    with db.transaction() as conn:
+        conn.execute("UPDATE tasks SET lease_owner=NULL WHERE id=?", (task["id"],))
+    await asyncio.gather(chat.deliver_results(), chat.deliver_results())
+    await asyncio.gather(*list(chat.jobs.values()))
+    assert len(chat.server.prompts) == 1
+    prompt = json.loads(chat.server.prompts[0])
+    assert '"output_truncated": true' in prompt["message"]
+    assert "Final result" in prompt["message"]
+    assert len(db.all("SELECT id FROM messages WHERE role='worker'")) == 1

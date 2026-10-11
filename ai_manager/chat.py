@@ -186,16 +186,21 @@ class Chat:
         }
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None):
-        if not content.strip() or len(content) > 48000:
+        if not content.strip() or (not delivery and len(content) > 48000):
             raise ValueError("Message must be 1–48000 characters")
-        conversation = self.conversation(project_id)
-        if conversation_id and conversation["id"] != conversation_id:
+        conversation = (
+            self.db.one("SELECT * FROM conversations WHERE id=? AND project_id IS ?", (conversation_id, project_id))
+            if delivery and conversation_id
+            else self.conversation(project_id)
+        )
+        if not conversation or (conversation_id and conversation["id"] != conversation_id):
             raise ValueError("Chat changed. Refresh before sending")
         route = (await self.routes())["interactive"]
         execution_id, response_id, now = new_id(), new_id(), time.time()
         with self.db.transaction() as conn:
             if not conn.execute(
-                "SELECT 1 FROM conversations WHERE id=? AND context=?", (conversation["id"], project_id or "global")
+                "SELECT 1 FROM conversations WHERE id=? AND project_id IS ? AND (? OR context=?)",
+                (conversation["id"], project_id, bool(delivery), project_id or "global"),
             ).fetchone():
                 raise ValueError("Chat changed. Refresh before sending")
             if conn.execute(
@@ -204,9 +209,9 @@ class Chat:
             ).fetchone():
                 raise ValueError("A response is already running in this conversation")
             conn.execute(
-                "INSERT INTO messages VALUES(?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,?)",
                 (
-                    new_id(),
+                    "result:" + delivery if delivery else new_id(),
                     conversation["id"],
                     "worker" if delivery else "user",
                     content,
@@ -226,8 +231,11 @@ class Chat:
             )
             if delivery:
                 cursor = conn.execute(
-                    "UPDATE executions SET delivery='running',delivery_execution=? WHERE id=? AND delivery='pending'",
-                    (execution_id, delivery),
+                    """UPDATE executions SET delivery='running',delivery_execution=? WHERE id=? AND delivery='pending'
+                    AND finished_at IS NOT NULL
+                    AND EXISTS(SELECT 1 FROM tasks t WHERE t.id=executions.task_id AND t.lease_owner IS NULL
+                        AND (t.origin_conversation=? OR t.origin_conversation IS NULL))""",
+                    (execution_id, delivery, conversation["id"]),
                 )
                 if cursor.rowcount != 1:
                     raise ValueError("Result already claimed")
@@ -325,6 +333,9 @@ class Chat:
 
     def _finish(self, execution_id, response_id, status, error, output):
         with self.db.transaction() as conn:
+            execution = conn.execute("SELECT finished_at FROM executions WHERE id=?", (execution_id,)).fetchone()
+            if not execution or execution["finished_at"] is not None:
+                return
             conn.execute(
                 "UPDATE executions SET status=?,error=?,output=?,finished_at=? WHERE id=?",
                 (status, error, output, time.time(), execution_id),
@@ -332,52 +343,80 @@ class Chat:
             conn.execute("UPDATE messages SET status=?,content=? WHERE id=?", (status, output, response_id))
             conn.execute(
                 "UPDATE executions SET delivery=? WHERE delivery_execution=?",
-                ("delivered" if status == "completed" else "waiting", execution_id),
+                ("delivered" if status == "completed" else "pending", execution_id),
             )
             self.db.event(conn, "chat.finished", {"status": status, "error": error}, execution_id=execution_id)
 
     async def deliver_results(self):
         for result in self.db.all(
-            "SELECT e.*,t.origin_conversation,t.description FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery='pending' AND t.lease_owner IS NULL ORDER BY e.finished_at"
+            """SELECT e.*,t.origin_conversation,t.description,t.lifecycle AS task_status,t.blocker
+            FROM executions e JOIN tasks t ON t.id=e.task_id
+            LEFT JOIN executions reply ON reply.id=e.delivery_execution
+            WHERE e.delivery='pending' AND e.finished_at IS NOT NULL AND t.lease_owner IS NULL
+            AND (reply.id IS NULL OR reply.finished_at<=?) ORDER BY e.finished_at""",
+            (time.time() - 30,),
         ):
-            origin = self.db.one("SELECT * FROM conversations WHERE id=?", (result["origin_conversation"],))
-            project_id = origin["project_id"] if origin else result["project_id"]
-            conversation = self.conversation(project_id)
+            if result["origin_conversation"]:
+                conversation = self.db.one("SELECT * FROM conversations WHERE id=?", (result["origin_conversation"],))
+                # A deliberately cleared chat must not leak into its replacement.
+                if not conversation:
+                    with self.db.transaction() as conn:
+                        conn.execute(
+                            "UPDATE executions SET delivery='discarded' WHERE id=? AND delivery='pending'",
+                            (result["id"],),
+                        )
+                    continue
+            else:
+                conversation = self.conversation(result["project_id"])
             if self.db.one(
                 "SELECT 1 FROM messages WHERE conversation_id=? AND status IN ('queued','streaming')",
                 (conversation["id"],),
             ):
                 continue
-            content = (
-                "Codex result for assignment "
-                + result["task_id"]
-                + "\nObjective: "
-                + result["description"]
-                + "\nOutcome: "
-                + result["status"]
-                + "\n"
-                + result["output"][-24000:]
-                + "\nError: "
-                + result["error"]
-                + "\nRespond to the user using this result. Continue the same assignment if the objective remains incomplete; do not independently review or certify it."
-            )
-            if origin and origin["id"] != conversation["id"]:
-                with self.db.transaction() as conn:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,?)",
-                        (
-                            "result:" + result["id"],
-                            origin["id"],
-                            "worker",
-                            content,
-                            "completed",
-                            result["id"],
-                            time.time(),
-                        ),
-                    )
-                content = "Result from your archived conversation:\n" + content
             try:
-                await self.submit(project_id, content, conversation["id"], result["id"])
+                objective = json.loads(result["input"]).get("objective", result["description"])
+            except (ValueError, AttributeError):
+                objective = result["description"]
+            content = (
+                "Codex result:\n"
+                + json.dumps(
+                    {
+                        "task_id": result["task_id"],
+                        "objective": objective,
+                        "task_status": result["task_status"],
+                        "blocker": result["blocker"],
+                        "output": result["output"][-24000:],
+                        "output_truncated": len(result["output"]) > 24000,
+                        "execution": {
+                            k: result[k]
+                            for k in (
+                                "id",
+                                "status",
+                                "error",
+                                "thread_id",
+                                "turn_id",
+                                "worktree",
+                                "branch",
+                                "commit_ref",
+                                "model",
+                                "effort",
+                                "started_at",
+                                "finished_at",
+                                "latency_ms",
+                                "usage",
+                            )
+                        },
+                    },
+                    ensure_ascii=False,
+                )
+                + (
+                    "\nReport completion, failure, or partial progress naturally to the user in this conversation. "
+                    "Use the actual worker result. Continue the same assignment only if the authorized objective "
+                    "still needs work; do not independently review or certify it."
+                )
+            )
+            try:
+                await self.submit(conversation["project_id"], content, conversation["id"], result["id"])
             except ValueError:
                 continue
 

@@ -173,6 +173,8 @@ class Workers:
     def finish(self, execution_id, status, output, error, started=None):
         with self.db.transaction() as conn:
             execution = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
+            if not execution or execution["finished_at"] is not None:
+                return
             conn.execute(
                 """UPDATE executions SET status=?,output=?,error=?,finished_at=?,latency_ms=?,delivery='pending' WHERE id=?""",
                 (

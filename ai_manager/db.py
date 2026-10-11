@@ -147,6 +147,11 @@ class Database:
                     "UPDATE tasks SET lifecycle=CASE WHEN status IN ('completed','cancelled','failed') THEN status ELSE 'waiting' END"
                 )
                 conn.execute("INSERT INTO schema_version VALUES(7)")
+            if not conn.execute("SELECT 1 FROM schema_version WHERE version=8").fetchone():
+                conn.execute(
+                    "UPDATE executions SET delivery='pending' WHERE delivery='waiting' AND finished_at IS NOT NULL"
+                )
+                conn.execute("INSERT INTO schema_version VALUES(8)")
             conn.execute(
                 "CREATE UNIQUE INDEX IF NOT EXISTS project_worker ON tasks(project_id) WHERE lifecycle='running'"
             )
