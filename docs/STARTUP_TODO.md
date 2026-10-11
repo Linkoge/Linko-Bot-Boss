@@ -65,8 +65,9 @@ are verified prefixes, not a synchronized stopped snapshot. Paths/hashes are in 
 ## External activation and rollback
 
 The releasing worker's native PID 132017 is a direct child of manager PID 123727 inside
-`linko-bot-manager.service`, whose KillMode is control-group. Only this unfinished execution/claim was found;
-other queued work, questions/deliveries and recovery eligibility must be rechecked immediately before cutover.
+`linko-bot-manager.service`, whose KillMode is control-group. Only this unfinished execution/claim was found. Final inspection also found one queued assignment, which was
+preserved and adds an idle gate; zero pending questions/deliveries were present. Recheck all queued work,
+questions/deliveries and recovery eligibility immediately before cutover.
 No supported external operator/dispatch-quiesce tool is available to this session. Stop/restart here would kill
 this worker. No service escape, detached restart, unit change, live asset edit, task-state manipulation or production
 schema initialization was attempted. Deployment authorization is already present; no new permission is needed.
