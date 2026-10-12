@@ -5,29 +5,46 @@ const submissionKey = 'linko-chat-submissions-v1';
 const submissions = new Map(JSON.parse(sessionStorage.getItem(submissionKey)||'[]'));
 function saveSubmissions(){sessionStorage.setItem(submissionKey,JSON.stringify([...submissions]));}
 const element = (tag, text, cls) => {const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
-function notice(text){$('notice').textContent=text;$('notice').hidden=!text;}
+function notice(text){$('notice-text').textContent=text;$('notice').hidden=!text;}
+$('notice-dismiss').onclick=()=>notice('');
+function updatesUnavailable(error){
+  if($('app').hidden)return;
+  $('connection-status').textContent='Updates unavailable · Retrying…';
+  $('connection-status').title=error.message;
+  $('connection-status').hidden=false;
+}
+function updatesRecovered(){$('connection-status').hidden=true;}
+
 async function api(path, options={}){
   const headers={'Content-Type':'application/json',...(options.headers||{})};
   if(options.method && options.method!=='GET')headers['X-CSRF-Token']=state.csrf||'';
-  const response=await fetch(path,{...options,headers});
-  const result=await response.json();
+  const controller=new AbortController(),read=!options.method||options.method==='GET';
+  const timeout=read?setTimeout(()=>controller.abort(),15000):null;
+  let response,result;
+  try{
+    response=await fetch(path,{...options,headers,signal:options.signal||controller.signal});
+    // Preserve HTTP rejection status even when a proxy returns an HTML error page.
+    try{result=await response.json();}catch{result={detail:response.ok?'Invalid server response. Please retry.':`Request failed (${response.status}). Please retry.`};if(response.ok)throw new Error(result.detail);}
+  }catch(error){if(error.name==='AbortError')throw new Error('Request timed out. Please retry.');if(error instanceof TypeError)throw new Error('Connection interrupted. Please retry.');throw error;}
+  finally{if(timeout)clearTimeout(timeout);}
   if(!response.ok){if(response.status===401 && !path.includes('login'))showAuth();const error=new Error(result.detail||result.message||'Request failed');error.status=response.status;error.result=result.result||(response.status<500?'rejected':'failed');throw error;}
   return result;
 }
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
-function showAuth(){stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
+function showAuth(){updatesRecovered();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);state.ready=true;}
 let refreshVersion=0;
 async function refresh(loadChat=true){
   const version=++refreshVersion,selection=state.selection,project=state.project;
   const portfolio=await api('/api/portfolio'+(project?'?project_id='+encodeURIComponent(project):''));
-  if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return;
+  if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return false;
   state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();
   if(portfolio.queue_error)notice(portfolio.queue_error);
   if(state.view==='todo')await loadTodos(selection);
   if(loadChat&&!state.source&&!state.pending.has(project))await loadHistory(selection);
+  return selection===state.selection&&project===state.project&&version===refreshVersion;
 }
 function localTime(timestamp){
   if(timestamp===null||timestamp===undefined)return 'Not recorded';
@@ -158,7 +175,7 @@ function attachStream(execution,messageId,cursor=0){
   const selection=state.selection,conversation=state.history?.conversation.id;
   const source=new EventSource(`/api/executions/${execution}/events?after=${cursor}`);state.source=source;
   const current=()=>state.source===source&&selection===state.selection&&conversation===state.history?.conversation.id&&!$('app').hidden;
-  const reconcile=()=>{if(!current())return;source.close();state.source=null;loadHistory(selection).catch(error=>notice(error.message));};
+  const reconcile=()=>{if(!current())return;source.close();state.source=null;loadHistory(selection).then(()=>{if(selection===state.selection)updatesRecovered();}).catch(error=>{if(selection===state.selection)updatesUnavailable(error);});};
   source.addEventListener('chat.delta',event=>{
     if(!current()||Number(event.lastEventId)<=cursor)return;cursor=Number(event.lastEventId);
     const data=JSON.parse(event.data),follow=shouldFollowChat(),message=state.history?.messages.find(m=>m.id===messageId);
@@ -171,6 +188,7 @@ function attachStream(execution,messageId,cursor=0){
   source.addEventListener('chat.finished',reconcile);
   source.addEventListener('stream.end',reconcile);
   source.addEventListener('stream.auth_expired',()=>{if(current())showAuth();});
+  source.onopen=()=>{if(current())clearTimeout(state.reconcileTimer);};
   source.onerror=()=>{
     if(!current())return;$('status-label').textContent='Checking saved response…';
     clearTimeout(state.reconcileTimer);state.reconcileTimer=setTimeout(()=>{if(current())reconcile();},1000);
@@ -276,13 +294,16 @@ async function sendSubmission(){
   let submission=submissions.get(project);
   if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:$('message-input').value,conversation_id:state.history?.conversation.id,mode:$('chat-mode').value};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
   state.pending.add(project);$('send').disabled=true;
+  let accepted=false;
   try{
     await api('/api/chat',{method:'POST',body:JSON.stringify(submission)});
+    accepted=true;
     submissions.delete(project);saveSubmissions();
     if(state.drafts.get(project)===submission.content)state.drafts.set(project,'');
     if(selection===state.selection){if($('message-input').value===submission.content)$('message-input').value='';await loadHistory(selection);}
   }catch(error){
-    if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){submissions.delete(project);saveSubmissions();}
+    if(accepted){if(selection===state.selection)updatesUnavailable(error);error.ambiguous=true;error.message='Message accepted. Saved response unavailable; updates will retry.';}
+    else if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){submissions.delete(project);saveSubmissions();}
     else{error.ambiguous=true;error.message='Acceptance is unconfirmed. Your saved request will be checked on return or Send.';}
     throw error;
   }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=!!state.execution;updateChatActions();}}
@@ -302,7 +323,24 @@ $('load-models').onclick=action(async()=>{const catalog=await api('/api/models')
 let searchTimer;
 $('history-search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>searchHistory().catch(error=>notice(error.message)),250);};
 document.querySelectorAll('.tabs [data-view]').forEach(b=>b.onclick=()=>showView(b.dataset.view));
-setInterval(()=>{if(!$('app').hidden&&state.ready)refresh().catch(error=>notice(error.message));},3000);
+// Schedule after completion: slow/disconnected reads cannot pile up every three seconds.
+let pollTimer,pollRunning=false,pollFailures=0;
+async function pollUpdates(){
+  clearTimeout(pollTimer);
+  if(pollRunning)return;
+  pollRunning=true;
+  const selection=state.selection;
+  try{
+    if(!$('app').hidden&&state.ready&&!document.hidden){
+      const recovered=await refresh();
+      if(recovered&&selection===state.selection){pollFailures=0;updatesRecovered();}
+    }
+  }catch(error){if(selection===state.selection){pollFailures=Math.min(pollFailures+1,4);updatesUnavailable(error);}}
+  finally{pollRunning=false;pollTimer=setTimeout(pollUpdates,Math.min(30000,3000*2**pollFailures));}
+}
+pollTimer=setTimeout(pollUpdates,3000);
+window.addEventListener('online',pollUpdates);
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollUpdates();});
 boot().catch(error=>notice(error.message));
 
 function renameProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'display_name',label:'Display name',value:p.display_name||''}],values=>api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,revision:p.revision})}));}

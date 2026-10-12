@@ -26,6 +26,7 @@ def prepare(repo, live, data, release_id, python):
               ['node', '--check', 'ai_manager/static/usage.js'],
               ['node', '--check', 'ai_manager/static/memory.js'],
               [str(python), 'scripts/browser_project_memory.py'],
+              [str(python), 'scripts/browser_fetch_recovery.py'],
               [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_deployment.py'],
               [str(python), 'scripts/browser_account_usage.py']]
     with (target / 'validation.log').open('w') as log:

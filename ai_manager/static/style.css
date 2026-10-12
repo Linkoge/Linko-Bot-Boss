@@ -92,3 +92,9 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 @media(min-width:901px){.workspace-row{padding-inline:16px}}
 /* Memory review evidence and controls remain readable on narrow screens. */
 #view-memory{overflow-wrap:anywhere}#view-memory :is(input,textarea,select,details){min-width:0;max-width:100%}#view-memory button{max-width:100%;white-space:normal}#memory-reviews label{margin-block:12px}
+
+/* Notices never consume conversation height; outage state is separate from action feedback. */
+#notice{position:fixed;z-index:60;top:calc(var(--nav-height,100px) + 8px);right:8px;width:max-content;max-width:calc(100vw - 16px);max-height:120px;overflow:auto;margin:0;display:flex;align-items:center;gap:8px;padding:6px 8px;box-shadow:0 4px 16px #0008}
+#notice-text{max-width:360px;overflow-wrap:anywhere}
+#notice-dismiss{padding:0;width:36px;min-height:36px;flex:none}
+#connection-status{position:fixed;z-index:59;right:8px;bottom:8px;max-width:calc(100vw - 16px);border:1px solid #67553a;border-radius:8px;padding:3px 8px;background:#2e281e;color:#e4c58b;font-size:11px;pointer-events:none}

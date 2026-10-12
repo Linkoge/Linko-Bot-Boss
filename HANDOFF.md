@@ -1,3 +1,7 @@
+# Combined memory / fetch recovery release — activation pending, 2026-10-12
+
+Both existing assignments are preserved in one candidate; owner deployment authorization persists. Use only `memory-fetch-combined-v1-20261012` after the durable combined receipt confirms readiness. Activation uses manager `deploy_release` and the established idle/backup/verify/rollback helper. Do not deploy the memory-only release. See [fetch recovery](docs/FETCH_RECOVERY.md), [project memory](docs/PROJECT_MEMORY.md) and the private combined report. Older activation authorization/status wording below is historical.
+
 # Compact project-memory candidate — activation pending, 2026-10-12
 
 Candidate: `/home/codex/checkouts/linko-project-memory-20261012`. Read [docs/PROJECT_MEMORY.md](docs/PROJECT_MEMORY.md) and its private report for tests, preservation, exact release and activation procedure. Owner authorized implementation/testing/preparation only. Do not deploy automatically or run full project reviews without the explicit project button/start workflow. Live checkout remains on its original commit; this candidate preserves the existing helper and account-usage deliveries.
