@@ -82,7 +82,7 @@ configuration fails compactly on microphone activation before requesting device 
 Owner request: “Limit should be 20 minutes. And don't show that limit in a chat ui, just make it
 20 minutes.” This supersedes the investigated 180-second app policy. Candidate checkout:
 `/home/codex/checkouts/linko-audio-20m-20261012`. Exact controlled release ID:
-`audio-20m-v1-20261012`. **Not activated; no deployment request or succeeded receipt for this release.**
+`audio-20m-v2-20261012`. **Not activated; no deployment request or succeeded receipt for this release.**
 Manager must only request this exact ID through its controlled `deploy_release` capability after owner
 requests activation. Do not activate with shell or restart the manager from a worker.
 
@@ -152,7 +152,7 @@ physical recording or paid provider call.
 Sanitized detailed report and targeted logs:
 `/home/codex/.local/share/linko-bot-manager/deployments/audio-20m-20261012/REPORT.md`.
 Prepared manifest/bundle/fixed-check log:
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/audio-20m-v1-20261012/`.
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/audio-20m-v2-20261012/`.
 The preparation manifest records exact live base, candidate commit, asset and validation hashes.
 Preparation runs all repository backend/lint/syntax/browser release checks including deployed
 memory/fetch behavior. Only a future **succeeded** helper result establishes activation.
