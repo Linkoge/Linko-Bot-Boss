@@ -1,6 +1,6 @@
 # Chat UI cleanup — prepared; activation pending, 2026-10-12
 
-Exact release ID: `chat-ui-cleanup-v1-20261012`. Candidate:
+Exact release ID: `chat-ui-cleanup-v2-20261012`. Candidate:
 `/home/codex/checkouts/linko-chat-cleanup-20261012`.
 Read [docs/chat-history.md](docs/chat-history.md) for current implementation and authoritative
 queue baseline correction. Queue release `queue-composer-v1-20261012` **did deploy successfully**;

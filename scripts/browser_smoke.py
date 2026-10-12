@@ -200,6 +200,10 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                     for control in ('#copy-all','#copy-five','#archive-chat','#clear-chat'):
                         assert page.locator(control).is_visible()
                         assert page.locator(control).bounding_box()['height'] >= 44
+                        assert page.locator(control).evaluate('''n=>{
+                            const r=n.getBoundingClientRect();
+                            return n.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
+                        }''')
                     assert page.locator('#copy-five').inner_text() == 'Copy 5'
                     assert page.locator('#chat-mode-choices button').all_text_contents() == ['Conversation','Auto','Execute']
                     page.screenshot(path=str(evidence/f'{label}-menu.png'), full_page=True)

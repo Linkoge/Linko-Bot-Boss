@@ -1,6 +1,6 @@
 # Chat UI cleanup — prepared, not deployed, 2026-10-12
 
-Exact release ID: `chat-ui-cleanup-v1-20261012`. Candidate checkout:
+Exact release ID: `chat-ui-cleanup-v2-20261012`. Candidate checkout:
 `/home/codex/checkouts/linko-chat-cleanup-20261012`.
 Current deployed baseline is `queue-composer-v1-20261012`, commit
 `f2614893ce4ed58737cc6e9fdbfed62569a1c522`. Its immutable succeeded helper receipt is
@@ -49,7 +49,7 @@ warning remains. Full release preparation repeats the required checks and record
 Manager routine brief/recent delivery facts and full evidence:
 `/home/codex/.local/share/linko-bot-manager/deployments/chat-ui-cleanup-20261012/REPORT.md`.
 Exact manifest, validation log and hashed bundle:
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/chat-ui-cleanup-v1-20261012/`.
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/chat-ui-cleanup-v2-20261012/`.
 A future owner deployment request must use the controlled helper and recheck the live base;
 only an exact durable succeeded receipt may establish activation. Preserve production data,
 active work, prior release receipts and unrelated changes.
