@@ -66,8 +66,8 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     page.evaluate('()=>pollUpdates()')
                     assert page.locator('#connection-status').is_visible()
                     page.unroute('**/api/portfolio*')
-                    page.evaluate('()=>pollUpdates()')
-                    assert not page.locator('#connection-status').is_visible()
+                    page.evaluate("()=>window.dispatchEvent(new Event('online'))")
+                    page.wait_for_function("()=>document.querySelector('#connection-status').hidden")
                     # History failure must remain unhealthy even if portfolio itself succeeds.
                     page.route('**/api/history*', lambda route: route.abort('failed'))
                     page.evaluate('()=>pollUpdates()')
@@ -85,6 +85,21 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     page.wait_for_function("()=>!document.querySelector('#connection-status').hidden")
                     page.unroute('**/api/history*')
                     page.evaluate('()=>{window.EventSource=window.originalEventSource;return pollUpdates();}')
+                    assert not page.locator('#connection-status').is_visible()
+                    # A successful history read cannot hide a continuing portfolio failure.
+                    page.route('**/api/portfolio*', lambda route: route.abort('failed'))
+                    page.evaluate('()=>pollUpdates()')
+                    page.evaluate('''()=>{
+                      window.originalEventSource=window.EventSource;
+                      window.EventSource=class {close(){} addEventListener(type,fn){if(type==='stream.end')this.end=fn;}};
+                      attachStream('fixture-stream','fixture-message');state.source.end();
+                    }''')
+                    page.wait_for_function('()=>!state.source')
+                    page.wait_for_timeout(150)
+                    assert page.locator('#connection-status').is_visible()
+                    page.evaluate('()=>{window.EventSource=window.originalEventSource;}')
+                    page.unroute('**/api/portfolio*')
+                    page.evaluate('()=>pollUpdates()')
                     assert not page.locator('#connection-status').is_visible()
                     # HTTP errors, including proxy HTML, retain actionable status.
                     page.route('**/api/portfolio*', lambda route: route.fulfill(

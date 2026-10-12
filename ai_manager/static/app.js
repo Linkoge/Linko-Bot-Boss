@@ -7,13 +7,17 @@ function saveSubmissions(){sessionStorage.setItem(submissionKey,JSON.stringify([
 const element = (tag, text, cls) => {const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
 function notice(text){$('notice-text').textContent=text;$('notice').hidden=!text;}
 $('notice-dismiss').onclick=()=>notice('');
-function updatesUnavailable(error){
-  if($('app').hidden)return;
+const updateFailures=new Map();
+function renderUpdateStatus(){
   $('connection-status').textContent='Updates unavailable · Retrying…';
-  $('connection-status').title=error.message;
-  $('connection-status').hidden=false;
+  $('connection-status').title=[...updateFailures.values()].join(' · ');
+  $('connection-status').hidden=!updateFailures.size;
 }
-function updatesRecovered(){$('connection-status').hidden=true;}
+function updatesUnavailable(error,channel='refresh'){
+  if($('app').hidden)return;
+  updateFailures.set(channel,error.message);renderUpdateStatus();
+}
+function updatesRecovered(channel='refresh'){updateFailures.delete(channel);renderUpdateStatus();}
 
 async function api(path, options={}){
   const headers={'Content-Type':'application/json',...(options.headers||{})};
@@ -32,7 +36,7 @@ async function api(path, options={}){
 }
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
-function showAuth(){updatesRecovered();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
+function showAuth(){updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);state.ready=true;}
 let refreshVersion=0;
@@ -175,7 +179,7 @@ function attachStream(execution,messageId,cursor=0){
   const selection=state.selection,conversation=state.history?.conversation.id;
   const source=new EventSource(`/api/executions/${execution}/events?after=${cursor}`);state.source=source;
   const current=()=>state.source===source&&selection===state.selection&&conversation===state.history?.conversation.id&&!$('app').hidden;
-  const reconcile=()=>{if(!current())return;source.close();state.source=null;loadHistory(selection).then(()=>{if(selection===state.selection)updatesRecovered();}).catch(error=>{if(selection===state.selection)updatesUnavailable(error);});};
+  const reconcile=()=>{if(!current())return;source.close();state.source=null;loadHistory(selection).then(()=>{if(selection===state.selection)updatesRecovered('history');}).catch(error=>{if(selection===state.selection)updatesUnavailable(error,'history');});};
   source.addEventListener('chat.delta',event=>{
     if(!current()||Number(event.lastEventId)<=cursor)return;cursor=Number(event.lastEventId);
     const data=JSON.parse(event.data),follow=shouldFollowChat(),message=state.history?.messages.find(m=>m.id===messageId);
@@ -302,7 +306,7 @@ async function sendSubmission(){
     if(state.drafts.get(project)===submission.content)state.drafts.set(project,'');
     if(selection===state.selection){if($('message-input').value===submission.content)$('message-input').value='';await loadHistory(selection);}
   }catch(error){
-    if(accepted){if(selection===state.selection)updatesUnavailable(error);error.ambiguous=true;error.message='Message accepted. Saved response unavailable; updates will retry.';}
+    if(accepted){if(selection===state.selection)updatesUnavailable(error,'history');error.ambiguous=true;error.message='Message accepted. Saved response unavailable; updates will retry.';}
     else if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){submissions.delete(project);saveSubmissions();}
     else{error.ambiguous=true;error.message='Acceptance is unconfirmed. Your saved request will be checked on return or Send.';}
     throw error;
@@ -332,8 +336,9 @@ async function pollUpdates(){
   const selection=state.selection;
   try{
     if(!$('app').hidden&&state.ready&&!document.hidden){
+      const historyChecked=!state.source&&!state.pending.has(state.project);
       const recovered=await refresh();
-      if(recovered&&selection===state.selection){pollFailures=0;updatesRecovered();}
+      if(recovered&&selection===state.selection){pollFailures=0;updatesRecovered();if(historyChecked)updatesRecovered('history');}
     }
   }catch(error){if(selection===state.selection){pollFailures=Math.min(pollFailures+1,4);updatesUnavailable(error);}}
   finally{pollRunning=false;pollTimer=setTimeout(pollUpdates,Math.min(30000,3000*2**pollFailures));}
