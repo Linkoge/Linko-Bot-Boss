@@ -16,7 +16,7 @@ def execution_summary(db, project_id=None):
         (SELECT MIN(v.created_at) FROM events v WHERE v.execution_id=e.id
             AND v.kind IN ('worker.started','chat.started','turn/started')) AS work_started_at
         FROM executions e WHERE 1=1{scope}
-        ORDER BY e.started_at DESC,e.id LIMIT 100""", params,
+        ORDER BY is_working DESC,CASE WHEN e.finished_at IS NULL THEN 0 ELSE 1 END,e.started_at DESC,e.id LIMIT 100""", params,
     )
     count = db.one(f"SELECT count(*) AS n FROM executions e WHERE {ACTIVE}{scope}", params)["n"]
     return {"executions": rows, "active_agents": count}

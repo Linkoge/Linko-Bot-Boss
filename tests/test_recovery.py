@@ -295,8 +295,8 @@ async def test_manager_outage_before_and_after_worker_delivery_reuses_response(s
     assert len(faults.calls) == 1
     assert len(db.all("SELECT * FROM messages WHERE role='assistant'")) == 1
     assert faults.calls[0]["worker_result"]["execution_id"] == result["id"]
-    with pytest.raises(ValueError, match="already running"):
-        await chat.submit(task["project_id"], "Another request")
+    queued = await chat.submit(task["project_id"], "Another request")
+    assert queued["status"] == "queued" and len(faults.calls) == 1
     restored = Chat(Database(db.path), registry, faults.factory(settings))
     eligible(db)
     await restored.recover()
@@ -306,6 +306,9 @@ async def test_manager_outage_before_and_after_worker_delivery_reuses_response(s
     assert len(db.all("SELECT * FROM messages WHERE role='assistant' AND status='completed'")) == 1
     assert len(db.all("SELECT * FROM conversations")) == 1
     assert restored.history(task["project_id"])["conversation"]["id"] == origin
+    await restored.recover()
+    await settle(restored)
+    assert db.one("SELECT status FROM executions WHERE id=?", (queued["execution_id"],))["status"] == "completed"
 
 
 @pytest.mark.asyncio

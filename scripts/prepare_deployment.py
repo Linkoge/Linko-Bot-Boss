@@ -28,6 +28,8 @@ def prepare(repo, live, data, release_id, python):
               ['node', '--check', 'ai_manager/static/audio.js'],
               [str(python), 'scripts/browser_worker_delivery.py'],
               [str(python), 'scripts/browser_audio.py'],
+              [str(python), 'scripts/browser_chat_reliability.py'],
+              [str(python), 'scripts/browser_project_ui.py'],
               [str(python), 'scripts/browser_project_memory.py'],
               [str(python), 'scripts/browser_fetch_recovery.py'],
               [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_deployment.py'],

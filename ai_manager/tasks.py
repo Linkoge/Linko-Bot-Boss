@@ -32,7 +32,7 @@ class Tasks:
         rows = self.db.all(
             "SELECT t.*,e.retry_at,e.recovery_reason FROM tasks t LEFT JOIN executions e ON e.id=t.lease_owner"
             + (" WHERE t.project_id=?" if project_id else "")
-            + " ORDER BY t.created_at DESC",
+            + " ORDER BY CASE t.lifecycle WHEN 'running' THEN 0 WHEN 'queued' THEN 1 WHEN 'waiting' THEN 2 ELSE 3 END,t.created_at DESC,t.id",
             (project_id,) if project_id else (),
         )
         archived = self.db.setting("archived_tasks", {})

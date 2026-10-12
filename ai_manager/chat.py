@@ -58,10 +58,13 @@ class Chat:
     def history(self, project_id=None, search=""):
         conversation = self.conversation(project_id)
         rows = self.db.all(
-            """SELECT m.*,CASE WHEN m.role!='assistant' OR e.id IS NULL THEN m.status
+            """SELECT m.*,CASE WHEN m.role='user' AND e.id IS NOT NULL THEN
+            CASE WHEN e.finished_at IS NOT NULL THEN CASE WHEN e.status='completed' THEN 'completed' ELSE e.status END
+            WHEN e.status='running' THEN 'processing' WHEN e.status='recovering' THEN 'waiting' ELSE 'queued' END
+            WHEN m.role!='assistant' OR e.id IS NULL THEN m.status
             WHEN e.finished_at IS NOT NULL THEN e.status WHEN e.status='recovering' THEN 'waiting'
             WHEN e.status='running' THEN 'streaming' ELSE 'queued' END AS authoritative_status,e.status AS execution_status,
-            e.finished_at,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND NOT """ + internal_result("m") + """ AND instr(lower(m.content),lower(?))>0 ORDER BY m.created_at DESC,m.rowid DESC LIMIT 200""",
+            e.finished_at,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND NOT """ + internal_result("m") + """ AND instr(lower(m.content),lower(?))>0 ORDER BY m.rowid DESC LIMIT 200""",
             (conversation["id"], search),
         )
         for row in rows:
@@ -233,14 +236,17 @@ class Chat:
         if not prior:
             rows = self.db.all(
                 """SELECT id,role,content FROM messages WHERE NOT """ + internal_result() + """ AND conversation_id=? AND execution_id IS NOT ?
+                AND (execution_id IS NULL OR execution_id IN
+                    (SELECT id FROM executions WHERE rowid<(SELECT rowid FROM executions WHERE id=?)))
                 ORDER BY created_at DESC,rowid DESC LIMIT 16""",
-                (conversation["id"], execution_id),
+                (conversation["id"], execution_id, execution_id),
             )
             # Keep the latest owner request even across a long automatic worker chain.
             owner = self.db.one(
                 """SELECT id,role,content FROM messages WHERE conversation_id=? AND role='user'
-                AND execution_id IS NOT ? ORDER BY created_at DESC,rowid DESC LIMIT 1""",
-                (conversation["id"], execution_id),
+                AND execution_id IS NOT ? AND (execution_id IS NULL OR execution_id IN
+                (SELECT id FROM executions WHERE rowid<(SELECT rowid FROM executions WHERE id=?))) ORDER BY created_at DESC,rowid DESC LIMIT 1""",
+                (conversation["id"], execution_id, execution_id),
             )
             if owner and owner["id"] not in {r["id"] for r in rows}:
                 rows.append(owner)
@@ -284,8 +290,8 @@ class Chat:
                     return receipt
         if mode not in {"conversation", "auto", "execute"}:
             raise ValueError("Unknown chat mode")
-        if not content.strip() or (not delivery and len(content) > 48000):
-            raise ValueError("Message must be 1–48000 characters")
+        if not content.strip() or (not delivery and len(content) > 64000):
+            raise ValueError("Message must be 1–64000 characters")
         conversation = (
             self.db.one("SELECT * FROM conversations WHERE id=? AND project_id IS ?", (conversation_id, project_id))
             if delivery and conversation_id
@@ -304,11 +310,6 @@ class Chat:
                 (conversation["id"], project_id, bool(delivery), project_id or "global"),
             ).fetchone():
                 raise ValueError("Chat changed. Refresh before sending")
-            if conn.execute(
-                "SELECT 1 FROM executions e JOIN messages m ON m.execution_id=e.id WHERE m.conversation_id=? AND e.agent_id='manager' AND e.finished_at IS NULL",
-                (conversation["id"],),
-            ).fetchone():
-                raise ValueError("A response is already running in this conversation")
             conn.execute(
                 "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,?)",
                 (
@@ -357,9 +358,22 @@ class Chat:
         self.launch(execution_id, response_id, conversation, content, route, mode)
         return receipt
 
+    def is_head(self, execution_id):
+        return bool(self.db.one(
+            """SELECT 1 FROM executions e WHERE e.id=? AND e.finished_at IS NULL
+            AND NOT EXISTS(SELECT 1 FROM executions earlier
+                WHERE earlier.agent_id='manager' AND earlier.conversation_id=e.conversation_id
+                AND earlier.finished_at IS NULL AND earlier.rowid<e.rowid)""", (execution_id,)))
+
     def launch(self, execution_id, response_id, conversation, content, route, mode):
-        if execution_id in self.jobs:
+        if execution_id in self.jobs or not self.is_head(execution_id):
             return
+        # A terminal receipt can precede runner cleanup. Keep the native thread
+        # attached to its old runner until its done callback releases ownership.
+        if any(self.db.one("SELECT conversation_id FROM executions WHERE id=?", (key,))["conversation_id"]
+               == conversation["id"] for key in self.jobs):
+            return
+        conversation = self.db.one("SELECT * FROM conversations WHERE id=?", (conversation["id"],))
         job = asyncio.create_task(self._run(execution_id, response_id, conversation, content, route, mode))
         self.jobs[execution_id] = job
         job.add_done_callback(lambda _: self.jobs.pop(execution_id, None))
@@ -596,12 +610,15 @@ class Chat:
             await self.server.interrupt(row["thread_id"], row["turn_id"])
         elif execution_id in self.jobs:
             self.jobs[execution_id].cancel()
+        elif row["launch_key"] == "not-started":
+            message = self.db.one("SELECT id FROM messages WHERE execution_id=? AND role='assistant'", (execution_id,))
+            self._finish(execution_id, message["id"] if message else "", "interrupted", "Stopped by user", row["output"])
 
     async def recover(self):
         for row in self.db.all(
-            "SELECT * FROM executions WHERE agent_id='manager' AND finished_at IS NULL ORDER BY started_at"
+            "SELECT * FROM executions WHERE agent_id='manager' AND finished_at IS NULL ORDER BY rowid"
         ):
-            if row["id"] in self.jobs or (row["retry_at"] and row["retry_at"] > time.time()):
+            if not self.is_head(row["id"]) or row["id"] in self.jobs or (row["retry_at"] and row["retry_at"] > time.time()):
                 continue
             message = self.db.one("SELECT * FROM messages WHERE execution_id=? AND role='assistant'", (row["id"],))
             response_id = message["id"] if message else ""

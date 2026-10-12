@@ -208,6 +208,31 @@ def main():
                 page.locator("#stop-chat").click()
                 page.wait_for_function("() => state.history.messages.at(-1).status==='interrupted'")
                 assert page.locator("#messages .message-content").last.inner_text() == "Stopped."
+                # Native multiline editing, IME and busy durable Send.
+                page.locator("#message-input").fill("Line one")
+                page.locator("#message-input").press("End")
+                page.locator("#message-input").press("Enter")
+                assert page.locator("#message-input").input_value() == "Line one\n"
+                page.locator("#message-input").press("Control+Enter")
+                assert page.locator("#message-input").input_value().startswith("Line one\n")
+                page.evaluate("""() => {
+                    const input=$('message-input');
+                    const event=new KeyboardEvent('keydown',{key:'Enter',isComposing:true,bubbles:true,cancelable:true});
+                    input.dispatchEvent(event);
+                    if(event.defaultPrevented)throw new Error('IME Enter was intercepted');
+                }""")
+                assert page.evaluate("state.history.messages.length") == 6
+                page.locator("#send").click()
+                page.wait_for_function("() => !state.pending.size && state.execution")
+                assert page.locator("#send").is_enabled()
+                page.locator("#chat-mode").select_option("conversation")
+                page.locator("#message-input").fill("Queued while busy")
+                page.locator("#send").dblclick()
+                page.wait_for_function("() => state.history.messages.length===10 && !state.pending.size")
+                assert "Queued while busy" in page.locator("#messages .message.user").last.inner_text()
+                assert page.evaluate("state.history.messages.filter(m=>m.role==='user').at(-1).content") == "Queued while busy"
+                page.wait_for_function("() => state.history.messages.length===10 && state.history.messages.at(-1).status==='completed'")
+                assert page.evaluate("state.history.messages.filter(m=>m.role==='user').length") == 5
                 # Current stream expiry hides the app and invalidates pending callbacks.
                 page.locator("#message-input").fill("Expiry")
                 page.locator("#send").click()

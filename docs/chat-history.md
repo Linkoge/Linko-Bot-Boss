@@ -1,3 +1,57 @@
+# Nonblocking composer and active-first views — prepared, 2026-10-12
+
+Exact integrated release ID: `queue-composer-v1-20261012`. Candidate checkout:
+`/home/codex/checkouts/linko-nonblocking-chat-20261012`.
+**Prepared only; not activated. No deployment request or succeeded receipt for this release.**
+Includes `audio-composer-v3-20261012` (20-minute recording and compact composer) and
+internal-result fix `0675150`; their immutable prepared releases remain historical evidence.
+The three related assignments `2c7f9687a2fd49259468c5838a512c19`,
+`4c8eab2e6b554fb7b757d5bb84cf2bb0`, `11efb3bb804d473fa211da4baa74e272`
+were inspected read-only: completed, no lease. Shared executable files/service were untouched.
+
+Tasks group running, queued, waiting, then terminal history; each group uses descending creation
+and ID for stable ties. Agents use the existing confirmed-work predicate first, then unfinished
+and completed history with descending queue time/ID; active records are selected before the
+100-record window. Existing archived-task policy and full execution history remain.
+
+Textarea Enter uses native multiline editing, including IME; no keyboard Send shortcut.
+Send and microphone startup no longer depend on manager inference activity. Recorder startup,
+Stop/transcription/upload/Send phases, pending HTTP requests, ambiguous submission retries,
+origin project/conversation/mode, saved drafts and retained audio/transcript retry still guard
+admission. Recording Send preserves the whole-file Stop → transcribe → submit flow.
+
+Owner messages commit immediately to existing messages/executions/request receipts. SQLite
+BEGIN IMMEDIATE and insertion rowid define acceptance FIFO per conversation, independent of
+wall-clock ties. Only the earliest unfinished manager execution may launch or recover; later
+requests remain queued through active work, questions and head backoff. Failure/explicit Stop
+finishes only the affected execution. One-second scheduler passes drain after terminal completion.
+The existing exclusive manager process flock plus synchronous job registration prevents duplicate
+runners; a finished receipt does not release the old runner's native-thread handlers prematurely.
+The next runner reloads the conversation's latest thread reference. Native-history reconciliation,
+account gates, permissions, per-request mode and deployment drain gates remain in force.
+No new schema, dependencies, provider traffic, deployment request, cancellation or restart.
+
+Cold prompt history and the manager read_history tool exclude future queued inputs. Current owner
+messages show queued/processing/waiting/completed/failed/stopped states from their executions;
+assistant queued placeholders remain compact. Chat display follows committed message insertion
+order. Request IDs deduplicate ambiguous retries, including concurrent transactions and restart;
+legacy API callers without a request ID still lack retry deduplication. Pending requests remain
+bound to their captured context and mode; a different payload under the same ID is rejected.
+No guarantee of exactly-once arbitrary external side effects is introduced.
+
+Verification uses disposable SQLite/native-turn fixtures and real Chromium with fixture-only STT.
+Coverage includes older active records before recent history; multiline Enter/IME/no shortcuts;
+busy recording/whole-file Send; double click and queued display; FIFO, equal timestamps,
+concurrent receipts, crash before launch, restart, head retry/permanent failure, conversation
+isolation, completion/cleanup races, future-history exclusion and unchanged deployment mode gate.
+Full release validation log/manifest/bundle are private under
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/queue-composer-v1-20261012/`.
+Detailed report and manager routine brief/recent-delivery reference:
+`/home/codex/.local/share/linko-bot-manager/deployments/nonblocking-chat-20261012/REPORT.md`.
+Only a future durable **succeeded** helper receipt establishes activation. Deployment remains
+pending owner authorization. Physical mobile IME/microphone, real long-clip STT and live-provider
+outage reproduction are not claimed; browser/audio tab lifetime limitations still apply.
+
 # Chat history controls
 
 Search in chat follows Settings in the workspace navigation. It searches message contents and archive names for the selected project context (All Projects is the global conversation). Selecting a result opens matching messages, including older messages; Read full chat opens the entire saved conversation. Long conversations and result lists have pagination.

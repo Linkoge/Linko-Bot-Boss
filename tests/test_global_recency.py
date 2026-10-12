@@ -53,12 +53,12 @@ async def test_only_accepted_submissions_and_assignments_update_recency(system, 
     assert db.setting('global_last_used_at') == 1000
     assert db.one("SELECT project_id FROM executions WHERE agent_id='manager'")['project_id'] is None
     clock[0] = 1100
-    with pytest.raises(ValueError, match='already running'):
-        await chat.submit(None, 'Rejected overlapping request')
-    assert db.setting('global_last_used_at') == 1000
+    queued = await chat.submit(None, 'Accepted queued request')
+    assert queued['status'] == 'queued'
+    assert db.setting('global_last_used_at') == 1100
     await chat.submit(project['id'], 'Project discussion')
     assert registry.get(project['id'])['last_used_at'] == 1100
-    assert db.setting('global_last_used_at') == 1000
+    assert db.setting('global_last_used_at') == 1100
     clock[0] = 1200
     task = Tasks(db).add(project['id'], 'Accepted assignment')
     assert registry.get(project['id'])['last_used_at'] == 1200
@@ -66,7 +66,7 @@ async def test_only_accepted_submissions_and_assignments_update_recency(system, 
     claimed = Tasks(db).claim(2)
     assert claimed['id'] == task['id']
     assert registry.get(project['id'])['last_used_at'] == 1300
-    assert Database(db.path).setting('global_last_used_at') == 1000
+    assert Database(db.path).setting('global_last_used_at') == 1100
     assert db.setting('unrelated') == 'preserved'
 
 

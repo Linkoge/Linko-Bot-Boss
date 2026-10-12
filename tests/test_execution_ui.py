@@ -132,3 +132,22 @@ def test_archive_audit_failure_rolls_back_entire_clear(records, monkeypatch):
         tasks.archive_before(time.time())
     assert db.all('SELECT * FROM tasks') == before
     assert db.setting('archived_tasks') is None
+
+
+def test_status_group_order_is_stable_and_history_remains(records):
+    db, tasks, (one, _) = records
+    ids = {status: tasks.add(one, status)['id'] for status in ('running', 'queued', 'waiting', 'completed', 'failed')}
+    with db.transaction() as conn:
+        for status, id in ids.items():
+            conn.execute('UPDATE tasks SET lifecycle=?,created_at=100 WHERE id=?', (status, id))
+    rows = tasks.list(one)
+    assert [t['status'] for t in rows[:3]] == ['running', 'queued', 'waiting']
+    assert len(rows) == 5 and tasks.list(one) == rows
+    execution(db, one, 'old-active', queued=1)
+    for i in range(105):
+        execution(db, one, f'history-{i}', 'completed', queued=i+10)
+        with db.transaction() as conn:
+            conn.execute('UPDATE executions SET finished_at=500 WHERE id=?', (f'history-{i}',))
+    rows = execution_summary(db, one)['executions']
+    assert rows[0]['id'] == 'old-active' and len(rows) == 100
+    assert execution_summary(db, one)['executions'] == rows

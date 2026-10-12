@@ -12,9 +12,9 @@ function renderAudio(){
   $('microphone').textContent=recording?'Stop':phase==='error'?'Retry':'🎙';
   $('microphone').setAttribute('aria-label',recording?'Stop recording and transcribe':phase==='error'?'Retry recording transcription':'Record microphone');
   $('microphone').title=audioSupported()?'Record microphone':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
-  $('microphone').disabled=busy||(!session&&(!!state.execution||state.pending.has(state.project)||submissions.has(state.project)||!state.history));
+  $('microphone').disabled=busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));
   $('send').type=session?'button':'submit';
-  $('send').disabled=session?!recording||session.project!==state.project||!!state.execution||state.pending.has(state.project):!!state.execution||state.pending.has(state.project);
+  $('send').disabled=session?!recording||session.project!==state.project||state.pending.has(state.project):state.pending.has(state.project);
   for(const id of ['archive-chat','clear-chat'])if(session&&session.project===state.project)$(id).disabled=true;
 }
 function audioChanged(auth=false){
@@ -35,7 +35,7 @@ function discardAudio(){
 async function startAudio(){
   if(audioState.session)return;
   if(!audioSupported()){notice(!window.isSecureContext?'Open this manager over HTTPS to use the microphone on mobile.':'This browser does not support microphone recording. Try a current browser.');return;}
-  if(state.execution||state.pending.has(state.project)||submissions.has(state.project)||!state.history)return;
+  if(state.pending.has(state.project)||submissions.has(state.project)||!state.history)return;
   const session={project:state.project,conversation:state.history.conversation.id,mode:$('chat-mode').value,label:projectName(state.project),phase:'starting',chunks:[],bytes:0,send:false};
   audioState.session=session;renderAudio();
   try{
@@ -97,8 +97,8 @@ async function transcribeAudio(session){
     if(typeof text!=='string'||!text.trim())throw new Error('No speech recognized. Retry or record again.');
     session.transcript=text.trim();
     const content=appendTranscript(session,session.transcript);
-    // Context switches, history changes, an existing retry, and active inference suppress automatic Send.
-    const send=session.send&&!session.changed&&state.project===session.project&&state.history?.conversation.id===session.conversation&&!state.execution&&!state.pending.has(session.project)&&!submissions.has(session.project);
+    // Context switches, history changes, an existing retry, suppress automatic Send.
+    const send=session.send&&!session.changed&&state.project===session.project&&state.history?.conversation.id===session.conversation&&!state.pending.has(session.project)&&!submissions.has(session.project);
     audioState.session=null;renderAudio();
     if(send){
       submitting=true;

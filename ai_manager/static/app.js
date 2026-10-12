@@ -145,13 +145,13 @@ async function loadHistory(selection=state.selection){
   }
   const active=history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
   state.execution=active?.execution_id||null;
-  $('stop-chat').hidden=!active;$('send').disabled=!!active||state.pending.has(state.project);
-  $('status-label').textContent=active?(active.status==='waiting'?recoveryLabel(active):active.status==='queued'?'Queued / connecting':'Thinking / responding'):'Ready to help';
+  $('stop-chat').hidden=!active;$('send').disabled=state.pending.has(state.project);
+  $('status-label').textContent=active?(active.status==='waiting'?recoveryLabel(active):active.status==='queued'?'Queued':'Thinking / responding'):'Ready to help';
   if(active)attachStream(active.execution_id,active.id,active.stream_cursor);
   updateChatActions();
   if(fresh||follow)messages.scrollTop=messages.scrollHeight;
 }
-function messageText(m){return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Connecting to Codex…':'Thinking…');}
+function messageText(m){return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Queued':'Thinking…');}
 function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Codex result':'AI Manager';}
 function chatHasSelection(node=$('messages')){const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&selection.containsNode(node,true);}
 function shouldFollowChat(){const messages=$('messages');return !state.selectingChat&&!chatHasSelection()&&messages.scrollHeight-messages.clientHeight-messages.scrollTop<48;}
@@ -312,10 +312,10 @@ async function sendSubmission(bound=null){
     else if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){submissions.delete(project);saveSubmissions();}
     else{error.ambiguous=true;error.message='Acceptance is unconfirmed. Your saved request will be checked on return or Send.';}
     throw error;
-  }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=!!state.execution;updateChatActions();}}
+  }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=state.pending.has(project);updateChatActions();}}
 }
 $('chat-form').onsubmit=action(async event=>{event.preventDefault();await sendSubmission();});
-$('message-input').onkeydown=event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing){event.preventDefault();if(!audioState.session&&!$('send').disabled)$('chat-form').requestSubmit();}};
+// Textarea Enter (including IME composition) keeps the browser's native multiline editing.
 $('stop-chat').onclick=action(()=>api(`/api/executions/${state.execution}/interrupt`,{method:'POST'}));
 $('all-projects').onclick=action(()=>selectProject(null));
 $('discover').onclick=action(async()=>{await api('/api/projects/discover',{method:'POST'});await refresh();});

@@ -3,6 +3,7 @@
 import json
 import os
 import socket
+import sqlite3
 import subprocess
 import tempfile
 import time
@@ -71,6 +72,8 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 for filename in ('app.js', 'style.css'):
                     original = subprocess.check_output(['git','show','bd757456ecc81d495270c5619b5f8da3fa76abc8:ai_manager/static/'+filename],text=True)
                     baseline.route('**/static/'+filename,lambda route,request,body=original:route.fulfill(body=body,content_type='text/javascript' if route.request.url.endswith('.js') else 'text/css'))
+                original_html = subprocess.check_output(['git','show','bd757456ecc81d495270c5619b5f8da3fa76abc8:ai_manager/static/index.html'],text=True)
+                baseline.route(base+'/',lambda route:route.fulfill(body=original_html,content_type='text/html'))
                 baseline.goto(base)
                 baseline.wait_for_function('() => state.history')
                 baseline.locator('#message-input').focus()
@@ -178,6 +181,18 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 safe_gap=page.evaluate('visualViewport.height+visualViewport.offsetTop-document.querySelector(".composer").getBoundingClientRect().bottom')
                 assert safe_gap==28
                 receipts.append({'simulated_safe_area':{'top':20,'bottom':28,'composer_gap':safe_gap}})
+                # Older active records precede newer history through real portfolio APIs.
+                with sqlite3.connect(root/'data/manager.sqlite3') as conn:
+                    conn.execute("UPDATE tasks SET lifecycle='running',created_at=1600000000 WHERE description LIKE 'Alpha%'")
+                    conn.execute("UPDATE executions SET status='running',finished_at=NULL,started_at=1600000000 WHERE id='Beta'")
+                page.evaluate('()=>refresh()')
+                page.locator('[data-view=tasks]').click()
+                assert 'Alpha scoped objective' in page.locator('#task-list .panel').first.inner_text()
+                assert page.locator('#task-list .panel').count() == 2
+                page.locator('[data-view=agents]').click()
+                assert 'Beta' in page.locator('#agent-list .panel').first.inner_text()
+                assert page.locator('#agent-list .panel').count() == 2
+                receipts.append({'ordering':'Older running task and confirmed active agent first; history retained'})
                 assert not errors, errors
                 browser.close()
         finally:

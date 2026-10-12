@@ -20,7 +20,18 @@ from ai_manager.web import create_app
 class AudioProvider:
     async def transcribe(self,data,mime):
         return 'spoken transcript'
-s=Settings(xai_api_key='disposable-test-key');app=create_app(s,FakeServer(s))
+class Server(FakeServer):
+    async def request(self,method,params,timeout=30):
+        import asyncio, json
+        if method=='turn/start' and json.loads(params['input'][0]['text'])['message']=='Busy recording':
+            queue=self.queues[params['threadId']]
+            async def finish():
+                await asyncio.sleep(5)
+                queue.put_nowait({'method':'turn/completed','params':{'turn':{'id':'busy','status':'completed'}}})
+            asyncio.create_task(finish())
+            return {'turn':{'id':'busy'}}
+        return await super().request(method,params,timeout)
+s=Settings(xai_api_key='disposable-test-key');app=create_app(s,Server(s))
 app.state.audio.provider=AudioProvider()
 for name in ('Alpha','Beta'): app.state.registry.add(s.project_roots[0]/name)
 uvicorn.run(app,host='127.0.0.1',port=PORT,log_level='error')
@@ -91,9 +102,23 @@ def main():
                 page.locator('#message-input').press('Enter')
                 assert len(chats) == 0
                 finish_stop()
-                assert page.locator('#message-input').input_value() == 'typed draft spoken transcript'
+                assert page.locator('#message-input').input_value() == 'typed draft\nspoken transcript'
                 assert len(chats) == 0 and uploads[0].startswith('audio/webm')
                 assert page.evaluate("$('microphone').nextElementSibling.id") == 'send'
+
+                # Capture and explicit whole-file Send while a real fixture manager turn is active.
+                page.locator('#message-input').fill('Busy recording')
+                page.locator('#send').click()
+                page.wait_for_function('()=>!!state.execution&&!state.pending.size')
+                assert page.locator('#microphone').is_enabled()
+                start()
+                assert page.evaluate('!!state.execution')
+                page.locator('#send').click()
+                page.wait_for_function('()=>!audioState.session&&!state.pending.size')
+                assert len(chats) == 2 and chats[-1]['content'] == 'spoken transcript'
+                page.wait_for_function("()=>state.history.messages.at(-1).status==='completed'&&!state.execution")
+                # Keep the original scenario's independent request-count assertions.
+                del chats[-2:]
 
                 # Blank text field still permits explicit recording Send, in the original mode.
                 page.locator('#message-input').fill('')
@@ -207,7 +232,7 @@ def main():
                 page.wait_for_function('()=>!submissions.size&&!state.pending.size&&!state.execution')
                 assert len(chats)==3 and chats[-1]['request_id']==chats[-2]['request_id']
                 history=page.evaluate('()=>api("/api/history?project_id="+state.project)')
-                assert sum(m['role']=='user' for m in history['messages'])==2
+                assert sum(m['role']=='user' for m in history['messages'])==4
                 page.locator('#message-input').fill('preserved spoken transcript')
 
                 # Media permission denial is compact and retryable, no draft loss.

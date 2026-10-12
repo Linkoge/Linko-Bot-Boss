@@ -1,3 +1,14 @@
+# Integrated ordering / nonblocking chat candidate — prepared, not activated
+
+Exact release ID: `queue-composer-v1-20261012`. Read the current section of
+[docs/chat-history.md](docs/chat-history.md) and its private REPORT.md for implementation,
+verification, evidence and manager routine brief/recent-delivery facts. Candidate:
+`/home/codex/checkouts/linko-nonblocking-chat-20261012`.
+Preserves completed composer/audio/internal-result assignments, 20-minute capture and compact UI.
+No deployment request, service restart, active-work cancellation or succeeded activation receipt.
+The integrated candidate supersedes individual prepared IDs for a future requested activation;
+keep their immutable receipts. Use controlled deployment only after owner requests activation.
+
 # Worker delivery and manager context candidate — activation pending, 2026-10-12
 
 Read [docs/MANAGER_COMMUNICATION.md](docs/MANAGER_COMMUNICATION.md). Exact combined release:

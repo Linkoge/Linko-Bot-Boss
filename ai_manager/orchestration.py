@@ -94,7 +94,7 @@ class Scheduler:
             raise ValueError("Unknown manager action")
         action = args["action"]
         execution = self.db.one(
-            "SELECT stop_requested,finished_at FROM executions WHERE id=?", (params.get("manager_execution_id"),)
+            "SELECT stop_requested,finished_at,rowid AS queue_position FROM executions WHERE id=?", (params.get("manager_execution_id"),)
         )
         if execution and (execution["stop_requested"] or execution["finished_at"] is not None):
             raise ValueError("This manager execution has stopped")
@@ -119,6 +119,10 @@ class Scheduler:
                 raise ValueError("History belongs to another project")
             return self.chat.search_history(project_id, args.get("query", ""), offset)
         if action == "read_history":
+            # A running turn must not consume future queued owner instructions.
+            cutoff = execution["queue_position"] if execution else None
+            visible = """ AND (? IS NULL OR execution_id IS NULL OR execution_id IN
+                (SELECT id FROM executions WHERE rowid<=?))"""
             history_project = args.get("project_id") or selected_project
             if selected_project and selected_project != history_project:
                 raise ValueError("History belongs to another project")
@@ -130,8 +134,8 @@ class Scheduler:
                 raise ValueError("Unknown conversation")
             if args.get("message_id"):
                 message = self.db.one(
-                    "SELECT id,role,content FROM messages WHERE id=? AND conversation_id=?",
-                    (args["message_id"], conversation["id"]),
+                    "SELECT id,role,content FROM messages WHERE id=? AND conversation_id=?" + visible,
+                    (args["message_id"], conversation["id"], cutoff, cutoff),
                 )
                 if not message:
                     raise ValueError("Unknown message in this conversation")
@@ -143,8 +147,8 @@ class Scheduler:
                 }
             rows = self.db.all(
                 """SELECT id,role,content FROM messages WHERE NOT """ + internal_result() + """ AND conversation_id=? AND status='completed'
-                AND instr(lower(content),lower(?))>0 ORDER BY created_at DESC,rowid DESC LIMIT 6 OFFSET ?""",
-                (conversation["id"], args.get("query", ""), offset),
+                AND instr(lower(content),lower(?))>0""" + visible + " ORDER BY rowid DESC LIMIT 6 OFFSET ?",
+                (conversation["id"], args.get("query", ""), cutoff, cutoff, offset),
             )
             return {
                 "messages": [
