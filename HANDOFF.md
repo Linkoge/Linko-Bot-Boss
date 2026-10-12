@@ -1,9 +1,9 @@
 # Audio 20-minute candidate — prepared; activation pending, 2026-10-12
 
 Read [docs/AUDIO.md](docs/AUDIO.md) for authoritative behavior, limits, validation and evidence.
-Exact compatible release ID: `audio-20m-v2-20261012`; isolated checkout:
+Exact compatible release ID: `audio-composer-v3-20261012`; isolated checkout:
 `/home/codex/checkouts/linko-audio-20m-20261012`. Implements owner's 1200-second recording request,
-removes normal limit text, preserves full-file Stop/transcribe/edit behavior and explicit Send.
+removes textarea prompt, context label, composer note and recording prose; elapsed `MM:SS` starts at `00:00`. Preserves full-file Stop/transcribe/edit behavior and explicit Send.
 Supports the larger clips with 32 MiB intake, increased probe/upload/provider/browser deadlines,
 and consistent 64,000-character transcript/composer/chat intake. One-second encoder tolerance retained.
 
