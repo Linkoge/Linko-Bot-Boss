@@ -6,7 +6,7 @@ function renderAudio(){
   const session=audioState.session,phase=session?.phase;
   const recording=phase==='recording',busy=['starting','stopping','transcribing','sending'].includes(phase);
   $('audio-panel').hidden=!session;
-  $('audio-status').textContent=session?`${session.label} · ${session.message||({starting:'Requesting microphone…',recording:'Recording',stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
+  $('audio-status').textContent=recording?session.message:session?`${session.label} · ${session.message||({starting:'Requesting microphone…',recording:'Recording',stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
   $('audio-cancel').disabled=phase==='sending';
   $('audio-download').hidden=!session?.blob;
   $('microphone').textContent=recording?'Stop':phase==='error'?'Retry':'🎙';
@@ -56,11 +56,11 @@ async function startAudio(){
       if(session.authLost){session.phase='error';session.message='Recording saved in this tab. Sign in, then retry.';renderAudio();return;}
       transcribeAudio(session);
     };
-    session.recorder.start(250);session.phase='recording';session.started=performance.now();
+    session.recorder.start(250);session.phase='recording';session.message='00:00';session.started=performance.now();
     session.timer=setInterval(()=>{
       if(session.phase!=='recording')return;
       const elapsed=Math.floor((performance.now()-session.started)/1000);
-      session.message=`Recording ${Math.floor(elapsed/60)}:${String(elapsed%60).padStart(2,'0')}`;
+      session.message=`${String(Math.floor(elapsed/60)).padStart(2,'0')}:${String(elapsed%60).padStart(2,'0')}`;
       renderAudio();if(elapsed>=config.max_seconds)finishAudio(false);
     },250);
     for(const track of stream.getTracks())track.onended=()=>{if(session.phase==='recording')finishAudio(false);};

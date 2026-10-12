@@ -74,6 +74,8 @@ def main():
                 def start():
                     page.locator('#microphone').click()
                     page.wait_for_function("()=>audioState.session?.phase==='recording'")
+                    assert page.locator('#audio-status').inner_text() == '00:00'
+                    page.wait_for_function("()=>$('audio-status').textContent==='00:01'")
                     # Capture actual browser audio, not a synthetic MediaRecorder implementation.
                     page.wait_for_function('()=>audioState.session.bytes>0')
 
@@ -243,9 +245,9 @@ def main():
                 assert page.locator('#microphone').get_attribute('title') == 'Record microphone'
                 before_uploads = len(uploads)
                 page.evaluate('audioState.session.started=performance.now()-1199000')
-                page.wait_for_function("()=>audioState.session?.message==='Recording 19:59'")
+                page.wait_for_function("()=>audioState.session?.message==='19:59'")
                 assert len(uploads) == before_uploads
-                assert '/' not in page.locator('#audio-status').inner_text()
+                assert page.locator('#audio-status').inner_text() == '19:59'
                 complete = []
                 def check_full_upload(route):
                     # Actual final MediaRecorder chunk is included, one whole Blob after stop.
@@ -268,6 +270,13 @@ def main():
                     assert bounds['y']+bounds['height'] <= height
                     assert bounds['x']+bounds['width'] <= width
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    assert page.locator('#message-input').get_attribute('placeholder') is None
+                    assert page.locator('#context-hint').count() == 0
+                    assert page.locator('.composer-note').count() == 0
+                    assert page.locator('#audio-status').inner_text() == '00:01'
+                    for control in ['microphone', 'audio-cancel', 'send']:
+                        assert page.locator('#'+control).is_visible()
+                    assert page.locator('#messages').inner_text().strip()
                     page.screenshot(path=f'/tmp/linko-audio-{width}.png')
                     page.locator('#audio-cancel').click()
                 # Unsupported browser and insecure mobile origins use dismissible compact notices.

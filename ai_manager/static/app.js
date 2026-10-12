@@ -76,7 +76,6 @@ function renderProjects(){
   $('project-tabs').scrollLeft=scroll;
   $('all-projects').classList.toggle('selected',!state.project);$('all-projects').setAttribute('aria-pressed',String(!state.project));
   if(!$('project-menu').hidden)renderProjectMenu();
-  $('context-hint').textContent=state.project?`${projectName(state.project)} in context`:'All projects in context';
 }
 function closeProjectMenu(focus=false){$('project-menu').hidden=true;$('project-menu-button').setAttribute('aria-expanded','false');if(focus)$('project-menu-button').focus();}
 function renderProjectMenu(){

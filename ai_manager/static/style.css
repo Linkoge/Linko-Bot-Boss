@@ -101,5 +101,5 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 
 .audio-panel{display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;color:var(--muted)}
 .audio-panel span{flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.35}.audio-panel button{padding:4px 8px;font-size:11px;min-height:36px}
-#microphone{flex:none;min-width:42px;padding:7px 10px}.composer-footer #context-hint{flex:1}.composer-footer button{flex-shrink:0}
+#microphone{flex:none;min-width:42px;padding:7px 10px}.composer-footer{justify-content:flex-end}.composer-footer button{flex-shrink:0}
 @media(max-width:420px){.composer-footer{gap:6px}}
