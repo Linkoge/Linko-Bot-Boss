@@ -1,3 +1,55 @@
+# Mobile composer regression fix — 2026-10-12, candidate only
+
+Exact candidate release: `chat-ui-mobile-composer-v4-20261012`; isolated checkout
+`/home/codex/checkouts/linko-mobile-composer-20261012`. Implemented and browser-verified;
+prepared for later owner-requested activation. **No deployment is requested or performed.**
+The deployed baseline is `chat-ui-composer-v3-20261012`, commit
+`5b31f3fc554a16a21ba6f138d975e0af4d8ce748`, established by succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/ae463def00a557e8cebafbf1c7536fa0.json`.
+Earlier prepared-only statements for that baseline below are historical and superseded.
+Detailed evidence and limitations: [full private report](/home/codex/.local/share/linko-bot-manager/deployments/mobile-composer-20261012/REPORT.md).
+
+
+The attachment button was disabled while history was missing, then never re-rendered on
+history readiness. Direct + tap was therefore inert on fresh login/context switches; prior
+browser tests bypassed it with `set_input_files`. History/action updates now refresh attachment
+and audio availability together. Pending submission immediately disables attachment admission;
+active manager inference alone still allows Upload/Record/queued Send. No queue logic changes.
+
+A primary pointer press on Record, Upload, Stop, Discard or Download prevents the default
+focus transfer only when the draft is already focused. Click is never cancelled; keyboard
+activation/Tab remain native. Send keeps its default focus behavior and may dismiss the keyboard.
+Upload synchronously clicks the native file input inside the trusted + click, without awaiting,
+deferring or blurring. The visually clipped input is rendered, outside Tab order, with multiple
+selection and no restrictive accept/capture filter, allowing files and photo sources offered by
+the browser/OS. Server signature/size/format restrictions remain authoritative, including the
+existing HEIC conversion error. The input does not overlay/intercept any visible control.
+
+Picker open captures project, conversation, selection identity and focused draft/caret. Change,
+cancel and window/visibility return restore the formerly focused draft with `preventScroll`
+only in that same visible context, without stealing another field or resetting an already
+focused editor. Changed text does not receive an old selection. Selected files upload to the
+originating context; changing projects does not retarget them to a new project. Native OS
+picker may replace/hide the keyboard; simultaneous picker/keyboard is not guaranteed, nor
+is an async focus call guaranteed to reopen every mobile keyboard under browser policy.
+
+Recording Stop and Discard align to the right edge beside the existing control column,
+with 44px height and at least 64px width and descriptive accessible names. Composer remains
+154px at tested desktop/mobile/reduced viewports. Stop reply moves to the upper corner to
+avoid covering recording controls during busy manager inference. Sequential full-file Stop
+append, stale Discard guards, explicit Send, FIFO/request replay, recovery and attachment
+manager/worker forwarding retain their existing implementations.
+
+Verification is required by the trusted release preparation: full backend tests/Ruff/JS and
+all existing browser regressions. Expanded composer checks exercise actual desktop click and
+emulated touch tap filechooser events, real selected-byte upload/download, preserved focus
+with zero draft blur on Record/Upload, keyboard picker activation, controlled cancellation/
+focus return, context switching, attachment Send/replay, recovery/Discard and geometry/hit
+checks while manager work is active. Actual physical Android keyboard, permission UI and
+native picker rendering are **not verified**; Chromium automation cannot prove them.
+
+---
+
 # Combined cleanup / compact composer candidate — prepared only
 
 Exact release ID: `chat-ui-composer-v3-20261012`; candidate checkout:

@@ -234,7 +234,7 @@ function updateChatActions(){
   const disabled=!state.history?.messages.length||state.pending.has(state.project)||!!state.execution||state.history.messages.some(m=>['queued','streaming','waiting'].includes(m.status));
   for(const id of ['archive-chat','clear-chat'])$(id).disabled=disabled;
   for(const id of ['copy-all','copy-five'])$(id).disabled=!state.history?.messages.length||!!state.copyingChat;
-  renderAudio();
+  renderAttachments();
 }
 async function copyChat(all){
   const history=state.history;if(!history?.messages.length||state.copyingChat)return;
@@ -332,7 +332,7 @@ async function sendSubmission(bound=null){
   if(state.pending.has(project))return;
   let submission=submissions.get(project);
   if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id)};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
-  state.pending.add(project);$('send').disabled=true;
+  state.pending.add(project);$('send').disabled=true;renderAttachments();
   let accepted=false;
   try{
     await api('/api/chat',{method:'POST',body:JSON.stringify(submission)});
@@ -349,6 +349,18 @@ async function sendSubmission(bound=null){
 }
 $('chat-form').onsubmit=action(async event=>{event.preventDefault();if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length&&!submissions.has(state.project))return;await sendSubmission();});
 $('message-input').addEventListener('input',()=>{state.drafts.set(state.project,$('message-input').value);saveDrafts();});
+// Cancel only pointer press focus transfer. Click/keyboard activation remains native;
+// in particular file-picker activation must stay synchronous inside its trusted click.
+function preserveDraftFocus(event){
+  if(event.button!==0||!event.isPrimary||document.activeElement!==$('message-input'))return;
+  if(event.target.closest('#microphone,#attach,#audio-stop,#audio-cancel,#audio-download'))event.preventDefault();
+}
+$('chat-form').addEventListener('pointerdown',preserveDraftFocus);
+// Older mouse browsers without Pointer Events still get the same focus protection.
+if(!window.PointerEvent)$('chat-form').addEventListener('mousedown',event=>{
+  if(event.button===0&&document.activeElement===$('message-input')&&event.target.closest('#microphone,#attach,#audio-stop,#audio-cancel,#audio-download'))event.preventDefault();
+});
+
 // Textarea Enter (including IME composition) keeps the browser's native multiline editing.
 $('stop-chat').onclick=action(()=>api(`/api/executions/${state.execution}/interrupt`,{method:'POST'}));
 $('all-projects').onclick=action(()=>selectProject(null));

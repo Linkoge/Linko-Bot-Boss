@@ -11,9 +11,37 @@ function renderAttachments(){
   $('attachment-status').hidden=!uploading;$('attachment-status').textContent=uploading?'Uploading…':'';
   if(typeof renderAudio==='function')renderAudio();
 }
-$('attach').onclick=()=>{$('attachment-input').click();};
+// Bind native selection and return focus to the context that actually opened the picker.
+let attachmentPicker=null;
+function restoreAttachmentFocus(picker){
+  if(!picker?.focused||picker.project!==state.project||picker.selection!==state.selection||picker.conversation!==state.history?.conversation.id||state.view!=='chat'||$('app').hidden)return;
+  // Do not steal focus if the owner selected another field/control while returning.
+  if(![document.body,$('message-input'),$('attach'),$('attachment-input')].includes(document.activeElement))return;
+  if(document.activeElement===$('message-input'))return;
+  $('message-input').focus({preventScroll:true});
+  if($('message-input').value===picker.value)$('message-input').setSelectionRange(picker.start,picker.end,picker.direction);
+}
+$('attach').onclick=()=>{
+  if($('attach').disabled||!state.history)return;
+  const draft=$('message-input');
+  attachmentPicker={project:state.project,conversation:state.history.conversation.id,selection:state.selection,focused:document.activeElement===draft,value:draft.value,start:draft.selectionStart,end:draft.selectionEnd,direction:draft.selectionDirection};
+  // No await, timer, focus call or cancelled click before trusted picker activation.
+  $('attachment-input').click();
+};
+$('attachment-input').addEventListener('cancel',()=>{
+  const picker=attachmentPicker;attachmentPicker=null;restoreAttachmentFocus(picker);
+});
+// Some mobile browsers resume the window before dispatching change/cancel.
+function attachmentPickerReturned(){
+  const picker=attachmentPicker;
+  if(picker&&!document.hidden)requestAnimationFrame(()=>{if(attachmentPicker===picker)restoreAttachmentFocus(picker);});
+}
+window.addEventListener('focus',attachmentPickerReturned);
+document.addEventListener('visibilitychange',attachmentPickerReturned);
 $('attachment-input').onchange=async()=>{
-  const project=state.project,conversation=state.history?.conversation.id,files=[...$('attachment-input').files];$('attachment-input').value='';
+  const picker=attachmentPicker;attachmentPicker=null;
+  const project=picker?picker.project:state.project,conversation=picker?picker.conversation:state.history?.conversation.id,files=[...$('attachment-input').files];$('attachment-input').value='';
+  restoreAttachmentFocus(picker);
   if(!files.length||!conversation||attachmentState.uploads.has(project))return;
   if(files.length+attachmentDraft(project).length>4){notice('Use at most four attachments per message.');return;}
   attachmentState.uploads.add(project);renderAttachments();

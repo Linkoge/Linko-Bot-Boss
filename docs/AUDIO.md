@@ -1,3 +1,34 @@
+# Mobile focus and recording controls — 2026-10-12, candidate only
+
+Exact candidate release: `chat-ui-mobile-composer-v4-20261012`; isolated checkout
+`/home/codex/checkouts/linko-mobile-composer-20261012`. Implemented and browser-verified;
+prepared for later owner-requested activation. **No deployment is requested or performed.**
+The deployed baseline is `chat-ui-composer-v3-20261012`, commit
+`5b31f3fc554a16a21ba6f138d975e0af4d8ce748`, established by succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/ae463def00a557e8cebafbf1c7536fa0.json`.
+Earlier prepared-only statements for that baseline below are historical and superseded.
+Detailed evidence and limitations: [full private report](/home/codex/.local/share/linko-bot-manager/deployments/mobile-composer-20261012/REPORT.md).
+
+
+Record/Stop/Discard pointer presses preserve an already focused draft by preventing default
+button focus transfer before click. Send remains explicit and may collapse the keyboard.
+No new focus call, recording lifecycle or STT invocation occurs on Record pointerdown. The
+click handler retains full capture/transcript/queue semantics; keyboard buttons remain native.
+Stop/Discard are now right aligned beside the existing vertical column, 44px tall and at
+least 64px wide, with accessible labels. Timer/status, Download and interruption recovery
+remain inside the 154px composer. Stop reply sits at its upper corner so busy inference does
+not cover recording controls. Upload focus/picker return behavior is documented in
+[chat-history.md](chat-history.md). Physical Android open-keyboard behavior remains pending
+owner/device verification; browser focus preservation is verified without claiming OS proof.
+
+Sequential append, distinct session IDs, stale-result protection, checkpoint serialization,
+recovered draft/audio, Stop versus Send and the 20-minute/32 MiB limits are preserved.
+Expanded real Chromium mouse/touch checks plus the existing audio/queue/backend suites are
+retained in the exact release validation log. Capture is real; STT/native inference use
+fixtures. No paid provider call or production mutation/restart was performed.
+
+---
+
 # Compact recording lifecycle candidate — prepared only, 2026-10-12
 
 Combined release: `chat-ui-composer-v3-20261012`, preserving original chat cleanup and

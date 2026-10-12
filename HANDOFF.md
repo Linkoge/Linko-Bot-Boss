@@ -1,3 +1,30 @@
+# Mobile composer regressions — fixed candidate, no deployment
+
+Exact candidate release: `chat-ui-mobile-composer-v4-20261012`; isolated checkout
+`/home/codex/checkouts/linko-mobile-composer-20261012`. Implemented and browser-verified;
+prepared for later owner-requested activation. **No deployment is requested or performed.**
+The deployed baseline is `chat-ui-composer-v3-20261012`, commit
+`5b31f3fc554a16a21ba6f138d975e0af4d8ce748`, established by succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/ae463def00a557e8cebafbf1c7536fa0.json`.
+Earlier prepared-only statements for that baseline below are historical and superseded.
+Detailed evidence and limitations: [full private report](/home/codex/.local/share/linko-bot-manager/deployments/mobile-composer-20261012/REPORT.md).
+
+
+Fixes fresh-context + being left disabled, pointer button focus stealing and small left-hand
+Stop/Discard controls. Direct trusted desktop/touch picker activation and real uploaded bytes
+are checked; recording actions now align right with larger touch targets, retaining the compact
+viewport and all original cleanup/audio/attachment/queue behavior. Physical Android keyboard
+and native picker UI remain unverified; OS picker may temporarily hide/replace the keyboard.
+
+Manager routine brief/recent delivery should reference the full private report and its
+`manager-summary.json`: implemented/verified/prepared, pending owner deployment request and
+physical-device verification. Preserve task `96591308b2354e0ba0671316c5ef58a9` / execution
+`900ab350079f4a83abfc5ddfdfd65f07` linkage. Do not assert this new candidate is deployed;
+only the exact future succeeded helper receipt establishes that. Prior immutable releases
+and production data are unchanged. No full memory reconciliation is needed.
+
+---
+
 # Combined chat cleanup / compact composer — prepared only
 
 Exact prepared release: `chat-ui-composer-v3-20261012`; checkout
