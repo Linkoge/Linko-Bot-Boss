@@ -1,47 +1,26 @@
-# Composer audio — prepared, activation pending
+# Composer audio — 20-minute candidate prepared; activation pending, 2026-10-12
 
-The audio candidate is isolated in `/home/codex/checkouts/linko-audio-20261012`, based on the tested
-memory/fetch-warning combined candidate `7f79fc0`. Assignment `fd654ea170084822942f84b1adc1a59a`.
-Full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/audio-20261012/REPORT.md`.
-Owner authorization now includes audio activation. The earlier audio-v1-20261012 request failed
-before cutover with `Live release changed; reprepare` after the memory/fetch release succeeded.
-The audio candidate already descends directly from the exact current live memory/fetch baseline
-`7f79fc082eb3d4e01964bc50aefbc67d41a146f3`; no source rebase or merge is required.
-Fresh release preparation uses that live baseline and preserves both deployed changes.
+Current deployed state (unchanged by this task): `audio-v2-livebase-20261012` and the same-code key-loading release
+`audio-key-load-v1-20261012` both have durable **succeeded** helper receipts. Live code is
+`d87be8124ab9d7c2de325982061dcac3467994e6`. The private key was installed in the existing server
+EnvironmentFile; no key value is included here. The earlier absent-key/pending-activation handoffs
+are historical. One real public 11-second whole-file xAI sample passed; this does not establish long
+clip performance or physical device acceptance. No additional provider call was made for this investigation.
 
-Replacement release: `audio-v2-livebase-20261012`. Repreparation evidence:
-`/home/codex/.local/share/linko-bot-manager/deployments/audio-reprepare-20261012/REPORT.md`.
-The manager may deploy the prepared replacement through its existing `deploy_release` path under
-the owner's continuing authorization. This worker must not restart the manager itself.
+Authoritative deployment receipts:
+- `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/683598e8554c73dca96c263840e5ca20.json`
+  — audio activation succeeded, commit above, authentication/data/assets health verified.
+- `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/a7b93842f9ba53999c81260fde185568.json`
+  — key-loading release succeeded, same commit, service PID 84907, start 2026-10-12 14:38:29 +04.
 
-### Required credential setup
+Retained preparation/provider evidence:
+- `/home/codex/.local/share/linko-bot-manager/deployments/audio-20261012/REPORT.md`
+- `/home/codex/.local/share/linko-bot-manager/deployments/audio-reprepare-20261012/REPORT.md`
+- `/home/codex/.local/share/linko-bot-manager/deployments/audio-key-20261012/REPORT.md`
+- `/home/codex/.local/share/linko-bot-manager/deployments/audio-key-20261012/provider-check.json`
 
-The running service and this worker have no nonempty `XAI_API_KEY`. The configured optional systemd
-EnvironmentFile `/home/codex/.config/linko-bot-manager.env` does not exist. These are presence-only
-checks: no value was output, copied, logged or placed in source. There is no browser/SQLite API-key
-setting. Use the existing server environment mechanism, as the same `codex` account, in a private
-SSH terminal. These commands create the file only if absent and preserve existing content:
-
-```bash
-umask 077
-touch /home/codex/.config/linko-bot-manager.env
-chmod 600 /home/codex/.config/linko-bot-manager.env
-nano /home/codex/.config/linko-bot-manager.env
-```
-
-In the editor add one line `XAI_API_KEY=YOUR_XAI_KEY`, replacing the placeholder with the actual
-STT-enabled xAI key. Enter it only inside the editor, never as a shell command or in this chat.
-If that variable already exists, edit its line rather than adding duplicate definitions. Preserve
-any other environment settings. No `daemon-reload` is needed for an existing EnvironmentFile;
-the helper's approved deployment starts the process and loads the file. Prefer setting the key
-before the manager requests this replacement release. If adding it after activation, use a later
-controlled idle restart/release so the running process loads it; do not stop an active worker.
-
-The UI/backend can activate before the key is configured. The microphone is then visible, but clicking
-it shows the compact missing-key message before requesting microphone access. Typed chat and Codex
-continue normally. This is explicitly not live transcription readiness. After deployment with a key,
-check authenticated `/api/audio` readiness and a short spoken recording for Stop/edit and Send.
-No live xAI transcription has been verified by this worker.
+These reports describe their earlier observed state; the succeeded receipts supersede their pending
+activation text. The failed `audio-v1-20261012` attempt was a stale-live-base rejection before cutover.
 
 ## Behavior
 
@@ -83,7 +62,7 @@ Use the existing private systemd `EnvironmentFile` at `/home/codex/.config/linko
 `XAI_API_KEY`. Keep this file readable only by its owner; enter the key there outside chat, Git, SQLite,
 logs and browser settings. Do not paste a key into an owner conversation. The key is read server-side
 at process startup, excluded from Settings repr, and never returned by either audio API. Reloading an
-updated key requires a separately authorized audio activation/restart at the normal safe release boundary.
+updated key requires a controlled deployment/restart at the normal safe release boundary.
 No secret file contents were read or changed by this implementation.
 
 Optional environment settings:
@@ -98,27 +77,197 @@ can be replaced later with an explicitly configured provider. No runtime Python 
 `GET /api/audio` reports readiness and limits without a key; it is authenticated. Missing provider/key/probe
 configuration fails compactly on microphone activation before requesting device permission.
 
-## Boundaries and limits
+## Prepared 20-minute recording change
 
-Authenticated, CSRF/origin/host-protected `POST /api/audio/transcribe` accepts a raw bounded binary request
-from the browser and constructs the provider multipart body on the server. Limit: 8 MiB and three minutes
-(with one second of encoder-tail tolerance), one upload/probe/transcription in flight per application process.
-Upload deadline 30 seconds; probe deadline 10 seconds, metadata bounded to 2 MiB, pipe-only protocols and
-16 MiB maximum individual probe allocation; provider socket timeout 60 seconds and response capped at 1 MiB;
-browser aborts at 90 seconds and retains the blob. Network cancellation does not release provider admission
-until its HTTP thread finishes. Provider errors/response bodies are sanitized, never logged or returned.
-Transcript must be nonempty text of at most 24,000 characters. Multipart redirects are refused so a redirect
-cannot forward the bearer key. No arbitrary audio URL, filename, provider URL or browser key is accepted.
+Owner request: “Limit should be 20 minutes. And don't show that limit in a chat ui, just make it
+20 minutes.” This supersedes the investigated 180-second app policy. Candidate checkout:
+`/home/codex/checkouts/linko-audio-20m-20261012`. Exact controlled release ID:
+`audio-20m-v2-20261012`. **Not activated; no deployment request or succeeded receipt for this release.**
+Manager must only request this exact ID through its controlled `deploy_release` capability after owner
+requests activation. Do not activate with shell or restart the manager from a worker.
 
-MIME, magic bytes, actual audio-stream presence and packet/container duration are checked before the provider.
-Browser chunks are encoded at a requested 64 kbps, with size/duration automatic Stop, never automatic Send.
-Unsupported media APIs and insecure origins give a dismissible notice on activation, not a permanent warning.
-Mobile browsers require private HTTPS; loopback HTTP is a browser-allowed secure context for local tests.
-Chrome recording, server probe and layout are checked with real Chromium fake-device MediaRecorder input.
-Generated MP4/AAC, Ogg/Opus and WebM/Opus exercise the real server validator. Physical Android/iOS/Safari,
-OS permission sheets, mobile screen lock and hardware microphone quality remain unverified.
+The browser uses authenticated API `max_seconds=1200`, stops automatically at the boundary,
+assembles all chunks including the final encoder chunk, uploads the entire file once and inserts
+editable text. Boundary Stop never invokes chat Send. Existing explicit Stop/Send, drafts, cached
+transcript retry, durable chat request retries and project/context guards remain unchanged.
+The normal microphone tooltip is “Record microphone”; recording status shows elapsed `m:ss` only.
+There is no duration denominator, countdown or normal limit disclosure. Errors remain actionable.
 
-No app-owned persistent audio retention; xAI receives the file on explicit Stop/Send/retry. This does not
-assert a third-party provider retention policy. No live xAI transcription was performed: this worker has
-no `XAI_API_KEY`, and a production credential was not read. Server-key configuration, a real spoken-audio
-provider acceptance check and activation through the already authorized manager helper remain pending.
+### Candidate boundaries and supporting resource choices
+
+- Real server duration must be at most 1201 seconds: retain the existing one-second final encoder
+  packet tolerance; forged browser timing cannot bypass actual ffprobe validation.
+- Upload limit 32 MiB, one upload/probe/provider operation per process. At requested 64 kbps,
+  1200 seconds is 9.6 MB before overhead, exceeding the former 8 MiB. The new cap also has room
+  for approximately 192 kbps (28.8 MB) if a compressed browser encoder ignores the bitrate hint.
+  Browser capture keeps WebM/Opus, Ogg/Opus and MP4/AAC; removes uncompressed WAV fallback because
+  48 kHz mono PCM would exceed 115 MB at 20 minutes. Backend WAV validation remains available
+  within the same bounds. Bitrate requests are hints, not browser guarantees; excessive final size
+  retains the full blob for Download/Discard instead of truncating it.
+- ffprobe metadata 8 MiB (formerly 2): a 20-minute Opus file has about 60,000 20 ms packets.
+  Real long Opus fixtures pass this cap. Keep pipe-only protocols, 16 MiB individual allocation,
+  MIME/magic/audio checks. Probe deadline 30 s (formerly 10).
+- Upload deadline 120 s (formerly 30): allows a roughly 9.6 MB clip at about 0.65 Mbps, plus
+  transport overhead. Very slow connections can still fail recoverably; no unlimited upload.
+- Provider socket timeout 300 s (formerly 60), response cap remains 1 MiB. Browser whole
+  upload/transcription abort 480 s (formerly 90): 120 upload + 30 probe + 300 provider + 30 slack.
+  Socket timeout is an I/O bound, not a strict total provider wall-clock guarantee. Cancellation
+  still holds admission until the provider thread exits, avoiding overlapping billable work.
+  These are finite operational choices, not a provider long-clip latency guarantee.
+- Transcript, textarea and chat MessageBody intake now consistently allow 64,000 characters
+  (formerly 24,000). A 20-minute fast dictation at 300 words/minute with six characters/word
+  is about 36,000 characters; the old limit was insufficient. Existing merged-draft overflow
+  error/cached transcript remains; shortening and retrying never duplicates STT. No schema,
+  Codex route, task-details limit or inference transport change.
+- Live proxy inspected read-only: Tailscale Serve private HTTPS :8787 proxies directly to
+  loopback Uvicorn :8787. No nginx or configured Serve upload/request duration cap on this path.
+  Uvicorn entrypoint has no request-duration timeout; keep-alive timeout concerns idle connections.
+  No proxy/systemd/listener change is necessary based on observed configuration. Exact installed
+  Tailscale 1.102.4 source was unavailable at its reported commit; older official Serve source has
+  no response-header timeout, but that is supporting context, not proof of installed behavior.
+  A long candidate upload through production HTTPS was not performed before activation.
+
+Official [xAI STT guide](https://docs.x.ai/developers/model-capabilities/audio/speech-to-text)
+rechecked 2026-10-12: 500 MB whole-file allowance; options precede final file part. It provides no
+20-minute latency SLA. No paid STT call or secret read was made for this change. Prior 11-second real
+provider success remains the only real provider evidence; physical Android/iOS and long provider
+latency remain unverified. Browser/OS memory/lifecycle behavior can still lose tab-held audio.
+
+### Validation and durable handoff
+
+26 targeted backend checks passed: real synthetic duration 1200 and 1201 accepted; 1201.01 and
+1202 rejected with 413. Generated 1200-second WebM/Opus, Ogg/Opus and fragmented MP4/AAC files,
+each larger than 8 MiB, passed real probing and authenticated whole-file intake. Fixture provider
+received exact original bytes; no chat messages or retained server audio were created. Upload
+deadline failure releases admission; provider errors/keys remain sanitized. Exact 64,000-character
+provider text passes chat intake; oversized provider output fails safely.
+
+Actual Chromium capture with fixture-only STT passed at 1440/393/320 px. Accelerated 19:59 remains
+recording with no upload, then 20:00 stops, sends exactly the final Blob, appends editable text and
+makes no extra chat submission. Tooltip/elapsed status have no normal limit text. Existing Stop,
+explicit Send, project switching, retry, discard, draft overflow/cache, permission handling and
+idempotent chat recovery checks pass. This exercises the real timer and recorder, not a 20-minute
+physical recording or paid provider call.
+
+Sanitized detailed report and targeted logs:
+`/home/codex/.local/share/linko-bot-manager/deployments/audio-20m-20261012/REPORT.md`.
+Prepared manifest/bundle/fixed-check log:
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/audio-20m-v2-20261012/`.
+The preparation manifest records exact live base, candidate commit, asset and validation hashes.
+Preparation runs all repository backend/lint/syntax/browser release checks including deployed
+memory/fetch behavior. Only a future **succeeded** helper result establishes activation.
+
+## Historical investigation: exact limit, origin and adjustment options
+
+The section below preserves task `2b32890ed14e42b6aea43091c195b3a7` evidence about the deployed
+180-second baseline. Its options are historical proposals; the candidate above implements the
+owner's subsequent 20-minute request. Its “no code change” statements apply to that investigation.
+
+Scope: investigation only. No audio code, limit, credential, service unit, production database or
+release request was changed. Applicable repository/ancestor AGENTS.md: none found.
+
+### Frontend and backend behavior
+
+- `ai_manager/audio.py:13-14` defines `MAX_BYTES = 8 * 1024 * 1024` and `MAX_SECONDS = 180`.
+  `Audio.status()` (lines 139-150), exposed through authenticated `GET /api/audio`
+  (`ai_manager/web.py:358-364`), sends both limits to the browser. They are constants, not settings.
+- `ai_manager/static/audio.js:14,63` hardcodes the tooltip “Record up to three minutes” and timer
+  denominator `/ 3:00`. Actual stopping uses API `config.max_seconds`, not that displayed string.
+- Capture starts with requested 64,000 bits/s and 250 ms chunk delivery (lines 49-59). Every 250 ms,
+  elapsed time is floored to seconds; at `elapsed >= 180`, it calls `finishAudio(false)` (60-65).
+  This is a browser timer, not sample-exact trimming: scheduling/encoder tail may run slightly over.
+- `finishAudio(false)` (73-77) clears the send flag, stops MediaRecorder and releases tracks.
+  `onstop` (52-57) assembles the entire Blob and automatically transcribes it. On success,
+  `appendTranscript` and the send guard (78-106) append editable text to the originating draft;
+  no chat submission occurs. This is **automatic Stop + transcription**, not cancel/discard or Send.
+  An expired authentication context instead retains the recording for login/retry.
+- Manual Stop uses the same path (113-117). Clicking Send during capture calls `finishAudio(true)`
+  (119), then sends recognized text only if the original context/admission guards still hold (100-105).
+  Discard (29-33) aborts capture/upload and ignores late results. Error/retry (108-110) clears Send;
+  retained recording can be retried/downloaded/discarded. Reload/OS termination can lose that Blob.
+- Size events stop at `bytes >= max_bytes` (50); final encoded chunk can overshoot. Blob larger than
+  8 MiB is rejected locally before uploading (93), retained for Download/Discard, not truncated.
+  Exactly 8 MiB passes the size check, subject to other validation.
+- Server streaming intake (audio.py:152-179) rejects bytes exceeding 8 MiB with HTTP 413 before xAI.
+  It validates MIME, file magic, audio-stream presence and actual ffprobe duration (26-81), taking
+  the larger container or packet-span duration. Duration **greater than 181 seconds** returns 413;
+  the extra second is explicitly commented as allowance for a final browser encoder packet.
+  A forged client duration/config or removed browser timer cannot bypass server enforcement.
+
+### Why 180 seconds?
+
+Git introduces this constant in `9d8478bbb946f53e38134fc008fac0c4f5ce39ca`,
+“Add bounded Grok microphone transcription with draft-safe Stop and Send” (2026-10-12).
+The module describes bounded, transient transcription; the original report records the paired
+8 MiB/three-minute bounds and resource deadlines. The original task's description/acceptance was
+inspected selectively for limit/duration/timeout terms: no numerical duration requirement or rationale
+was found. Neither report, commit message nor relevant source explains why exactly 180 rather than
+300/600 seconds. A conservative initial resource/interaction bound is an **inference from the design**,
+not a demonstrated provider requirement, owner request, performance benchmark or cost threshold.
+
+### Provider limits versus local constraints
+
+Official xAI STT guide checked 2026-10-12:
+https://docs.x.ai/developers/model-capabilities/audio/speech-to-text
+Request Body and Limits document **500 MB maximum file size** for whole-file REST STT. The examined
+STT guide, REST reference and model page do not document a three-minute maximum recording duration
+or a REST request-duration timeout. Do not interpret this as a guarantee of unlimited duration or
+borrow a timeout from xAI text-to-speech/custom voices. REST endpoint is `POST /v1/stt`; model is
+`grok-voice-transcribe-2.0`; multipart options precede the final file. Model page lists WebM support:
+https://docs.x.ai/developers/models/speech-to-text
+REST reference: https://docs.x.ai/developers/rest-api-reference/inference/speech-to-text
+Streaming STT exists, but requires a separate integration with raw frames/backend proxy; the current
+MediaRecorder WebM/Ogg container workflow uploads only after capture ends.
+
+Local practical bounds are verified in source, not provider limits:
+- Upload 30 s total (`audio.py:164`), probe 10 s (`:58`), metadata 2 MiB (`:53-54`),
+  individual ffprobe allocation 16 MiB (`:36`), provider socket timeout 60 s (`:110`),
+  provider response 1 MiB (`:111-113`), nonempty transcript at most 24,000 characters (`:117`).
+- Browser transcription abort after 90 s (`audio.js:89`); this covers the HTTP upload/transcription
+  wait after recording ends. Provider 60 s is a socket timeout, not a 60-second audio-duration cap
+  or guaranteed total wall-clock deadline. No frontend recording-time network transcription happens.
+- One upload/probe/provider operation per app process (`audio.py:159-161`). A cancelled request
+  retains the admission slot until the non-cancellable provider HTTP thread ends (`:89-96`).
+- Whole-file capture and multiple in-memory server/multipart copies mean larger clips consume more
+  memory and postpone first transcript. No measured long-clip latency, memory budget or reverse-proxy
+  size/timeout guarantee was established in this investigation.
+- Requested 64 kbps implies about 1.44 MB audio payload at 3 min, 2.4 MB at 5 min, 4.8 MB at 10 min,
+  excluding overhead. This is arithmetic, not measured output or a bitrate guarantee; codecs/browsers
+  may differ. At that rate 8 MiB is roughly 17.5 min before overhead. Other formats can reach it sooner.
+- Existing composer maxLength (24,000) also applies to typed draft plus transcript (`audio.js:82`);
+  cached recognized text is retained when insertion would exceed it.
+
+### Feasible options (proposed, not implemented)
+
+1. Keep current safeguards and dictate in successive clips, appending each transcript before sending.
+2. Raise cap to 5 or 10 minutes in a reviewed release: change server MAX_SECONDS and make tooltip,
+   timer and error wording reflect the same limit. Current API already drives actual browser stopping.
+   Keep/reassess 8 MiB, deadlines, probe metadata and text length; verify target browser/container,
+   boundary behavior, upload/transcription latency and memory with longer recordings. Provider sample
+   acceptance at 11 s does not prove 5/10-minute readiness.
+3. Add a validated server duration configuration setting and render it dynamically. No existing
+   environment variable, UI setting or provider/model/probe override changes this constant.
+4. Remove the duration cap while retaining a byte cap: feasible code work, but uploads can still stop
+   at 8 MiB and fail existing probe/time/response/text constraints. Truly long dictation merits chunked
+   or streaming transcription, timeout/cancellation/backpressure work and draft recovery. It is a
+   larger change; “unlimited” would not accurately describe the current or proposed bounded design.
+
+### Investigation verification and routine manager handoff
+
+Verified 2026-10-12: live service active/running, PID 84907, configured working directory this repo;
+HEAD matches both succeeded receipts. Served loopback `/static/audio.js` SHA256 exactly matches
+source and receipt: `734a0de64f6e41f1beb9d5159cd7c2f2bdd50edc851947175b2bdd2fd8086ee2`.
+17 existing audio backend tests passed (one existing Starlette/httpx deprecation warning).
+Fresh real ffprobe synthetic WAV checks: 180 and 181 s accepted; 181.01 and 182 s rejected, HTTP 413.
+Fresh `scripts/browser_audio.py` passed with real Chromium capture and **fixture-only** STT:
+11 uploads, 3 chat HTTP submissions, 1440/393/320 px viewports. Its accelerated three-minute-boundary
+check adjusts session start time and asserts no additional Send; it is not a physical 180-second run.
+No paid provider call, credential read or live API upload was needed. Served-asset GET is read-only.
+
+Manager routine brief/recent-delivery facts: investigation completed; deployed default is 180 s,
+server allowance up to 181 s, 8 MiB, automatic Stop/transcribe/edit without Send; hardcoded app policy,
+no duration override or documented exact numerical rationale; xAI file allowance 500 MB. Docs corrected
+historical pending-audio/key claims using the exact succeeded receipts above. Proposed increases remain
+unimplemented/unverified/undeployed; no new activation is requested. Preserve existing working service.
+Detailed authoritative report is this section; secret-free check artifacts retained in
+`/home/codex/.local/share/linko-bot-manager/deployments/audio-limit-investigation-20261012/`.
