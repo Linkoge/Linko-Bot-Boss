@@ -10,8 +10,13 @@ from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from fastapi import HTTPException
 
-MAX_BYTES = 8 * 1024 * 1024
-MAX_SECONDS = 180
+MAX_BYTES = 32 * 1024 * 1024
+MAX_SECONDS = 1200
+MAX_TRANSCRIPT_CHARS = 64000
+UPLOAD_TIMEOUT = 120
+PROBE_TIMEOUT = 30
+PROVIDER_TIMEOUT = 300
+MAX_PROBE_BYTES = 8 * 1024 * 1024
 MIME_EXTENSIONS = {
     'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a',
     'audio/wav': 'wav', 'audio/x-wav': 'wav',
@@ -50,12 +55,12 @@ async def audio_duration(data: bytes, mime: str, executable: str) -> float:
         output = bytearray()
         while chunk := await process.stdout.read(65536):
             output.extend(chunk)
-            if len(output) > 2 * 1024 * 1024:
+            if len(output) > MAX_PROBE_BYTES:
                 raise HTTPException(422, 'Recording metadata exceeds the supported limit.')
         return bytes(output)
 
     try:
-        _, output, _ = await asyncio.wait_for(asyncio.gather(feed(), read(), process.wait()), 10)
+        _, output, _ = await asyncio.wait_for(asyncio.gather(feed(), read(), process.wait()), PROBE_TIMEOUT)
     except BaseException:
         if process.returncode is None:
             process.kill()
@@ -77,7 +82,7 @@ async def audio_duration(data: bytes, mime: str, executable: str) -> float:
     except (ValueError, TypeError, KeyError):
         raise HTTPException(422, 'Recording could not be read. Retry or record again.') from None
     if duration > MAX_SECONDS + 1:  # Allow a final browser encoder packet at the boundary.
-        raise HTTPException(413, 'Recording exceeds the three-minute limit.')
+        raise HTTPException(413, 'Recording is too long. Stop sooner and record again.')
     return duration
 
 
@@ -107,13 +112,13 @@ class GrokTranscriber:
             'Authorization': f'Bearer {self.api_key}', 'Content-Type': f'multipart/form-data; boundary={boundary}',
         })
         try:
-            with build_opener(NoRedirect()).open(request, timeout=60) as response:
+            with build_opener(NoRedirect()).open(request, timeout=PROVIDER_TIMEOUT) as response:
                 raw = response.read(1024 * 1024 + 1)
                 if len(raw) > 1024 * 1024:
                     raise ValueError()
                 result = json.loads(raw)
                 text = result.get('text')
-                if not isinstance(text, str) or not text.strip() or len(text) > 24000:
+                if not isinstance(text, str) or not text.strip() or len(text) > MAX_TRANSCRIPT_CHARS:
                     raise ValueError()
                 return text.strip()
         except HTTPError as error:
@@ -161,10 +166,10 @@ class Audio:
         self.busy = True  # Before any await: one bounded upload/probe/provider request per process.
         try:
             data = bytearray()
-            async with asyncio.timeout(30):
+            async with asyncio.timeout(UPLOAD_TIMEOUT):
                 async for chunk in request.stream():
                     if len(data) + len(chunk) > MAX_BYTES:
-                        raise HTTPException(413, 'Recording exceeds the 8 MiB upload limit.')
+                        raise HTTPException(413, 'Recording exceeds the upload limit. Download it or record a shorter clip.')
                     data.extend(chunk)
             if not data:
                 raise HTTPException(422, 'The recording is empty. Record again.')

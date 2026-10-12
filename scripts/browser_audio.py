@@ -173,7 +173,7 @@ def main():
                 assert len(chats) == 1
 
                 # An overlong draft preserves the transcript; shortening and retrying needs no second STT call.
-                page.locator('#message-input').fill('x'*23995)
+                page.locator('#message-input').fill('x'*(page.locator('#message-input').evaluate('(el)=>el.maxLength')-5))
                 start()
                 page.locator('#microphone').click()
                 page.wait_for_function("()=>audioState.session?.phase==='error'")
@@ -237,10 +237,28 @@ def main():
                 page.locator('#audio-cancel').click()
                 page.unroute('**/api/audio')
 
-                # Three-minute boundary always stops for editing, never implicitly sends.
+                # Twenty-minute boundary always stops for editing, never implicitly sends.
                 start()
-                page.evaluate('audioState.session.started=performance.now()-180000')
+                assert page.evaluate('audioState.session.config.max_seconds') == 1200
+                assert page.locator('#microphone').get_attribute('title') == 'Record microphone'
+                before_uploads = len(uploads)
+                page.evaluate('audioState.session.started=performance.now()-1199000')
+                page.wait_for_function("()=>audioState.session?.message==='Recording 19:59'")
+                assert len(uploads) == before_uploads
+                assert '/' not in page.locator('#audio-status').inner_text()
+                complete = []
+                def check_full_upload(route):
+                    # Actual final MediaRecorder chunk is included, one whole Blob after stop.
+                    data = bytes(page.evaluate('async()=>Array.from(new Uint8Array(await audioState.session.blob.arrayBuffer()))'))
+                    assert route.request.post_data_buffer == data
+                    complete.append(len(data))
+                    route.continue_()
+                page.route('**/api/audio/transcribe', check_full_upload)
+                page.evaluate('audioState.session.started=performance.now()-1200000')
                 page.wait_for_function('()=>!audioState.session')
+                page.unroute('**/api/audio/transcribe')
+                assert complete and len(uploads) == before_uploads + 1
+                assert page.locator('#message-input').input_value() == 'preserved spoken transcript spoken transcript'
                 assert len(chats) == 3
 
                 for width, height in [(1440, 1000), (393, 851), (320, 420)]:

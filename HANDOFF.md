@@ -1,12 +1,20 @@
-# Composer audio replacement release — activation pending, 2026-10-12
+# Audio 20-minute candidate — prepared; activation pending, 2026-10-12
 
-Read [docs/AUDIO.md](docs/AUDIO.md). Owner authorized activation; the first audio deployment failed
-with a stale live-base receipt after memory/fetch fixes deployed. Candidate already descends from
-current live `7f79fc0`; preserve it and prepare `audio-v2-livebase-20261012` against that exact base.
-Use manager `deploy_release` under the existing authorization, never a worker self-restart.
-The UI can activate without credentials, but transcription needs `XAI_API_KEY` in the existing private
-server EnvironmentFile. No key is currently present and live provider validation remains pending.
-Detailed evidence: `/home/codex/.local/share/linko-bot-manager/deployments/audio-reprepare-20261012/REPORT.md`.
+Read [docs/AUDIO.md](docs/AUDIO.md) for authoritative behavior, limits, validation and evidence.
+Exact compatible release ID: `audio-20m-v1-20261012`; isolated checkout:
+`/home/codex/checkouts/linko-audio-20m-20261012`. Implements owner's 1200-second recording request,
+removes normal limit text, preserves full-file Stop/transcribe/edit behavior and explicit Send.
+Supports the larger clips with 32 MiB intake, increased probe/upload/provider/browser deadlines,
+and consistent 64,000-character transcript/composer/chat intake. One-second encoder tolerance retained.
+
+Manager routine brief/recent delivery: implemented and validated with synthetic 20-minute compressed
+files and real Chromium accelerated boundary/full-Blob capture; fixture STT only, no paid provider call.
+Fixed release validation and manifest are retained under the exact release directory named in AUDIO.md.
+Detailed sanitized report: `/home/codex/.local/share/linko-bot-manager/deployments/audio-20m-20261012/REPORT.md`.
+**Not activated; no new deployment request or succeeded receipt.** Owner requested functionality,
+not deployment. Use controlled `deploy_release` only on subsequent owner activation request; no shell cutover.
+Live remains `d87be8124ab9d7c2de325982061dcac3467994e6`, previous audio/key-load receipts succeeded.
+Preserve working service, private key, memory/fetch fixes, existing dirty docs and production data.
 
 # Codex account usage candidate — activation pending, 2026-10-12
 

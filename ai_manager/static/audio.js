@@ -11,7 +11,7 @@ function renderAudio(){
   $('audio-download').hidden=!session?.blob;
   $('microphone').textContent=recording?'Stop':phase==='error'?'Retry':'🎙';
   $('microphone').setAttribute('aria-label',recording?'Stop recording and transcribe':phase==='error'?'Retry recording transcription':'Record microphone');
-  $('microphone').title=audioSupported()?'Record up to three minutes':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
+  $('microphone').title=audioSupported()?'Record microphone':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
   $('microphone').disabled=busy||(!session&&(!!state.execution||state.pending.has(state.project)||submissions.has(state.project)||!state.history));
   $('send').type=session?'button':'submit';
   $('send').disabled=session?!recording||session.project!==state.project||!!state.execution||state.pending.has(state.project):!!state.execution||state.pending.has(state.project);
@@ -42,7 +42,7 @@ async function startAudio(){
     const config=await api('/api/audio');if(audioState.session!==session)return;
     if(!config.available)throw new Error(config.reason);
     session.config=config;
-    const mime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4','audio/wav'].find(type=>config.mime_types.includes(type.split(';')[0])&&MediaRecorder.isTypeSupported(type));
+    const mime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4'].find(type=>config.mime_types.includes(type.split(';')[0])&&MediaRecorder.isTypeSupported(type));
     if(!mime)throw new Error('This browser has no supported audio recording format.');
     const stream=await navigator.mediaDevices.getUserMedia({audio:true});
     if(audioState.session!==session){stream.getTracks().forEach(track=>track.stop());return;}
@@ -60,7 +60,7 @@ async function startAudio(){
     session.timer=setInterval(()=>{
       if(session.phase!=='recording')return;
       const elapsed=Math.floor((performance.now()-session.started)/1000);
-      session.message=`Recording ${Math.floor(elapsed/60)}:${String(elapsed%60).padStart(2,'0')} / 3:00`;
+      session.message=`Recording ${Math.floor(elapsed/60)}:${String(elapsed%60).padStart(2,'0')}`;
       renderAudio();if(elapsed>=config.max_seconds)finishAudio(false);
     },250);
     for(const track of stream.getTracks())track.onended=()=>{if(session.phase==='recording')finishAudio(false);};
@@ -86,7 +86,7 @@ function appendTranscript(session,text){
 async function transcribeAudio(session){
   if(audioState.session!==session||session.phase==='transcribing')return;
   session.phase='transcribing';session.message='';session.authLost=false;session.controller=new AbortController();renderAudio();
-  const timeout=setTimeout(()=>session.controller.abort(),90000);
+  const timeout=setTimeout(()=>session.controller.abort(),480000);
   let submitting=false;
   try{
     if(!session.blob?.size)throw new Error('No audio captured. Discard and record again.');

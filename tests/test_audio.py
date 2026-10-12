@@ -10,7 +10,16 @@ from fastapi import HTTPException
 from test_web import client as web_client
 from test_web import sign_in
 
-from ai_manager.audio import MAX_BYTES, Audio, GrokTranscriber, NoRedirect, audio_duration
+from ai_manager.audio import (
+    MAX_BYTES,
+    MAX_SECONDS,
+    MAX_TRANSCRIPT_CHARS,
+    PROVIDER_TIMEOUT,
+    Audio,
+    GrokTranscriber,
+    NoRedirect,
+    audio_duration,
+)
 from ai_manager.config import Settings
 
 client = web_client
@@ -60,7 +69,7 @@ def test_auth_config_bounded_upload_and_no_chat_or_retention(client):
     assert c.post('/api/audio/transcribe', headers=h, content=b'bad').status_code == 415
     assert c.post('/api/audio/transcribe', headers={**h, 'Content-Type': 'text/plain'}, content=wav()).status_code == 415
     assert c.post('/api/audio/transcribe', headers=h, content=b'x' * (MAX_BYTES + 1)).status_code == 413
-    assert c.post('/api/audio/transcribe', headers=h, content=wav(182)).status_code == 413
+    assert c.post('/api/audio/transcribe', headers=h, content=wav(MAX_SECONDS + 2)).status_code == 413
     app.state.audio.busy = True
     assert c.post('/api/audio/transcribe', headers=h, content=wav()).status_code == 429
     app.state.audio.busy = False
@@ -92,7 +101,7 @@ def test_grok_official_contract(monkeypatch):
     class Opener:
         def open(self, request, timeout):
             calls.append(request)
-            assert timeout == 60
+            assert timeout == PROVIDER_TIMEOUT
             return Response(json.dumps({'text': '  speech  ', 'duration': 1}).encode())
 
     monkeypatch.setattr('ai_manager.audio.build_opener', lambda handler: Opener())
@@ -116,7 +125,7 @@ def test_provider_failures_sanitized(monkeypatch, failure):
             if failure == 'network':
                 raise URLError('private-test-secret')
             return io.BytesIO({'json': b'private-test-secret', 'empty': b'{"text":" "}',
-                              'type': b'{"text": {}}', 'long': json.dumps({'text': 'x'*24001}).encode()}[failure])
+                              'type': b'{"text": {}}', 'long': json.dumps({'text': 'x'*(MAX_TRANSCRIPT_CHARS + 1)}).encode()}[failure])
     monkeypatch.setattr('ai_manager.audio.build_opener', lambda handler: Opener())
     with pytest.raises(HTTPException) as caught:
         GrokTranscriber('private-test-secret', 'grok-voice-transcribe-2.0')._request(wav(), 'audio/wav')
@@ -154,3 +163,74 @@ def test_failure_releases_upload_slot_for_retry(client):
     assert app.state.audio.busy is False
     app.state.audio.provider = Provider()
     assert c.post('/api/audio/transcribe', content=wav(), headers={'Content-Type': 'audio/wav'}).status_code == 200
+
+
+@pytest.mark.parametrize('seconds,accepted', [(1200, True), (1201, True), (1201.01, False), (1202, False)])
+@pytest.mark.asyncio
+async def test_twenty_minute_duration_boundary(seconds, accepted):
+    if accepted:
+        assert await audio_duration(wav(seconds), 'audio/wav', 'ffprobe') == pytest.approx(seconds)
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await audio_duration(wav(seconds), 'audio/wav', 'ffprobe')
+        assert caught.value.status_code == 413
+
+
+@pytest.mark.parametrize('mime,codec,container,extra', [
+    ('audio/ogg', 'libopus', 'ogg', ['-vbr', 'off']),
+    ('audio/webm', 'libopus', 'webm', ['-vbr', 'off']),
+    ('audio/mp4', 'aac', 'mp4', ['-movflags', 'frag_keyframe+empty_moov']),
+])
+def test_twenty_minute_full_upload_real_probe(client, mime, codec, container, extra):
+    # Encode faster than realtime; real 60k Opus packets exercise the metadata cap.
+    encoded = subprocess.run([
+        'ffmpeg', '-v', 'error', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000',
+        '-t', '1200', '-ac', '1', '-c:a', codec, '-b:a', '64000', *extra,
+        '-f', container, 'pipe:1',
+    ], capture_output=True, check=True, timeout=60).stdout
+    assert 8 * 1024 * 1024 < len(encoded) < MAX_BYTES
+    c, app, settings = client
+    sign_in(c, app, settings)
+    settings.xai_api_key = 'fixture-only'
+    provider = app.state.audio.provider = Provider()
+    assert c.get('/api/audio').json()['max_seconds'] == 1200
+    assert c.get('/api/audio').json()['max_bytes'] == MAX_BYTES
+    response = c.post('/api/audio/transcribe', content=encoded, headers={'Content-Type': mime})
+    assert response.status_code == 200, response.text
+    assert 1200 <= response.json()['duration'] <= 1201
+    assert provider.data == encoded and provider.mime == mime
+    assert not app.state.db.all('SELECT * FROM messages')
+
+
+def test_long_transcript_can_be_inserted_and_submitted(monkeypatch):
+    from ai_manager.web import MessageBody
+
+    class Opener:
+        def open(self, request, timeout):
+            return io.BytesIO(json.dumps({'text': 'x' * MAX_TRANSCRIPT_CHARS}).encode())
+    monkeypatch.setattr('ai_manager.audio.build_opener', lambda handler: Opener())
+    text = GrokTranscriber('fixture-only', 'grok-voice-transcribe-2.0')._request(wav(), 'audio/wav')
+    assert len(text) == MAX_TRANSCRIPT_CHARS
+    assert MessageBody(content=text).content == text
+
+
+@pytest.mark.asyncio
+async def test_upload_deadline_releases_slot(monkeypatch):
+    import asyncio
+
+    monkeypatch.setattr('ai_manager.audio.UPLOAD_TIMEOUT', 0.01)
+    audio = Audio(Settings(xai_api_key='fixture-only'))
+    provider = audio.provider = Provider()
+
+    class SlowRequest:
+        headers = {'content-type': 'audio/wav'}
+
+        async def stream(self):
+            yield wav()[:12]
+            await asyncio.sleep(0.05)
+            yield wav()[12:]
+
+    with pytest.raises(HTTPException) as caught:
+        await audio.transcribe(SlowRequest())
+    assert caught.value.status_code == 408
+    assert not audio.busy and not hasattr(provider, 'data')

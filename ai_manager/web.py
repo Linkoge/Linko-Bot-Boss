@@ -60,7 +60,7 @@ class ProjectUpdate(BaseModel):
 class MessageBody(BaseModel):
     request_id: str | None = Field(default=None, min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     project_id: str | None = None
-    content: str = Field(min_length=1, max_length=24000)
+    content: str = Field(min_length=1, max_length=64000)
     conversation_id: str | None = None
     mode: Literal["conversation", "auto", "execute"] = "auto"
 
