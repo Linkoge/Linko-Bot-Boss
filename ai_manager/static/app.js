@@ -36,7 +36,7 @@ async function api(path, options={}){
 }
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
-function showAuth(){audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
+function showAuth(){closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);state.ready=true;}
 let refreshVersion=0;
@@ -88,7 +88,7 @@ function renderProjectMenu(){
   if(state.project){const rename=element('button','Rename selected project…');rename.setAttribute('role','menuitem');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};menu.append(rename);}
   if(focused!==undefined)menu.querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
 }
-$('project-menu-button').onclick=()=>{if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-checked="true"]').focus();};
+$('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-checked="true"]').focus();};
 $('project-menu').onkeydown=event=>{
   const buttons=[...$('project-menu').querySelectorAll('button')],index=buttons.indexOf(document.activeElement);
   if(event.key==='Escape'){event.preventDefault();closeProjectMenu(true);}
@@ -96,7 +96,32 @@ $('project-menu').onkeydown=event=>{
   if(event.key==='Tab')closeProjectMenu();
 };
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#project-menu')&&!event.target.closest('#project-menu-button'))closeProjectMenu();});
+function closeChatMenu(focus=false){$('chat-menu').closest('.navigation').classList.remove('chat-menu-open');$('chat-menu').hidden=true;$('chat-menu-button').setAttribute('aria-expanded','false');if(focus)$('chat-menu-button').focus({preventScroll:true});}
+function renderChatModes(){
+  const choices=$('chat-mode-choices');choices.replaceChildren();
+  for(const option of $('chat-mode').options){
+    const selected=option.selected,button=element('button',option.text,selected?'selected':'');
+    button.type='button';button.dataset.mode=option.value;button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(selected));
+    button.onclick=()=>{$('chat-mode').value=option.value;renderChatModes();closeChatMenu(true);};choices.append(button);
+  }
+  $('chat-menu-button').setAttribute('aria-label',`Chat controls, mode ${$('chat-mode').selectedOptions[0].text}`);
+}
+function openChatMenu(last=false){closeProjectMenu();renderChatModes();$('chat-menu').hidden=false;$('chat-menu').closest('.navigation').classList.add('chat-menu-open');$('chat-menu-button').setAttribute('aria-expanded','true');const buttons=chatMenuButtons();buttons[last?buttons.length-1:0]?.focus();}
+function chatMenuButtons(){return [...$('chat-menu').querySelectorAll('button:not(:disabled)')];}
+$('chat-menu-button').onclick=()=>{$('chat-menu').hidden?openChatMenu():closeChatMenu(true);};
+$('chat-menu-button').onkeydown=event=>{if(['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();openChatMenu(event.key==='ArrowUp');}};
+$('chat-menu').onkeydown=event=>{
+  const buttons=chatMenuButtons(),index=buttons.indexOf(document.activeElement);
+  if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeChatMenu(true);}
+  if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();buttons[event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length]?.focus();}
+  if(event.key==='Tab')closeChatMenu(true);
+};
+$('chat-menu').addEventListener('focusout',event=>{if(!$('chat-menu').contains(event.relatedTarget)&&event.relatedTarget!==$('chat-menu-button'))closeChatMenu();});
+document.addEventListener('pointerdown',event=>{if(!event.target.closest('#chat-menu')&&!event.target.closest('#chat-menu-button'))closeChatMenu();});
+$('chat-mode').onchange=renderChatModes;
+renderChatModes();
 async function selectProject(id){
+  closeChatMenu();
   if(id!==state.project)audioChanged();
   state.drafts.set(state.project,$('message-input').value);
   const selection=++state.selection;
@@ -138,8 +163,12 @@ async function loadHistory(selection=state.selection){
   for(const [id,row] of rows)if(!ids.has(id))row.remove();
   for(const m of history.messages){
     let row=rows.get(m.id);
-    if(!row){row=element('article',undefined,`message ${m.role}`);const body=element('div'),label=element('div',undefined,'message-label');label.append(element('strong',messageAuthor(m)),element('span',m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status,`badge ${m.status}`));body.append(label,element('div',messageText(m),'message-content'));row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);row.dataset.message=m.id;messages.append(row);}
-    else{const badge=row.querySelector('.badge');if(badge.textContent!==(m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status)){badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;badge.className=`badge ${m.status}`;}}
+    if(!row){row=element('article',undefined,`message ${m.role}`);row.setAttribute('aria-label',messageAuthor(m));const body=element('div'),label=element('div',undefined,'message-label');label.append(element('span',undefined,'badge'));body.append(label,element('div',messageText(m),'message-content'));row.append(body);row.dataset.message=m.id;messages.append(row);}
+    // Reply/stream completion does not establish requested-task acceptance or deployment.
+    const badge=row.querySelector('.badge'),label=row.querySelector('.message-label');
+    label.hidden=m.status==='completed';
+    badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;
+    badge.className=`badge ${m.status==='completed'?'':m.status}`;
     updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);
 
   }
@@ -230,8 +259,9 @@ async function copyText(text){
   try{input.select();if(!document.execCommand('copy'))throw new Error('Could not copy to the clipboard. Select the chat text and copy it manually.');}
   finally{input.remove();focused?.focus({preventScroll:true});selection.removeAllRanges();for(const range of ranges)selection.addRange(range);}
 }
-for(const [id,all] of [['copy-all',true],['copy-five',false]])$(id).onclick=()=>copyChat(all).catch(error=>notice('Rejected or failed: '+error.message));
+for(const [id,all] of [['copy-all',true],['copy-five',false]])$(id).onclick=()=>{closeChatMenu(true);return copyChat(all).catch(error=>notice('Rejected or failed: '+error.message));};
 function confirmChatReset(archive){
+  closeChatMenu(true);
   if(!state.history?.messages.length)return;
   const project=state.project,selection=state.selection,history=state.history;
   $('chat-confirm-title').textContent=archive?'Archive this chat?':'Clear this chat?';
@@ -276,7 +306,7 @@ async function openSavedHistory(id,older=false,search=''){
   $('history-detail-meta').textContent=`${projectName(state.project)} · ${data.conversation.archived_at?'Archived '+new Date(data.conversation.archived_at*1000).toLocaleString():'Active conversation'}${data.search?' · Messages matching “'+data.search+'”':''}`;
   $('history-full').hidden=!data.search;
   $('history-detail-messages').replaceChildren();
-  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');body.append(element('strong',m.role==='user'?'You':m.role==='worker'?'Codex result':'AI Manager'),element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',undefined,'message-content'));updateMessageContent(body.querySelector('.message-content'),m.content,m.role);row.append(element('div',m.role==='user'?'YOU':'Ai','avatar'),body);$('history-detail-messages').append(row);}
+  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');row.setAttribute('aria-label',messageAuthor(m));body.append(element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',undefined,'message-content'));updateMessageContent(body.querySelector('.message-content'),m.content,m.role);row.append(body);$('history-detail-messages').append(row);}
   if(!state.savedHistory.messages.length)$('history-detail-messages').append(element('p','This chat is empty.','empty'));
   $('history-older').hidden=!data.has_more;$('history-detail').hidden=false;
   if(!older)$('history-detail').scrollIntoView({block:'start'});
@@ -284,7 +314,7 @@ async function openSavedHistory(id,older=false,search=''){
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
-function showView(view){if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));}
+function showView(view){closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));}
 function editor(title,fields,onSave,reloadContext=true){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}

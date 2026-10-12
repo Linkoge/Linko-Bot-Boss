@@ -1,3 +1,20 @@
+# Chat UI cleanup — prepared; activation pending, 2026-10-12
+
+Exact release ID: `chat-ui-cleanup-v1-20261012`. Candidate:
+`/home/codex/checkouts/linko-chat-cleanup-20261012`.
+Read [docs/chat-history.md](docs/chat-history.md) for current implementation and authoritative
+queue baseline correction. Queue release `queue-composer-v1-20261012` **did deploy successfully**;
+its exact receipt is linked there. Older pending sections below remain historical.
+
+Cleanup hides the insertion caret, removes decorative speakers/ordinary Completed badges,
+and places history utilities and individual modes in a square menu immediately left of usage.
+Preserves queue composer, audio and internal-result filtering. Implemented/verified/prepared;
+**not deployed**, no deployment requested. All 199 tests and required browser checks pass.
+Full private evidence, manager brief/recent-delivery facts and limitations:
+`/home/codex/.local/share/linko-bot-manager/deployments/chat-ui-cleanup-20261012/REPORT.md`.
+Manager should record this routine delivery with pending activation and the exact release/report
+references, without full memory reconciliation or asserting deployment. No restart/cutover performed.
+
 # Integrated ordering / nonblocking chat candidate — prepared, not activated
 
 Exact release ID: `queue-composer-v1-20261012`. Read the current section of

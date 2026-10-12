@@ -122,9 +122,11 @@ def main():
 
                 # Blank text field still permits explicit recording Send, in the original mode.
                 page.locator('#message-input').fill('')
-                page.locator('#chat-mode').select_option('conversation')
+                page.locator('#chat-menu-button').click()
+                page.locator('[data-mode=conversation]').click()
                 start()
-                page.locator('#chat-mode').select_option('auto')
+                page.locator('#chat-menu-button').click()
+                page.locator('[data-mode=auto]').click()
                 page.locator('#send').click()
                 page.wait_for_function("()=>!audioState.session&&!state.pending.size&&!state.execution&&$('message-input').value===''")
                 assert len(chats) == 1 and chats[-1]['content'] == 'spoken transcript'
@@ -222,7 +224,8 @@ def main():
                     route.abort('failed')
                 page.route('**/api/chat', lose_receipt)
                 page.locator('#message-input').fill('')
-                page.locator('#chat-mode').select_option('conversation')
+                page.locator('#chat-menu-button').click()
+                page.locator('[data-mode=conversation]').click()
                 start()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!audioState.session&&!state.pending.size&&submissions.size===1')

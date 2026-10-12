@@ -44,7 +44,7 @@ async function refreshUsage(){
 }
 function startUsage(){stopUsage();usageTimer=setInterval(refreshUsage,60000);usageTick=setInterval(renderUsage,15000);setTimeout(refreshUsage,0);}
 function stopUsage(){usageSession++;clearInterval(usageTimer);clearInterval(usageTick);usageData=null;usageRequest=null;$('usage-dialog')?.close();}
-$('usage-button').onclick=()=>{closeProjectMenu();$('usage-dialog').showModal();renderUsage();refreshUsage();};
+$('usage-button').onclick=()=>{closeChatMenu();closeProjectMenu();$('usage-dialog').showModal();renderUsage();refreshUsage();};
 $('usage-close').onclick=()=>$('usage-dialog').close();
 $('usage-dialog').addEventListener('close',()=>$('usage-button').focus({preventScroll:true}));
 $('usage-dialog').addEventListener('keydown',event=>{

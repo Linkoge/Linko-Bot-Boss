@@ -32,7 +32,7 @@ def prepare(repo, live, data, release_id, python):
               [str(python), 'scripts/browser_project_ui.py'],
               [str(python), 'scripts/browser_project_memory.py'],
               [str(python), 'scripts/browser_fetch_recovery.py'],
-              [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_deployment.py'],
+              [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_markdown.py'], [str(python), 'scripts/browser_deployment.py'],
               [str(python), 'scripts/browser_account_usage.py']]
     with (target / 'validation.log').open('w') as log:
         for argv in checks:

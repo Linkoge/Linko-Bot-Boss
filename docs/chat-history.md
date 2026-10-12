@@ -1,3 +1,59 @@
+# Chat UI cleanup — prepared, not deployed, 2026-10-12
+
+Exact release ID: `chat-ui-cleanup-v1-20261012`. Candidate checkout:
+`/home/codex/checkouts/linko-chat-cleanup-20261012`.
+Current deployed baseline is `queue-composer-v1-20261012`, commit
+`f2614893ce4ed58737cc6e9fdbfed62569a1c522`. Its immutable succeeded helper receipt is
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/95c21194ebf3e4e941debba157928521.json`.
+That receipt supersedes the historical queue release's prepared-only wording below.
+This cleanup is **implemented and verified; prepared only, activation pending**.
+No deployment request, restart or new succeeded receipt is created by this assignment.
+
+The textarea uses `caret-color: transparent`; native input focus/editing/selection, Enter
+newlines, IME and accessibility label remain. Composer focus gets a visible border cue.
+Live and saved message rows omit decorative avatars and visible author headings, reclaiming
+the former avatar column. Existing role classes and palette distinguish user panels from
+assistant text; accessible article names and copy export author labels remain.
+
+Ordinary messages have no visible Completed badge. History status derives from manager
+execution/stream completion, not accepted requested-task delivery. It contains no reliable
+message-level acceptance/activation semantic signal, so this release omits Completed badges
+entirely instead of guessing from prose, roles, turn termination or task lifecycle alone.
+Queued, processing/streaming, waiting/retry, failed and stopped indicators remain. Content,
+including blockers and pending activation reports, is not shortened or rewritten by this UI.
+
+One 44×44 square, using the existing project menu visual language, sits immediately left of
+usage percentages. Its menu exposes Clear, Archive, Copy 5, Copy all and each supported mode
+as a radio item with current selection. Options derive from the existing single mode source;
+Auto remains default, scope remains per submitted request/recording capture, and changing
+mode does not rewrite queued/retry requests or captured audio context. Project/global context
+switching follows the existing behavior. Disabled utilities retain their original guards.
+Keyboard Enter/Space, arrows, Home/End, Escape and Tab, pointer/touch selection, outside
+close and focus return are supported. The menu scrolls in short/narrow viewports and sits
+above transient notices. Existing usage and project menus remain accessible.
+
+No backend/schema/dependency or queue/audio logic changed. FIFO/request receipts, internal
+transport filtering, native multiline input, 20-minute recording, recording/sending while busy,
+queued messages, Stop and deployment admission/drain behavior remain. No new pause/cancel UI.
+
+Validation: all 199 backend tests passed; Ruff, JS syntax and Git whitespace checks passed.
+Authenticated disposable Chromium checks cover menu geometry/keyboard/touch at desktop,
+mobile/narrow and short viewport sizes; caret-hidden editing/selection; three mode choices;
+copy all 425 messages, Copy 5 and clipboard fallback; archive/clear/search; role accessibility;
+ordinary completion badge omission; queue/busy recording, captured mode and submission retry;
+Markdown/stream/reload/selection; internal result filtering and the existing regression browsers.
+Physical mobile keyboards, assistive technology and real-provider STT were not exercised;
+Chromium uses fixture Codex/STT and real browser audio capture. Existing Starlette/httpx
+warning remains. Full release preparation repeats the required checks and records their output.
+
+Manager routine brief/recent delivery facts and full evidence:
+`/home/codex/.local/share/linko-bot-manager/deployments/chat-ui-cleanup-20261012/REPORT.md`.
+Exact manifest, validation log and hashed bundle:
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/chat-ui-cleanup-v1-20261012/`.
+A future owner deployment request must use the controlled helper and recheck the live base;
+only an exact durable succeeded receipt may establish activation. Preserve production data,
+active work, prior release receipts and unrelated changes.
+
 # Nonblocking composer and active-first views — prepared, 2026-10-12
 
 Exact integrated release ID: `queue-composer-v1-20261012`. Candidate checkout:
@@ -56,7 +112,7 @@ outage reproduction are not claimed; browser/audio tab lifetime limitations stil
 
 Search in chat follows Settings in the workspace navigation. It searches message contents and archive names for the selected project context (All Projects is the global conversation). Selecting a result opens matching messages, including older messages; Read full chat opens the entire saved conversation. Long conversations and result lists have pagination.
 
-The compact mode selector shares the toolbar with Copy all, Copy five, Archive and Clear. Copy all copies every message in the current conversation, fetching earlier pages beyond the 200 displayed messages. Copy five copies the latest five messages, or all messages when fewer than five exist. Both preserve author labels, line breaks and chronological order, include received streaming text, and show a short success notice. Empty chats disable copying. Clipboard API failures fall back to browser copying and restore the text selection.
+The square chat menu immediately left of usage contains Clear, Archive, Copy 5 and Copy all, followed by individually listed Conversation, Auto and Execute modes. Copy all copies every message in the current conversation, fetching earlier pages beyond the 200 displayed messages. Copy five copies the latest five messages, or all messages when fewer than five exist. Both preserve author labels, line breaks and chronological order, include received streaming text, and show a short success notice. Empty chats disable copying. Clipboard API failures fall back to browser copying and restore the text selection.
 
 Periodic refreshes keep existing message elements and text nodes. Streaming appends to the existing text node. Selecting text or reading older messages suppresses automatic scrolling; chats already at the bottom continue following incoming text.
 

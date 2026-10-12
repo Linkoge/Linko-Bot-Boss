@@ -12,6 +12,8 @@ from playwright.sync_api import sync_playwright
 
 
 def main():
+    evidence = Path(os.environ.get('LINKO_CHAT_EVIDENCE', '/tmp/linko-chat-cleanup-browser'))
+    evidence.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="linko-browser-") as temporary:
         root = Path(temporary)
         projects = root / "projects"
@@ -67,6 +69,12 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch()
                 page = browser.new_page()
+                def chat_control(selector):
+                    page.wait_for_function("() => !state.copyingChat")
+                    if page.locator('#chat-menu').is_hidden():
+                        page.locator('#chat-menu-button').click()
+                    page.locator(selector).click()
+
                 page.context.grant_permissions(["clipboard-read", "clipboard-write"])
                 errors = []
                 page.on("pageerror", lambda error: errors.append(str(error)))
@@ -84,18 +92,21 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.get_by_text("Saved streamed answer", exact=True).wait_for()
                 page.wait_for_function("() => !state.execution")
                 for control in ("#copy-all", "#copy-five"):
-                    page.locator(control).click()
+                    chat_control(control)
                     page.wait_for_function(
                         "async () => (await navigator.clipboard.readText()) === "
                         "'You:\\nDiscuss the project.\\n\\nAI Manager:\\nSaved streamed answer'"
                     )
-                page.locator("#archive-chat").click()
+                chat_control("#archive-chat")
                 page.locator("#chat-archive-name").fill("Fixture archive")
                 page.locator("#chat-confirm-submit").click()
                 page.locator("#chat-confirm").wait_for(state="hidden")
                 page.locator("[data-view=search]").click()
                 page.locator("#history-results button").filter(has_text="Fixture archive").click()
                 page.locator("#history-detail-messages").get_by_text("Saved streamed answer", exact=True).wait_for()
+                assert page.locator('#history-detail-messages .avatar,#history-detail-messages strong').count() == 0
+                assert page.locator('#history-detail-messages .message.assistant').get_attribute('aria-label') == 'AI Manager'
+
                 page.locator("[data-view=settings]").click()
                 page.locator("#load-models").click()
                 page.locator("#model-routes form").first.wait_for()
@@ -130,13 +141,13 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 )
                 assert page.evaluate("window.getSelection().toString()") == selected
                 assert page.evaluate("window.getSelection().anchorNode === window.selectedNode")
-                page.locator("#copy-five").click()
+                chat_control("#copy-five")
                 expected = "\n\n".join(
                     f"{'You' if i % 2 == 0 else 'AI Manager'}:\nFixture message {i}\nSecond line {i}"
                     for i in range(420, 425)
                 )
                 page.wait_for_function("async text => (await navigator.clipboard.readText()) === text", arg=expected)
-                page.locator("#copy-all").click()
+                chat_control("#copy-all")
                 expected = "\n\n".join(
                     f"{'You' if i % 2 == 0 else 'AI Manager'}:\nFixture message {i}\nSecond line {i}"
                     for i in range(425)
@@ -151,7 +162,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                     "const range=document.createRange();range.setStart(node,0);range.setEnd(node,7);"
                     "window.getSelection().removeAllRanges();window.getSelection().addRange(range);"
                 )
-                page.locator("#copy-five").click()
+                chat_control("#copy-five")
                 page.wait_for_function("() => !state.copyingChat")
                 assert page.evaluate("window.getSelection().toString()") == "Fixture"
                 assert page.evaluate("document.querySelectorAll('.clipboard-fallback').length") == 0
@@ -167,10 +178,63 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 ]:
                     page.set_viewport_size({"width": width, "height": height})
                     assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
-                    assert page.locator("#chat-mode").bounding_box()["width"] <= 112
-                    for control in ("#copy-all", "#copy-five", "#archive-chat", "#clear-chat"):
-                        assert page.locator(control).bounding_box()["height"] <= 30
-                    page.screenshot(path=f"/tmp/linko-minimal-{label}.png", full_page=True)
+                    assert page.locator('#messages .avatar,#messages .message-label strong').count() == 0
+                    assert page.locator('#messages .badge.completed').count() == 0
+                    assert page.locator('#messages .message.user').first.get_attribute('aria-label') == 'You'
+                    assert page.locator('#messages .message.assistant').first.get_attribute('aria-label') == 'AI Manager'
+                    square = page.locator('#chat-menu-button').bounding_box()
+                    usage = page.locator('#usage-button').bounding_box()
+                    assert square['width'] == square['height'] == 44
+                    assert square['y'] == usage['y'] and square['x']+44+4 == usage['x']
+                    page.locator('#chat-menu-button').focus()
+                    page.keyboard.press('ArrowDown')
+                    assert page.locator('#clear-chat').evaluate('(n)=>n===document.activeElement')
+                    page.keyboard.press('End')
+                    assert page.locator('[data-mode=execute]').evaluate('(n)=>n===document.activeElement')
+                    page.keyboard.press('Home')
+                    page.keyboard.press('ArrowDown')
+                    assert page.locator('#archive-chat').evaluate('(n)=>n===document.activeElement')
+                    menu = page.locator('#chat-menu').bounding_box()
+                    assert menu['x'] >= 0 and menu['x']+menu['width'] <= width
+                    assert menu['y']+menu['height'] <= height
+                    for control in ('#copy-all','#copy-five','#archive-chat','#clear-chat'):
+                        assert page.locator(control).is_visible()
+                        assert page.locator(control).bounding_box()['height'] >= 44
+                    assert page.locator('#copy-five').inner_text() == 'Copy 5'
+                    assert page.locator('#chat-mode-choices button').all_text_contents() == ['Conversation','Auto','Execute']
+                    page.screenshot(path=str(evidence/f'{label}-menu.png'), full_page=True)
+                    page.keyboard.press('Escape')
+                    assert page.locator('#chat-menu-button').evaluate('(n)=>n===document.activeElement')
+                    for mode in ('conversation','execute','auto'):
+                        chat_control(f'[data-mode={mode}]')
+                        assert page.evaluate("$('chat-mode').value") == mode
+                        page.locator('#chat-menu-button').click()
+                        assert page.locator(f'[data-mode={mode}]').get_attribute('aria-checked') == 'true'
+                        assert page.locator('#chat-mode-choices [aria-checked=true]').count() == 1
+                        page.keyboard.press('Tab')
+                        assert page.locator('#chat-menu').is_hidden()
+                        assert page.locator('#usage-button').evaluate('(n)=>n===document.activeElement')
+                    # CSS hides only the insertion caret; native editing remains intact.
+                    field = page.locator('#message-input')
+                    field.fill('abc')
+                    field.focus()
+                    assert field.evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgba(0, 0, 0, 0)'
+                    page.keyboard.press('End')
+                    page.keyboard.press('Enter')
+                    page.keyboard.insert_text('def')
+                    assert field.input_value() == 'abc\ndef'
+                    page.keyboard.press('Shift+Home')
+                    assert field.evaluate('(n)=>n.value.slice(n.selectionStart,n.selectionEnd)') == 'def'
+                    page.keyboard.insert_text('xyz')
+                    assert field.input_value() == 'abc\nxyz'
+                    page.keyboard.press('Backspace')
+                    assert field.input_value() == 'abc\nxy'
+                    assert field.evaluate('(n)=>n===document.activeElement')
+                    field.fill('')
+                    page.locator('#chat-menu-button').click()
+                    field.click()
+                    assert page.locator('#chat-menu').is_hidden()
+                    page.screenshot(path=str(evidence/f'{label}-chat.png'), full_page=True)
                 assert not errors, errors
                 assert page.locator("#chat-mode option").count() == 3
                 assert not page.locator("#configure-verification,#configure-scheduler").count()

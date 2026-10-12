@@ -133,7 +133,8 @@ def main():
                 page.wait_for_timeout(400)
                 assert reply.inner_html() == page.evaluate("selectedDOM")
                 page.evaluate("getSelection().removeAllRanges()")
-                page.wait_for_function("() => document.querySelector('.message.assistant .badge')?.textContent==='completed'", timeout=30000)
+                page.wait_for_function("() => state.history?.messages.at(-1).status==='completed' && !state.execution", timeout=30000)
+                assert page.locator(".message.assistant .badge.completed").count() == 0
                 assert reply.inner_html() == page.evaluate("expectedMarkdown")
                 assert reply.locator("pre code").inner_text().startswith("<script>window.markdownXss = 1</script>")
                 assert reply.locator("ul ul").count() == 1
@@ -143,7 +144,7 @@ def main():
                 assert page.evaluate("window.markdownXss||0") == 0
                 page.reload()
                 page.locator("#app").wait_for(state="visible")
-                page.wait_for_function("() => document.querySelector('.message.assistant .badge')?.textContent==='completed'")
+                page.wait_for_function("() => state.history?.messages.at(-1).status==='completed' && !state.execution")
                 assert reply.inner_html() == page.evaluate("text=>{const n=document.createElement('div');n.append(renderChatMarkdown(text));return n.innerHTML}", TEXT)
                 # User markup stays literal. Code and links support keyboard access.
                 page.evaluate('''text=>{
