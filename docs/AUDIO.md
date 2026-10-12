@@ -82,7 +82,7 @@ configuration fails compactly on microphone activation before requesting device 
 Owner request: “Limit should be 20 minutes. And don't show that limit in a chat ui, just make it
 20 minutes.” This supersedes the investigated 180-second app policy. Candidate checkout:
 `/home/codex/checkouts/linko-audio-20m-20261012`. Exact controlled release ID:
-`audio-20m-v2-20261012`. **Not activated; no deployment request or succeeded receipt for this release.**
+`audio-composer-v3-20261012`. **Not activated; no deployment request or succeeded receipt for this release.**
 Manager must only request this exact ID through its controlled `deploy_release` capability after owner
 requests activation. Do not activate with shell or restart the manager from a worker.
 
@@ -90,8 +90,16 @@ The browser uses authenticated API `max_seconds=1200`, stops automatically at th
 assembles all chunks including the final encoder chunk, uploads the entire file once and inserts
 editable text. Boundary Stop never invokes chat Send. Existing explicit Stop/Send, drafts, cached
 transcript retry, durable chat request retries and project/context guards remain unchanged.
-The normal microphone tooltip is “Record microphone”; recording status shows elapsed `m:ss` only.
+The normal microphone tooltip is “Record microphone”; recording status shows elapsed `MM:SS` only, beginning immediately at `00:00` and incrementing each second.
+The textarea prompt, bottom-left project/context label and saved-conversation composer note are removed.
+Normal recording has no project prefix or “Recording” wording; Stop, Send and Discard remain visible.
+Conversation messages, project selection and actionable errors remain intact.
 There is no duration denominator, countdown or normal limit disclosure. Errors remain actionable.
+
+The integrated v3 candidate reuses completed assignment `4c8eab2e6b554fb7b757d5bb84cf2bb0`
+and its existing 20-minute implementation; no second worker or duplicated implementation was launched.
+Read-only inspection found lifecycle completed with no lease before refinement. The previous v2
+prepared receipt remains immutable historical evidence and is superseded for activation by v3.
 
 ### Candidate boundaries and supporting resource choices
 
@@ -152,7 +160,7 @@ physical recording or paid provider call.
 Sanitized detailed report and targeted logs:
 `/home/codex/.local/share/linko-bot-manager/deployments/audio-20m-20261012/REPORT.md`.
 Prepared manifest/bundle/fixed-check log:
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/audio-20m-v2-20261012/`.
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/audio-composer-v3-20261012/`.
 The preparation manifest records exact live base, candidate commit, asset and validation hashes.
 Preparation runs all repository backend/lint/syntax/browser release checks including deployed
 memory/fetch behavior. Only a future **succeeded** helper result establishes activation.
