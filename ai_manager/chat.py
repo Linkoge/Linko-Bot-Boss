@@ -22,7 +22,6 @@ from .recovery import (
     with_reset,
 )
 from .registry import Registry
-from .tasks import Tasks
 
 ROLES = {"interactive": "low", "execution": "medium"}
 
@@ -191,26 +190,27 @@ class Chat:
                 ],
                 "instructions": self.db.setting("global_instructions", ""),
             }
+        from .project_memory import ProjectMemory, encode
         p = self.registry.get(project_id)
-        return {
-            "project": {k: p[k] for k in ("id", "name", "path", "objective", "success_criteria", "instructions")},
-            "instructions": self.db.setting("global_instructions", ""),
-            "owner_notes": self.registry.notes(project_id),
-            "assignments": [
-                {
-                    **Tasks.context(t),
-                    "description": t["description"][:300],
-                    "description_truncated": len(t["description"]) > 300,
-                }
-                for t in Tasks(self.db).list(project_id)
-                if t["status"] in {"queued", "running", "waiting"}
-            ],
+        memory = ProjectMemory(self.db, self.registry).snapshot(project_id)
+        context = {
+            "project": {k: p[k] for k in ("id", "name")},
+            "project_brief": memory["brief"],
+            "memory_reference": memory["active"],
         }
+        if len(encode(context).encode()) > 2000:
+            raise ValueError("Project context exceeds token ceiling; condense brief with provenance")
+        return {**context, "instructions": self.db.setting("global_instructions", "")}
 
     def prompt(self, conversation, content, mode, execution_id, thread_id, prior):
         context = self.context(conversation["project_id"])
         from .deployment import Handoff
-        context['deployment'] = Handoff(self.db.path.parent).status()
+        deployment = Handoff(self.db.path.parent).status()
+        context['deployment'] = {k: deployment[k] for k in ('phase', 'release_id') if k in deployment}
+        if conversation['project_id']:
+            from .project_memory import encode
+            if len(encode({k: v for k, v in context.items() if k != 'instructions'}).encode()) > 2000:
+                raise ValueError('Default project context exceeds token ceiling; condense with provenance')
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         prompt = {"mode": mode, "message": content}
         if prior and saved.get("thread_id") == thread_id:
@@ -405,13 +405,13 @@ class Chat:
                 self.db.event(
                     conn, "model.context", {"prompt": prompt}, conversation["project_id"], execution_id=execution_id
                 )
-            launch_key = launching(self.db, execution_id, json.dumps(prompt))
+            launch_key = launching(self.db, execution_id, json.dumps(prompt, ensure_ascii=False, separators=(",", ":")))
             turn = await self.server.request(
                 "turn/start",
                 {
                     "threadId": thread_id,
                     "clientUserMessageId": launch_key,
-                    "input": [{"type": "text", "text": json.dumps(prompt)}],
+                    "input": [{"type": "text", "text": json.dumps(prompt, ensure_ascii=False, separators=(",", ":"))}],
                     **route,
                     "serviceTierForTurn": "default",
                 },

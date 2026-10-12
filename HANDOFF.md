@@ -1,3 +1,7 @@
+# Compact project-memory candidate — activation pending, 2026-10-12
+
+Candidate: `/home/codex/checkouts/linko-project-memory-20261012`. Read [docs/PROJECT_MEMORY.md](docs/PROJECT_MEMORY.md) and its private report for tests, preservation, exact release and activation procedure. Owner authorized implementation/testing/preparation only. Do not deploy automatically or run full project reviews without the explicit project button/start workflow. Live checkout remains on its original commit; this candidate preserves the existing helper and account-usage deliveries.
+
 # Codex account usage candidate — activation pending, 2026-10-12
 
 Read [docs/CODEX_USAGE.md](docs/CODEX_USAGE.md) and its private report. This isolated candidate includes

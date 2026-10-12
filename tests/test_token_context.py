@@ -72,7 +72,7 @@ async def test_old_history_tasks_and_memory_are_retrievable_in_conversation_mode
                     time.time() + i,
                 ),
             )
-    assert chat.context(project["id"])["assignments"] == []
+    assert "assignments" not in chat.context(project["id"])
     prompt, _ = chat.prompt(chat.conversation(project["id"]), "New result", "auto", "new", "new-thread", None)
     assert prompt["conversation_history"][0]["content"] == "original authorized goal"
     scheduler = Scheduler(db, registry, settings, Workers(db, registry, settings, NativeFixture), chat)

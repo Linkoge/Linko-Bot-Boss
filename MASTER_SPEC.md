@@ -21,3 +21,12 @@ Current architecture, superseding prior supervision requirements as authorized o
 - No new orchestration framework, supervision AI calls, speculative policy engines or manager-created subagent hierarchy.
 
 Implementation uses existing FastAPI, SQLite, plain JavaScript and Codex App Server. Model settings contain only manager and worker roles. Old requirements are retained in Git history and historical stage reports.
+
+## Project memory
+
+- Manager planning/brainstorming uses one derived persistent compact project brief (purpose, goals, constraints, established state, active decisions/reasons, unresolved work, three recent meaningful deliveries and retrieval references). Target 1500 tokens, maximum 2000 excluding shared global instructions; overflow must preserve active requirements and surface a gap, never silently truncate.
+- Authoritative specs/docs, complete historical evidence and archived transcripts remain retrievable; fresh chats exclude archived transcripts. Recent deliveries include date/change/effect/verification/deployment/report, archive oldest on the fourth and retain current lasting effects/unresolved blockers. Related fixes share one delivery ID.
+- Worker assignments include objective/acceptance/relevant constraints/dependencies/selected context, with necessary source inspection and repository/security instructions; no automatic bulk brief/history injection. Completion preserves detailed evidence and updates relevant authoritative docs/current facts/recent entry with truthful proposed/implemented/verified/deployed status. Deployment needs durable success evidence.
+- Full reconciliation is only an explicit project-scoped owner workflow: explain scope/unknown cost, Start, progress/actual reported usage, retained old/candidate versions, fact diff/references/unresolved conflicts, explicit Apply, retrievable prior version/rollback. Failed/cancelled review leaves active memory intact. Missing code/ambiguous conflicts cannot silently erase goals. No recurring/background reviews. Global owner communication preference persists across fresh/cleared chats. Conversation compaction is separate future scope.
+
+Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.

@@ -24,6 +24,8 @@ def prepare(repo, live, data, release_id, python):
     checks = [[str(python), '-m', 'pytest', '-q'], [str(python), '-m', 'ruff', 'check', '.'],
               ['node', '--check', 'ai_manager/static/app.js'],
               ['node', '--check', 'ai_manager/static/usage.js'],
+              ['node', '--check', 'ai_manager/static/memory.js'],
+              [str(python), 'scripts/browser_project_memory.py'],
               [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_deployment.py'],
               [str(python), 'scripts/browser_account_usage.py']]
     with (target / 'validation.log').open('w') as log:

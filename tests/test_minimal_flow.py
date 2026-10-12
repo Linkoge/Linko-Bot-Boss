@@ -536,6 +536,7 @@ async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
                 assert await handler({**call, "arguments": {"action": "read_document", "path": "notes.txt"}}) == {
                     "path": "notes.txt",
                     "content": "Project notes",
+                    "next_offset": None,
                 }
                 for action in (
                     "delegate",

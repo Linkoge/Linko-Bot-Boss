@@ -66,9 +66,11 @@ class Tasks:
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (json.dumps(archived),))
             return cleared
 
-    def add(self, project_id, description, origin_conversation=None, request_key=None):
+    def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None):
         if not description.strip() or len(description) > 24000:
             raise ValueError("Objective must be 1–24000 characters")
+        if not isinstance(acceptance, str) or len(acceptance) > 12000:
+            raise ValueError("Acceptance criteria must be at most 12000 characters")
         now, task_id = time.time(), new_id()
         with self.db.transaction() as conn:
             if request_key:
@@ -94,10 +96,12 @@ class Tasks:
             conn.execute(
                 """INSERT INTO tasks(id,project_id,description,acceptance,created_at,updated_at,
                          lifecycle,origin_conversation,request_key,legacy)
-                         VALUES(?,?,?,'',?,?,'queued',?,?,0)""",
-                (task_id, project_id, description.strip(), now, now, origin_conversation, request_key),
+                         VALUES(?,?,?,?,?,?,'queued',?,?,0)""",
+                (task_id, project_id, description.strip(), acceptance, now, now, origin_conversation, request_key),
             )
             self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
+            if selected:
+                self.db.event(conn, "task.context", selected, project_id, task_id)
         return self.get(task_id)
 
     def control(self, task_id, action, revision):

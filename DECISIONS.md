@@ -5,3 +5,5 @@ Use the underlying Codex agent for investigation, implementation, validation and
 Retain authentication, history, project settings, model/effort settings, explicit pauses/cancellation, catastrophic confirmation, native-thread recovery and backups. Removed supervision machinery stays removed; add complexity only for a demonstrated requirement.
 
 Historical decisions and evidence remain in Git history; [docs/CODEBASE_CLEANUP.md](docs/CODEBASE_CLEANUP.md) records this cleanup.
+
+- 2026-10-12: Use a derived versioned project brief in existing private SQLite memory/settings, preserving authoritative docs/history. Bound default context conservatively with a UTF-8 byte token upper bound; reject overflow and retain explicit condensation/resolution provenance. Full reconciliation is exclusively owner-started with candidate comparison, explicit Apply and rollback; routine delivery updates remain separate. Do not copy the full brief/history or manager-only reply preference into workers. Details: docs/PROJECT_MEMORY.md.

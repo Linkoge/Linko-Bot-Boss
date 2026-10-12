@@ -5,6 +5,7 @@ import json
 import logging
 
 from .deployment import Handoff
+from .project_memory import ProjectMemory
 from .recovery import SilentObserver
 from .tasks import Tasks
 from .todos import Todos
@@ -28,6 +29,11 @@ MANAGER_TOOL = {
                     "wait",
                     "read_document",
                     "read_memory",
+                    "read_project",
+                    "list_memory",
+                    "list_history",
+                    "update_brief",
+                    "record_delivery",
                     "read_task",
                     "list_tasks",
                     "read_history",
@@ -36,6 +42,18 @@ MANAGER_TOOL = {
                 ],
             },
             "project_id": {"type": "string"},
+            "conversation_id": {"type": "string"},
+            "acceptance": {"type": "string"},
+            "constraints": {"type": "array", "items": {"type": "string"}},
+            "dependencies": {"type": "array", "items": {"type": "string"}},
+            "selected_context": {"type": "array", "items": {"type": "string"}},
+            "brief": {"type": "object"},
+            "retained": {"type": "array", "items": {"type": "object"}},
+            "resolved": {"type": "array", "items": {"type": "object"}},
+            "entry": {"type": "object"},
+            "established": {"type": "array", "items": {"type": "string"}},
+            "evidence": {"type": "string"},
+            "deployment_receipt": {"type": "string"},
             "objective": {"type": "string"},
             "task_id": {"type": "string"},
             "todo_id": {"type": "string"},
@@ -92,10 +110,18 @@ class Scheduler:
         offset = args.get("offset", 0)
         if not isinstance(offset, int) or offset < 0:
             raise ValueError("Offset must be a nonnegative integer")
+        if action == "list_history":
+            project_id = args.get("project_id") or selected_project
+            if selected_project and selected_project != project_id:
+                raise ValueError("History belongs to another project")
+            return self.chat.search_history(project_id, args.get("query", ""), offset)
         if action == "read_history":
+            history_project = args.get("project_id") or selected_project
+            if selected_project and selected_project != history_project:
+                raise ValueError("History belongs to another project")
             conversation = self.db.one(
                 "SELECT id FROM conversations WHERE id=? AND project_id IS ?",
-                (params["conversation_id"], selected_project),
+                (args.get("conversation_id") or params["conversation_id"], history_project),
             )
             if not conversation:
                 raise ValueError("Unknown conversation")
@@ -142,10 +168,25 @@ class Scheduler:
         if params.get("mode") == "conversation" and action not in {
             "read_document",
             "read_memory",
+            "read_project",
+            "list_memory",
             "read_task",
             "list_tasks",
         }:
             raise ValueError("Conversation mode is read-only; use Auto or Execute for work")
+        if action == "list_memory":
+            rows = self.db.all("SELECT name,updated_at FROM memory WHERE project_id=? AND instr(lower(name),lower(?))>0 ORDER BY name LIMIT 21 OFFSET ?", (project_id,args.get("query", ""),offset))
+            return {"records":rows[:20], "next_offset":offset+20 if len(rows)>20 else None}
+        if action == "read_project":
+            return project
+        if action == "update_brief":
+            return ProjectMemory(self.db, self.registry).update(project_id, args["revision"], args["brief"], retained=args.get("retained"), resolved=args.get("resolved"))
+        if action == "record_delivery":
+            return ProjectMemory(self.db, self.registry).delivery(project_id, args["revision"], args["entry"],
+                       args.get("established", []), args["evidence"], args.get("deployment_receipt"), args.get("release_id"))
+        selected = {k: args[k] for k in ("constraints", "dependencies", "selected_context") if args.get(k)}
+        if len(json.dumps(selected)) > 12000:
+            raise ValueError("Selected task context must be at most 12000 characters")
         if action == "delegate":
             return self.tasks.context(
                 self.tasks.add(
@@ -153,6 +194,7 @@ class Scheduler:
                     args["objective"],
                     params["conversation_id"],
                     params["manager_execution_id"] + ":" + project_id,
+                    acceptance=args.get("acceptance", ""), selected=selected,
                 )
             )
         if action == "wait":
@@ -189,6 +231,10 @@ class Scheduler:
                 )
                 if changed.rowcount != 1:
                     raise ValueError("Assignment changed while continuing")
+                if selected:
+                    self.db.event(conn, "task.context", selected, project_id, task["id"])
+                if "acceptance" in args:
+                    conn.execute("UPDATE tasks SET acceptance=? WHERE id=?", (args["acceptance"], task["id"]))
                 self.db.event(
                     conn,
                     "manager.continued",
@@ -235,6 +281,8 @@ class Scheduler:
             )
             return {**self.tasks.context(task), "result": result, "evidence": [json.loads(e["payload"]) for e in evidence]}
         if action == "read_memory":
+            if not args.get("path"):
+                return ProjectMemory(self.db, self.registry).snapshot(project_id)
             row = self.db.one("SELECT content FROM memory WHERE project_id=? AND name=?", (project_id, args["path"]))
             if not row:
                 raise ValueError("Unknown saved memory")
@@ -249,7 +297,9 @@ class Scheduler:
             path = (root / args["path"]).resolve()
             if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > 100000:
                 raise ValueError("Read a project text document smaller than 100KB")
-            return {"path": args["path"], "content": path.read_text(errors="replace")[:12000]}
+            content = path.read_text(errors="replace")
+            return {"path": args["path"], "content": content[offset:offset+12000],
+                    "next_offset": offset+12000 if len(content)>offset+12000 else None}
         raise ValueError("Unsupported action")
 
     async def tick(self):

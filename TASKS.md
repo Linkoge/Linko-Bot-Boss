@@ -1,3 +1,7 @@
+# Compact project memory — explicitly scheduled, 2026-10-12
+
+Current matching assignment `bdd52a610b734efaaf04ac7c70999429` implements the agreed design and preserves source task `2b15765038784009b8f6ad8e0e7008ea`. To-Do `deferred-2b15765038784009b8f6ad8e0e7008ea` retains its original details/source and now links this assignment plus all agreed refinements. Implementation/testing/release preparation are authorized; deployment and full project reconciliation remain owner-triggered. See [project memory](docs/PROJECT_MEMORY.md). The older deferred wording below is historical for this now-scheduled idea. Unrelated tasks remain unchanged.
+
 # Deployment helper — first activation pending, 2026-10-12
 
 Controlled helper, scoped manager request/status, failure/rollback/concurrency/idle checks and external

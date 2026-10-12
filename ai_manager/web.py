@@ -24,6 +24,7 @@ from .config import Settings
 from .db import Database
 from .execution_ui import execution_summary
 from .orchestration import Scheduler
+from .project_memory import MemoryReviews, ProjectMemory
 from .registry import Registry, git
 from .tasks import Tasks
 from .todos import Todos
@@ -97,6 +98,25 @@ class TodoArchive(BaseModel):
     selected: list[TodoSelection] = Field(min_length=1, max_length=200)
 
 
+class MemoryStart(BaseModel):
+    confirmed: bool = False
+
+
+class MemoryApply(BaseModel):
+    review: str
+    revision: int
+    resolutions: list[dict] = Field(default_factory=list)
+
+
+class MemoryRollback(BaseModel):
+    version: str
+    revision: int
+
+
+class MemoryCancel(BaseModel):
+    review: str
+
+
 class DeploymentCancel(BaseModel):
     nonce: str = Field(pattern=r"^[0-9a-f]{32}$")
 
@@ -120,6 +140,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     workers = Workers(db, registry, settings, worker_factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
+    memory = ProjectMemory(db, registry)
+    reviews = MemoryReviews(memory, settings)
     release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
 
     @asynccontextmanager
@@ -130,9 +152,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
             auth.bootstrap()
             registry.discover()
             settings.max_workers = db.setting("max_workers", settings.max_workers)
+            reviews.recover()
             scheduler.start()
             yield
         finally:
+            await reviews.close()
             await scheduler.close()
             await workers.close()
             await chat.close()
@@ -141,10 +165,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     app = FastAPI(title="Linko Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
     app.state.workers, app.state.scheduler = workers, scheduler
+    app.state.memory, app.state.memory_reviews = memory, reviews
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
     app.state.deployment_mutations = 0
-    scheduler.deployment_busy = lambda: app.state.deployment_mutations > 0
+    scheduler.deployment_busy = lambda: app.state.deployment_mutations > 0 or bool(reviews.jobs)
 
     @app.middleware("http")
     async def browser_security(request: Request, call_next):
@@ -159,7 +184,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
                 if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
                     return JSONResponse({"detail": "CSRF token required"}, status_code=403)
         mutation = request.method not in {'GET', 'HEAD', 'OPTIONS'}
-        drain = request.url.path in {'/api/login', '/api/deployment/cancel'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt')
+        drain = request.url.path in {'/api/login', '/api/deployment/cancel'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
         if request.method == 'PATCH' and request.url.path.startswith('/api/tasks/'):
             body = await request.json()
             drain = body.get('action') in {'stop', 'pause', 'cancel'}
@@ -413,6 +438,36 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
             "memory": registry.memory(project_id),
             "tasks": tasks.list(project_id),
         }
+
+    @app.get("/api/projects/{project_id}/brief", dependencies=[Depends(require_owner)])
+    def memory_brief(project_id: str):
+        snapshot = memory.snapshot(project_id)
+        return {**snapshot, "review_records": [
+            {"reference": ref, **memory.get(project_id, ref)} for ref in reversed(snapshot["reviews"])
+        ]}
+
+    @app.get("/api/projects/{project_id}/brief/version", dependencies=[Depends(require_owner)])
+    def memory_version(project_id: str, reference: str):
+        snapshot = memory.snapshot(project_id)
+        if reference not in snapshot["versions"]:
+            raise ValueError("Unknown version in this project")
+        return memory.get(project_id, reference)
+
+    @app.post("/api/projects/{project_id}/brief/review", dependencies=[Depends(require_owner)])
+    async def memory_review(project_id: str, body: MemoryStart):
+        return reviews.start(project_id, body.confirmed)
+
+    @app.post("/api/projects/{project_id}/brief/cancel", dependencies=[Depends(require_owner)])
+    async def memory_cancel(project_id: str, body: MemoryCancel):
+        return await reviews.cancel(project_id, body.review)
+
+    @app.post("/api/projects/{project_id}/brief/apply", dependencies=[Depends(require_owner)])
+    def memory_apply(project_id: str, body: MemoryApply):
+        return memory.apply(project_id, body.review, body.revision, body.resolutions)
+
+    @app.post("/api/projects/{project_id}/brief/rollback", dependencies=[Depends(require_owner)])
+    def memory_rollback(project_id: str, body: MemoryRollback):
+        return memory.rollback(project_id, body.version, body.revision)
 
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):

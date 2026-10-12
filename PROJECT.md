@@ -9,3 +9,5 @@ FastAPI, plain browser assets, SQLite and Codex App Server remain. Authenticatio
 MASTER_SPEC.md describes current requirements. The cleanup report records current validation and deployment. Historical milestones remain in Git. Runtime state is outside Git; historical SQLite evidence and private owner notes are preserved.
 
 The existing private hosting and unrelated projects/services remain intact. Deployment affects only the dedicated manager service.
+
+Project-memory behavior and budget/review contract: [docs/PROJECT_MEMORY.md](docs/PROJECT_MEMORY.md). The brief is derived current navigation; this file and existing authoritative docs retain their roles.
