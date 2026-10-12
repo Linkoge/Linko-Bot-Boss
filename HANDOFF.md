@@ -1,3 +1,10 @@
+# Codex account usage candidate — activation pending, 2026-10-12
+
+Read [docs/CODEX_USAGE.md](docs/CODEX_USAGE.md) and its private report. This isolated candidate includes
+the reviewed deployment-helper candidate and preserves the live startup/To-Do/Markdown baseline.
+Use the combined usage release only through the helper external bootstrap/idle procedure.
+The original helper release remains untouched; no self-restart or remote push.
+
 # Deployment helper candidate — first activation pending, 2026-10-12
 
 Read [docs/DEPLOYMENT_HELPER.md](docs/DEPLOYMENT_HELPER.md) for the controlled independent helper,

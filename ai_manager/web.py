@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from .account_usage import AccountUsage
 from .auth import Auth
 from .chat import ROLES, Chat
 from .codex import AppServer, CodexError
@@ -115,6 +116,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     db = Database(settings.db_path)
     registry, tasks, auth = Registry(db, settings.project_roots), Tasks(db), Auth(db, settings)
     chat = Chat(db, registry, server or AppServer(settings))
+    account_usage = AccountUsage(chat.server)
     workers = Workers(db, registry, settings, worker_factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
@@ -320,6 +322,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
                 await asyncio.sleep(0.5)
 
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
+
+    @app.get("/api/account-usage", dependencies=[Depends(require_owner)])
+    async def usage():
+        return await account_usage.read()
 
     @app.get("/api/models", dependencies=[Depends(require_owner)])
     async def models():

@@ -74,3 +74,19 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 .message-content.markdown table{display:block;max-width:100%;overflow:auto;border-collapse:collapse;margin:.75em 0}
 .message-content.markdown :is(th,td){border:1px solid var(--border);padding:.4em .65em;min-width:5em}
 .message-content.markdown hr{border:0;border-top:1px solid var(--border);margin:1em 0}
+
+/* Both fixed navigation controls occupy the same square; only tabs scroll. */
+#project-menu-button,#usage-button{width:44px;height:44px;min-height:44px;flex:none;box-sizing:border-box}
+.workspace-row{display:flex;align-items:center;gap:4px;padding:2px 8px;border-bottom:1px solid var(--border);min-width:0}
+.workspace-row .tabs{flex:1;min-width:0;border-bottom:0;padding:0 2px}
+#usage-button{display:grid;grid-template-rows:1fr 1fr;padding:0;overflow:hidden;font-size:11px;font-weight:600;line-height:1}
+#usage-button span{display:grid;place-items:center;min-width:0}
+#usage-button span+span{border-top:1px solid var(--border)}
+#usage-button .stale{color:#e4c58b;text-decoration:underline dotted}
+.usage-heading{display:flex;justify-content:space-between;align-items:center;gap:12px}.usage-heading h2{margin:0}
+#usage-dialog{max-width:620px;max-height:calc(var(--app-height,100dvh) - 24px);overflow:auto;padding:18px}
+#usage-status{color:var(--muted);font-size:12px;margin:12px 0}
+.usage-bucket h3,.usage-window h4{margin:12px 0 8px}.usage-window{border-top:1px solid var(--border);padding:4px 0}
+.usage-window dl{display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px 16px;font-size:13px}
+.usage-window dt{color:var(--muted)}.usage-window dd{margin:0;overflow-wrap:anywhere}
+@media(min-width:901px){.workspace-row{padding-inline:16px}}

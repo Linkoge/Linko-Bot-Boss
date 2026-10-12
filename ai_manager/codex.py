@@ -195,6 +195,12 @@ class AppServer:
                     params = message.get("params", {})
                     if message.get("method") == "account/rateLimits/updated":
                         self.rate_limits = params
+                        if listener := getattr(self, "usage_listener", None):
+                            listener(params)
+                    if message.get("method") == "account/updated":
+                        self.rate_limits = {}
+                        if invalidate := getattr(self, "usage_invalidate", None):
+                            invalidate()
                     thread_id = params.get("threadId") or params.get("thread_id")
                     if thread_id in self.queues:
                         self.queues[thread_id].put_nowait(message)
