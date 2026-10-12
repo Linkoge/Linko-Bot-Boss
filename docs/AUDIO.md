@@ -30,7 +30,7 @@ transcript for editing. Typed text is retained, with a separating space where ne
 permission, finishing, transcription and recoverable errors occupy one temporary compact row.
 Discard cancels capture/upload and suppresses late responses; Download explicitly saves retained audio.
 Enter does not send during any audio operation. Context switches, leaving Chat, hiding the tab,
-changed conversations, editing during transcription, pending requests or active inference suppress
+changed conversations, editing during transcription, pending requests suppress
 automatic sending. Project switches stop recording and save the transcript to the original project's
 session draft; they cannot write to another project's field. Send uses the captured project, conversation
 and mode, with the existing durable request ID and ambiguity/reconciliation behavior. Retries after
@@ -76,6 +76,15 @@ has `/usr/bin/ffprobe`; no package installation was performed. The small `transc
 can be replaced later with an explicitly configured provider. No runtime Python dependency/schema change.
 `GET /api/audio` reports readiness and limits without a key; it is authenticated. Missing provider/key/probe
 configuration fails compactly on microphone activation before requesting device permission.
+
+## Integrated nonblocking recording candidate
+
+The current integrated release is `queue-composer-v1-20261012`, prepared only, not activated.
+It preserves the 20-minute/composer candidate below and internal-result fix. Recording and explicit
+whole-file audio Send are available during manager inference; recorder/transcription/upload/Send,
+HTTP admission and ambiguous-retry locks remain. See [chat-history.md](chat-history.md) for FIFO,
+context/mode binding, validation and private evidence references. Older statements that active
+inference suppresses recording/Send describe the deployed historical behavior.
 
 ## Prepared 20-minute recording change
 
