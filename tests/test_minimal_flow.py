@@ -630,3 +630,31 @@ async def test_background_queue_runs_projects_concurrently_with_capacity(system)
         NativeFixture.release = None
         await workers.close()
         await chat.close()
+
+
+@pytest.mark.asyncio
+async def test_uploaded_files_and_photos_reach_delegated_worker(system):
+    db, registry, chat, settings = system
+    project = registry.list()[0]
+    path = settings.data_dir / 'test-photo.png'
+    path.write_bytes(b'fixture; native image bytes are validated by upload tests')
+    refs = [{'id': 'a'*32, 'name': 'photo.png', 'mime': 'image/png', 'path': str(path), 'sha256': 'fixture', 'size': 1}]
+    db.set_setting('execution_attachments:origin-manager', refs)
+    captured = []
+    class AttachmentFixture(NativeFixture):
+        async def request(self, method, params, timeout=30):
+            if method == 'turn/start':
+                captured.append(params['input'])
+            return await super().request(method, params, timeout)
+    workers = Workers(db, registry, settings, AttachmentFixture)
+    scheduler = Scheduler(db, registry, settings, workers, chat)
+    conversation = chat.conversation(project['id'])
+    params = {'tool': 'manager_action', 'arguments': {'action': 'delegate', 'objective': 'Inspect supplied file'},
+              'manager_execution_id': 'origin-manager', 'conversation_id': conversation['id'], 'callId': 'attachment-call'}
+    task = await scheduler.manager_action(project['id'], params)
+    claimed = scheduler.tasks.claim(2)
+    assert claimed['id'] == task['id']
+    workers.launch(claimed)
+    await settled(workers)
+    assert captured[0][1] == {'type': 'localImage', 'path': str(path)}
+    assert json.loads(captured[0][0]['text'])['task_context']['attachments'] == refs

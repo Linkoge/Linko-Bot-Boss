@@ -53,3 +53,27 @@ and release receipts instead of restarting a releasing worker. The older manual 
 context for code-only releases and requires an external quiet operator window.
 
 Prepare and test a separate checkout. Create an online SQLite backup and rehearse startup against its copy. When no active execution needs interruption, stop only `linko-bot-manager.service`, fast-forward this repository to the tested commit, and start the same user service. Its existing `.venv`, environment, daily backup timer and Tailscale listener are retained. Check service PID/start time, loopback/private HTTPS, served asset hashes, SQLite integrity and preserved records. Do not run acceptance assignments against production data.
+
+
+## Attachment storage and recording recovery (prepared composer V3)
+
+`chat-ui-composer-v3-20261012` adds immutable owner-uploaded files under
+`DATA/chat-workspace/attachments`, private 0700/0600 directory/files. Upload metadata and execution
+references use existing SQLite settings. Four files/message, 8 MiB/file, 512 MiB storage cap;
+PNG/JPEG/WebP photos up to 20 megapixels; arbitrary file interpretation depends on native tools.
+User clear/archive/remove controls retain bytes. Upload errors never claim success. Review retained
+storage with the owner before deleting anything, including orphaned/unsent uploads; no automated GC.
+
+`scripts/backup_daily.py` creates the verified DB snapshot and a sibling `.attachments` directory
+with copies matching snapshot metadata and SHA256 manifest. Back up both together. Restore uploaded
+files to their original generated names under the original DATA path, with private permissions,
+verify checksums and SQLite integrity, and preserve newer accepted uploads/native work before any
+rollback. Existing older database-only/helper backups do not capture these bytes; for controlled
+activation/rollback, explicitly preserve attachment storage alongside the helper/native backups.
+Deployment does not replace/remove this DATA directory. The daily backup change takes effect only
+when this candidate is activated; this preparation makes no production backup or data mutation.
+
+Unfinished recording checkpoints are browser-local IndexedDB; draft/recovery keys live in per-tab
+sessionStorage. Same-tab reload recovery is best effort, not a server audio archive. Stop or Download
+before leaving long mobile recordings; Android/browser suspension and storage eviction cannot be
+prevented by this app. No background service is installed.

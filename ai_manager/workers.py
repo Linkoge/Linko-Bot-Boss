@@ -168,12 +168,16 @@ class Workers:
                 )
                 self.db.event(conn, "model.context", {"prompt": prompt}, project["id"], task["id"], execution_id)
             launch_key = launching(self.db, execution_id, json.dumps(prompt))
+            native_input = [{"type": "text", "text": json.dumps(prompt)}]
+            native_input.extend({'type': 'localImage', 'path': item['path']} for item in
+                                full_prompt.get('task_context', {}).get('attachments', [])
+                                if item['mime'].startswith('image/'))
             turn = await server.request(
                 "turn/start",
                 {
                     "threadId": thread_id,
                     "clientUserMessageId": launch_key,
-                    "input": [{"type": "text", "text": json.dumps(prompt)}],
+                    "input": native_input,
                     **route,
                     "serviceTierForTurn": "default",
                 },

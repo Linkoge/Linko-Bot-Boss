@@ -97,14 +97,14 @@ def main():
                 switch(alpha)
                 page.locator('#message-input').fill('typed draft')
                 start()
-                assert page.locator('#microphone').inner_text() == 'Stop'
+                assert page.locator('#microphone').inner_text() == '■'
                 # Enter must not send a recording accidentally.
                 page.locator('#message-input').press('Enter')
                 assert len(chats) == 0
                 finish_stop()
                 assert page.locator('#message-input').input_value() == 'typed draft\nspoken transcript'
                 assert len(chats) == 0 and uploads[0].startswith('audio/webm')
-                assert page.evaluate("$('microphone').nextElementSibling.id") == 'send'
+                assert page.evaluate("$('send').nextElementSibling.id") == 'microphone'
 
                 # Capture and explicit whole-file Send while a real fixture manager turn is active.
                 page.locator('#message-input').fill('Busy recording')
@@ -148,7 +148,7 @@ def main():
                 assert page.locator('#message-input').input_value() == 'Beta draft'
                 assert len(chats) == 1
                 switch(alpha)
-                assert page.locator('#message-input').input_value() == 'Alpha draft late Alpha text'
+                assert page.locator('#message-input').input_value() == 'Alpha draft\n\nlate Alpha text'
                 page.unroute('**/api/audio/transcribe')
 
                 # Switching while recording ends capture and inserts, with no send.
@@ -157,7 +157,7 @@ def main():
                 page.wait_for_function('()=>!audioState.session')
                 assert page.locator('#message-input').input_value() == 'Beta draft'
                 switch(alpha)
-                assert page.locator('#message-input').input_value().endswith('late Alpha text spoken transcript')
+                assert page.locator('#message-input').input_value().endswith('late Alpha text\n\nspoken transcript')
                 assert len(chats) == 1
 
                 # Failed explicit Send retains recording. Retry inserts only, without duplicate appends.
@@ -173,7 +173,7 @@ def main():
                 page.unroute('**/api/audio/transcribe')
                 page.locator('#microphone').click()
                 page.wait_for_function('()=>!audioState.session')
-                assert page.locator('#message-input').input_value() == 'preserved spoken transcript'
+                assert page.locator('#message-input').input_value() == 'preserved\n\nspoken transcript'
                 assert len(chats) == 1
 
                 # Discard while awaiting a late transcript suppresses all effects.
@@ -186,7 +186,7 @@ def main():
                 held.pop().fulfill(status=200, json={'text': 'discarded text'})
                 page.unroute('**/api/audio/transcribe')
                 page.wait_for_timeout(200)
-                assert page.locator('#message-input').input_value() == 'preserved spoken transcript'
+                assert page.locator('#message-input').input_value() == 'preserved\n\nspoken transcript'
                 assert len(chats) == 1
 
                 # Editing after pressing recording Send cancels automatic submission.
@@ -198,7 +198,7 @@ def main():
                 held.pop().fulfill(status=200, json={'text': 'editable result'})
                 page.wait_for_function('()=>!audioState.session')
                 page.unroute('**/api/audio/transcribe')
-                assert page.locator('#message-input').input_value() == 'edited while waiting editable result'
+                assert page.locator('#message-input').input_value() == 'edited while waiting\n\neditable result'
                 assert len(chats) == 1
 
                 # An overlong draft preserves the transcript; shortening and retrying needs no second STT call.
@@ -213,7 +213,7 @@ def main():
                 page.locator('#microphone').click()
                 page.wait_for_function('()=>!audioState.session')
                 assert len(uploads)==count
-                assert page.locator('#message-input').input_value()=='shortened spoken transcript'
+                assert page.locator('#message-input').input_value()=='shortened\n\nspoken transcript'
 
                 # An accepted chat with a lost response retries the exact same request ID.
                 dropped=[]
@@ -236,7 +236,7 @@ def main():
                 assert len(chats)==3 and chats[-1]['request_id']==chats[-2]['request_id']
                 history=page.evaluate('()=>api("/api/history?project_id="+state.project)')
                 assert sum(m['role']=='user' for m in history['messages'])==4
-                page.locator('#message-input').fill('preserved spoken transcript')
+                page.locator('#message-input').fill('preserved\n\nspoken transcript')
 
                 # Media permission denial is compact and retryable, no draft loss.
                 page.evaluate("()=>{window.savedGetUserMedia=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);navigator.mediaDevices.getUserMedia=async()=>{throw new DOMException('denied','NotAllowedError')}}")
@@ -247,7 +247,7 @@ def main():
                 page.locator('#microphone').click()
                 page.wait_for_function("()=>audioState.session?.phase==='recording'")
                 page.locator('#audio-cancel').click()
-                assert page.locator('#message-input').input_value() == 'preserved spoken transcript'
+                assert page.locator('#message-input').input_value() == 'preserved\n\nspoken transcript'
 
                 # Cancellation while browser permission is pending releases any late granted track.
                 page.evaluate("()=>{navigator.mediaDevices.getUserMedia=()=>new Promise(resolve=>window.resolveMic=resolve)}")
@@ -288,7 +288,7 @@ def main():
                 page.wait_for_function('()=>!audioState.session')
                 page.unroute('**/api/audio/transcribe')
                 assert complete and len(uploads) == before_uploads + 1
-                assert page.locator('#message-input').input_value() == 'preserved spoken transcript spoken transcript'
+                assert page.locator('#message-input').input_value() == 'preserved\n\nspoken transcript\n\nspoken transcript'
                 assert len(chats) == 3
 
                 for width, height in [(1440, 1000), (393, 851), (320, 420)]:

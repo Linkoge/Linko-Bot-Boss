@@ -1,3 +1,50 @@
+# Combined cleanup / compact composer candidate — prepared only
+
+Exact release ID: `chat-ui-composer-v3-20261012`; candidate checkout:
+`/home/codex/checkouts/linko-compact-composer-20261012`.
+
+Extends the drained completed assignment `05ca122859d548adba73bd99f1f35176` and its
+verified `chat-ui-cleanup-v2-20261012` candidate; no edits to that checkout or immutable
+receipts. Preserves hidden caret, role styles/accessibility without avatars/speaker labels,
+no ordinary Completed badges, compact utility menu immediately left of usage, all three
+mode choices and original utilities. Preserves succeeded `queue-composer-v1-20261012`
+FIFO, busy Send/Record, mode/origin binding, retry IDs, Enter/newline, internal result filtering.
+
+Composer is 154px including padding/border, with a scrolling text area and three equal
+44×44 buttons vertically at right: **+ file/photo**, **Send**, **Record**. Recording has
+explicit Stop (transcribe into draft), Send (stop/transcribe/submit), Discard and available
+audio Download; controls/status stay inside the compact input area. Recording square also
+stops or retries, with state-specific accessible names. Draft attachments show removable,
+owner-authenticated download links; messages and archived history retain download links.
+
+Uploads are real owner-only, CSRF-protected raw-byte uploads, scoped to the exact project
+and conversation. Four per message, 8 MiB each, 512 MiB retained storage cap. Empty files,
+unsafe names, wrong chat scope and invalid photos reject without upload success. PNG/JPEG/WebP
+have signature/ffprobe format and 20 megapixel checks; HEIC/SVG/other photo formats require
+conversion. Other files remain bytes for native tools to read; there is no promise that any
+arbitrary binary file is understood. Generated immutable private paths/checksums live under
+`DATA/chat-workspace/attachments`; existing settings store metadata, so no schema/dependency
+migration. Chat intake stores execution attachment references atomically, binds them to
+request-id replay, sends photos as native `localImage` input, and automatically forwards
+references and images to delegated/continued workers. UI messages show names, not internal
+paths or transport instructions. Native context recovery can retrieve historical file references.
+
+Storage is retained on clear/archive/remove-from-draft; these actions do not erase files.
+No automatic upload garbage collector or delete endpoint is introduced. Storage-full errors
+are explicit. Daily backups now include checksum-verified companion attachment directories;
+operators must preserve them with DB/native history. See operations for restore/retention limits.
+
+Verification includes `tests/test_attachments.py`, delegated-worker native input fixture,
+`scripts/browser_composer.py` and existing cleanup/queue/audio/reliability suites, all required
+by trusted preparation. Final exact results, screenshots, limitations, commit/assets and release
+manifest are in [the full durable report](/home/codex/.local/share/linko-bot-manager/deployments/compact-composer-20261012/REPORT.md). Chromium covers desktop 1440×1000,
+Android-sized 393×851 and narrow 320×420. Paid inference/STT and physical Android are not
+asserted. No deployment requested or performed; only an exact durable succeeded deployment
+receipt establishes activation. Existing queue baseline succeeded receipt is
+`deployment-helper/results/95c21194ebf3e4e941debba157928521.json`.
+
+---
+
 # Chat UI cleanup — prepared, not deployed, 2026-10-12
 
 Exact release ID: `chat-ui-cleanup-v2-20261012`. Candidate checkout:

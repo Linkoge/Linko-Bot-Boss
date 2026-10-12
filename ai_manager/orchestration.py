@@ -193,6 +193,10 @@ class Scheduler:
             return ProjectMemory(self.db, self.registry).delivery(project_id, args["revision"], args["entry"],
                        args.get("established", []), args["evidence"], args.get("deployment_receipt"), args.get("release_id"))
         selected = {k: args[k] for k in ("constraints", "dependencies", "selected_context") if args.get(k)}
+        if action in {'delegate', 'continue'}:
+            attachments = self.db.setting('execution_attachments:' + params['manager_execution_id'], [])
+            if attachments:
+                selected['attachments'] = attachments
         if len(json.dumps(selected)) > 12000:
             raise ValueError("Selected task context must be at most 12000 characters")
         if action == "delegate":

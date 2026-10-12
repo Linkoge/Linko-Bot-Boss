@@ -26,6 +26,8 @@ def prepare(repo, live, data, release_id, python):
               ['node', '--check', 'ai_manager/static/usage.js'],
               ['node', '--check', 'ai_manager/static/memory.js'],
               ['node', '--check', 'ai_manager/static/audio.js'],
+              ['node', '--check', 'ai_manager/static/attachments.js'],
+              [str(python), 'scripts/browser_composer.py'],
               [str(python), 'scripts/browser_worker_delivery.py'],
               [str(python), 'scripts/browser_audio.py'],
               [str(python), 'scripts/browser_chat_reliability.py'],

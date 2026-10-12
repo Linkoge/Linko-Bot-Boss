@@ -1,3 +1,50 @@
+# Compact recording lifecycle candidate — prepared only, 2026-10-12
+
+Combined release: `chat-ui-composer-v3-20261012`, preserving original chat cleanup and
+succeeded queue composer. Full [report](/home/codex/.local/share/linko-bot-manager/deployments/compact-composer-20261012/REPORT.md) and current chat-history section
+are authoritative for this continuation; historical candidate statuses below are superseded.
+
+Each recording has a distinct ID. Stop adds its full-file transcript to the latest originating
+draft, separated by a paragraph (or existing final newline). Existing typed/transcribed text
+is retained. Only one STT attempt per session is active; retries reuse a returned transcript
+on text-limit errors. A session identity check after every asynchronous response suppresses
+discarded/stale results; originating conversation verification rejects replaced chats. A durable
+per-tab applied-ID set is saved atomically with drafts to avoid duplicate insertion after recovery.
+Context switches stop into the original draft without sending. Edits after recording Send
+cancel implicit submission. Explicit Send still captures original mode and queues while busy.
+
+Browser visibility alone no longer stops recording. It requests a checkpoint and allows
+MediaRecorder to continue; background status states capture may pause. Track mute/end,
+recorder errors/unexpected Stop, lifecycle freeze/pagehide, and a >5-second scheduling gap
+produce interruption/recovery state rather than claiming continuous capture. Recovery never
+automatically sends. Retry transcribes available captured audio; Download/Discard stay available.
+The 20-minute/32 MiB limits and full final Blob remain. Native Enter/newline behavior is unchanged.
+
+Unfinished audio checkpoints use IndexedDB (per tab key retained in sessionStorage); drafts
+and applied transcript IDs use sessionStorage. Checkpoints are serialized/coalesced every two
+seconds while data arrives, and finalized on Stop. Discard/success remove saved audio in the
+same serialized queue. Reload in the same tab can recover checkpoints and drafts. Storage
+failure shows a notice; browser eviction, closing the tab/session, OS kill before a checkpoint,
+private-mode policy or missing encoder data can still lose audio/drafts. Previously captured
+bytes can also be undecodable after abrupt termination; server validation reports this honestly.
+Other newly opened tabs do not automatically claim the original tab's recovery key. Audio
+remains local to the browser until explicit Stop/Send/Retry submits to STT.
+
+For long mobile capture, keep the page open and the device awake when possible; stop/save
+before leaving. No background service or guaranteed background recording is added. Android
+screen lock may delay `dataavailable`, and browsers can suspend microphone capture:
+[MDN MediaRecorder dataavailable](https://developer.mozilla.org/en-US/docs/Web/API/MediaRecorder/dataavailable_event).
+Native photos use the locally generated Codex protocol's `localImage` variant; contract reference:
+[OpenAI App Server protocol](https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md).
+
+Real Chromium capture plus controlled provider/network/lifecycle fixtures verify safe sequential
+append, recovery after reload, visibility continuing, suspension recovery, stale result suppression,
+attachments and compact layouts. Physical Android/iOS, paid provider/native image inference and
+an actual OS suspension were not run. Exact verification belongs to the release log/full report.
+Deployment is not requested and remains pending an owner activation request.
+
+---
+
 # Composer audio — 20-minute candidate prepared; activation pending, 2026-10-12
 
 Current deployed state (unchanged by this task): `audio-v2-livebase-20261012` and the same-code key-loading release

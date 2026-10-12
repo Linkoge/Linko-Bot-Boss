@@ -1,3 +1,20 @@
+# Combined chat cleanup / compact composer — prepared only
+
+Exact prepared release: `chat-ui-composer-v3-20261012`; checkout
+`/home/codex/checkouts/linko-compact-composer-20261012`.
+Reuses the finished original cleanup candidate after its worker and manager delivery drained;
+preserves all original requirements and deployed queue behavior. Adds compact +/Send/Record,
+working scoped attachments through native manager/worker plumbing, safe recording append and
+truthful browser interruption recovery. No live edits, task cancellation, restart or deployment.
+
+Read current [chat history](docs/chat-history.md), [audio lifecycle](docs/AUDIO.md),
+and the [full private report](/home/codex/.local/share/linko-bot-manager/deployments/compact-composer-20261012/REPORT.md). Manager should record implemented/verified vs
+prepared/not deployed in its routine brief/recent delivery using the report's manager-summary.json;
+retain original task/result linkage and succeeded queue baseline receipt. This combined release
+supersedes cleanup V2 for a later owner-requested activation; preserve its immutable receipts.
+Do not claim activation without the exact future succeeded receipt. Attachment storage must be
+preserved with database/native backups; prior DB-only backups do not contain uploaded bytes.
+
 # Chat UI cleanup — prepared; activation pending, 2026-10-12
 
 Exact release ID: `chat-ui-cleanup-v2-20261012`. Candidate:

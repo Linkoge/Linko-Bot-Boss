@@ -1,8 +1,11 @@
 'use strict';
 const $ = id => document.getElementById(id);
-const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(), pending:new Set()};
+const draftRecovery=JSON.parse(sessionStorage.getItem('linko-drafts-v1')||'[]');
+const appliedTranscripts=new Set(draftRecovery.transcripts||[]);
+const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
 const submissionKey = 'linko-chat-submissions-v1';
 const submissions = new Map(JSON.parse(sessionStorage.getItem(submissionKey)||'[]'));
+function saveDrafts(){try{sessionStorage.setItem('linko-drafts-v1',JSON.stringify({drafts:[...state.drafts],transcripts:[...appliedTranscripts]}));}catch{notice('Draft recovery storage unavailable. Keep this tab open.');}}
 function saveSubmissions(){sessionStorage.setItem(submissionKey,JSON.stringify([...submissions]));}
 const element = (tag, text, cls) => {const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
 function notice(text){$('notice-text').textContent=text;$('notice').hidden=!text;}
@@ -123,13 +126,13 @@ renderChatModes();
 async function selectProject(id){
   closeChatMenu();
   if(id!==state.project)audioChanged();
-  state.drafts.set(state.project,$('message-input').value);
+  state.drafts.set(state.project,$('message-input').value);saveDrafts();
   const selection=++state.selection;
   state.todoSelection=new Map();state.todos=[];renderTodos(true);
   state.project=id;state.detail=null;state.brief=null;clearTimeout(state.memoryTimer);renderMemory();renderMemoryReview();state.source?.close();state.source=null;
   state.execution=null;state.history=null;$('messages').replaceChildren();updateChatActions();
   $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';
-  $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderAudio();
+  $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderAttachments();renderAudio();
   state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],active_agents:0};
   renderProjects();renderTasks();renderAgents();renderQuestions();
   await refresh(false);
@@ -169,7 +172,7 @@ async function loadHistory(selection=state.selection){
     label.hidden=m.status==='completed';
     badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;
     badge.className=`badge ${m.status==='completed'?'':m.status}`;
-    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);
+    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);renderMessageAttachments(row,m);
 
   }
   const active=history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
@@ -180,7 +183,7 @@ async function loadHistory(selection=state.selection){
   updateChatActions();
   if(fresh||follow)messages.scrollTop=messages.scrollHeight;
 }
-function messageText(m){return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Queued':'Thinking…');}
+function messageText(m){if(m.attachments?.length&&!m.content)return '';return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Queued':'Thinking…');}
 function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Codex result':'AI Manager';}
 function chatHasSelection(node=$('messages')){const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&selection.containsNode(node,true);}
 function shouldFollowChat(){const messages=$('messages');return !state.selectingChat&&!chatHasSelection()&&messages.scrollHeight-messages.clientHeight-messages.scrollTop<48;}
@@ -306,7 +309,7 @@ async function openSavedHistory(id,older=false,search=''){
   $('history-detail-meta').textContent=`${projectName(state.project)} · ${data.conversation.archived_at?'Archived '+new Date(data.conversation.archived_at*1000).toLocaleString():'Active conversation'}${data.search?' · Messages matching “'+data.search+'”':''}`;
   $('history-full').hidden=!data.search;
   $('history-detail-messages').replaceChildren();
-  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');row.setAttribute('aria-label',messageAuthor(m));body.append(element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',undefined,'message-content'));updateMessageContent(body.querySelector('.message-content'),m.content,m.role);row.append(body);$('history-detail-messages').append(row);}
+  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');row.setAttribute('aria-label',messageAuthor(m));body.append(element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',undefined,'message-content'));updateMessageContent(body.querySelector('.message-content'),m.content,m.role);row.append(body);renderMessageAttachments(row,m);$('history-detail-messages').append(row);}
   if(!state.savedHistory.messages.length)$('history-detail-messages').append(element('p','This chat is empty.','empty'));
   $('history-older').hidden=!data.has_more;$('history-detail').hidden=false;
   if(!older)$('history-detail').scrollIntoView({block:'start'});
@@ -324,27 +327,28 @@ function editor(title,fields,onSave,reloadContext=true){
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:['active','paused','archived','removed'].map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
 async function sendSubmission(bound=null){
-  if(audioState.session)return;
+  if(audioState.session||attachmentState.uploads.has(bound?bound.project_id:state.project))return;
   const project=bound?bound.project_id:state.project,selection=state.selection;
   if(state.pending.has(project))return;
   let submission=submissions.get(project);
-  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
+  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id)};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
   state.pending.add(project);$('send').disabled=true;
   let accepted=false;
   try{
     await api('/api/chat',{method:'POST',body:JSON.stringify(submission)});
-    accepted=true;
+    accepted=true;clearSentAttachments(project,submission.attachment_ids||[]);
     submissions.delete(project);saveSubmissions();
-    if(state.drafts.get(project)===submission.content)state.drafts.set(project,'');
+    if(state.drafts.get(project)===submission.content)state.drafts.set(project,'');saveDrafts();
     if(selection===state.selection){if($('message-input').value===submission.content)$('message-input').value='';await loadHistory(selection);}
   }catch(error){
     if(accepted){if(selection===state.selection)updatesUnavailable(error,'history');error.ambiguous=true;error.message='Message accepted. Saved response unavailable; updates will retry.';}
     else if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){submissions.delete(project);saveSubmissions();}
     else{error.ambiguous=true;error.message='Acceptance is unconfirmed. Your saved request will be checked on return or Send.';}
     throw error;
-  }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=state.pending.has(project);updateChatActions();}}
+  }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=state.pending.has(project);updateChatActions();renderAttachments();}}
 }
-$('chat-form').onsubmit=action(async event=>{event.preventDefault();await sendSubmission();});
+$('chat-form').onsubmit=action(async event=>{event.preventDefault();if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length&&!submissions.has(state.project))return;await sendSubmission();});
+$('message-input').addEventListener('input',()=>{state.drafts.set(state.project,$('message-input').value);saveDrafts();});
 // Textarea Enter (including IME composition) keeps the browser's native multiline editing.
 $('stop-chat').onclick=action(()=>api(`/api/executions/${state.execution}/interrupt`,{method:'POST'}));
 $('all-projects').onclick=action(()=>selectProject(null));

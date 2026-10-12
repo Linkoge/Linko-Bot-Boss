@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .account_usage import AccountUsage
+from .attachments import Attachments
 from .audio import Audio
 from .auth import Auth
 from .chat import ROLES, Chat
@@ -60,7 +61,8 @@ class ProjectUpdate(BaseModel):
 class MessageBody(BaseModel):
     request_id: str | None = Field(default=None, min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     project_id: str | None = None
-    content: str = Field(min_length=1, max_length=64000)
+    content: str = Field(default='', max_length=64000)
+    attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     conversation_id: str | None = None
     mode: Literal["conversation", "auto", "execute"] = "auto"
 
@@ -139,6 +141,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     chat = Chat(db, registry, server or AppServer(settings))
     account_usage = AccountUsage(chat.server)
     audio = Audio(settings)
+    attachments = Attachments(db, settings)
+    chat.attachments = attachments
     workers = Workers(db, registry, settings, worker_factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
@@ -168,6 +172,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
     app.state.workers, app.state.scheduler = workers, scheduler
     app.state.audio = audio
+    app.state.attachments = attachments
     app.state.memory, app.state.memory_reviews = memory, reviews
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
@@ -359,6 +364,16 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     def audio_status():
         return audio.status()
 
+    @app.post('/api/attachments', dependencies=[Depends(require_owner)])
+    async def upload_attachment(request: Request, name: str, conversation_id: str, project_id: str | None = None):
+        return await attachments.upload(request, name, project_id, conversation_id)
+
+    @app.get('/api/attachments/{identifier}', dependencies=[Depends(require_owner)])
+    def download_attachment(identifier: str):
+        item = attachments.get(identifier)
+        return FileResponse(attachments.root / item['stored_name'], media_type='application/octet-stream',
+                            filename=item['name'], headers={'X-Content-Type-Options': 'nosniff'})
+
     @app.post("/api/audio/transcribe", dependencies=[Depends(require_owner)])
     async def transcribe_audio(request: Request):
         return await audio.transcribe(request)
@@ -483,7 +498,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
         return await chat.submit(
-            body.project_id, body.content, body.conversation_id, mode=body.mode, request_id=body.request_id
+            body.project_id, body.content, body.conversation_id, mode=body.mode, request_id=body.request_id,
+            attachment_ids=body.attachment_ids
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
