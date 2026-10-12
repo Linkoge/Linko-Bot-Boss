@@ -1,3 +1,10 @@
+# Deployment helper — first activation pending, 2026-10-12
+
+Controlled helper, scoped manager request/status, failure/rollback/concurrency/idle checks and external
+bootstrap are prepared. See [deployment helper](docs/DEPLOYMENT_HELPER.md) and its private report.
+The combined startup-selection/zero-badge/To-Do/Markdown release is already deployed and preserved.
+Do not restart an active releasing worker. Deferred memory compaction remains in To-Do, unchanged.
+
 # Development priorities
 
 Current architecture and evidence: docs/RADICAL_SIMPLIFICATION_IMPLEMENTATION.md.

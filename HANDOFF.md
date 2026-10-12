@@ -1,3 +1,10 @@
+# Deployment helper candidate — first activation pending, 2026-10-12
+
+Read [docs/DEPLOYMENT_HELPER.md](docs/DEPLOYMENT_HELPER.md) for the controlled independent helper,
+exact one-time external bootstrap and durable evidence. The combined startup/zero-badge/To-Do/Markdown
+release is already live at 7999d1a, schema11; the pending text below is historical. This new candidate
+preserves that complete release. No manager restart or active-worker interruption was performed.
+
 # Startup / To-Do candidate — activation pending, 2026-10-12
 
 Read [docs/STARTUP_TODO.md](docs/STARTUP_TODO.md) and the linked private REPORT.md for the reviewed isolated

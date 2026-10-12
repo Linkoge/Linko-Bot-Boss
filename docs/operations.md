@@ -47,4 +47,9 @@ Run `pytest`, Ruff and JavaScript syntax checks. `scripts/browser_smoke.py` uses
 
 ## Deployment
 
+The controlled independent helper and one-time bootstrap are documented in
+[deployment helper](DEPLOYMENT_HELPER.md). Its first manager activation is pending; use its exact gate
+and release receipts instead of restarting a releasing worker. The older manual procedure below is historical
+context for code-only releases and requires an external quiet operator window.
+
 Prepare and test a separate checkout. Create an online SQLite backup and rehearse startup against its copy. When no active execution needs interruption, stop only `linko-bot-manager.service`, fast-forward this repository to the tested commit, and start the same user service. Its existing `.venv`, environment, daily backup timer and Tailscale listener are retained. Check service PID/start time, loopback/private HTTPS, served asset hashes, SQLite integrity and preserved records. Do not run acceptance assignments against production data.

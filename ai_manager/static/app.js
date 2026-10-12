@@ -375,3 +375,8 @@ $('todo-delete').onclick=action(async()=>{
   await api('/api/todos/archive',{method:'POST',body:JSON.stringify({project_id:project,selected})});
   if(selection===state.selection){state.todoSelection.clear();await loadTodos(selection);}
 });
+
+let deploymentNonce=null;
+async function deploymentStatus(){const result=await api('/api/deployment');deploymentNonce=result.nonce;$('deployment-status').textContent=result.phase==='idle'?'No pending deployment.':`${result.release_id}: ${result.phase.replaceAll('_',' ')}`;$('deployment-cancel').hidden=result.phase!=='waiting_idle';}
+$('deployment-check').onclick=action(deploymentStatus);
+$('deployment-cancel').onclick=action(async()=>{await api('/api/deployment/cancel',{method:'POST',body:JSON.stringify({nonce:deploymentNonce})});await deploymentStatus();});

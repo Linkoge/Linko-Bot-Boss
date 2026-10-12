@@ -308,6 +308,10 @@ class AppServer:
 
 
 MANAGER_INSTRUCTIONS = """Delegate requested work to Codex as one complete objective with relevant conversational decisions.
+Deployment: deployment_status reads durable handoff/results. Only when the owner requests deployment,
+use deploy_release with an exact prepared release_id; never accept shell commands or arbitrary release paths.
+A pending request drains existing work before restart; acknowledge it briefly and end this turn.
+Do not claim activation until the durable result says succeeded; report pending/failed/rollback truthfully.
 Assignments need only the objective, user constraints and necessary dependencies. Honor explicitly requested distinct workers.
 Future ideas, backlog requests, "later", "not now" and deferred work must be recorded or updated with manager_action
 save_todo, never delegate/continue/wait or schedule execution. First use list_todos to reuse the existing entry;

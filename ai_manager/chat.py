@@ -209,6 +209,8 @@ class Chat:
 
     def prompt(self, conversation, content, mode, execution_id, thread_id, prior):
         context = self.context(conversation["project_id"])
+        from .deployment import Handoff
+        context['deployment'] = Handoff(self.db.path.parent).status()
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         prompt = {"mode": mode, "message": content}
         if prior and saved.get("thread_id") == thread_id:
@@ -256,6 +258,10 @@ class Chat:
             return json.loads(row["receipt"])
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto", request_id=None):
+        from .deployment import Handoff
+        handoff = Handoff(self.db.path.parent)
+        if handoff.ready_to_stop() or (handoff.gated() and not delivery):
+            raise ValueError('Deployment pending; wait before submitting new work')
         payload_hash = hashlib.sha256(
             json.dumps([project_id, conversation_id, content, mode], ensure_ascii=False).encode()
         ).hexdigest()

@@ -96,6 +96,10 @@ class TodoArchive(BaseModel):
     selected: list[TodoSelection] = Field(min_length=1, max_length=200)
 
 
+class DeploymentCancel(BaseModel):
+    nonce: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
 class TaskControl(BaseModel):
     revision: int
     action: str
@@ -137,6 +141,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     app.state.workers, app.state.scheduler = workers, scheduler
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
+    app.state.deployment_mutations = 0
+    scheduler.deployment_busy = lambda: app.state.deployment_mutations > 0
+
     @app.middleware("http")
     async def browser_security(request: Request, call_next):
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
@@ -149,7 +156,22 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
                     return JSONResponse({"detail": "Login required"}, status_code=401)
                 if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
                     return JSONResponse({"detail": "CSRF token required"}, status_code=403)
-        response = await call_next(request)
+        mutation = request.method not in {'GET', 'HEAD', 'OPTIONS'}
+        drain = request.url.path in {'/api/login', '/api/deployment/cancel'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt')
+        if request.method == 'PATCH' and request.url.path.startswith('/api/tasks/'):
+            body = await request.json()
+            drain = body.get('action') in {'stop', 'pause', 'cancel'}
+        if mutation and scheduler.deployment.gated() and not drain:
+            return JSONResponse({'detail': 'Deployment pending; wait for activation'}, status_code=503)
+        if mutation and scheduler.deployment.ready_to_stop():
+            return JSONResponse({'detail': 'Deployment handoff acknowledged'}, status_code=503)
+        if mutation:
+            app.state.deployment_mutations += 1
+        try:
+            response = await call_next(request)
+        finally:
+            if mutation:
+                app.state.deployment_mutations -= 1
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
@@ -184,6 +206,14 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
             "release_commit": release_commit,
             "scheduler_running": bool(scheduler.job and not scheduler.job.done()),
         }
+
+    @app.get('/api/deployment', dependencies=[Depends(require_owner)])
+    def deployment_status():
+        return scheduler.deployment.status()
+
+    @app.post('/api/deployment/cancel', dependencies=[Depends(require_owner)])
+    def cancel_deployment(body: DeploymentCancel):
+        return scheduler.deployment.cancel(body.nonce)
 
     @app.post("/api/setup")
     async def setup(body: SetupBody, request: Request):

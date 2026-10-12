@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 
+from .deployment import Handoff
 from .recovery import SilentObserver
 from .tasks import Tasks
 from .todos import Todos
@@ -18,6 +19,8 @@ MANAGER_TOOL = {
             "action": {
                 "type": "string",
                 "enum": [
+                    "deploy_release",
+                    "deployment_status",
                     "list_todos",
                     "save_todo",
                     "delegate",
@@ -36,6 +39,7 @@ MANAGER_TOOL = {
             "objective": {"type": "string"},
             "task_id": {"type": "string"},
             "todo_id": {"type": "string"},
+            "release_id": {"type": "string"},
             "title": {"type": "string"},
             "details": {"type": "string"},
             "revision": {"type": "integer", "minimum": 0},
@@ -58,6 +62,8 @@ class Scheduler:
         self.tasks, self.job = Tasks(db), None
         self.lock = asyncio.Lock()
         self.error = ""
+        self.deployment = Handoff(settings.data_dir)
+        self.deployment_busy = lambda: False
 
     async def manager_action(self, selected_project, params):
         args = params["arguments"]
@@ -71,6 +77,18 @@ class Scheduler:
         )
         if execution and (execution["stop_requested"] or execution["finished_at"] is not None):
             raise ValueError("This manager execution has stopped")
+        if action == 'deployment_status':
+            return self.deployment.status()
+        if action == 'deploy_release':
+            if params.get('mode') == 'conversation':
+                raise ValueError('Use Auto or Execute to request deployment')
+            from .deployment import read
+            config = read(self.deployment.root / 'config.json')
+            if not config or (selected_project and self.registry.get(selected_project)['path'] != config['repo']):
+                raise ValueError('Deployment is available only for this manager or All Projects')
+            return self.deployment.request(args['release_id'], {
+                'project_id': selected_project, 'conversation_id': params['conversation_id'],
+                'execution_id': params['manager_execution_id']})
         offset = args.get("offset", 0)
         if not isinstance(offset, int) or offset < 0:
             raise ValueError("Offset must be a nonnegative integer")
@@ -236,6 +254,9 @@ class Scheduler:
 
     async def tick(self):
         async with self.lock:
+            self.deployment.report(self.db)
+            if self.deployment.ready_to_stop():
+                return
             await self.observer.observe(
                 {
                     **{key: self.chat.server for key in self.chat.jobs},
@@ -247,6 +268,7 @@ class Scheduler:
             while task := self.tasks.claim(self.settings.max_workers):
                 self.workers.launch(task)
             await self.chat.deliver_results()
+            self.deployment.acknowledge(self.db, bool(self.chat.jobs or self.workers.jobs or self.deployment_busy()))
 
     async def run(self):
         while True:
