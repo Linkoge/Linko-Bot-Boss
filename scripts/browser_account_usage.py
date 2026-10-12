@@ -131,7 +131,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.route('**/api/account-usage', lambda route: route.abort())
                 page.evaluate('refreshUsage()')
                 page.locator('#usage-button').click()
-                assert 'Refresh failed' in page.locator('#usage-status').inner_text()
+                page.wait_for_function("() => document.getElementById('usage-status').textContent.includes('Refresh failed')")
                 page.keyboard.press('Escape')
                 page.evaluate("usageData={buckets:[],server_time:usageNow(),last_attempt_at:null,error:null};renderUsage()")
                 assert page.locator('#usage-five').inner_text() == '—' and page.locator('#usage-week').inner_text() == '—'

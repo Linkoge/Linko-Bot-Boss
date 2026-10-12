@@ -355,7 +355,7 @@ async def test_full_review_scoped_tools_usage_failure_cancel_restart(system):
     await asyncio.gather(*list(reviews.jobs.values()))
     result = memory.get(project, ref)
     assert result["status"] == "candidate" and result["usage"]["turn"]["inputTokens"] == 50
-    assert result["sources"] == ["file:app.py"]
+    assert "file:app.py" in result["sources"] and "project:durable_state" in result["sources"]
     assert memory.snapshot(project)["active"] == old["active"]
     ReviewServer.mode = "bad"
     ref = reviews.start(project, True)["review"]

@@ -662,7 +662,9 @@ class MemoryReviews:
             review = self.memory.get(project_id, ref)
             active = self.memory.get(project_id, review["base"])
             project = self.memory.registry.get(project_id)
+            observed.extend(["active:" + review["base"], "project:fields", "project:durable_state"])
             prompt = {
+                "provided_source_references": observed.copy(),
                 "active": active,
                 "project": {
                     k: project[k]
