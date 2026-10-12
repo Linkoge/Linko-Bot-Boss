@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 
+from .chat import internal_result
 from .deployment import Handoff
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
@@ -35,6 +36,7 @@ MANAGER_TOOL = {
                     "update_brief",
                     "record_delivery",
                     "read_task",
+                    "read_result",
                     "list_tasks",
                     "read_history",
                     "pause_project",
@@ -56,6 +58,7 @@ MANAGER_TOOL = {
             "deployment_receipt": {"type": "string"},
             "objective": {"type": "string"},
             "task_id": {"type": "string"},
+            "execution_id": {"type": "string"},
             "todo_id": {"type": "string"},
             "release_id": {"type": "string"},
             "title": {"type": "string"},
@@ -139,7 +142,7 @@ class Scheduler:
                     "next_offset": offset + 12000 if len(content) > offset + 12000 else None,
                 }
             rows = self.db.all(
-                """SELECT id,role,content FROM messages WHERE conversation_id=? AND status='completed'
+                """SELECT id,role,content FROM messages WHERE NOT """ + internal_result() + """ AND conversation_id=? AND status='completed'
                 AND instr(lower(content),lower(?))>0 ORDER BY created_at DESC,rowid DESC LIMIT 6 OFFSET ?""",
                 (conversation["id"], args.get("query", ""), offset),
             )
@@ -171,6 +174,7 @@ class Scheduler:
             "read_project",
             "list_memory",
             "read_task",
+            "read_result",
             "list_tasks",
         }:
             raise ValueError("Conversation mode is read-only; use Auto or Execute for work")
@@ -263,6 +267,14 @@ class Scheduler:
                 ],
                 "next_offset": offset + 20 if len(tasks) > offset + 20 else None,
             }
+        if action == "read_result":
+            result = self.db.one("SELECT id,task_id,project_id,status,output,error,input,delivery FROM executions WHERE id=? AND task_id IS NOT NULL", (args["execution_id"],))
+            if not result or result["project_id"] != project_id:
+                raise ValueError("Result belongs to another project or does not exist")
+            output = result.pop("output")
+            return {**result, "output": output[offset:offset + 12000],
+                    "next_offset": offset + 12000 if len(output) > offset + 12000 else None,
+                    "evidence": self.db.all("SELECT seq,payload FROM events WHERE execution_id=? AND kind='task.evidence' ORDER BY seq", (result["id"],))}
         if action == "read_task":
             task = self.tasks.get(args["task_id"])
             if task["project_id"] != project_id:

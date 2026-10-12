@@ -294,7 +294,7 @@ async def test_manager_outage_before_and_after_worker_delivery_reuses_response(s
         await chat.recover()
     assert len(faults.calls) == 1
     assert len(db.all("SELECT * FROM messages WHERE role='assistant'")) == 1
-    assert "Result 1" in faults.calls[0]["message"]
+    assert faults.calls[0]["worker_result"]["execution_id"] == result["id"]
     with pytest.raises(ValueError, match="already running"):
         await chat.submit(task["project_id"], "Another request")
     restored = Chat(Database(db.path), registry, faults.factory(settings))
@@ -336,9 +336,10 @@ async def test_five_sequential_assignments_resume_in_order_after_manager_interru
 
     async def chain(server, params, prompt):
         handler = server.tool_handlers[params["threadId"]]
-        if prompt["message"].startswith("Codex result:"):
-            result = json.loads(prompt["message"].split("\n", 1)[1])
-            step = int(result["objective"].split()[-1]) + 1
+        if "worker_result" in prompt:
+            notice = prompt["worker_result"]
+            result = await handler({"tool": "manager_action", "arguments": {"action": "read_result", "execution_id": notice["execution_id"]}})
+            step = int(json.loads(result["input"])["objective"].split()[-1]) + 1
         else:
             assert prompt["message"] == "Run five authorized assignments in order"
             step = 1

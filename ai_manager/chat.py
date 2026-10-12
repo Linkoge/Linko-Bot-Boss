@@ -23,6 +23,14 @@ from .recovery import (
 )
 from .registry import Registry
 
+
+# Application-created transport rows only; never classify by text or JSON shape.
+def internal_result(alias="messages"):
+    return (f"({alias}.role='worker' AND {alias}.id LIKE 'result:%' AND EXISTS("
+            f"SELECT 1 FROM executions source WHERE source.id=substr({alias}.id,8) "
+            "AND source.task_id IS NOT NULL))")
+
+
 ROLES = {"interactive": "low", "execution": "medium"}
 
 
@@ -53,7 +61,7 @@ class Chat:
             """SELECT m.*,CASE WHEN m.role!='assistant' OR e.id IS NULL THEN m.status
             WHEN e.finished_at IS NOT NULL THEN e.status WHEN e.status='recovering' THEN 'waiting'
             WHEN e.status='running' THEN 'streaming' ELSE 'queued' END AS authoritative_status,e.status AS execution_status,
-            e.finished_at,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND instr(lower(m.content),lower(?))>0 ORDER BY m.created_at DESC,m.rowid DESC LIMIT 200""",
+            e.finished_at,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND NOT """ + internal_result("m") + """ AND instr(lower(m.content),lower(?))>0 ORDER BY m.created_at DESC,m.rowid DESC LIMIT 200""",
             (conversation["id"], search),
         )
         for row in rows:
@@ -136,13 +144,13 @@ class Chat:
             self.registry.get(project_id)
         rows = self.db.all(
             """SELECT c.id, c.project_id, c.created_at, a.title, a.archived_at,
-            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id) AS message_count,
-            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id
+            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id AND NOT """ + internal_result("m") + """ ) AS message_count,
+            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id AND NOT """ + internal_result("m") + """
              AND instr(lower(m.content),lower(?))>0) AS match_count
             FROM conversations c LEFT JOIN chat_archives a ON a.conversation_id=c.id
             WHERE c.project_id IS ? AND (c.context=? OR a.conversation_id IS NOT NULL)
             AND (instr(lower(COALESCE(a.title,'Current chat')),lower(?))>0 OR EXISTS
-              (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND instr(lower(m.content),lower(?))>0))
+              (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND NOT """ + internal_result("m") + """ AND instr(lower(m.content),lower(?))>0))
             ORDER BY COALESCE(a.archived_at,c.created_at) DESC,c.id LIMIT 101 OFFSET ?""",
             (search, project_id, project_id or "global", search, search, offset),
         )
@@ -165,7 +173,7 @@ class Chat:
             if not boundary:
                 raise ValueError("Message was not found in this chat")
         rows = self.db.all(
-            """SELECT * FROM messages WHERE conversation_id=? AND (? IS NULL OR rowid<?)
+            """SELECT * FROM messages WHERE NOT """ + internal_result() + """ AND conversation_id=? AND (? IS NULL OR rowid<?)
             AND instr(lower(content),lower(?))>0 ORDER BY rowid DESC LIMIT 201""",
             (
                 conversation_id,
@@ -212,7 +220,10 @@ class Chat:
             if len(encode({k: v for k, v in context.items() if k != 'instructions'}).encode()) > 2000:
                 raise ValueError('Default project context exceeds token ceiling; condense with provenance')
         saved = self.db.setting("manager_context:" + conversation["id"], {})
-        prompt = {"mode": mode, "message": content}
+        source = self.db.one("SELECT e.*,t.lifecycle AS task_status,t.blocker FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery_execution=?", (execution_id,))
+        prompt = {"mode": mode, "message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
+        if source:
+            prompt["worker_result"] = self.result_notice(source)
         if prior and saved.get("thread_id") == thread_id:
             updates = {k: v for k, v in context.items() if saved.get("context", {}).get(k) != v}
             if updates:
@@ -221,7 +232,7 @@ class Chat:
             prompt["context"] = context
         if not prior:
             rows = self.db.all(
-                """SELECT id,role,content FROM messages WHERE conversation_id=? AND execution_id IS NOT ?
+                """SELECT id,role,content FROM messages WHERE NOT """ + internal_result() + """ AND conversation_id=? AND execution_id IS NOT ?
                 ORDER BY created_at DESC,rowid DESC LIMIT 16""",
                 (conversation["id"], execution_id),
             )
@@ -371,7 +382,7 @@ class Chat:
                 )
             from .orchestration import MANAGER_TOOL
 
-            schema = hashlib.sha256(json.dumps(MANAGER_TOOL, sort_keys=True).encode()).hexdigest()
+            schema = hashlib.sha256((MANAGER_INSTRUCTIONS + json.dumps(MANAGER_TOOL, sort_keys=True)).encode()).hexdigest()
             prior = conversation["thread_id"]
             if self.db.setting("manager_tool_schema:" + conversation["id"]) != schema:
                 prior = None
@@ -521,6 +532,18 @@ class Chat:
             release_gate(conn, execution_id, status == "completed")
             self.db.event(conn, "chat.finished", {"status": status, "error": error}, execution_id=execution_id)
 
+    @staticmethod
+    def result_notice(result):
+        return {
+            "task_id": result["task_id"], "execution_id": result["id"],
+            "project_id": result["project_id"], "status": result["status"],
+            "task_status": result["task_status"],
+            "blocker": result["blocker"][:600], "blocker_truncated": len(result["blocker"]) > 600,
+            "error": result["error"][:600], "error_truncated": len(result["error"]) > 600,
+            "output_characters": len(result["output"]),
+            "evidence_action": "read_result", "deployment": "unverified; consult exact succeeded receipt",
+        }
+
     async def deliver_results(self):
         for result in self.db.all(
             """SELECT e.*,t.origin_conversation,t.description,t.lifecycle AS task_status,t.blocker
@@ -547,23 +570,7 @@ class Chat:
                 (conversation["id"],),
             ):
                 continue
-            try:
-                objective = json.loads(result["input"]).get("objective", result["description"])
-            except (ValueError, AttributeError):
-                objective = result["description"]
-            content = "Codex result:\n" + json.dumps(
-                {
-                    "task_id": result["task_id"],
-                    "objective": objective,
-                    "task_status": result["task_status"],
-                    "blocker": result["blocker"],
-                    "output": result["output"][-24000:],
-                    "output_truncated": len(result["output"]) > 24000,
-                    "status": result["status"],
-                    "error": result["error"],
-                },
-                ensure_ascii=False,
-            )
+            content = json.dumps(self.result_notice(result), ensure_ascii=False)
             try:
                 await self.submit(conversation["project_id"], content, conversation["id"], result["id"])
             except ValueError:

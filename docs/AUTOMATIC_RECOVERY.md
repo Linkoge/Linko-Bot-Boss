@@ -37,7 +37,7 @@ The application does not reset files, replace worktrees, revert commits or creat
 - The shared gate uses the existing settings table because all workers/managers use the same configured ChatGPT account. It survives restarts. One actual unfinished turn probes availability after eligibility; others wait. Successful inference clears that gate. Already-running requests can still encounter the same limit before the first failure is known.
 - Each scheduler tick checks persisted eligibility. Waiting produces no repeated AI calls, errors in conversation or retry notifications. Retryable conditions have bounded intervals but no arbitrary attempt count that would abandon a long outage.
 
-Task and manager badges show the waiting reason and next eligible attempt. Actual dispatch can be later because of project pause, worker capacity or the shared probe. Reporting stays conversational: the manager receives the actual final worker result and decides how to report it or continue authorized incomplete work.
+Task and manager badges show the waiting reason and next eligible attempt. Actual dispatch can be later because of project pause, worker capacity or the shared probe. Reporting stays conversational: the manager receives a compact exact-result reference, retrieves relevant retained evidence and decides how to report it or continue authorized incomplete work.
 
 ## Persistence, startup and ownership
 

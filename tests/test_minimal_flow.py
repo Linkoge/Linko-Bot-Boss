@@ -155,7 +155,7 @@ async def test_direct_delegation_native_execution_and_return(system):
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
     assert db.one("SELECT delivery FROM executions WHERE id=?", (result["id"],))["delivery"] == "delivered"
-    assert [m["role"] for m in chat.history(p["id"])["messages"]] == ["worker", "assistant"]
+    assert [m["role"] for m in chat.history(p["id"])["messages"]] == ["assistant"]
     assert len(Tasks(db).list()) == 1
     assert not db.one("SELECT 1 FROM sqlite_master WHERE name='verification_results'")
     assert len(chat.server.prompts) == 1
@@ -188,7 +188,7 @@ async def test_pending_result_restart_archive_and_busy_conversation(system):
     await restored.deliver_results()
     assert len(restored.server.prompts) == 1
     messages = restored.saved_history(origin, p["id"])["messages"]
-    assert messages[-2]["role"] == "worker" and "Codex result" in messages[-2]["content"]
+    assert not any(m["role"] == "worker" for m in messages)
     assert messages[-1]["role"] == "assistant" and messages[-1]["status"] == "completed"
     assert restored.history(p["id"])["messages"] == []
     assert current != origin
@@ -356,11 +356,12 @@ async def test_terminal_result_is_reasoning_input_and_finish_is_idempotent(syste
     workers.finish(task["lease_owner"], status, "Actual worker result", error)
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
-    content = json.loads(chat.server.prompts[0])["message"]
-    evidence = json.loads(content.split("\n", 1)[1])
-    assert evidence["objective"] == "Original objective"
+    evidence = json.loads(chat.server.prompts[0])["worker_result"]
+    scheduler = Scheduler(db, registry, settings, workers, chat)
+    retained = await scheduler.manager_action(project["id"], {"tool": "manager_action", "arguments": {"action": "read_result", "execution_id": evidence["execution_id"]}})
+    assert json.loads(retained["input"])["objective"] == "Original objective"
     assert evidence["task_status"] == status
-    assert evidence["output"] == "Actual worker result"
+    assert retained["output"] == "Actual worker result"
     assert evidence["status"] == status
     assert evidence["error"] == error
     assert "execution" not in evidence
@@ -423,7 +424,9 @@ async def test_results_stay_in_their_project_or_global_origin(system):
     for project, origin in zip(projects, origins, strict=True):
         messages = db.all("SELECT * FROM messages WHERE conversation_id=? ORDER BY created_at", (origin,))
         assert [m["role"] for m in messages] == ["worker", "assistant"]
-        assert "Result for " + project["name"] in messages[0]["content"]
+        notice = json.loads(messages[0]["content"])
+        assert notice["project_id"] == project["id"]
+        assert [m["role"] for m in chat.saved_history(origin, project["id"] if origin == origins[0] else None)["messages"]] == ["assistant"]
     assert chat.history(projects[1]["id"])["messages"] == []
 
 
@@ -476,7 +479,8 @@ async def test_manager_can_continue_incomplete_work_from_result(system):
         async def request(self, method, params, timeout=30):
             if method == "turn/start":
                 prompt = json.loads(params["input"][0]["text"])
-                assert "File creation needs another attempt" in prompt["message"]
+                retained = await self.tool_handlers[params["threadId"]]({"tool": "manager_action", "arguments": {"action": "read_result", "execution_id": prompt["worker_result"]["execution_id"]}})
+                assert retained["output"] == "File creation needs another attempt"
                 await self.tool_handlers[params["threadId"]](
                     {
                         "tool": "manager_action",
@@ -512,8 +516,9 @@ async def test_large_result_and_concurrent_delivery_claims(system):
     await asyncio.gather(*list(chat.jobs.values()))
     assert len(chat.server.prompts) == 1
     prompt = json.loads(chat.server.prompts[0])
-    assert '"output_truncated": true' in prompt["message"]
-    assert "Final result" in prompt["message"]
+    assert prompt["worker_result"]["output_characters"] == 100012
+    assert len(json.dumps(prompt["worker_result"])) < 1000
+    assert "Final result" not in json.dumps(prompt)
     assert len(db.all("SELECT id FROM messages WHERE role='worker'")) == 1
 
 

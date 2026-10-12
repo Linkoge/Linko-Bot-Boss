@@ -1,3 +1,16 @@
+# Worker delivery and manager context candidate — activation pending, 2026-10-12
+
+Read [docs/MANAGER_COMMUNICATION.md](docs/MANAGER_COMMUNICATION.md). Exact combined release:
+`worker-delivery-audio-v1-20261012`, checkout `/home/codex/checkouts/linko-worker-delivery-20261012`.
+Includes the completed audio/composer v3 candidate. Raw results were application worker messages,
+rendered verbatim and replayed into native context despite the existing brief-reply preference.
+Compact internal notices, scoped exact-result retrieval, provenance-based history projection and
+native-thread compatibility rotation preserve full audit/evidence and owner JSON. Shared preference
+strengthened immediately; candidate code is not live. No deployment authorized/requested/succeeded.
+Detailed evidence: `/home/codex/.local/share/linko-bot-manager/deployments/worker-delivery-20261012/REPORT.md`.
+Manager should record the verified candidate and pending activation in its existing brief/recent
+navigation using this report; do not run a full memory reconciliation or assert deployment.
+
 # Audio 20-minute candidate — prepared; activation pending, 2026-10-12
 
 Read [docs/AUDIO.md](docs/AUDIO.md) for authoritative behavior, limits, validation and evidence.
