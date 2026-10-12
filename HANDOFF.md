@@ -1,16 +1,12 @@
-# Composer audio candidate — activation pending, 2026-10-12
+# Composer audio replacement release — activation pending, 2026-10-12
 
-Read [docs/AUDIO.md](docs/AUDIO.md). Tested in an isolated checkout atop the memory/fetch-warning
-candidate. Do not add audio to its existing authorized release request. Audio needs server-side
-`XAI_API_KEY`, live provider validation and separate activation authorization. Codex inference is unchanged.
-
-# Combined memory / fetch recovery release — activation pending, 2026-10-12
-
-Both existing assignments are preserved in one candidate; owner deployment authorization persists. Use only `memory-fetch-combined-v1-reviewed-20261012` after the durable combined receipt confirms readiness. Activation uses manager `deploy_release` and the established idle/backup/verify/rollback helper. Do not deploy the memory-only release. See [fetch recovery](docs/FETCH_RECOVERY.md), [project memory](docs/PROJECT_MEMORY.md) and the private combined report. Older activation authorization/status wording below is historical.
-
-# Compact project-memory candidate — activation pending, 2026-10-12
-
-Candidate: `/home/codex/checkouts/linko-project-memory-20261012`. Read [docs/PROJECT_MEMORY.md](docs/PROJECT_MEMORY.md) and its private report for tests, preservation, exact release and activation procedure. Owner authorized implementation/testing/preparation only. Do not deploy automatically or run full project reviews without the explicit project button/start workflow. Live checkout remains on its original commit; this candidate preserves the existing helper and account-usage deliveries.
+Read [docs/AUDIO.md](docs/AUDIO.md). Owner authorized activation; the first audio deployment failed
+with a stale live-base receipt after memory/fetch fixes deployed. Candidate already descends from
+current live `7f79fc0`; preserve it and prepare `audio-v2-livebase-20261012` against that exact base.
+Use manager `deploy_release` under the existing authorization, never a worker self-restart.
+The UI can activate without credentials, but transcription needs `XAI_API_KEY` in the existing private
+server EnvironmentFile. No key is currently present and live provider validation remains pending.
+Detailed evidence: `/home/codex/.local/share/linko-bot-manager/deployments/audio-reprepare-20261012/REPORT.md`.
 
 # Codex account usage candidate — activation pending, 2026-10-12
 

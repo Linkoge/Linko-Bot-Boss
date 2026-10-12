@@ -3,9 +3,45 @@
 The audio candidate is isolated in `/home/codex/checkouts/linko-audio-20261012`, based on the tested
 memory/fetch-warning combined candidate `7f79fc0`. Assignment `fd654ea170084822942f84b1adc1a59a`.
 Full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/audio-20261012/REPORT.md`.
-No audio deployment was requested. The two earlier changes have their own authorized request;
-do not replace, cancel or expand it with this candidate. Once that release completes, prepare/recheck
-this candidate against actual live HEAD before separately authorized activation.
+Owner authorization now includes audio activation. The earlier audio-v1-20261012 request failed
+before cutover with `Live release changed; reprepare` after the memory/fetch release succeeded.
+The audio candidate already descends directly from the exact current live memory/fetch baseline
+`7f79fc082eb3d4e01964bc50aefbc67d41a146f3`; no source rebase or merge is required.
+Fresh release preparation uses that live baseline and preserves both deployed changes.
+
+Replacement release: `audio-v2-livebase-20261012`. Repreparation evidence:
+`/home/codex/.local/share/linko-bot-manager/deployments/audio-reprepare-20261012/REPORT.md`.
+The manager may deploy the prepared replacement through its existing `deploy_release` path under
+the owner's continuing authorization. This worker must not restart the manager itself.
+
+### Required credential setup
+
+The running service and this worker have no nonempty `XAI_API_KEY`. The configured optional systemd
+EnvironmentFile `/home/codex/.config/linko-bot-manager.env` does not exist. These are presence-only
+checks: no value was output, copied, logged or placed in source. There is no browser/SQLite API-key
+setting. Use the existing server environment mechanism, as the same `codex` account, in a private
+SSH terminal. These commands create the file only if absent and preserve existing content:
+
+```bash
+umask 077
+touch /home/codex/.config/linko-bot-manager.env
+chmod 600 /home/codex/.config/linko-bot-manager.env
+nano /home/codex/.config/linko-bot-manager.env
+```
+
+In the editor add one line `XAI_API_KEY=YOUR_XAI_KEY`, replacing the placeholder with the actual
+STT-enabled xAI key. Enter it only inside the editor, never as a shell command or in this chat.
+If that variable already exists, edit its line rather than adding duplicate definitions. Preserve
+any other environment settings. No `daemon-reload` is needed for an existing EnvironmentFile;
+the helper's approved deployment starts the process and loads the file. Prefer setting the key
+before the manager requests this replacement release. If adding it after activation, use a later
+controlled idle restart/release so the running process loads it; do not stop an active worker.
+
+The UI/backend can activate before the key is configured. The microphone is then visible, but clicking
+it shows the compact missing-key message before requesting microphone access. Typed chat and Codex
+continue normally. This is explicitly not live transcription readiness. After deployment with a key,
+check authenticated `/api/audio` readiness and a short spoken recording for Stop/edit and Send.
+No live xAI transcription has been verified by this worker.
 
 ## Behavior
 
@@ -85,4 +121,4 @@ OS permission sheets, mobile screen lock and hardware microphone quality remain 
 No app-owned persistent audio retention; xAI receives the file on explicit Stop/Send/retry. This does not
 assert a third-party provider retention policy. No live xAI transcription was performed: this worker has
 no `XAI_API_KEY`, and a production credential was not read. Server-key configuration, a real spoken-audio
-provider acceptance check and separately authorized audio activation remain pending.
+provider acceptance check and activation through the already authorized manager helper remain pending.
