@@ -1,3 +1,27 @@
+# Integrated ordering / nonblocking chat candidate — prepared, not activated
+
+Exact release ID: `queue-composer-v1-20261012`. Read the current section of
+[docs/chat-history.md](docs/chat-history.md) and its private REPORT.md for implementation,
+verification, evidence and manager routine brief/recent-delivery facts. Candidate:
+`/home/codex/checkouts/linko-nonblocking-chat-20261012`.
+Preserves completed composer/audio/internal-result assignments, 20-minute capture and compact UI.
+No deployment request, service restart, active-work cancellation or succeeded activation receipt.
+The integrated candidate supersedes individual prepared IDs for a future requested activation;
+keep their immutable receipts. Use controlled deployment only after owner requests activation.
+
+# Worker delivery and manager context candidate — activation pending, 2026-10-12
+
+Read [docs/MANAGER_COMMUNICATION.md](docs/MANAGER_COMMUNICATION.md). Exact combined release:
+`worker-delivery-audio-v1-20261012`, checkout `/home/codex/checkouts/linko-worker-delivery-20261012`.
+Includes the completed audio/composer v3 candidate. Raw results were application worker messages,
+rendered verbatim and replayed into native context despite the existing brief-reply preference.
+Compact internal notices, scoped exact-result retrieval, provenance-based history projection and
+native-thread compatibility rotation preserve full audit/evidence and owner JSON. Shared preference
+strengthened immediately; candidate code is not live. No deployment authorized/requested/succeeded.
+Detailed evidence: `/home/codex/.local/share/linko-bot-manager/deployments/worker-delivery-20261012/REPORT.md`.
+Manager should record the verified candidate and pending activation in its existing brief/recent
+navigation using this report; do not run a full memory reconciliation or assert deployment.
+
 # Audio 20-minute candidate — prepared; activation pending, 2026-10-12
 
 Read [docs/AUDIO.md](docs/AUDIO.md) for authoritative behavior, limits, validation and evidence.
