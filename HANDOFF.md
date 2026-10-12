@@ -1,3 +1,22 @@
+# Rich red theme — implemented/verified; activation pending, 2026-10-12
+
+Owner requested replacing green theme selections with rich red. Focused CSS-only candidate
+`chat-ui-rich-red-v1-20261012` is in `/home/codex/checkouts/linko-rich-red-20261012`.
+Read [UI theme](docs/UI_THEME.md) and the private full report for palette, UI checks, exact
+prepared manifest and manager routine brief/recent-delivery facts. Semantic success/status
+colors and all prior composer/agent-control behavior are preserved. No deployment request,
+restart, production data mutation or remote publication. Only report prepared after the exact
+manifest exists; only report deployed after this release's own succeeded activation receipt.
+
+Current established live baseline is `agent-controls-v1-20261012`, commit
+`0d2d80f2162c932d7beb945ce43b2aeb9c4bab0a`, succeeded receipt
+`deployment-helper/results/01e3989b0f1b9e05c3c726d49248dc01.json` under the private data directory.
+This supersedes older pending-agent-controls/live-baseline wording below. Manager should
+record this focused delivery and activation pending in existing brief/recent navigation;
+no full project-memory reconciliation or source conversation cleanup is part of this work.
+
+---
+
 # Agent controls — prepared only, 2026-10-12
 
 Read [agent controls](docs/AGENT_CONTROLS.md) and its full private REPORT.md. Exact candidate

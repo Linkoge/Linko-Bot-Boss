@@ -20,6 +20,8 @@ Native workers have broad same-user access. They preserve user work and request 
 
 Legacy unfinished assignments remain waiting until explicitly continued, preserving their source/workspace references and historical dispositions. Historical verification and integration evidence remains readable through task history. There is no migration-time replay or automatic merge of old clones.
 
+Rich red chat theme candidate and truthful activation/evidence: [UI theme](docs/UI_THEME.md).
+
 ## Development
 
 ```bash

@@ -1,3 +1,12 @@
+# Rich red theme candidate — activation pending, 2026-10-12
+
+Rich red selection/active/hover/focus accents are implemented and browser-verified in an isolated
+CSS-only candidate, exact release `chat-ui-rich-red-v1-20261012`. Contract/evidence and manifest
+readiness gate: [UI theme](docs/UI_THEME.md). No deployment is requested or performed.
+Current established deployed baseline is `agent-controls-v1-20261012`, commit `0d2d80f`,
+proven by succeeded result nonce `01e3989b0f1b9e05c3c726d49248dc01`; older prepared-only agent
+controls statements below are historical. Existing composer and agent controls are preserved.
+
 # Compact project-memory candidate — activation pending, 2026-10-12
 
 Versioned compact manager brief, focused worker context, recent-delivery archive and explicit owner review/diff/apply/rollback are implemented for testing/preparation. No deployment is requested. Current known behavior and detailed evidence: [project memory](docs/PROJECT_MEMORY.md). Existing production acceptance and historical evidence remain unchanged.
