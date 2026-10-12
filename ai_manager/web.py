@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .account_usage import AccountUsage
+from .audio import Audio
 from .auth import Auth
 from .chat import ROLES, Chat
 from .codex import AppServer, CodexError
@@ -137,6 +138,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     registry, tasks, auth = Registry(db, settings.project_roots), Tasks(db), Auth(db, settings)
     chat = Chat(db, registry, server or AppServer(settings))
     account_usage = AccountUsage(chat.server)
+    audio = Audio(settings)
     workers = Workers(db, registry, settings, worker_factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
@@ -165,6 +167,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     app = FastAPI(title="Linko Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
     app.state.workers, app.state.scheduler = workers, scheduler
+    app.state.audio = audio
     app.state.memory, app.state.memory_reviews = memory, reviews
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
@@ -351,6 +354,14 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     @app.get("/api/account-usage", dependencies=[Depends(require_owner)])
     async def usage():
         return await account_usage.read()
+
+    @app.get("/api/audio", dependencies=[Depends(require_owner)])
+    def audio_status():
+        return audio.status()
+
+    @app.post("/api/audio/transcribe", dependencies=[Depends(require_owner)])
+    async def transcribe_audio(request: Request):
+        return await audio.transcribe(request)
 
     @app.get("/api/models", dependencies=[Depends(require_owner)])
     async def models():

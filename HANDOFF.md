@@ -1,3 +1,9 @@
+# Composer audio candidate — activation pending, 2026-10-12
+
+Read [docs/AUDIO.md](docs/AUDIO.md). Tested in an isolated checkout atop the memory/fetch-warning
+candidate. Do not add audio to its existing authorized release request. Audio needs server-side
+`XAI_API_KEY`, live provider validation and separate activation authorization. Codex inference is unchanged.
+
 # Combined memory / fetch recovery release — activation pending, 2026-10-12
 
 Both existing assignments are preserved in one candidate; owner deployment authorization persists. Use only `memory-fetch-combined-v1-reviewed-20261012` after the durable combined receipt confirms readiness. Activation uses manager `deploy_release` and the established idle/backup/verify/rollback helper. Do not deploy the memory-only release. See [fetch recovery](docs/FETCH_RECOVERY.md), [project memory](docs/PROJECT_MEMORY.md) and the private combined report. Older activation authorization/status wording below is historical.

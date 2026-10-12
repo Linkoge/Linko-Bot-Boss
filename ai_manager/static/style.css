@@ -98,3 +98,8 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-off
 #notice-text{max-width:360px;overflow-wrap:anywhere}
 #notice-dismiss{padding:0;width:36px;min-height:36px;flex:none}
 #connection-status{position:fixed;z-index:59;right:8px;bottom:8px;max-width:calc(100vw - 16px);border:1px solid #67553a;border-radius:8px;padding:3px 8px;background:#2e281e;color:#e4c58b;font-size:11px;pointer-events:none}
+
+.audio-panel{display:flex;align-items:center;gap:6px;margin-bottom:4px;font-size:11px;color:var(--muted)}
+.audio-panel span{flex:1;min-width:0;overflow-wrap:anywhere;line-height:1.35}.audio-panel button{padding:4px 8px;font-size:11px;min-height:36px}
+#microphone{flex:none;min-width:42px;padding:7px 10px}.composer-footer #context-hint{flex:1}.composer-footer button{flex-shrink:0}
+@media(max-width:420px){.composer-footer{gap:6px}}

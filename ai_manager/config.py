@@ -15,6 +15,11 @@ class Settings:
     )
     codex_bin: str = field(default_factory=lambda: os.getenv("AI_MANAGER_CODEX", "codex"))
     secure_cookie: bool = field(default_factory=lambda: os.getenv("AI_MANAGER_SECURE_COOKIE", "1") == "1")
+    # Audio-only external provider; secrets never go through SQLite/browser settings.
+    xai_api_key: str = field(default_factory=lambda: os.getenv("XAI_API_KEY", ""), repr=False)
+    audio_provider: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_PROVIDER", "grok"))
+    audio_model: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_MODEL", "grok-voice-transcribe-2.0"))
+    audio_probe: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_PROBE", "ffprobe"))
     session_seconds: int = 43200
     max_workers: int = 2
     allowed_hosts: tuple[str, ...] = field(
