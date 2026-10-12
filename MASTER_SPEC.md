@@ -16,6 +16,7 @@ Current architecture, superseding prior supervision requirements as authorized o
 - SQLite preserves conversations, assignments, execution history, question answers and result-delivery identity. Native Codex thread storage is also required for resumable model context.
 - Restart recovery inspects prior outcomes before continuation. Never launch a competing worker while a prior owned process remains unresolved. Do not blindly replay a turn with unknown launch identity.
 - Preserve deliberate pauses/cancellations, existing user edits, historical records and owner notes.
+- While coding, Tasks/Agents expose Pause and Cancel with requested versus confirmed cleanup state. Pause promptly interrupts to a retained checkpoint; Cancel immediately signals owned execution. Retain partial work for review/resume. Manager pause and append-only instruction bundling resume the same unfinished assignment without competing workers. Contract: docs/AGENT_CONTROLS.md.
 - Secure single-owner authentication, private hosting, CSRF/session protections and verified backup/restore remain.
 - Native workers have broad same-user access; do not claim no-host-home isolation, transactional shell replay, source-preserving clones or deterministic prevention of arbitrary destructive code.
 - No new orchestration framework, supervision AI calls, speculative policy engines or manager-created subagent hierarchy.

@@ -283,7 +283,7 @@ async def test_shutdown_continues_active_work_but_preserves_user_wait(system):
         waiting = Tasks(db).add(registry.list()[1]["id"], "paused objective")
         Tasks(db).control(waiting["id"], "pause", waiting["revision"])
         await workers.recover()
-        assert Tasks(db).get(waiting["id"])["status"] == "waiting"
+        assert Tasks(db).get(waiting["id"])["status"] == "paused"
     finally:
         NativeFixture.release.set()
         NativeFixture.release = None

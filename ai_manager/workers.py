@@ -38,6 +38,7 @@ class Workers:
         self.db, self.registry, self.settings = db, registry, settings
         self.tasks, self.factory = Tasks(db), server_factory
         self.jobs, self.servers = {}, {}
+        self.controls, self.closing = {}, set()
 
     def launch(self, task):
         execution_id = task["lease_owner"]
@@ -51,6 +52,9 @@ class Workers:
         question_id = new_id()
         execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
         with self.db.transaction() as conn:
+            current = conn.execute("SELECT stop_requested,finished_at FROM executions WHERE id=?", (execution_id,)).fetchone()
+            if current["stop_requested"] or current["finished_at"] is not None:
+                raise ValueError("Worker stop requested; question cannot execute")
             conn.execute(
                 "INSERT INTO questions(id,execution_id,request,kind,created_at) VALUES(?,?,?,?,?)",
                 (question_id, execution_id, json.dumps(params), method, time.time()),
@@ -68,6 +72,9 @@ class Workers:
                 execution_id,
             )
         while True:
+            current = self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))
+            if current["stop_requested"]:
+                raise ValueError("Worker stop requested; answer cannot execute")
             question = self.db.one("SELECT * FROM questions WHERE id=?", (question_id,))
             if question["status"] == "answered":
                 answer = json.loads(question["answer"])
@@ -89,9 +96,12 @@ class Workers:
         output = self.db.one("SELECT output FROM executions WHERE id=?", (execution_id,))["output"]
         new_output = False
         self.servers[execution_id] = server
+        controlled_error = ""
         thread_id = None
         usage = TurnUsage()
         try:
+            if self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))["stop_requested"]:
+                return
             if not reserve(self.db, execution_id):
                 wait_for_gate(self.db, execution_id)
                 return
@@ -156,6 +166,9 @@ class Workers:
                     except (ValueError, AttributeError):
                         pass
             execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
+            previous_stop = self.db.one("SELECT stop_requested FROM executions WHERE task_id=? AND id!=? AND stop_requested!=0 ORDER BY started_at DESC LIMIT 1", (task["id"], execution_id))
+            if previous_stop:
+                prompt["continuation"] = "Resume the same bundled assignment. Inspect retained partial files, native history and earlier execution records before repeating actions; interrupted commands may have partial effects. Preserve all prior requirements and finish only unfinished work."
             if execution["retry_count"]:
                 prompt["recovery"] = (
                     "Resume only unfinished work in this retained thread. Inspect partial repository changes and completed actions before repeating any side effect."
@@ -167,6 +180,8 @@ class Workers:
                     (thread_id, json.dumps(full_prompt), execution_id),
                 )
                 self.db.event(conn, "model.context", {"prompt": prompt}, project["id"], task["id"], execution_id)
+            if self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))["stop_requested"]:
+                return
             launch_key = launching(self.db, execution_id, json.dumps(prompt))
             native_input = [{"type": "text", "text": json.dumps(prompt)}]
             native_input.extend({'type': 'localImage', 'path': item['path']} for item in
@@ -217,6 +232,13 @@ class Workers:
                         )
                     self.db.event(conn, method, params, project["id"], task["id"], execution_id)
                 if method == "turn/completed":
+                    if self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))["stop_requested"]:
+                        with self.db.transaction() as conn:
+                            if "reconciled_output" in params:
+                                conn.execute("UPDATE executions SET output=? WHERE id=?", (params["reconciled_output"], execution_id))
+                            conn.execute("UPDATE executions SET status='stopping' WHERE id=?", (execution_id,))
+                            self.db.event(conn, "worker.control.checkpoint", {"native_status": params["turn"]["status"]}, project["id"], task["id"], execution_id)
+                        return
                     turn = params["turn"]
                     if "reconciled_output" in params:
                         output = params["reconciled_output"]
@@ -242,11 +264,13 @@ class Workers:
         except asyncio.CancelledError:
             execution = self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))
             if execution["stop_requested"]:
-                self.finish(execution_id, "waiting", output, "Stopped by user", started)
-            else:
-                defer(self.db, execution_id, Failure("interrupted"), "Service stopped", output)
+                return  # Confirmation is recorded after process cleanup in finally.
+            defer(self.db, execution_id, Failure("interrupted"), "Service stopped", output)
             raise
         except Exception as error:
+            controlled_error = str(error)[:2000]
+            if self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))["stop_requested"]:
+                return
             failure = classify(error)
             if failure:
                 # An RPC error response is a rejection, unlike a transport timeout.
@@ -260,8 +284,20 @@ class Workers:
             else:
                 self.finish(execution_id, "failed", output, str(error)[:2000], started)
         finally:
-            # Close the owned process before releasing the project claim.
+            # A control is confirmed only after the dedicated process group closes.
+            self.closing.add(execution_id)
             await server.close()
+            execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
+            if execution["stop_requested"]:
+                mode = execution["stop_requested"]
+                state = {1: "waiting", 2: "paused", 3: "cancelled"}[mode]
+                error = {1: "Stopped by user", 2: "Paused; partial work retained; inspect interrupted operations before resume", 3: "Cancelled; partial work retained for review"}[mode]
+                if mode == 2 and self.db.one("SELECT seq FROM events WHERE execution_id=? AND kind='worker.control.forced'", (execution_id,)):
+                    error = "Paused after forced interruption; partial work retained; inspect incomplete operations before resume"
+                if controlled_error:
+                    error += "; " + controlled_error
+                self.finish(execution_id, state, execution["output"], error, started, controlled=True)
+            self.closing.discard(execution_id)
             self.servers.pop(execution_id, None)
             with self.db.transaction() as conn:
                 conn.execute(
@@ -272,10 +308,12 @@ class Workers:
                     "UPDATE questions SET status='expired' WHERE execution_id=? AND status='pending'", (execution_id,)
                 )
 
-    def finish(self, execution_id, status, output, error, started=None):
+    def finish(self, execution_id, status, output, error, started=None, controlled=False):
         with self.db.transaction() as conn:
             execution = conn.execute("SELECT * FROM executions WHERE id=?", (execution_id,)).fetchone()
             if not execution or execution["finished_at"] is not None:
+                return
+            if execution["stop_requested"] and not controlled:
                 return
             conn.execute(
                 """UPDATE executions SET status=?,output=?,error=?,finished_at=?,latency_ms=?,delivery='pending' WHERE id=?""",
@@ -302,23 +340,57 @@ class Workers:
                 execution_id,
             )
 
-    async def interrupt(self, execution_id):
+    async def control(self, task_id, action, revision):
+        task = self.tasks.control(task_id, action, revision)
+        if task["lease_owner"]:
+            self.request_control(task["lease_owner"])
+        return self.tasks.get(task_id)
+
+    def request_control(self, execution_id):
         server = self.servers.get(execution_id)
+        row = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
+        if row["stop_requested"] == 3 and server and hasattr(server, "terminate"):
+            server.terminate()  # Signal now, not after a cooperative RPC or completion.
+        if not server and reap_orphan(row, force=row["stop_requested"] == 3):
+            with self.db.transaction() as conn:
+                conn.execute("UPDATE executions SET retry_count=MAX(retry_count,1),recovery_reason='interrupted' WHERE id=?", (execution_id,))
+        if execution_id not in self.controls:
+            job = asyncio.create_task(self._control(execution_id))
+            self.controls[execution_id] = job
+            job.add_done_callback(lambda _: self.controls.pop(execution_id, None))
+
+    async def _control(self, execution_id):
+        server, job = self.servers.get(execution_id), self.jobs.get(execution_id)
+        row = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
+        if not job:
+            return  # Durable request is reconciled by recover, never replayed.
+        if row["stop_requested"] != 3 and server and row["turn_id"]:
+            try:
+                await asyncio.wait_for(server.interrupt(row["thread_id"], row["turn_id"]), 1)
+            except Exception:
+                pass  # Bound an unavailable or unresponsive native checkpoint.
+            try:
+                await asyncio.wait_for(asyncio.shield(job), 1)
+                return
+            except TimeoutError:
+                pass
+            except asyncio.CancelledError:
+                if asyncio.current_task().cancelling():
+                    raise
+                return
+        if not job.done() and execution_id not in self.closing:
+            with self.db.transaction() as conn:
+                conn.execute("UPDATE executions SET status='stopping' WHERE id=?", (execution_id,))
+                self.db.event(conn, "worker.control.forced", {"reason": "cancel" if row["stop_requested"] == 3 else "checkpoint timeout or no active turn"}, row["project_id"], row["task_id"], execution_id)
+            job.cancel()  # finally closes the owned group, then confirms the state.
+
+    async def interrupt(self, execution_id):
         execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
         if not execution or execution["finished_at"]:
             raise ValueError("No attached active worker")
         with self.db.transaction() as conn:
-            conn.execute("UPDATE executions SET stop_requested=1,retry_at=NULL WHERE id=?", (execution_id,))
-        if not server:
-            if not reap_orphan(execution):
-                self.finish(execution_id, "waiting", execution["output"], "Stopped by user")
-                with self.db.transaction() as conn:
-                    conn.execute("UPDATE tasks SET lease_owner=NULL WHERE lease_owner=?", (execution_id,))
-            return
-        if execution["turn_id"]:
-            await server.interrupt(execution["thread_id"], execution["turn_id"])
-        else:
-            self.jobs[execution_id].cancel()
+            conn.execute("UPDATE executions SET stop_requested=MAX(stop_requested,1),retry_at=NULL WHERE id=?", (execution_id,))
+        self.request_control(execution_id)
 
     async def recover(self):
         for task in self.tasks.list():
@@ -328,7 +400,7 @@ class Workers:
             row = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
             if not row:
                 continue  # Unprovable historical claim: preserve exclusivity.
-            if row["retry_at"] and row["retry_at"] > time.time():
+            if not row["stop_requested"] and row["retry_at"] and row["retry_at"] > time.time():
                 continue
             if row["finished_at"] is not None:
                 if reap_orphan(row):
@@ -343,19 +415,24 @@ class Workers:
                         "UPDATE tasks SET lease_owner=NULL WHERE id=? AND lease_owner=?", (task["id"], execution_id)
                     )
                 continue
-            if reap_orphan(row):
+            if reap_orphan(row, force=row["stop_requested"] == 3):
+                if row["stop_requested"]:
+                    with self.db.transaction() as conn:
+                        conn.execute("UPDATE executions SET retry_count=MAX(retry_count,1),recovery_reason='interrupted' WHERE id=?", (execution_id,))
+                    continue
                 defer(self.db, execution_id, Failure("interrupted"), "Previous owned worker process is still present")
                 continue
-            if task["status"] in {"completed", "failed", "cancelled"}:
+            if not row["stop_requested"] and task["status"] in {"completed", "failed", "cancelled"}:
                 self.finish(execution_id, task["status"], row["output"], row["error"])
             elif row["stop_requested"] or task["legacy"]:
                 self.finish(
                     execution_id,
-                    "waiting",
+                    {1: "waiting", 2: "paused", 3: "cancelled"}.get(row["stop_requested"], "waiting"),
                     row["output"],
-                    "Stopped by user"
+                    {1: "Stopped by user", 2: "Paused after restart cleanup; inspect retained partial work before resume", 3: "Cancelled after restart cleanup; partial work retained"}[row["stop_requested"]]
                     if row["stop_requested"]
                     else "Historical assignment retained; continue explicitly",
+                    controlled=bool(row["stop_requested"]),
                 )
             elif not reserve(self.db, execution_id):
                 continue
@@ -444,6 +521,10 @@ class Workers:
             )
 
     async def close(self):
-        for job in list(self.jobs.values()):
-            job.cancel()
+        for control in list(self.controls.values()):
+            control.cancel()
+        await asyncio.gather(*list(self.controls.values()), return_exceptions=True)
+        for execution_id, job in list(self.jobs.items()):
+            if execution_id not in self.closing:
+                job.cancel()
         await asyncio.gather(*list(self.jobs.values()), return_exceptions=True)

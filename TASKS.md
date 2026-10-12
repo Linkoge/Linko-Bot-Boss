@@ -1,3 +1,11 @@
+# Agent controls — explicitly scheduled and prepared, 2026-10-12
+
+Owner scheduling supersedes To-Do `5bdfa1dc8b7f42a6a766ab9f99574935` earlier deferral.
+Assignment `a01b6c008c19464f883d5709937fc906` implements controls and bundled instruction updates
+as one objective. Source conversation and original To-Do remain preserved. Current behavior,
+validation/release and deployment truth: [agent controls](docs/AGENT_CONTROLS.md). No deployment
+or GitHub publication is included. Unrelated assignments and intentional dispositions are preserved.
+
 # Combined memory / fetch recovery release — activation pending, 2026-10-12
 
 Both existing assignments are preserved in one candidate; owner deployment authorization persists. Use only `memory-fetch-combined-v1-reviewed-20261012` after the durable combined receipt confirms readiness. Activation uses manager `deploy_release` and the established idle/backup/verify/rollback helper. Do not deploy the memory-only release. See [fetch recovery](docs/FETCH_RECOVERY.md), [project memory](docs/PROJECT_MEMORY.md) and the private combined report. Older activation authorization/status wording below is historical.

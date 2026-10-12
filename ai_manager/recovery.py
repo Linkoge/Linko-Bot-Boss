@@ -276,7 +276,7 @@ def owned_alive(row):
     return bool(row["pid"] and row["process_start"] and process_start(row["pid"]) == row["process_start"])
 
 
-def reap_orphan(row):
+def reap_orphan(row, force=False):
     """Only signal a verified, dedicated App Server group from our durable receipt."""
     if not owned_alive(row):
         return False
@@ -286,7 +286,7 @@ def reap_orphan(row):
         if os.getpgid(pid) != pid or b"app-server" not in args or Path(f"/proc/{pid}").stat().st_uid != os.getuid():
             return True  # Cannot prove ownership of the whole group; keep exclusivity.
         os.killpg(
-            pid, signal.SIGKILL if row["recovery_reason"] == "interrupted" and row["retry_count"] else signal.SIGTERM
+            pid, signal.SIGKILL if force or (row["recovery_reason"] == "interrupted" and row["retry_count"]) else signal.SIGTERM
         )
     except ProcessLookupError:
         return False

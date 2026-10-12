@@ -1,3 +1,19 @@
+# Agent controls — prepared only, 2026-10-12
+
+Read [agent controls](docs/AGENT_CONTROLS.md) and its full private REPORT.md. Exact candidate
+`agent-controls-v1-20261012`, isolated checkout `/home/codex/checkouts/linko-agent-controls-20261012`.
+Implemented/verified locally; no publication or deployment request. Manager routine brief/recent delivery
+should use the retained manager-summary.json, preserve original To-Do/task/execution linkage, and
+record activation pending owner deployment request. No full memory reconciliation is needed.
+
+The current deployed baseline is **chat-ui-mobile-composer-v4-20261012**, commit **00fb20f**,
+established by exact succeeded receipt `deployment-helper/results/a9ef45440d33ae7a692f825249291e41.json`
+under the private data directory. Older pending wording below is historical. No live files, production
+assignment dispositions or unrelated work were changed for this candidate. Preserve partial work and
+requested controls; do not manufacture idleness for a later deployment.
+
+---
+
 # Mobile composer regressions — fixed candidate, no deployment
 
 Exact candidate release: `chat-ui-mobile-composer-v4-20261012`; isolated checkout

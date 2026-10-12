@@ -14,7 +14,7 @@ from .todos import Todos
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Record/update deferred ideas with save_todo (never schedules execution), retrieve list_todos, delegate or continue work, wait with a reason, pause/resume a project, or retrieve project documents, saved memory, assignments and conversation history. Read actions support offset pagination; history query searches older messages.",
+    "description": "Record/update deferred ideas with save_todo (never schedules execution), retrieve list_todos, delegate, pause/cancel an assignment or append instructions and continue the same assignment, wait with a reason, pause/resume a project, or retrieve project documents, saved memory, assignments and conversation history. Read actions support offset pagination; history query searches older messages.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -27,6 +27,8 @@ MANAGER_TOOL = {
                     "save_todo",
                     "delegate",
                     "continue",
+                    "pause",
+                    "cancel",
                     "wait",
                     "read_document",
                     "read_memory",
@@ -200,6 +202,8 @@ class Scheduler:
         if len(json.dumps(selected)) > 12000:
             raise ValueError("Selected task context must be at most 12000 characters")
         if action == "delegate":
+            if args.get("task_id"):
+                raise ValueError("Use continue to bundle instructions into an existing assignment")
             return self.tasks.context(
                 self.tasks.add(
                     project_id,
@@ -223,6 +227,13 @@ class Scheduler:
                     raise ValueError("Assignment changed while recording the wait")
                 self.db.event(conn, "task.waiting", {"reason": reason[:2000]}, project_id, task["id"])
             return self.tasks.context(self.tasks.get(task["id"]))
+        if action in {"pause", "cancel"}:
+            task = self.tasks.get(args["task_id"])
+            if task["project_id"] != project_id:
+                raise ValueError("Assignment belongs to another project")
+            if task["status"] in {"cancelled", action + "_requested"} or (action == "pause" and task["status"] == "paused"):
+                return self.tasks.context(task)
+            return self.tasks.context(await self.workers.control(task["id"], action, args.get("revision", task["revision"])))
         if action == "continue":
             task = self.tasks.get(args["task_id"])
             if task["project_id"] != project_id:
@@ -234,26 +245,37 @@ class Scheduler:
                 ).fetchone()
                 if previous:
                     return self.tasks.context(self.tasks.get(task["id"]))
-                if task["lease_owner"] or task["status"] == "cancelled":
-                    raise ValueError("Assignment is still active or cancelled")
-                objective = args.get("objective") or task["description"]
+                if task["lease_owner"] or task["status"] in {"cancelled", "queued", "running", "pause_requested", "cancel_requested"}:
+                    raise ValueError("Wait for confirmed pause/cleanup before bundling this assignment")
+                # Append, never silently replace unfinished objective/acceptance/context.
+                additions = args.get("objective", "").strip()
+                objective = task["description"]
+                if additions and additions != objective:
+                    objective += "\n\nAdditional instructions (preserve prior requirements):\n" + additions
+                acceptance = task["acceptance"]
+                extra = args.get("acceptance", "").strip()
+                if extra and extra != acceptance:
+                    acceptance += ("\n\n" if acceptance else "") + extra
+                old = conn.execute("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task["id"],)).fetchone()
+                context = json.loads(old["payload"]) if old else {}
+                for key, values in selected.items():
+                    context[key] = list(context.get(key, []))
+                    for value in values:
+                        if value not in context[key]:
+                            context[key].append(value)
+                if len(objective) > 24000 or len(acceptance) > 12000 or len(json.dumps(context)) > 12000:
+                    raise ValueError("Bundled instructions exceed assignment limits; prior requirements remain intact")
                 changed = conn.execute(
-                    "UPDATE tasks SET lifecycle='queued',description=?,blocker='',origin_conversation=?,revision=revision+1 WHERE id=? AND revision=? AND lease_owner IS NULL",
-                    (objective, params["conversation_id"], task["id"], task["revision"]),
+                    "UPDATE tasks SET lifecycle='queued',description=?,acceptance=?,blocker='',origin_conversation=?,revision=revision+1 WHERE id=? AND revision=? AND lease_owner IS NULL",
+                    (objective, acceptance, params["conversation_id"], task["id"], args.get("revision", task["revision"])),
                 )
                 if changed.rowcount != 1:
                     raise ValueError("Assignment changed while continuing")
-                if selected:
-                    self.db.event(conn, "task.context", selected, project_id, task["id"])
-                if "acceptance" in args:
-                    conn.execute("UPDATE tasks SET acceptance=? WHERE id=?", (args["acceptance"], task["id"]))
+                if context:
+                    self.db.event(conn, "task.context", context, project_id, task["id"])
                 self.db.event(
-                    conn,
-                    "manager.continued",
-                    {"call_id": params["callId"]},
-                    project_id,
-                    task["id"],
-                    params["manager_execution_id"],
+                    conn, "manager.continued", {"call_id": params["callId"], "added_instructions": additions, "added_acceptance": extra},
+                    project_id, task["id"], params["manager_execution_id"],
                 )
             return self.tasks.context(self.tasks.get(task["id"]))
         if action in {"pause_project", "resume_project"}:

@@ -503,8 +503,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
-    def task_control(task_id: str, body: TaskControl):
-        return tasks.control(task_id, body.action, body.revision)
+    async def task_control(task_id: str, body: TaskControl):
+        return await workers.control(task_id, body.action, body.revision)
 
     @app.get("/api/tasks/{task_id}/execution-records", dependencies=[Depends(require_owner)])
     def records(task_id: str):
@@ -537,7 +537,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     def answer(question_id: str, body: AnswerBody):
         with db.transaction() as conn:
             question = conn.execute(
-                "SELECT q.* FROM questions q JOIN executions e ON e.id=q.execution_id WHERE q.id=? AND q.status='pending' AND e.finished_at IS NULL",
+                "SELECT q.* FROM questions q JOIN executions e ON e.id=q.execution_id WHERE q.id=? AND q.status='pending' AND e.finished_at IS NULL AND e.stop_requested=0",
                 (question_id,),
             ).fetchone()
             if not question:

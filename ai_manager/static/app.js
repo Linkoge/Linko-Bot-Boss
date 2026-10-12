@@ -147,8 +147,55 @@ function projectName(id){const p=state.portfolio?.projects.find(p=>p.id===id);re
 async function loadMemory(selection=state.selection){if(!state.project){renderMemory();renderMemoryReview();return;}const project=state.project;const [detail,brief]=await Promise.all([api(`/api/projects/${project}`),api(`/api/projects/${project}/brief`)]);if(selection!==state.selection||project!==state.project)return;state.detail=detail;state.brief=brief;renderMemory();renderMemoryReview();}
 function renderMemory(){$('memory-list').replaceChildren();if(!state.detail){$('memory-list').append(element('p','Select a project to read historical owner notes.'));return;}for(const m of state.detail.memory){const d=element('details');d.append(element('summary',m.name),element('pre',m.content));$('memory-list').append(d);}if(!state.detail.memory.length)$('memory-list').append(element('p','Project context comes from its repository and instructions.'));}
 function recoveryLabel(record){const reasons={connection:'Waiting for connection',usage:'Waiting for usage limit',interrupted:'Recovering interrupted execution'};return (reasons[record.recovery_reason]||'Waiting')+(record.retry_at?' · Next attempt '+new Date(record.retry_at*1000).toLocaleString():'');}
-function renderTasks(){const count=state.portfolio.tasks.filter(t=>(!state.project||t.project_id===state.project)&&['queued','running','waiting'].includes(t.status)).length;$('task-count').textContent=count;$('task-count').hidden=count===0;$('task-list').replaceChildren();for(const t of state.portfolio.tasks.filter(t=>!state.project||t.project_id===state.project)){const row=element('article',undefined,'panel');row.append(element('h3',`${t.status} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.retry_at?recoveryLabel(t):t.blocker));if(t.legacy&&!['completed','cancelled','failed'].includes(t.status))row.append(element('small','Historical work: continuation inspects existing source and saved results.'));const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));if(!t.lease_owner&&t.status!=='cancelled'){for(const a of ['continue','pause','cancel']){if(a==='continue'&&t.status==='queued')continue;const b=element('button',a);b.onclick=action(async()=>{await api(`/api/tasks/${t.id}`,{method:'PATCH',body:JSON.stringify({action:a,revision:t.revision})});await refresh();});controls.append(b);}}const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});controls.append(records);row.append(controls);$('task-list').append(row);}}
-function renderAgents(){const count=state.portfolio.active_agents||0,badge=$('agent-count'),scope=projectName(state.project);badge.textContent=count;badge.hidden=count===0;badge.title=`${count} working · ${scope}`;document.querySelector('[data-view=agents]').setAttribute('aria-label',`Agents · ${scope}${count?' · '+count+' working':''}`);$('agent-list').replaceChildren();for(const e of state.portfolio.executions.filter(e=>!state.project||e.project_id===state.project)){const row=element('article',undefined,'panel');row.append(element('h3',`${e.agent_id} · ${e.status} · ${projectName(e.project_id)}`));row.append(e.work_started_at!=null?timestamp('Work started',e.work_started_at):element('small',['queued','starting'].includes(e.status)?'Work has not started':'Work start not recorded'));row.append(timestamp('Queued',e.started_at));const d=element('details');d.append(element('summary','Output and execution references'),element('pre',[e.output,e.error,e.thread_id,e.turn_id].filter(Boolean).join('\n')));row.append(d);if(!e.finished_at){const b=element('button','Stop');b.onclick=action(async()=>{await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});await refresh();});row.append(b);}$('agent-list').append(row);}}
+function taskControlButton(task,label,command){
+  const selection=state.selection,button=element('button',label);
+  button.onclick=action(async()=>{
+    if(selection!==state.selection)return;
+    button.disabled=true;
+    try{await api(`/api/tasks/${task.id}`,{method:'PATCH',body:JSON.stringify({action:command,revision:task.revision})});if(selection===state.selection)await refresh();}
+    finally{button.disabled=false;}
+  });
+  return button;
+}
+function appendTaskControls(controls,t){
+  if(['cancelled','cancel_requested'].includes(t.status))return;
+  if(t.lease_owner){
+    if(t.status!=='pause_requested')controls.append(taskControlButton(t,'Pause','pause'));
+    controls.append(taskControlButton(t,'Cancel','cancel'));
+  }else{
+    if(t.status!=='queued')controls.append(taskControlButton(t,t.status==='paused'?'Resume':'Continue','continue'));
+    if(!['paused','completed','failed'].includes(t.status))controls.append(taskControlButton(t,'Pause','pause'));
+    if(t.status!=='completed')controls.append(taskControlButton(t,'Cancel','cancel'));
+  }
+}
+function taskStateLabel(status){return ({pause_requested:'Pause requested · waiting for checkpoint',cancel_requested:'Cancel requested · waiting for termination',paused:'Paused · progress retained',cancelled:'Cancelled · partial work retained'})[status]||status;}
+function renderTasks(){
+  const tasks=state.portfolio.tasks.filter(t=>!state.project||t.project_id===state.project);
+  const count=tasks.filter(t=>['queued','running','waiting','paused','pause_requested','cancel_requested'].includes(t.status)).length;
+  $('task-count').textContent=count;$('task-count').hidden=count===0;$('task-list').replaceChildren();
+  for(const t of tasks){
+    const row=element('article',undefined,'panel');row.dataset.taskId=t.id;
+    row.append(element('h3',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.retry_at?recoveryLabel(t):t.blocker));
+    if(t.legacy&&!['completed','cancelled','failed'].includes(t.status))row.append(element('small','Historical work: continuation inspects existing source and saved results.'));
+    const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));appendTaskControls(controls,t);
+    const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});
+    controls.append(records);row.append(controls);$('task-list').append(row);
+  }
+}
+function renderAgents(){
+  const count=state.portfolio.active_agents||0,badge=$('agent-count'),scope=projectName(state.project);badge.textContent=count;badge.hidden=count===0;badge.title=`${count} working · ${scope}`;
+  document.querySelector('[data-view=agents]').setAttribute('aria-label',`Agents · ${scope}${count?' · '+count+' working':''}`);$('agent-list').replaceChildren();
+  for(const e of state.portfolio.executions.filter(e=>!state.project||e.project_id===state.project)){
+    const row=element('article',undefined,'panel');row.dataset.executionId=e.id;row.append(element('h3',`${e.agent_id} · ${taskStateLabel(e.status)} · ${projectName(e.project_id)}`));
+    row.append(e.work_started_at!=null?timestamp('Work started',e.work_started_at):element('small',['queued','starting'].includes(e.status)?'Work has not started':'Work start not recorded'));row.append(timestamp('Queued',e.started_at));
+    const d=element('details');d.append(element('summary','Output and execution references'),element('pre',[e.output,e.error,e.thread_id,e.turn_id].filter(Boolean).join('\n')));row.append(d);
+    const task=state.portfolio.tasks.find(t=>t.id===e.task_id&&t.lease_owner===e.id);
+    if(!e.finished_at&&task){const controls=element('div',undefined,'task-controls');appendTaskControls(controls,task);row.append(controls);}
+    else if(!e.finished_at&&!e.task_id){const selection=state.selection,b=element('button','Stop reply');b.onclick=action(async()=>{if(selection!==state.selection)return;await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});if(selection===state.selection)await refresh();});row.append(b);}
+    $('agent-list').append(row);
+  }
+}
+
 function renderQuestions(){$('questions').replaceChildren();for(const q of state.portfolio.questions.filter(q=>!state.project||q.project_id===state.project)){const request=JSON.parse(q.request),form=element('form',undefined,'panel');form.append(element('h3','Codex needs your answer · '+projectName(q.project_id)));if(q.kind==='item/tool/requestUserInput'){for(const question of request.questions){const label=element('label',question.question),input=element('input');input.name=question.id;input.required=true;if(question.options)label.append(element('small',question.options.map(x=>x.label).join(' / ')));label.append(input);form.append(label);}form.append(element('button','Send answer','primary'));form.onsubmit=action(async event=>{event.preventDefault();await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:Object.fromEntries(new FormData(form))})});await refresh();});}else{form.append(element('pre',JSON.stringify(request,null,2)));for(const [label,approve] of [['Confirm exact action',true],['Decline',false]]){const b=element('button',label);b.type='button';b.onclick=action(async()=>{await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:{approve}})});await refresh();});form.append(b);}}$('questions').append(form);}}
 async function loadHistory(selection=state.selection){
   if(selection!==state.selection)return;

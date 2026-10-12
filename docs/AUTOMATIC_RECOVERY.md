@@ -39,6 +39,13 @@ The application does not reset files, replace worktrees, revert commits or creat
 
 Task and manager badges show the waiting reason and next eligible attempt. Actual dispatch can be later because of project pause, worker capacity or the shared probe. Reporting stays conversational: the manager receives a compact exact-result reference, retrieves relevant retained evidence and decides how to report it or continue authorized incomplete work.
 
+## Intentional Pause / Cancel (prepared 2026-10-12)
+
+[Agent controls](AGENT_CONTROLS.md) extends the existing stop-request field without migration.
+Requests retain the project lease until owned-process cleanup confirms paused/cancelled state,
+bypass automatic retry and never replay after restart. Legacy Stop remains deliberate waiting.
+The new release is prepared only; earlier deployed recovery receipts below remain historical evidence.
+
 ## Persistence, startup and ownership
 
 Schema **9** adds execution fields: `retry_at`, `retry_count`, `recovery_reason`, `mode`, `launch_input`, `launch_key`, `stop_requested`. Existing task states are unchanged. An unfinished recovering execution has no `finished_at`; its task uses `waiting` and retains its original `lease_owner`. Recovering workers do not occupy active capacity, but their project claim prevents another assignment from writing concurrently. Terminal completion atomically saves output and pending delivery; release happens after the owned process closes.

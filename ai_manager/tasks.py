@@ -26,7 +26,7 @@ class Tasks:
 
     @staticmethod
     def context(task):
-        return {k: task[k] for k in ("id", "description", "status", "blocker")}
+        return {k: task[k] for k in ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision")}
 
     def list(self, project_id=None):
         rows = self.db.all(
@@ -86,7 +86,7 @@ class Tasks:
                     return self.get(previous["id"])
             previous = conn.execute(
                 """SELECT id FROM tasks WHERE project_id=? AND description=? AND origin_conversation IS ?
-                AND lifecycle IN ('queued','running','waiting') AND legacy=0 ORDER BY created_at DESC LIMIT 1""",
+                AND lifecycle IN ('queued','running','waiting','paused','pause_requested','cancel_requested') AND legacy=0 ORDER BY created_at DESC LIMIT 1""",
                 (project_id, description.strip(), origin_conversation),
             ).fetchone()
             if previous:
@@ -109,18 +109,33 @@ class Tasks:
             task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if not task or task["revision"] != revision:
                 raise ValueError("Assignment changed; refresh before editing")
-            if task["lifecycle"] == "running" or task["lease_owner"]:
-                raise ValueError("Stop the active worker before changing this assignment")
             if task_id in self.db.setting("archived_tasks", {}):
                 raise ValueError("Assignment was archived; its history is preserved")
             if task["lifecycle"] == "cancelled":
                 raise ValueError("Assignment was cancelled")
-            status = {"continue": "queued", "pause": "waiting", "cancel": "cancelled"}.get(action)
-            if not status:
+            if task["lifecycle"] == "completed" and action in {"pause", "cancel"}:
+                raise ValueError("Completed assignment has no unfinished work to stop")
+            if action not in {"continue", "pause", "cancel"}:
                 raise ValueError("Unknown assignment action")
+            if task["lease_owner"]:
+                if action == "continue":
+                    raise ValueError("Wait for confirmed worker cleanup before resuming")
+                execution = conn.execute("SELECT * FROM executions WHERE id=?", (task["lease_owner"],)).fetchone()
+                if not execution or execution["finished_at"] is not None:
+                    raise ValueError("Worker cleanup is still pending")
+                if execution["stop_requested"] == 3:
+                    raise ValueError("Cancellation is already requested")
+                conn.execute("UPDATE questions SET status='expired' WHERE execution_id=? AND status='pending'", (execution["id"],))
+                status = action + "_requested"
+                conn.execute("UPDATE executions SET stop_requested=?,retry_at=NULL WHERE id=?",
+                             (2 if action == "pause" else 3, execution["id"]))
+                blocker = "Pause requested; waiting for checkpoint and process cleanup" if action == "pause" else "Cancel requested; waiting for process termination"
+            else:
+                status = {"continue": "queued", "pause": "paused", "cancel": "cancelled"}[action]
+                blocker = "Paused by user" if action == "pause" else ""
             conn.execute(
                 "UPDATE tasks SET lifecycle=?,blocker=?,revision=revision+1,updated_at=? WHERE id=?",
-                (status, "Paused by user" if action == "pause" else "", time.time(), task_id),
+                (status, blocker, time.time(), task_id),
             )
             self.db.event(conn, "task." + action, {}, task["project_id"], task_id)
         return self.get(task_id)

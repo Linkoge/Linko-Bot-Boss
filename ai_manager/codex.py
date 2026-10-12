@@ -281,6 +281,18 @@ class AppServer:
     async def interrupt(self, thread_id, turn_id):
         return await self.request("turn/interrupt", {"threadId": thread_id, "turnId": turn_id})
 
+    def terminate(self):
+        """Immediately interrupt this instance's owned process group, retaining disk state."""
+        if not self.process or not self.process_identity:
+            return
+        current = process_start(self.process.pid)
+        if current and current != self.process_identity:
+            return
+        try:
+            os.killpg(self.process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
     async def close(self):
         for job in list(self.tool_jobs):
             job.cancel()
@@ -313,7 +325,15 @@ class AppServer:
             await asyncio.gather(self.stderr_reader, return_exceptions=True)
 
 
-MANAGER_INSTRUCTIONS = """Delegate requested work to Codex as one complete objective with relevant conversational decisions.
+MANAGER_INSTRUCTIONS = """For changes to unfinished work, list/read the existing assignment first. In Auto/Execute brainstorming,
+use pause with its task_id, acknowledge requested versus confirmed pause, and wait for paused state and no lease.
+Then use continue on that same task_id with ONLY added instructions/acceptance/context; the application appends
+these to all original requirements. Do not delegate a duplicate unfinished objective or resume before cleanup.
+Conversation mode remains read-only; ask the owner to select Auto/Execute for assignment controls.
+Cancelled assignments retain partial work for review and cannot automatically resume.
+A paused/stopped worker result never authorizes continuation: preserve owner pauses until an explicit resume
+or owner-authorized bundled update. Report requested/confirmed state briefly without scheduling more work.
+Delegate requested work to Codex as one complete objective with relevant conversational decisions.
 Deployment: deployment_status reads durable handoff/results. Only when the owner requests deployment,
 use deploy_release with an exact prepared release_id; never accept shell commands or arbitrary release paths.
 A pending request drains existing work before restart; acknowledge it briefly and end this turn.
