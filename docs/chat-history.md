@@ -1,6 +1,6 @@
 # General file formats and microphone — prepared candidate, 2026-10-13
 
-Integrated release `microphone-any-files-composer-v1-20261013` descends from the exact
+Integrated release `microphone-any-files-composer-v2-20261013` descends from the exact
 completed composer release `compact-expanding-composer-v2-20261013`, commit
 `14426988467ebee684c98a0b0c054dfac72655f2`. Composer expansion, caret/keyboard behavior,
 blank chat, Send/tab styling and latest live audio pass-through are preserved.

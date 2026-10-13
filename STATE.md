@@ -1,6 +1,6 @@
 # Integrated microphone/files candidate — 2026-10-13
 
-Current candidate `microphone-any-files-composer-v1-20261013` integrates completed
+Current candidate `microphone-any-files-composer-v2-20261013` integrates completed
 composer release `compact-expanding-composer-v2-20261013` without competing edits.
 Exact preparation requires its immutable manifest. Implemented; validation/report records
 actual outcomes. Not deployed; owner request and durable succeeded receipt remain pending.
