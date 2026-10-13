@@ -194,3 +194,24 @@ def test_manual_override_and_pre_feature_resume(system):
     save(db, server, config)
     assert assignment_route(db, server, task) == {'model': MODELS['Sol'], 'effort': 'high'}
     assert Tasks(db).get(task['id'])['worker_route']['mode'] == 'manual'
+
+
+@pytest.mark.asyncio
+async def test_policy_edit_during_thread_start_blocks_dispatch(system):
+    db, registry, settings, server, _, _, _ = system
+    config = restricted(db, server)
+    pair = {'model': MODELS['Luna'], 'effort': 'high'}
+    task = Tasks(db).add(registry.list()[0]['id'], 'Delayed thread preparation', model_route=delegation(db, server, pair))
+    claim = Tasks(db).claim(2)
+
+    class DenyingServer(CatalogServer):
+        async def thread(self, *args, **kwargs):
+            config['bot']['policy'][MODELS['Luna']]['allowed'] = False
+            save(db, server, config)
+            return await super().thread(*args, **kwargs)
+
+    before = len(CatalogServer.turns)
+    await Workers(db, registry, settings, DenyingServer)._run(claim)
+    assert len(CatalogServer.turns) == before
+    assert Tasks(db).get(task['id'])['status'] == 'waiting'
+    assert db.one('SELECT launch_key FROM executions WHERE id=?', (claim['lease_owner'],))['launch_key'] == 'not-started'

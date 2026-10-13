@@ -1,6 +1,6 @@
 # Manager and bot choices — 2026-10-13
 
-Implemented candidate: `model-settings-manual-scroll-v1-20261013`, isolated checkout
+Implemented candidate: `model-settings-manual-scroll-v2-20261013`, isolated checkout
 `/home/codex/checkouts/linko-model-scroll-20261013`. **Do not deploy yet.** The owner authorized
 implementation, verification and exact release preparation only. Existing deployed rich-red
 baseline remains `361a18f43f7d2fca2e211ce5b2673f808003ea20`, proven by succeeded receipt
@@ -72,7 +72,7 @@ allow removal, viewport fit, keyboard focus and sends/streams/polling without sc
 Detailed report, native acceptance, complete provider catalog, browser receipts and screenshots:
 `/home/codex/.local/share/linko-bot-manager/deployments/model-scroll-20261013/`.
 Exact release commit/base/asset hashes, validation hash and Git bundle:
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/model-settings-manual-scroll-v1-20261013/`.
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/model-settings-manual-scroll-v2-20261013/`.
 A complete manifest establishes preparation; only a later matching succeeded helper receipt could
 establish deployment. Physical Android/iOS behavior is not claimed by Chromium viewport simulation.
 Manual scrolling behavior is authoritative in [chat history](chat-history.md).

@@ -1,6 +1,6 @@
 # Model settings and manual scrolling — verified candidate, 2026-10-13
 
-Exact release `model-settings-manual-scroll-v1-20261013` implements the owner-approved panel,
+Exact release `model-settings-manual-scroll-v2-20261013` implements the owner-approved panel,
 persisted native runtime choices, constrained manager-selected Automatic bot pairs and fully manual
 chat scrolling. Contract/evidence: [model settings](docs/MODEL_SETTINGS.md) and [chat history](docs/chat-history.md).
 No deployment authorized or performed; release manifest is the preparation readiness gate.

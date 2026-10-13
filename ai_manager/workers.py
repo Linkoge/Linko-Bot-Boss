@@ -183,6 +183,9 @@ class Workers:
                 self.db.event(conn, "model.context", {"prompt": prompt}, project["id"], task["id"], execution_id)
             if self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))["stop_requested"]:
                 return
+            # Recheck after asynchronous thread start/resume: policy may have changed
+            # while the provider was preparing the retained thread.
+            route = assignment_route(self.db, server, task)
             launch_key = launching(self.db, execution_id, json.dumps(prompt))
             native_input = [{"type": "text", "text": json.dumps(prompt)}]
             native_input.extend({'type': 'localImage', 'path': item['path']} for item in

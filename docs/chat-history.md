@@ -1,6 +1,6 @@
 # Fully manual chat scrolling — 2026-10-13, candidate only
 
-Combined exact release: `model-settings-manual-scroll-v1-20261013`. Implemented and verified
+Combined exact release: `model-settings-manual-scroll-v2-20261013`. Implemented and verified
 in an isolated checkout; **no deployment authorized or performed**. Current production baseline
 is the succeeded `chat-ui-rich-red-v1-20261012`; see [model settings](MODEL_SETTINGS.md) for
 release/evidence references and truthful baseline receipt.

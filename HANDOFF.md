@@ -1,7 +1,7 @@
 # Model settings / manual scrolling — verified, do not deploy, 2026-10-13
 
 Owner authorized implementation, validation and exact release preparation, explicitly withholding
-deployment. Exact ID: `model-settings-manual-scroll-v1-20261013`; isolated checkout
+deployment. Exact ID: `model-settings-manual-scroll-v2-20261013`; isolated checkout
 `/home/codex/checkouts/linko-model-scroll-20261013`. Contract: [model settings](docs/MODEL_SETTINGS.md),
 manual viewport behavior: [chat history](docs/chat-history.md). Full durable report:
 `/home/codex/.local/share/linko-bot-manager/deployments/model-scroll-20261013/REPORT.md`.
