@@ -325,7 +325,8 @@ class AppServer:
             await asyncio.gather(self.stderr_reader, return_exceptions=True)
 
 
-MANAGER_INSTRUCTIONS = """For changes to unfinished work, list/read the existing assignment first. In Auto/Execute brainstorming,
+MANAGER_INSTRUCTIONS = """Pause to append work only when it directly corrects or closely refines the running assignment. Otherwise create a separate assignment, or queue it if edits conflict. Multiple requirements in an initial request are allowed.
+For such changes to unfinished work, list/read the existing assignment first. In Auto/Execute brainstorming,
 use pause with its task_id, acknowledge requested versus confirmed pause, and wait for paused state and no lease.
 Then use continue on that same task_id with ONLY added instructions/acceptance/context; the application appends
 these to all original requirements. Do not delegate a duplicate unfinished objective or resume before cleanup.
