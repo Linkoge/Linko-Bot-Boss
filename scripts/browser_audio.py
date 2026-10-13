@@ -18,7 +18,9 @@ from fake_codex import FakeServer
 from ai_manager.config import Settings
 from ai_manager.web import create_app
 class AudioProvider:
-    async def transcribe(self,data,mime):
+    async def transcribe(self,data,mime,filename=None):
+        import json
+        (s.data_dir/'audio-provider-last.json').write_text(json.dumps({'data':data.hex(),'mime':mime,'filename':filename}))
         return 'spoken transcript'
 class Server(FakeServer):
     async def request(self,method,params,timeout=30):
@@ -279,7 +281,8 @@ def main():
                 assert page.evaluate("audioState.session.id!==window.replaced.id&&window.replaced.recorder.state==='inactive'&&window.replaced.stream.getTracks().every(t=>t.readyState==='ended')")
                 assert len(held) == 1 and len(uploads) == before + 1
                 assert held[0].request.post_data_buffer == raw
-                assert held[0].request.headers['content-type'] == 'audio/webm'
+                assert held[0].request.headers['content-type'] == page.evaluate("audioState.session.blob.type||'application/octet-stream'")
+                assert held[0].request.headers['x-audio-filename'] == 'recording.webm'
                 page.evaluate("()=>{lateData({data:new Blob(['stale bytes'])});lateStop();lateMute();}")
                 assert page.evaluate('audioState.session.blob.size') == len(raw)
                 held.pop().fulfill(status=200, json={'text': 'selected file transcript'})
@@ -324,15 +327,50 @@ def main():
                 assert len(uploads) == before
                 page.locator('#audio-cancel').click()
 
-                # Unsupported selection discards capture, reports format, never submits.
+                # Picker has no format filter. Unknown/mismatched MIME and opaque
+                # bytes reach the backend fixture; every transcript remains a draft.
+                assert page.locator('#audio-file-input').get_attribute('accept') is None
+                for name, mime in [('clip.xyz', ''), ('clip.dat', 'application/octet-stream'), ('clip.wav', 'text/plain'), ('clip.flac', 'audio/flac')]:
+                    start()
+                    before = len(uploads)
+                    with page.expect_file_chooser() as chooser:
+                        page.locator('#audio-upload').click()
+                    page.evaluate('([name,mime])=>{const transfer=new DataTransfer();transfer.items.add(new File(["opaque uploaded bytes"],name,{type:mime}));$("audio-file-input").files=transfer.files;$("audio-file-input").dispatchEvent(new Event("change"));}', [name,mime])
+                    page.wait_for_function('()=>!audioState.session')
+                    assert len(uploads) == before + 1
+                    assert uploads[-1] == (mime or 'application/octet-stream')
+                    received=json.loads((root/'data/audio-provider-last.json').read_text())
+                    assert received == {'data': b'opaque uploaded bytes'.hex(), 'mime': mime or 'application/octet-stream', 'filename': name}
+                    assert page.locator('#message-input').input_value().endswith('spoken transcript')
+
+                # Provider rejection retains original file/name for retry/download;
+                # retry succeeds without an implicit chat submission.
                 start()
-                before = len(uploads)
+                before_chats = len(chats)
+                page.route('**/api/audio/transcribe', lambda route: route.fulfill(status=502, json={'detail': 'xAI rejected the audio file (HTTP 415). Its format or contents may not be supported.'}))
                 with page.expect_file_chooser() as chooser:
                     page.locator('#audio-upload').click()
-                chooser.value.set_files({'name': 'bad.txt', 'mimeType': 'text/plain', 'buffer': b'invalid'})
-                assert page.evaluate('!audioState.session')
-                assert 'Unsupported audio' in page.locator('#notice-text').inner_text()
-                assert len(uploads) == before
+                chooser.value.set_files({'name': 'rejected.xyz', 'mimeType': 'text/plain', 'buffer': b'provider rejected bytes'})
+                page.wait_for_function("()=>audioState.session?.phase==='error'")
+                assert 'xAI rejected the audio file' in page.locator('#audio-status').inner_text()
+                assert page.evaluate('audioState.session.filename') == 'rejected.xyz'
+                assert bytes(page.evaluate('async()=>Array.from(new Uint8Array(await audioState.session.blob.arrayBuffer()))')) == b'provider rejected bytes'
+                assert page.locator('#audio-download').is_visible()
+                page.unroute('**/api/audio/transcribe')
+                page.locator('#microphone').click()
+                page.wait_for_function('()=>!audioState.session')
+                assert len(chats) == before_chats
+
+                # Empty/oversized selection still replaces capture and refuses locally.
+                for payload in [b'', b'x' * (32 * 1024 * 1024 + 1)]:
+                    start()
+                    before = len(uploads)
+                    with page.expect_file_chooser() as chooser:
+                        page.locator('#audio-upload').click()
+                    chooser.value.set_files({'name': 'clip.xyz', 'mimeType': 'text/plain', 'buffer': payload})
+                    assert page.evaluate('!audioState.session')
+                    assert 'must contain data' in page.locator('#notice-text').inner_text()
+                    assert len(uploads) == before
                 page.evaluate('clearSentAttachments(state.project,attachmentDraft(state.project).map(f=>f.id))')
                 page.locator('#message-input').fill('preserved\n\nspoken transcript')
 

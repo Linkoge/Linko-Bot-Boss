@@ -1,3 +1,20 @@
+# Audio format pass-through integrated candidate — 2026-10-13
+
+Exact release `audio-format-pass-through-usage-v1-20261013`; candidate checkout
+`/home/codex/checkouts/linko-audio-pass-through-20261013`. Removes local audio format
+restrictions, forwards bytes and safe original filename/MIME, retains duration/size/
+auth/empty limits and recording/draft lifecycle. Provider decides support and its
+rejections remain safe and understandable. docs/AUDIO.md is the current contract.
+Includes exact prepared lowercase usage commit `1d0b7cec236782115579345c8d470dba81b29dc5`
+without editing/pausing/duplicating usage task `7e2b8eb083164eb293103cf9f39a57c9`.
+Read-only base checks retain succeeded c9e8c98 and receipt 37bea66eea3274f2dfaddb58a993ff74.
+Report/evidence and manager brief facts: `/home/codex/.local/share/linko-bot-manager/deployments/audio-pass-through-20261013/REPORT.md` and sibling manager-summary.json.
+Preparation requires exact helper manifest. Deployment remains pending owner request;
+no deployment request/restart/live source or production data mutation performed.
+Reprepare if live base advances; retain usage changes in subsequent integrated release.
+
+---
+
 # Compact lowercase countdown release — 2026-10-13
 
 Exact candidate: `usage-compact-lowercase-v2-20261013`, checkout

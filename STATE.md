@@ -6,6 +6,14 @@ Live `usage-countdown-manual-scroll-v1-20261013`, commit
 Read-only verification confirms every served asset matches that receipt. It includes
 all integrated features and initial-bottom/subsequent-manual chat scrolling fixes.
 
+Current integrated candidate `audio-format-pass-through-usage-v1-20261013` removes audio upload extension/MIME/
+signature format gates and retains original bytes/name/MIME for provider decisions.
+Readable-file duration, recording duration, size/auth/empty limits and draft lifecycle
+remain. Provider rejection is safely surfaced. It retains the prepared lowercase usage
+candidate described below byte-for-byte in usage.js. No deployment requested/performed.
+Exact manifest establishes prepared status; no matching succeeded receipt exists.
+Report: `/home/codex/.local/share/linko-bot-manager/deployments/audio-pass-through-20261013/REPORT.md`; sibling manager-summary.json records routine delivery facts.
+
 Candidate `usage-compact-lowercase-v2-20261013` in
 `/home/codex/checkouts/linko-usage-compact-20261013` changes only duration formatting:
 `6h 12m`, Weekly `5d 12h 15m`, zero components omitted, `1m` for positive sub-minute,

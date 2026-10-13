@@ -6,6 +6,7 @@ import re
 import shutil
 import uuid
 from urllib.error import HTTPError, URLError
+from urllib.parse import unquote
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from fastapi import HTTPException
@@ -17,10 +18,24 @@ UPLOAD_TIMEOUT = 120
 PROBE_TIMEOUT = 30
 PROVIDER_TIMEOUT = 300
 MAX_PROBE_BYTES = 8 * 1024 * 1024
-MIME_EXTENSIONS = {
+RECORDING_EXTENSIONS = {
     'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'm4a',
     'audio/wav': 'wav', 'audio/x-wav': 'wav',
 }
+
+
+def forwarding_mime(value: str) -> str:
+    """Keep supplied MIME/parameters; guard multipart header syntax."""
+    value = value.strip()
+    if not value or any(ord(c) < 32 or ord(c) > 126 for c in value):
+        return 'application/octet-stream'
+    return value
+
+
+def forwarding_filename(value: str) -> str:
+    """Retain basename/extension without allowing multipart header injection."""
+    value = value.replace('\\', '/').rsplit('/', 1)[-1]
+    return ''.join(c if ord(c) >= 32 and ord(c) != 127 and c != '"' else '_' for c in value)[:255] or 'upload'
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -30,13 +45,6 @@ class NoRedirect(HTTPRedirectHandler):
 
 async def audio_duration(data: bytes, mime: str, executable: str) -> float:
     """Probe packets too: browser WebM commonly has no container duration."""
-    signatures = {
-        'webm': data.startswith(b'\x1aE\xdf\xa3'), 'ogg': data.startswith(b'OggS'),
-        'm4a': len(data) >= 12 and data[4:8] == b'ftyp',
-        'wav': data.startswith(b'RIFF') and data[8:12] == b'WAVE',
-    }
-    if not signatures[MIME_EXTENSIONS[mime]]:
-        raise HTTPException(415, 'Recording format does not match its content type.')
     process = await asyncio.create_subprocess_exec(
         executable, '-v', 'error', '-max_alloc', '16777216', '-protocol_whitelist', 'pipe', '-i', 'pipe:0',
         '-show_entries', 'format=duration:stream=codec_type:packet=pts_time,duration_time', '-of', 'json',
@@ -91,8 +99,8 @@ class GrokTranscriber:
     def __init__(self, api_key: str, model: str):
         self.api_key, self.model = api_key, model
 
-    async def transcribe(self, data: bytes, mime: str) -> str:
-        work = asyncio.create_task(asyncio.to_thread(self._request, data, mime))
+    async def transcribe(self, data: bytes, mime: str, filename: str | None = None) -> str:
+        work = asyncio.create_task(asyncio.to_thread(self._request, data, mime, filename))
         try:
             return await asyncio.shield(work)
         except asyncio.CancelledError:
@@ -100,13 +108,16 @@ class GrokTranscriber:
             await work
             raise
 
-    def _request(self, data: bytes, mime: str) -> str:
+    def _request(self, data: bytes, mime: str, filename: str | None = None) -> str:
+        # Metadata describes the file; never invent an audio extension for uploads.
+        mime = forwarding_mime(mime)
+        filename = forwarding_filename(filename or 'recording.' + RECORDING_EXTENSIONS.get(mime.split(';')[0], 'audio'))
         boundary = uuid.uuid4().hex
         # The provider requires model/options before the last, file part.
         body = (
             f'--{boundary}\r\nContent-Disposition: form-data; name="model"\r\n\r\n{self.model}\r\n'
             f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
-            f'filename="recording.{MIME_EXTENSIONS[mime]}"\r\nContent-Type: {mime}\r\n\r\n'
+            f'filename="{filename}"\r\nContent-Type: {mime}\r\n\r\n'
         ).encode() + data + f'\r\n--{boundary}--\r\n'.encode()
         request = Request('https://api.x.ai/v1/stt', data=body, headers={
             'Authorization': f'Bearer {self.api_key}', 'Content-Type': f'multipart/form-data; boundary={boundary}',
@@ -126,6 +137,8 @@ class GrokTranscriber:
             message = 'xAI transcription failed. Recording kept; retry later.'
             if error.code in (401, 403):
                 message = 'xAI rejected the server credential or access. Check the server audio configuration.'
+            elif error.code in (400, 415, 422):
+                message = f'xAI rejected the audio file (HTTP {error.code}). Its format or contents may not be supported. File kept; try another file.'
             elif error.code == 429:
                 message = 'xAI audio usage limit reached. Recording kept; retry later.'
             raise HTTPException(502, message) from None
@@ -152,15 +165,15 @@ class Audio:
         elif not shutil.which(self.settings.audio_probe):
             error = 'Audio needs ffprobe installed on the server.'
         return {'available': error is None, 'reason': error, 'provider': self.settings.audio_provider,
-                'max_bytes': MAX_BYTES, 'max_seconds': MAX_SECONDS, 'mime_types': list(MIME_EXTENSIONS)}
+                'max_bytes': MAX_BYTES, 'max_seconds': MAX_SECONDS, 'mime_types': list(RECORDING_EXTENSIONS)}
 
     async def transcribe(self, request):
         status = self.status()
         if not status['available']:
             raise HTTPException(503, status['reason'])
-        mime = request.headers.get('content-type', '').split(';')[0].lower()
-        if mime not in MIME_EXTENSIONS:
-            raise HTTPException(415, 'Use a WebM, Ogg, MP4/M4A or WAV recording.')
+        mime = forwarding_mime(request.headers.get('content-type', ''))
+        filename_header = request.headers.get('x-audio-filename')
+        filename = forwarding_filename(unquote(filename_header)) if filename_header else None
         if self.busy:
             raise HTTPException(429, 'Another recording is being transcribed. Retry shortly.')
         self.busy = True  # Before any await: one bounded upload/probe/provider request per process.
@@ -175,9 +188,14 @@ class Audio:
                 raise HTTPException(422, 'The recording is empty. Record again.')
             try:
                 duration = await audio_duration(bytes(data), mime, self.settings.audio_probe)
+            except HTTPException as error:
+                if error.status_code != 422:
+                    raise
+                # Local decoder support does not define provider format support.
+                duration = None
             except TimeoutError:
-                raise HTTPException(422, 'Recording validation timed out. Retry or record again.') from None
-            return {'text': await self.provider.transcribe(bytes(data), mime), 'duration': duration}
+                duration = None
+            return {'text': await self.provider.transcribe(bytes(data), mime, filename), 'duration': duration}
         except TimeoutError:
             raise HTTPException(408, 'Audio upload timed out. Recording kept; retry.') from None
         finally:

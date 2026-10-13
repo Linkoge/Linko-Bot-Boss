@@ -1,3 +1,51 @@
+# Audio format pass-through — candidate, 2026-10-13
+
+Exact integrated candidate `audio-format-pass-through-usage-v1-20261013` in
+`/home/codex/checkouts/linko-audio-pass-through-20261013`. Preparation is established
+only by `deployment-helper/releases/audio-format-pass-through-usage-v1-20261013/manifest.json` under private data.
+**Deployment pending a new owner request; no activation or restart performed.**
+Full report and manager routine brief/recent-delivery facts: [/home/codex/.local/share/linko-bot-manager/deployments/audio-pass-through-20261013/REPORT.md](/home/codex/.local/share/linko-bot-manager/deployments/audio-pass-through-20261013/REPORT.md)
+and sibling `manager-summary.json`. This section supersedes historical format
+restrictions and older pending/live statements below.
+
+The audio picker has no accept filter. Any nonempty file within 32 MiB replaces the
+originating microphone session and goes through whole-file transcription to its draft.
+Extension/MIME allowlists, MIME-from-extension normalization and signature matching
+are removed. Keep the original File/bytes, original basename/extension and supplied
+MIME including parameters. Absent MIME uses neutral application/octet-stream; neither
+this fallback nor forwarding claims that the provider supports a format. Filename is
+URI-encoded in X-Audio-Filename, decoded and made safe for multipart headers on the
+server. No transcoding or invented known audio extension for uploads. Retry, Download
+and IndexedDB checkpoints retain the selected filename.
+
+Duration probing remains bounded and content-based. Readable clips above 1200 seconds
+plus the existing one-second encoder tolerance are rejected for duration; unreadable,
+missing-audio/unknown metadata and probe timeout proceed to the transcription API with
+null duration. Decoder limitations must not act as format gating. Browser recording
+20-minute timer and 32 MiB limits, auth/CSRF/origin, empty-file checks, upload deadline,
+single provider admission, cancellation and provider timeout remain. API mime_types
+is retained solely as a browser encoder-selection hint, never an upload allowlist.
+
+xAI HTTP 400/415/422 yields a sanitized provider rejection with status and a cautious
+format-or-contents explanation. Provider response bodies/credentials are never echoed.
+Other existing safe credential/quota/network/invalid-transcript handling remains.
+Errors retain the file for Retry/Download and never auto-send. Picker cancellation,
+context fencing, replacement invalidation/stopped tracks, stale callback suppression,
+sequential draft append, attachments and explicit Send remain intact.
+
+This integrated candidate descends from usage task `7e2b8eb083164eb293103cf9f39a57c9`
+prepared commit `1d0b7cec236782115579345c8d470dba81b29dc5`; its lowercase countdown
+and tests/docs are retained. No edits to its checkout, task state or live source.
+Live base remains succeeded `usage-countdown-manual-scroll-v1-20261013`, commit
+`c9e8c9854ce90de7b945062a64cebe9b3d0d17b4`, proven by receipt
+`deployment-helper/results/37bea66eea3274f2dfaddb58a993ff74.json` and matching served
+assets. Reprepare if that live base advances before owner-requested activation.
+Validation uses real Chromium capture and disposable backend/provider fixtures;
+physical-device picker and paid-provider acceptance are not claimed. Exact verification
+and preparation outcomes belong to the report/manifest/log.
+
+---
+
 # Integrated activation status — 2026-10-13
 
 Current integrated activation target: `integrated-recovery-append-popup-v1-20261013`; see [STATE.md](../STATE.md).

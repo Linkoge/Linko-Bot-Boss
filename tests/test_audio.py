@@ -36,8 +36,8 @@ def wav(seconds=0.2):
 
 
 class Provider:
-    async def transcribe(self, data, mime):
-        self.data, self.mime = data, mime
+    async def transcribe(self, data, mime, filename=None):
+        self.data, self.mime, self.filename = data, mime, filename
         return 'Recognized speech'
 
 
@@ -65,9 +65,9 @@ def test_auth_config_bounded_upload_and_no_chat_or_retention(client):
     assert {p.name for p in settings.data_dir.iterdir()} == before
     assert not app.state.db.all('SELECT * FROM messages')
     assert c.post('/api/audio/transcribe', headers=h, content=b'').status_code == 422
-    assert c.post('/api/audio/transcribe', headers=h, content=b'RIFFbad!WAVEinvalid').status_code == 422
-    assert c.post('/api/audio/transcribe', headers=h, content=b'bad').status_code == 415
-    assert c.post('/api/audio/transcribe', headers={**h, 'Content-Type': 'text/plain'}, content=wav()).status_code == 415
+    assert c.post('/api/audio/transcribe', headers=h, content=b'RIFFbad!WAVEinvalid').status_code == 200
+    assert c.post('/api/audio/transcribe', headers=h, content=b'bad').status_code == 200
+    assert c.post('/api/audio/transcribe', headers={**h, 'Content-Type': 'text/plain'}, content=wav()).status_code == 200
     assert c.post('/api/audio/transcribe', headers=h, content=b'x' * (MAX_BYTES + 1)).status_code == 413
     assert c.post('/api/audio/transcribe', headers=h, content=wav(MAX_SECONDS + 2)).status_code == 413
     app.state.audio.busy = True
@@ -116,7 +116,7 @@ def test_grok_official_contract(monkeypatch):
     assert NoRedirect().redirect_request(request, None, 302, '', {}, 'https://other.test') is None
 
 
-@pytest.mark.parametrize('failure', [401, 403, 429, 500, 'network', 'json', 'empty', 'type', 'long'])
+@pytest.mark.parametrize('failure', [400, 401, 403, 415, 422, 429, 500, 'network', 'json', 'empty', 'type', 'long'])
 def test_provider_failures_sanitized(monkeypatch, failure):
     class Opener:
         def open(self, request, timeout):
@@ -155,7 +155,7 @@ def test_failure_releases_upload_slot_for_retry(client):
     settings.xai_api_key = 'test'
 
     class Failed:
-        async def transcribe(self, data, mime):
+        async def transcribe(self, data, mime, filename=None):
             raise HTTPException(502, 'Provider temporarily unavailable')
 
     app.state.audio.provider = Failed()
@@ -234,3 +234,83 @@ async def test_upload_deadline_releases_slot(monkeypatch):
         await audio.transcribe(SlowRequest())
     assert caught.value.status_code == 408
     assert not audio.busy and not hasattr(provider, 'data')
+
+
+@pytest.mark.parametrize('mime', [None, '', 'application/octet-stream', 'text/plain', 'audio/flac', 'audio/wav; codecs=unexpected'])
+@pytest.mark.parametrize('data', [b'unfamiliar opaque bytes', wav()])
+def test_uploaded_metadata_and_bytes_reach_actual_adapter(client, monkeypatch, mime, data):
+    from email.parser import BytesParser
+    from urllib.parse import quote
+
+    c, app, settings = client
+    sign_in(c, app, settings)
+    settings.xai_api_key = 'fixture-only'
+    app.state.audio.provider = GrokTranscriber('fixture-only', settings.audio_model)
+    captured = []
+
+    class Opener:
+        def open(self, request, timeout):
+            envelope = ('Content-Type: ' + request.get_header('Content-type') + '\r\nMIME-Version: 1.0\r\n\r\n').encode() + request.data
+            file = list(BytesParser().parsebytes(envelope).walk())[-1]
+            captured.append((file.get_filename(), str(file['Content-Type']), file.get_payload(decode=True)))
+            return io.BytesIO(b'{"text":"provider accepted"}')
+
+    monkeypatch.setattr('ai_manager.audio.build_opener', lambda handler: Opener())
+    name = 'original.unknown'
+    headers = {'X-Audio-Filename': quote(name)}
+    if mime is not None:
+        headers['Content-Type'] = mime
+    response = c.post('/api/audio/transcribe', content=data, headers=headers)
+    assert response.status_code == 200, response.text
+    assert captured == [(name, mime or 'application/octet-stream', data)]
+    assert response.json()['duration'] == (pytest.approx(0.2) if data == wav() else None)
+    assert not app.state.audio.busy
+
+
+@pytest.mark.parametrize('code', [400, 415, 422])
+def test_actual_provider_rejection_reaches_safe_api_error(client, monkeypatch, code):
+    c, app, settings = client
+    sign_in(c, app, settings)
+    settings.xai_api_key = 'fixture-only'
+    app.state.audio.provider = GrokTranscriber('fixture-only', settings.audio_model)
+    calls = []
+
+    class Opener:
+        def open(self, request, timeout):
+            calls.append(request)
+            raise HTTPError(request.full_url, code, 'secret', {}, io.BytesIO(b'private-provider-body'))
+
+    monkeypatch.setattr('ai_manager.audio.build_opener', lambda handler: Opener())
+    response = c.post('/api/audio/transcribe', content=b'unknown bytes', headers={'Content-Type': 'text/plain', 'X-Audio-Filename': 'clip.xyz'})
+    assert len(calls) == 1 and b'unknown bytes' in calls[0].data
+    assert response.status_code == 502
+    assert f'xAI rejected the audio file (HTTP {code})' in response.json()['detail']
+    assert 'may not be supported' in response.json()['detail']
+    assert 'private-provider-body' not in response.text and 'secret' not in response.text
+    assert not app.state.audio.busy
+
+
+@pytest.mark.asyncio
+async def test_unreadable_probe_timeout_still_forwards(monkeypatch):
+    async def timeout(*args):
+        raise TimeoutError()
+    monkeypatch.setattr('ai_manager.audio.audio_duration', timeout)
+    audio = Audio(Settings(xai_api_key='fixture-only'))
+    provider = audio.provider = Provider()
+
+    class Request:
+        headers = {'content-type': 'application/octet-stream', 'x-audio-filename': 'clip.xyz'}
+        async def stream(self):
+            yield b'opaque data'
+
+    assert await audio.transcribe(Request()) == {'text': 'Recognized speech', 'duration': None}
+    assert provider.data == b'opaque data' and provider.filename == 'clip.xyz'
+
+
+def test_forwarding_metadata_header_safety():
+    from ai_manager.audio import forwarding_filename, forwarding_mime
+    assert forwarding_filename('../clip.xyz') == 'clip.xyz'
+    assert forwarding_filename('clip"\r\nInjected: x.xyz') == 'clip___Injected: x.xyz'
+    assert forwarding_filename('звук.flac') == 'звук.flac'
+    assert forwarding_mime('audio/unknown; codecs=weird') == 'audio/unknown; codecs=weird'
+    assert forwarding_mime('audio/wav\r\nInjected: x') == 'application/octet-stream'

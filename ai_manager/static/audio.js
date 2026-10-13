@@ -104,7 +104,7 @@ async function transcribeAudio(session){
     if(!session.blob?.size)throw new Error('No audio captured. Discard and record again.');
     if(session.blob.size>session.config.max_bytes)throw new Error('Recording exceeds the upload limit. Download it or discard and record again.');
     let text=session.transcript;
-    if(!text){const result=await api('/api/audio/transcribe',{method:'POST',headers:{'Content-Type':session.blob.type},body:session.blob,signal:session.controller.signal});text=result.text;}
+    if(!text){const result=await api('/api/audio/transcribe',{method:'POST',headers:{'Content-Type':session.blob.type||'application/octet-stream',...(session.filename?{'X-Audio-Filename':encodeURIComponent(session.filename)}:{})},body:session.blob,signal:session.controller.signal});text=result.text;}
     if(audioState.session!==session)return;
     if(typeof text!=='string'||!text.trim())throw new Error('No speech recognized. Retry or record again.');
     session.transcript=text.trim();checkpointAudio(session,true);
@@ -140,7 +140,7 @@ window.addEventListener('pagehide',()=>{const session=audioState.session;if(sess
 $('audio-cancel').onclick=discardAudio;
 $('audio-download').onclick=()=>{
   const session=audioState.session;if(!session?.blob)return;
-  const link=element('a');link.href=URL.createObjectURL(session.blob);link.download='recording.'+({'audio/webm':'webm','audio/ogg':'ogg','audio/mp4':'m4a','audio/wav':'wav'}[session.blob.type.split(';')[0]]||'audio');link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
+  const link=element('a');link.href=URL.createObjectURL(session.blob);link.download=session.filename||'recording.'+({'audio/webm':'webm','audio/ogg':'ogg','audio/mp4':'m4a','audio/wav':'wav'}[session.blob.type.split(';')[0]]||'audio');link.click();setTimeout(()=>URL.revokeObjectURL(link.href),1000);
 };
 window.addEventListener('beforeunload',event=>{if(audioState.session){event.preventDefault();event.returnValue='';}});
 renderAudio();
@@ -163,7 +163,7 @@ function checkpointAudio(session,force=false){
   if(audioState.session!==session||!session.config)return Promise.resolve();
   const blob=session.blob||new Blob(session.chunks,{type:session.recorder?.mimeType});
   if(!blob.size)return Promise.resolve();
-  const pending=audioStorageOperation('readwrite',store=>store.put({id:session.id,project:session.project,conversation:session.conversation,mode:session.mode,label:session.label,config:session.config,blob,transcript:session.transcript||null},audioTabKey));
+  const pending=audioStorageOperation('readwrite',store=>store.put({id:session.id,project:session.project,conversation:session.conversation,mode:session.mode,label:session.label,config:session.config,blob,filename:session.filename,transcript:session.transcript||null},audioTabKey));
   session.checkpointPending=pending;pending.finally(()=>{if(session.checkpointPending===pending)session.checkpointPending=null;});return pending;
 }
 function clearAudioCheckpoint(){return audioStorageOperation('readwrite',store=>store.delete(audioTabKey));}
@@ -199,11 +199,7 @@ $('audio-file-input').onchange=()=>{
   // Invalidate before stop: queued final chunks, checkpoints and transcript replies
   // from the microphone are fenced by session identity, including synchronous stop.
   discardAudio();
-  const mime=file.type.split(';')[0].toLowerCase();
-  const extensions={webm:'audio/webm',ogg:'audio/ogg',oga:'audio/ogg',mp4:'audio/mp4',m4a:'audio/mp4',wav:'audio/wav'};
-  const type=previous.config.mime_types.includes(mime)?mime:extensions[file.name.split('.').pop().toLowerCase()];
-  if(!type||!previous.config.mime_types.includes(type)){notice('Unsupported audio file. Use WebM, Ogg, MP4/M4A or WAV.');return;}
   if(!file.size||file.size>previous.config.max_bytes){notice('Audio file must contain data and be at most 32 MiB.');return;}
-  const session={id:crypto.randomUUID(),project:previous.project,conversation:previous.conversation,mode:previous.mode,label:previous.label,config:previous.config,blob:file.slice(0,file.size,type),chunks:[],phase:'stopping',send:false,changed:true};
+  const session={id:crypto.randomUUID(),project:previous.project,conversation:previous.conversation,mode:previous.mode,label:previous.label,config:previous.config,blob:file,filename:file.name,chunks:[],phase:'stopping',send:false,changed:true};
   audioState.session=session;transcribeAudio(session);
 };
