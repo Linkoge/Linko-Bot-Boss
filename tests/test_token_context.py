@@ -40,6 +40,7 @@ async def test_context_updates_survive_restart_and_clear_removed_constraints(sys
     await restored.submit(project["id"], "Keep talking")
     await asyncio.gather(*list(restored.jobs.values()))
     followup = json.loads(chat.server.prompts[-1])
+    assert followup.pop('bot_selection')['mode'] == 'manual'
     assert followup == {"mode": "auto", "message": "Keep talking"}
     db.set_setting("global_instructions", "")
     await restored.submit(project["id"], "The constraint changed")

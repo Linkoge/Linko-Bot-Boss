@@ -58,6 +58,9 @@ MANAGER_TOOL = {
             "established": {"type": "array", "items": {"type": "string"}},
             "evidence": {"type": "string"},
             "deployment_receipt": {"type": "string"},
+            "worker_route": {"type": "object", "properties": {
+                "model": {"type": "string"}, "effort": {"type": "string", "enum": ["low", "medium", "high"]}},
+                "required": ["model", "effort"], "additionalProperties": False},
             "objective": {"type": "string"},
             "task_id": {"type": "string"},
             "execution_id": {"type": "string"},
@@ -204,13 +207,16 @@ class Scheduler:
         if action == "delegate":
             if args.get("task_id"):
                 raise ValueError("Use continue to bundle instructions into an existing assignment")
+            from .model_settings import delegation
+            await self.chat.server.start()
+            route = delegation(self.db, self.chat.server, args.get('worker_route'))
             return self.tasks.context(
                 self.tasks.add(
                     project_id,
                     args["objective"],
                     params["conversation_id"],
                     params["manager_execution_id"] + ":" + project_id,
-                    acceptance=args.get("acceptance", ""), selected=selected,
+                    acceptance=args.get("acceptance", ""), selected=selected, model_route=route,
                 )
             )
         if action == "wait":

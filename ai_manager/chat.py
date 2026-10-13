@@ -313,7 +313,8 @@ class Chat:
         )
         if not conversation or (conversation_id and conversation["id"] != conversation_id):
             raise ValueError("Chat changed. Refresh before sending")
-        route = self.db.setting("model_routes", {}).get("interactive", {"effort": "low"})
+        saved_models = self.db.setting("model_settings")
+        route = saved_models['manager'] if saved_models else self.db.setting("model_routes", {}).get("interactive", {"effort": "low"})
         execution_id, response_id, now = new_id(), new_id(), time.time()
         receipt = {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
         with self.db.transaction() as conn:
@@ -438,6 +439,15 @@ class Chat:
                     ("manager_tool_schema:" + conversation["id"], json.dumps(schema)),
                 )
             prompt, context = self.prompt(conversation, content, mode, execution_id, thread_id, prior)
+            from .model_settings import current, permitted
+            model_config = current(self.db, self.server)
+            prompt['bot_selection'] = {'mode': model_config['bot']['mode'],
+                'manual': model_config['bot']['manual'], 'permitted_pairs': permitted(model_config, self.server),
+                'guidelines': 'Before delegate in Automatic choose worker_route from permitted_pairs by task difficulty. '
+                    'Luna: simple well-defined work. Sol: ordinary coding/debugging. Astra: difficult reasoning only when allowed. '
+                    'Choose Low for simple, Medium for ordinary, High for difficult work within permitted pairs. '
+                    'Manual uses the saved pair; never override it. No extra routing call. '
+                    'Existing assignments retain their selected pair on continue.'}
             execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
             if execution["retry_count"]:
                 prompt["recovery"] = (

@@ -1,11 +1,15 @@
-# Rich red theme candidate — activation pending, 2026-10-12
+# Model settings and manual scrolling — verified candidate, 2026-10-13
 
-Rich red selection/active/hover/focus accents are implemented and browser-verified in an isolated
-CSS-only candidate, exact release `chat-ui-rich-red-v1-20261012`. Contract/evidence and manifest
-readiness gate: [UI theme](docs/UI_THEME.md). No deployment is requested or performed.
-Current established deployed baseline is `agent-controls-v1-20261012`, commit `0d2d80f`,
-proven by succeeded result nonce `01e3989b0f1b9e05c3c726d49248dc01`; older prepared-only agent
-controls statements below are historical. Existing composer and agent controls are preserved.
+Exact release `model-settings-manual-scroll-v1-20261013` implements the owner-approved panel,
+persisted native runtime choices, constrained manager-selected Automatic bot pairs and fully manual
+chat scrolling. Contract/evidence: [model settings](docs/MODEL_SETTINGS.md) and [chat history](docs/chat-history.md).
+No deployment authorized or performed; release manifest is the preparation readiness gate.
+
+# Current deployed baseline — rich red, 2026-10-13
+
+`chat-ui-rich-red-v1-20261012`, commit `361a18f43f7d2fca2e211ce5b2673f808003ea20`, succeeded with
+nonce `4dc90c51e97f8497303717091cf126a7`. Receipt references: [UI theme](docs/UI_THEME.md).
+Existing composer/audio and agent controls are preserved. Older pending statements below are historical.
 
 # Compact project-memory candidate — activation pending, 2026-10-12
 

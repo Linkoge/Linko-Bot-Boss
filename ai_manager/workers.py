@@ -6,6 +6,7 @@ import time
 
 from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
+from .model_settings import RouteBlocked
 from .recovery import (
     Failure,
     classify,
@@ -113,9 +114,9 @@ class Workers:
                 conn.execute("UPDATE executions SET status='queued',retry_at=NULL WHERE id=?", (execution_id,))
             project = self.registry.get(task["project_id"])
             root = self.registry.allowed_path(project["path"])
-            route = self.db.setting("model_routes", {}).get("execution", {"effort": "medium"})
+            from .model_settings import assignment_route
             await server.start()
-            route = server.route(**route)
+            route = assignment_route(self.db, server, task)
             with self.db.transaction() as conn:
                 conn.execute(
                     "UPDATE executions SET pid=?,process_start=?,model=?,effort=? WHERE id=?",
@@ -261,6 +262,8 @@ class Workers:
                             error = {**error, "message": "Stopped by user"}
                         self.finish(execution_id, state, output, error.get("message", ""), started)
                     return
+        except RouteBlocked as error:
+            self.finish(execution_id, "waiting", output, str(error), started)
         except asyncio.CancelledError:
             execution = self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))
             if execution["stop_requested"]:

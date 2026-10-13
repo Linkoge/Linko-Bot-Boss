@@ -34,11 +34,8 @@ The manifest is the readiness gate; no prepared status is established until it e
 
 ## Activation truth
 
-Implemented and UI-verified; preparation is local only. **Not deployed.** No owner deployment
-request is included in this objective. No restart, production mutation or remote push occurred.
-Current established deployed baseline is `agent-controls-v1-20261012`, commit
-`0d2d80f2162c932d7beb945ce43b2aeb9c4bab0a`, proven by succeeded receipt
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/01e3989b0f1b9e05c3c726d49248dc01.json`.
-Older prepared-only statements about that release are historical. On a later explicit owner
-request, use the controlled manager `deploy_release` with the exact red-theme release ID,
-requiring its own durable succeeded result before reporting activation.
+Rich-red release `chat-ui-rich-red-v1-20261012` is **deployed**, proven by succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/4dc90c51e97f8497303717091cf126a7.json`.
+Its observed service commit is `361a18f43f7d2fca2e211ce5b2673f808003ea20`. Earlier preparation-only
+wording described the original handoff before owner activation. The combined [model settings](MODEL_SETTINGS.md)
+and manual scroll candidate preserves this palette; it is not deployed and owner said not to deploy yet.

@@ -22,11 +22,12 @@ class Tasks:
         )
         if not row:
             raise ValueError("Unknown assignment")
-        return self.record(row)
+        selected = self.db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.model_selected' ORDER BY seq DESC LIMIT 1", (task_id,))
+        return {**self.record(row), "worker_route": json.loads(selected['payload']) if selected else None}
 
     @staticmethod
     def context(task):
-        return {k: task[k] for k in ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision")}
+        return {k: task[k] for k in ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision")} | {"worker_route": task.get("worker_route")}
 
     def list(self, project_id=None):
         rows = self.db.all(
@@ -66,7 +67,7 @@ class Tasks:
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (json.dumps(archived),))
             return cleared
 
-    def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None):
+    def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None, model_route=None):
         if not description.strip() or len(description) > 24000:
             raise ValueError("Objective must be 1–24000 characters")
         if not isinstance(acceptance, str) or len(acceptance) > 12000:
@@ -100,6 +101,8 @@ class Tasks:
                 (task_id, project_id, description.strip(), acceptance, now, now, origin_conversation, request_key),
             )
             self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
+            if model_route:
+                self.db.event(conn, "task.model_selected", model_route, project_id, task_id)
             if selected:
                 self.db.event(conn, "task.context", selected, project_id, task_id)
         return self.get(task_id)

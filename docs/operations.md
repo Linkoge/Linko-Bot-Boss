@@ -41,7 +41,7 @@ Restore only to a fresh destination. Stop manager execution before switching dat
 
 ## Configuration and validation
 
-Keep global `AI_MANAGER_DATA`, `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE` and absolute `AI_MANAGER_CODEX`. Default worker capacity is two; persisted `max_workers` remains the global capacity setting. Only two model routes remain: interactive manager and execution worker.
+Keep global `AI_MANAGER_DATA`, `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE` and absolute `AI_MANAGER_CODEX`. Default worker capacity is two; persisted `max_workers` remains the global capacity setting. Two roles remain: manual Manager and manual/automatic Bot. Global role selections, independent per-model/per-level policy and safe pinned assignment continuation follow [model settings](MODEL_SETTINGS.md).
 
 Run `pytest`, Ruff and JavaScript syntax checks. `scripts/browser_smoke.py` uses a temporary authenticated HTTP fixture. `scripts/smoke_minimal.py` uses disposable data/projects and real subscription inference. Read the implementation record for actual release validation and deployment evidence; older stage reports describe earlier architecture.
 

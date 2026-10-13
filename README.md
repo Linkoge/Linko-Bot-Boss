@@ -14,7 +14,7 @@ The private interface remains at **https://codex-server.tail5ebb9d.ts.net:8787/*
 uv run python -m ai_manager.cli setup-owner
 ```
 
-Configuration: `AI_MANAGER_DATA`, `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE` and `AI_MANAGER_CODEX`. Runtime data defaults to `~/.local/share/linko-bot-manager`. Manager and worker model settings are global and validated against the installed Codex catalog; the existing ChatGPT subscription supplies inference.
+Configuration: `AI_MANAGER_DATA`, `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE` and `AI_MANAGER_CODEX`. Runtime data defaults to `~/.local/share/linko-bot-manager`. Manager and bot settings are global: manual Manager, manual Bot or manager-selected permitted automatic pair, validated against the installed Codex catalog (see [model settings](docs/MODEL_SETTINGS.md)); the existing ChatGPT subscription supplies inference.
 
 Native workers have broad same-user access. They preserve user work and request explicit confirmation before catastrophic broad destruction. This is an agent-recognized conversational boundary, not a deterministic classifier of arbitrary programs. Completion is reported by the worker, not independently certified. See [security boundaries](docs/security.md).
 

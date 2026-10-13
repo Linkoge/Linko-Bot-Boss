@@ -1,3 +1,27 @@
+# Fully manual chat scrolling — 2026-10-13, candidate only
+
+Combined exact release: `model-settings-manual-scroll-v1-20261013`. Implemented and verified
+in an isolated checkout; **no deployment authorized or performed**. Current production baseline
+is the succeeded `chat-ui-rich-red-v1-20261012`; see [model settings](MODEL_SETTINGS.md) for
+release/evidence references and truthful baseline receipt.
+
+Chat never follows the bottom automatically, including initial history loading, sends, new messages,
+stream deltas, polling or completion reconciliation. Existing message nodes/selection preservation
+remain. The follow-bottom predicate and all message scrollTop writes are removed. Browser scroll
+anchoring is disabled for the messages container and descendants; smooth scrolling is disabled.
+The composer stays in the existing measured flex layout, with its former sticky rule removed.
+Manual wheel/touch/keyboard scrolling remains ordinary. Growing content above the viewport does
+not change its numeric scroll position. Switching/clearing a conversation replaces its content;
+normal browser scroll-range clamping when content shrinks still applies. There is no follow toggle,
+new-message jump button or forced focus on incoming messages.
+
+Chromium acceptance samples actual scrollTop through sends, eight streamed updates, completion,
+history reload and portfolio polling at top/middle/old-bottom; all stay within one pixel. Manual
+wheel scrolling and anchoring-disabled growth above the viewport also pass. Composer, audio,
+attachments, selection/copy and agent lifecycle regression checks remain release requirements.
+Full evidence and report: `/home/codex/.local/share/linko-bot-manager/deployments/model-scroll-20261013/`.
+Earlier bottom-follow behavior described in historical reports is superseded.
+
 # Mobile composer regression fix — 2026-10-12, candidate only
 
 Exact candidate release: `chat-ui-mobile-composer-v4-20261012`; isolated checkout
@@ -213,7 +237,7 @@ Search in chat follows Settings in the workspace navigation. It searches message
 
 The square chat menu immediately left of usage contains Clear, Archive, Copy 5 and Copy all, followed by individually listed Conversation, Auto and Execute modes. Copy all copies every message in the current conversation, fetching earlier pages beyond the 200 displayed messages. Copy five copies the latest five messages, or all messages when fewer than five exist. Both preserve author labels, line breaks and chronological order, include received streaming text, and show a short success notice. Empty chats disable copying. Clipboard API failures fall back to browser copying and restore the text selection.
 
-Periodic refreshes keep existing message elements and text nodes. Streaming appends to the existing text node. Selecting text or reading older messages suppresses automatic scrolling; chats already at the bottom continue following incoming text.
+Periodic refreshes keep existing message elements and text nodes. Streaming appends to the existing text node. All chat scrolling is manual, including when already at the bottom; streaming and polling do not force following or anchoring.
 
 Archive and Clear both show a confirmation dialog with Cancel focused initially. Archive offers an editable project/date name, preserves all messages and the original conversation/thread metadata, and starts a fresh conversation. Clear removes only the current conversation's messages and starts a fresh conversation. Existing archives, tasks, project memory, execution evidence and audit events remain. Both actions show an eight-second status notification without changing the composer layout. Unsent drafts are preserved.
 

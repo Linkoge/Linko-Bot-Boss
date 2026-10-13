@@ -1,3 +1,18 @@
+# Model settings / manual scrolling — verified, do not deploy, 2026-10-13
+
+Owner authorized implementation, validation and exact release preparation, explicitly withholding
+deployment. Exact ID: `model-settings-manual-scroll-v1-20261013`; isolated checkout
+`/home/codex/checkouts/linko-model-scroll-20261013`. Contract: [model settings](docs/MODEL_SETTINGS.md),
+manual viewport behavior: [chat history](docs/chat-history.md). Full durable report:
+`/home/codex/.local/share/linko-bot-manager/deployments/model-scroll-20261013/REPORT.md`.
+Manager routine brief/recent-delivery update should record implemented/verified/prepared, with activation
+pending owner instruction. Lasting effects: supported exact role settings, retained Manual bot selection,
+independent Automatic restrictions, durable assignment pair and denied-pair safe continuation, manual chat
+viewport. Evidence includes real Sol/Low manager → constrained Luna/High worker → automatic result delivery,
+backend regressions and responsive Chromium receipts. Do not infer deployment from these checks.
+Current deployed baseline remains rich-red commit `361a18f`, succeeded receipt nonce
+`4dc90c51e97f8497303717091cf126a7`. No restart, production settings change or deployment request made.
+
 # Rich red theme — implemented/verified; activation pending, 2026-10-12
 
 Owner requested replacing green theme selections with rich red. Focused CSS-only candidate

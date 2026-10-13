@@ -75,7 +75,10 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     top = page.locator('#project-menu-button').bounding_box()
                     bottom = page.locator('#usage-button').bounding_box()
                     nav = page.locator('.navigation').bounding_box()
-                    assert top['x'] == bottom['x'] and top['width'] == bottom['width'] == 44
+                    settings_button = page.locator('#model-settings-button').bounding_box()
+                    assert top['x'] == settings_button['x']
+                    assert bottom['x'] + 44 + 4 == settings_button['x']
+                    assert top['width'] == bottom['width'] == settings_button['width'] == 44
                     assert top['height'] == bottom['height'] == 44
                     assert 0 < bottom['y']-top['y'] < 55 and nav['height'] <= 100
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')

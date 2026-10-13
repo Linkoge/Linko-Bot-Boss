@@ -21,6 +21,9 @@ Current architecture, superseding prior supervision requirements as authorized o
 - Native workers have broad same-user access; do not claim no-host-home isolation, transactional shell replay, source-preserving clones or deterministic prevention of arbitrary destructive code.
 - No new orchestration framework, supervision AI calls, speculative policy engines or manager-created subagent hierarchy.
 
+- Manager and Bot settings follow [model settings](docs/MODEL_SETTINGS.md): manual Manager, retained manual Bot plus independent Automatic policy, supported exact pairs enforced and durably selected before dispatch; no extra router.
+- Chat scrolling is fully manual during sends, streaming and updates, with browser anchoring disabled. Preserve existing composer/audio/lifecycle/security and rich red theme.
+
 Implementation uses existing FastAPI, SQLite, plain JavaScript and Codex App Server. Model settings contain only manager and worker roles. Old requirements are retained in Git history and historical stage reports.
 
 ## Project memory

@@ -28,10 +28,10 @@ def main():
         program = """import sys
 sys.path.insert(0,'tests')
 import uvicorn, time
-from fake_codex import FakeServer
+from test_model_settings import CatalogServer
 from ai_manager.config import Settings
 from ai_manager.web import create_app
-s=Settings();app=create_app(s,FakeServer(s))
+s=Settings();app=create_app(s,CatalogServer(s))
 for name in ('Alpha','Beta','Recovery Fixture'):app.state.registry.add(s.project_roots[0]/name)
 recovery=app.state.db.one("SELECT id FROM projects WHERE name='Recovery Fixture'")
 recovery_chat=app.state.chat.conversation(recovery['id'])
@@ -109,8 +109,10 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
 
                 page.locator("[data-view=settings]").click()
                 page.locator("#load-models").click()
-                page.locator("#model-routes form").first.wait_for()
-                assert page.locator("#model-routes form").count() == 2
+                page.locator("#model-dialog").wait_for(state="visible")
+                assert page.locator("#manager-choices > div").count() == 2
+                assert page.locator(".bot-model-section").count() == 3
+                page.keyboard.press("Escape")
                 page.locator("#rename-project").click()
                 page.locator("#editor-form input[name=display_name]").fill("Renamed")
                 page.locator("#editor-form button[type=submit],#editor-form button.primary").click()

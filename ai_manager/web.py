@@ -387,15 +387,31 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
             "account_type": chat.server.account_type,
         }
 
+    @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
+    async def model_settings():
+        from .model_settings import choices, current
+        await chat.server.start()
+        return {"choices": choices(chat.server), "settings": current(db, chat.server)}
+
+    @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
+    async def save_model_settings(body: dict):
+        from .model_settings import save
+        await chat.server.start()
+        return save(db, chat.server, body)
+
     @app.put("/api/models/{role}", dependencies=[Depends(require_owner)])
     async def model_route(role: str, body: RouteBody):
         if role not in ROLES:
             raise ValueError("Unknown model role")
         await chat.server.start()
         route = chat.server.route(body.model, body.effort)
-        routes = db.setting("model_routes", {})
-        routes[role] = route
-        db.set_setting("model_routes", routes)
+        from .model_settings import current, save
+        config = current(db, chat.server)
+        if role == 'interactive':
+            config['manager'] = route
+        else:
+            config['bot']['manual'] = route
+        save(db, chat.server, config)
         return route
 
     @app.put("/api/settings/instructions", dependencies=[Depends(require_owner)])
