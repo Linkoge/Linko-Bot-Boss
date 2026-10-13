@@ -88,6 +88,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 assert page.locator("#copy-all").is_disabled()
                 assert page.locator("#copy-five").is_disabled()
                 page.locator("#message-input").fill("Discuss the project.")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.get_by_text("Saved streamed answer", exact=True).wait_for()
                 page.wait_for_function("() => !state.execution")
@@ -220,11 +221,11 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                         page.keyboard.press('Tab')
                         assert page.locator('#chat-menu').is_hidden()
                         assert page.locator('#usage-button').evaluate('(n)=>n===document.activeElement')
-                    # CSS hides only the insertion caret; native editing remains intact.
+                    # Desktop activation exposes a muted caret; native editing remains intact.
                     field = page.locator('#message-input')
                     field.fill('abc')
                     field.focus()
-                    assert field.evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgba(0, 0, 0, 0)'
+                    assert field.evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgb(119, 128, 142)'
                     page.keyboard.press('End')
                     page.keyboard.press('Enter')
                     page.keyboard.insert_text('def')

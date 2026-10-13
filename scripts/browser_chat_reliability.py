@@ -97,6 +97,7 @@ def main():
 
                 page.route("**/api/chat", lose_receipt)
                 page.locator("#message-input").fill("Lost receipt")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.wait_for_function("() => !state.pending.size && submissions.size===1")
                 saved = page.evaluate("sessionStorage.getItem(submissionKey)")
@@ -130,6 +131,7 @@ def main():
                 # Every SSE connection fails; history/cursor reconciliation must finish exactly.
                 page.route("**/api/executions/*/events?*", lambda route: route.abort("failed"))
                 page.locator("#message-input").fill("Broken SSE")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.wait_for_function(
                     "() => state.history?.messages.length===4 && state.history.messages.at(-1).status==='completed'"
@@ -140,6 +142,7 @@ def main():
                 page.unroute("**/api/executions/*/events?*")
                 # A selected context and replaced attachment reject old text, errors and expiry.
                 page.locator("#message-input").fill("Switch")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.wait_for_function("() => !!state.source")
                 page.evaluate("window.oldSource=state.source")
@@ -167,6 +170,7 @@ def main():
                 }""")
                 # Snapshot replacement cursor rejects replayed chunks on the same attachment.
                 page.locator("#message-input").fill("Replay")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.wait_for_function("() => !!state.source && state.history?.messages.at(-1).content==='Exact '")
                 unchanged = page.evaluate("""async () => {
@@ -197,12 +201,14 @@ def main():
                 assert page.locator("#messages .message-content").last.inner_text() == "Exact saved text"
                 # Terminal empty and stopped replies cannot look like connecting forever.
                 page.locator("#message-input").fill("Empty")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.wait_for_function(
                     "() => state.history.messages.at(-1).status==='completed' && state.history.messages.length===4"
                 )
                 assert page.locator("#messages .message-content").last.inner_text() == "No text response."
                 page.locator("#message-input").fill("Empty")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.wait_for_function("() => !!state.source && state.history.messages.length===6")
                 page.locator("#stop-chat").click()
@@ -222,12 +228,14 @@ def main():
                     if(event.defaultPrevented)throw new Error('IME Enter was intercepted');
                 }""")
                 assert page.evaluate("state.history.messages.length") == 6
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.wait_for_function("() => !state.pending.size && state.execution")
                 assert page.locator("#send").is_enabled()
                 page.locator('#chat-menu-button').click()
                 page.locator('[data-mode=conversation]').click()
                 page.locator("#message-input").fill("Queued while busy")
+                page.locator('#message-input').focus()
                 page.locator("#send").dblclick()
                 page.wait_for_function("() => state.history.messages.length===10 && !state.pending.size")
                 assert "Queued while busy" in page.locator("#messages .message.user").last.inner_text()
@@ -236,6 +244,7 @@ def main():
                 assert page.evaluate("state.history.messages.filter(m=>m.role==='user').length") == 5
                 # Current stream expiry hides the app and invalidates pending callbacks.
                 page.locator("#message-input").fill("Expiry")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 page.wait_for_function("() => !!state.source")
                 page.evaluate("state.source.handlers['stream.auth_expired']({})")

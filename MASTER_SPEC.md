@@ -39,3 +39,8 @@ Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
 - Outstanding job follow-up persists on existing assignments independently of worker completion; SQLite-only idle/grace checks queue one deduplicated internal manager review with durable backoff. Preserve all owner holds, read-only mode and authorization boundaries. Contract: docs/AUTOMATIC_RECOVERY.md.
 - New work resolves the latest visible supported model within the owner's selected Luna/Sol/Astra family from the authenticated catalog; keep existing assignment/recovery routes exact and policy-compatible. Contract: docs/MODEL_SETTINGS.md.
 - Tasks and History remain within viewport width with complete long filenames/paths/unbroken text wrapping; local code scrolling stays contained. Family buttons have a subtle red gradient distinct from plain effort buttons, with accessible selected/disabled/focus states.
+
+- Compact chat composer follows [chat UI contract](docs/chat-history.md): two-control idle,
+  three-control active, one further square-control increment for overflow, bounded draft scrolling;
+  muted caret follows supported keyboard signals, gray composer focus border, blank empty chat.
+  Send shares Upload appearance; selected workspace category text stays red without an underline.

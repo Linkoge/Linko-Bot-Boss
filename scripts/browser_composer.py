@@ -44,12 +44,102 @@ def main():
                 page.locator('#setup-token').fill((root/'data/setup-token').read_text())
                 page.locator('#login-button').click()
                 page.wait_for_function('()=>state.ready&&state.history&&!audioState.loading')
+                # Empty conversation is genuinely empty. Idle/active/overflow geometry.
+                assert page.locator('#messages').inner_text() == ''
+                assert page.locator('.welcome,.suggestions').count() == 0
+                field = page.locator('#message-input')
+                assert page.locator('#send').is_hidden()
+                assert page.locator('.composer-input').bounding_box()['height'] == 92
+                assert field.evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgba(0, 0, 0, 0)'
+                page.screenshot(path='/tmp/linko-expanding-idle.png')
+                gray = page.locator('#chat-form').evaluate('(n)=>getComputedStyle(n).borderColor')
+                field.focus()
+                assert page.locator('#send').is_visible()
+                assert page.locator('.composer-input').bounding_box()['height'] == 140
+                assert field.evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgb(119, 128, 142)'
+                assert page.locator('#chat-form').evaluate('(n)=>getComputedStyle(n).borderColor') == gray
+                def appearance(selector):
+                    return page.locator(selector).evaluate('(n)=>{const s=getComputedStyle(n);return {background:s.backgroundColor,border:s.borderColor,color:s.color,opacity:s.opacity}}')
+                page.mouse.move(0, 0)
+                assert appearance('#send') == appearance('#attach')
+                assert page.locator('#send').inner_text() == '↑'
+                page.locator('#send').hover()
+                send_hover = appearance('#send')
+                page.locator('#attach').hover()
+                assert appearance('#attach') == send_hover
+                page.mouse.move(0, 0)
+                page.evaluate("$('send').disabled=true;$('attach').disabled=true")
+                assert appearance('#send') == appearance('#attach')
+                page.evaluate("$('send').disabled=false;$('attach').disabled=false")
+                page.locator('#send').focus()
+                page.keyboard.press('Tab')
+                assert page.locator('#microphone').evaluate('(n)=>n===document.activeElement')
+                assert page.locator('#microphone').evaluate('(n)=>getComputedStyle(n).outlineStyle') != 'none'
+                field.focus()
+                page.screenshot(path='/tmp/linko-expanding-active.png')
+                field.fill('line\n' * 40)
+                assert page.locator('.composer-input').bounding_box()['height'] == 188
+                assert field.evaluate('(n)=>n.scrollHeight>n.clientHeight')
+                field.evaluate('(n)=>n.scrollTop=200')
+                page.evaluate('updateComposer()')
+                assert field.evaluate('(n)=>n.scrollTop') == 200
+                page.screenshot(path='/tmp/linko-expanding-overflow.png')
+                field.fill('short')
+                assert page.locator('.composer-input').bounding_box()['height'] == 140
+                page.locator('#chat-menu-button').focus()
+                page.wait_for_function("()=>$('send').hidden")
+                assert page.locator('#send').is_hidden()
+                assert page.locator('.composer-input').bounding_box()['height'] == 92
+                field.fill('')
+                page.locator('#chat-menu-button').focus()
+                # Every workspace category shares text-only selection at desktop/mobile widths.
+                for width in (1440, 393, 320):
+                    page.set_viewport_size({'width': width, 'height': 851})
+                    for view in ('chat', 'tasks', 'agents', 'todo', 'memory', 'settings', 'search'):
+                        tab = page.locator(f'.tabs [data-view={view}]')
+                        tab.click()
+                        assert tab.get_attribute('aria-current') == 'page'
+                        assert tab.evaluate('(n)=>getComputedStyle(n).color') == 'rgb(255, 130, 150)'
+                        assert tab.evaluate('(n)=>getComputedStyle(n).borderBottomWidth') == '0px'
+                        assert page.locator('#view-' + view).is_visible()
+                        tab.focus()
+                        page.keyboard.press('Tab')
+                        assert page.evaluate('document.activeElement!==document.body')
+                    page.locator('.tabs [data-view=chat]').click()
+                    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                page.set_viewport_size({'width':393,'height':851})
                 # Fresh authentication/history must enable + without a prior upload or Send.
                 assert page.locator('#attach').is_enabled()
+                with page.expect_file_chooser() as idle_picker:
+                    page.locator('#attach').click()
+                idle_picker.value.set_files([])
+                assert page.locator('#send').is_hidden()
                 picker_checks = []
                 touch = browser.new_page(storage_state=page.context.storage_state(), viewport={'width':393,'height':851}, is_mobile=True, has_touch=True)
                 touch.goto(url)
                 touch.wait_for_function('()=>state.ready&&state.history&&!audioState.loading')
+                # Synthetic keyboard geometry; no physical keyboard is claimed.
+                touch.evaluate("window.keyboardViewport=new EventTarget();Object.assign(keyboardViewport,{height:851,scale:1,offsetTop:0});Object.defineProperty(window,'visualViewport',{configurable:true,value:keyboardViewport});keyboardViewport.addEventListener('resize',updateViewport);updateViewport()")
+                touch.locator('#message-input').focus()
+                assert touch.locator('#send').is_visible()
+                assert touch.locator('#message-input').evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgba(0, 0, 0, 0)'
+                touch.evaluate("keyboardViewport.height=420;keyboardViewport.dispatchEvent(new Event('resize'))")
+                assert touch.locator('#message-input').evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgb(119, 128, 142)'
+                touch.evaluate("keyboardViewport.height=851;keyboardViewport.dispatchEvent(new Event('resize'))")
+                assert touch.locator('#message-input').evaluate('(n)=>n===document.activeElement')
+                assert touch.locator('#send').is_hidden()
+                assert touch.locator('.composer-input').bounding_box()['height'] == 92
+                assert touch.locator('#message-input').evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgba(0, 0, 0, 0)'
+                touch.locator('#message-input').tap()
+                assert touch.locator('#send').is_visible()
+                assert touch.locator('#message-input').evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgba(0, 0, 0, 0)'
+                touch.evaluate("keyboardViewport.scale=2;keyboardViewport.height=420;keyboardViewport.dispatchEvent(new Event('resize'))")
+                assert touch.locator('#message-input').evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgba(0, 0, 0, 0)'
+                touch.evaluate("keyboardViewport.scale=1;keyboardViewport.dispatchEvent(new Event('resize'))")
+                assert touch.locator('#message-input').evaluate('(n)=>getComputedStyle(n).caretColor') == 'rgb(119, 128, 142)'
+                touch.evaluate("keyboardViewport.height=851;keyboardViewport.dispatchEvent(new Event('resize'))")
+                touch.locator('#chat-menu-button').focus()
+                touch.evaluate("delete window.visualViewport;updateViewport()")
                 for device, target in [('desktop', page), ('touch', touch)]:
                     target.bring_to_front()
                     def activate(selector):
@@ -110,7 +200,7 @@ def main():
                     assert target.locator('#attach').is_enabled()
                     assert target.evaluate("document.activeElement===$('attach')")
                     with target.expect_file_chooser() as keyboard:
-                        target.keyboard.press('Enter')
+                        target.locator('#attach').press('Enter')
                     keyboard.value.set_files([])
                     assert target.evaluate("document.activeElement===$('attach')")
                     if device == 'touch':
@@ -209,6 +299,7 @@ def main():
                     assert route.fetch().status == 200
                     route.abort('failed')
                 page.route('**/api/chat', drop)
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!state.pending.size&&submissions.size===1')
                 request_id = chats[-1]['request_id']
@@ -230,10 +321,12 @@ def main():
                 page.wait_for_function('(id)=>state.project===id&&!!state.history', arg=alpha)
                 assert page.locator('#attachment-list').is_visible()
                 page.locator('#message-input').fill('')
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!state.pending.size&&!state.execution&&!submissions.size')
                 assert chats[-1]['content'] == '' and len(chats[-1]['attachment_ids']) == 1
                 page.locator('#message-input').fill('Busy recording')
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>state.execution&&!state.pending.size')
                 geometry = []
@@ -245,7 +338,7 @@ def main():
                     assert boxes[0]['x'] == boxes[1]['x'] == boxes[2]['x']
                     assert boxes[0]['y'] < boxes[1]['y'] < boxes[2]['y']
                     composer = page.locator('#chat-form').bounding_box()
-                    assert composer['height'] <= 160 and composer['y']+composer['height'] <= height
+                    assert composer['height'] <= 202 and composer['y']+composer['height'] <= height
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     assert page.locator('#audio-stop').count() == 0 and page.locator('#audio-cancel').is_visible()
                     assert page.locator('#microphone').get_attribute('aria-label') == 'Stop recording and transcribe'

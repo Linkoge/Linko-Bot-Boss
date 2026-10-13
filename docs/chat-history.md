@@ -1,3 +1,43 @@
+# Compact expanding composer and blank conversation — 2026-10-13
+
+Exact candidate `compact-expanding-composer-v1-20261013`, checkout
+`/home/codex/checkouts/linko-expanding-composer-20261013`, descends from the actually
+succeeded `audio-format-pass-through-usage-v1-20261013` at `cd0b3ecf69000475665cb124256e660883793c4b`.
+Receipt: `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/f62b8538f5233c8957cbf5da873a8772.json`.
+All 12 served assets matched that receipt during read-only baseline inspection.
+This new release is pending deployment; no restart, cutover or production-data mutation is authorized.
+
+Idle input column is 92px (two 44px square controls and one 4px gap), active is 140px
+(three controls), and text overflow grows once to 188px (four equivalents). Outer composer
+adds 14px padding/border. Long drafts scroll internally; viewport-based bounds retain space
+for chat. Send is hidden outside composer activation. Control keyboard focus keeps the active
+composer usable, including Tab to Send; Upload and Record retain their trusted pointer/focus paths.
+Attachments and recording controls share the bounded input column. Draft changes from typing,
+context restoration and transcription are remeasured without changing submission/audio ownership.
+Empty history renders no welcome prompt, paragraph, mark or suggestion buttons.
+
+Desktop typing focus shows a muted gray `#77808e` caret. Touch/coarse-pointer paths hide the
+caret until VirtualKeyboard geometry or a substantial unzoomed viewport reduction indicates a
+keyboard; restoration after an observed reduction hides caret/Send and returns compact geometry
+while leaving native input focus intact. A new tap can reactivate the composer. Pinch zoom is
+excluded from shrink detection; orientation resets observations. Browser visibility hides caret.
+This is practical best-effort detection, not a universal keyboard-state API: floating/split/overlay
+keyboards, hardware keyboards on touch devices, browser chrome changes, missing viewport/geometry
+APIs and delayed events can be ambiguous. Focus expands the composer before a keyboard signal,
+so typing and Send remain accessible on unsupported paths, but a mobile caret may stay hidden.
+No physical Android/iOS keyboard, native OS picker or paid STT acceptance is claimed by Chromium
+fixtures. Existing context-bound picker restoration and its mobile focus-policy limits remain.
+
+Composer focus retains the exact gray `#3a4858` border, with no red border/glow. Control
+focus-visible rings remain. Send uses Upload's shared ordinary button appearance, including hover,
+disabled opacity and focus, and retains its arrow. All workspace category tabs keep selected red
+text and aria-current, with no selection underline; keyboard focus rings/navigation remain.
+Full validation, limitations, exact preparation manifest and manager delivery facts:
+/home/codex/.local/share/linko-bot-manager/deployments/expanding-composer-20261013/REPORT.md
+
+Earlier sections below are historical; this contract supersedes their fixed height, always-hidden
+caret and red composer-focus requirements.
+
 # Fully manual chat scrolling — 2026-10-13, candidate only
 
 Combined exact release: `model-settings-manual-scroll-v2-20261013`. Implemented and verified

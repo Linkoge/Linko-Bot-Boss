@@ -1,3 +1,15 @@
+# Compact expanding composer — 2026-10-13, deployment pending
+
+Exact release: `compact-expanding-composer-v1-20261013`; isolated checkout
+`/home/codex/checkouts/linko-expanding-composer-20261013`. Preserves the actually succeeded
+`audio-format-pass-through-usage-v1-20261013` baseline; earlier pending-audio wording is historical.
+Read docs/chat-history.md and docs/UI_THEME.md for the combined owner refinements and device limits.
+Durable full evidence and routine manager brief/recent-delivery facts: /home/codex/.local/share/linko-bot-manager/deployments/expanding-composer-20261013/REPORT.md
+and sibling manager-summary.json. Preparation manifest is the readiness gate; only a later matching
+succeeded receipt can establish deployment. No deployment requested/performed by this assignment.
+Manager should record this as one delivery, pending deployment, preserving holds and unfinished work;
+no full memory reconciliation. Do not restart the manager from its worker.
+
 # Audio format pass-through integrated candidate — 2026-10-13
 
 Exact release `audio-format-pass-through-usage-v1-20261013`; candidate checkout

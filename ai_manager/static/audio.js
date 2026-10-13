@@ -17,6 +17,7 @@ function renderAudio(){
   $('send').type=session?'button':'submit';
   $('send').disabled=session?!recording||session.project!==state.project||state.pending.has(state.project):state.pending.has(state.project);
   if(typeof attachmentState!=='undefined'&&attachmentState.uploads.has(state.project))$('send').disabled=true;
+  if(typeof updateComposer==='function')updateComposer();
   for(const id of ['archive-chat','clear-chat'])if(session&&session.project===state.project)$(id).disabled=true;
 }
 function audioChanged(auth=false){

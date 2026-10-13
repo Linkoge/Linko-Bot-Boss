@@ -120,6 +120,7 @@ def main():
                   if(n.firstChild!==child)throw Error('unchanged polling replaced DOM');n.remove();
                 }""")
                 page.locator("#message-input").fill("Render Markdown")
+                page.locator('#message-input').focus()
                 page.locator("#send").click()
                 reply = page.locator("#messages .message.assistant .message-content")
                 reply.locator("strong").first.wait_for()

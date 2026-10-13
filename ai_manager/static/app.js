@@ -226,8 +226,6 @@ async function loadHistory(selection=state.selection){
   const previousTop=messages.scrollTop;
   state.history=history;updateChatActions();
   if(fresh||!history.messages.length)messages.replaceChildren();
-  if(history.messages.length)messages.querySelector('.welcome')?.remove();
-  if(!history.messages.length){const welcome=element('div',undefined,'welcome');welcome.append(element('div','Ai','mark'),element('h2','What should we move forward?'),element('p','Talk through a goal, review project state, or plan the next useful step. Your context stays with each project.'));const suggestions=element('div',undefined,'suggestions');for(const text of ['What needs my attention?','Summarize current project state','Help me prioritize the next tasks','Brainstorm a plan for this project']){const b=element('button',text);b.onclick=()=>{$('message-input').value=text;$('message-input').focus();};suggestions.append(b);}welcome.append(suggestions);$('messages').append(welcome);}
   const rows=new Map([...messages.querySelectorAll('[data-message]')].map(row=>[row.dataset.message,row]));
   const ids=new Set(history.messages.map(m=>m.id));
   // /api/history is a rolling 200-message tail, not a deletion list. Keep
@@ -465,6 +463,49 @@ document.addEventListener('DOMContentLoaded',()=>boot().catch(error=>notice(erro
 
 function renameProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'display_name',label:'Display name',value:p.display_name||''}],values=>api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,revision:p.revision})}));}
 
+// Keyboard APIs are optional; viewport shrink is a best-effort mobile signal.
+const composerKeyboard={baseline:window.visualViewport?.height||innerHeight,seen:false,closed:false,active:false};
+function mobileComposer(){return matchMedia('(pointer:coarse)').matches||navigator.maxTouchPoints>0;}
+function updateComposerViewport(){
+  const viewport=window.visualViewport, height=viewport?.height||innerHeight;
+  const focused=$('chat-form').contains(document.activeElement);
+  if(!focused){composerKeyboard.baseline=Math.max(height,innerHeight);composerKeyboard.seen=false;composerKeyboard.closed=false;composerKeyboard.active=false;}
+  if(document.activeElement===$('message-input'))composerKeyboard.active=true;
+  if(focused&&(!viewport||Math.abs(viewport.scale-1)<0.01)){
+    const keyboard=navigator.virtualKeyboard?.boundingRect;
+    const visible=!!keyboard?.height||composerKeyboard.baseline-height>Math.max(100,composerKeyboard.baseline*.18);
+    if(visible){composerKeyboard.seen=true;composerKeyboard.closed=false;}
+    else if(composerKeyboard.seen)composerKeyboard.closed=true;
+  }
+  updateComposer();
+}
+function updateComposer(){
+  const form=$('chat-form'),input=$('message-input');
+  const focused=document.activeElement===input,scroll=input.scrollTop;
+  const mobile=mobileComposer();
+  const active=composerKeyboard.active&&form.contains(document.activeElement)&&(!mobile||!composerKeyboard.closed);
+  form.classList.toggle('composer-active',active);
+  form.classList.toggle('composer-caret',focused&&!document.hidden&&(!mobile||(composerKeyboard.seen&&!composerKeyboard.closed)));
+  $('send').hidden=!active;
+  // Measure at the initial active size, independent of the previous overflow size.
+  form.style.setProperty('--composer-height',(active?140:92)+'px');
+  form.classList.toggle('composer-overflow',false);
+  if(active&&input.scrollHeight>input.clientHeight+1){
+    form.style.setProperty('--composer-height','188px');
+    form.classList.add('composer-overflow');
+  }
+  input.scrollTop=scroll;
+}
+$('message-input').addEventListener('input',updateComposer);
+$('chat-form').addEventListener('focusin',updateComposerViewport);
+// Let native pointer focus transfer finish before hiding/moving its target.
+$('chat-form').addEventListener('focusout',()=>requestAnimationFrame(updateComposerViewport));
+// A fresh tap can reopen a dismissed keyboard without a new focus event.
+$('message-input').addEventListener('pointerdown',()=>{composerKeyboard.active=true;if(composerKeyboard.closed)composerKeyboard.seen=false;composerKeyboard.closed=false;updateComposer();});
+navigator.virtualKeyboard?.addEventListener('geometrychange',updateComposerViewport);
+window.addEventListener('orientationchange',()=>{composerKeyboard.baseline=innerHeight;composerKeyboard.seen=false;composerKeyboard.closed=false;updateComposerViewport();});
+document.addEventListener('visibilitychange',updateComposer);
+
 // Use the visible viewport once: do not subtract keyboard height or safe area twice.
 function updateViewport(){
   const viewport=window.visualViewport;
@@ -473,6 +514,7 @@ function updateViewport(){
   const height=unzoomed&&viewport?viewport.height:window.innerHeight;
   document.documentElement.style.setProperty('--app-height',height+'px');
   document.documentElement.style.setProperty('--viewport-top',(unzoomed&&viewport?viewport.offsetTop:0)+'px');
+  updateComposerViewport();
 }
 window.addEventListener('resize',updateViewport);
 window.visualViewport?.addEventListener('resize',updateViewport);

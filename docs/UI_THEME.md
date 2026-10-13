@@ -1,3 +1,14 @@
+# Current UI refinement — 2026-10-13, candidate only
+
+The compact expanding composer candidate preserves rich red elsewhere. Composer activation keeps
+its existing gray border with no glow; Send matches Upload ordinary-button colors and retains ↑.
+Workspace category/view selection uses red text without a bottom selection line. Shared keyboard
+focus-visible rings and navigation semantics remain. Muted keyboard-aware caret and geometry:
+[chat-history.md](chat-history.md). Full report:
+/home/codex/.local/share/linko-bot-manager/deployments/expanding-composer-20261013/REPORT.md
+
+Earlier accent/fixed-composer evidence below remains historical.
+
 # Integrated activation status — 2026-10-13
 
 Current integrated activation target: `integrated-recovery-append-popup-v1-20261013`; see [STATE.md](../STATE.md).

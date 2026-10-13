@@ -146,6 +146,7 @@ def main():
                     page.locator('#messages').evaluate('(n,p)=>n.scrollTop=p==="top"?0:p==="middle"?800:n.scrollHeight', position)
                     before = page.locator('#messages').evaluate('(n)=>n.scrollTop')
                     page.locator('#message-input').fill('Viewport ' + position)
+                    page.locator('#message-input').focus()
                     page.locator('#send').click()
                     page.wait_for_function('()=>!state.pending.size&&state.execution')
                     samples = []

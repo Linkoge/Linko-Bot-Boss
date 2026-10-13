@@ -113,6 +113,7 @@ def main():
 
                 # Capture and explicit whole-file Send while a real fixture manager turn is active.
                 page.locator('#message-input').fill('Busy recording')
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!!state.execution&&!state.pending.size')
                 assert page.locator('#microphone').is_enabled()
@@ -126,6 +127,7 @@ def main():
                 page.wait_for_timeout(100)
                 assert len(chats) == before_chats and not interrupts
                 assert page.evaluate("audioState.session.phase==='recording'&&!!state.execution")
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!audioState.session&&!state.pending.size')
                 assert len(chats) == 2 and chats[-1]['content'] == 'spoken transcript'
@@ -140,6 +142,7 @@ def main():
                 start()
                 page.locator('#chat-menu-button').click()
                 page.locator('[data-mode=auto]').click()
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function("()=>!audioState.session&&!state.pending.size&&!state.execution&&$('message-input').value===''")
                 assert len(chats) == 1 and chats[-1]['content'] == 'spoken transcript'
@@ -151,6 +154,7 @@ def main():
                 start()
                 held = []
                 page.route('**/api/audio/transcribe', lambda route: held.append(route))
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
                 switch(beta)
@@ -177,6 +181,7 @@ def main():
                 page.route('**/api/audio/transcribe', lambda route: route.fulfill(status=502, json={'detail': 'Provider unavailable'}))
                 page.locator('#message-input').fill('preserved')
                 start()
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function("()=>audioState.session?.phase==='error'")
                 assert page.locator('#message-input').input_value() == 'preserved'
@@ -205,6 +210,7 @@ def main():
                 # Editing after pressing recording Send cancels automatic submission.
                 start()
                 page.route('**/api/audio/transcribe', lambda route: held.append(route))
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
                 page.locator('#message-input').fill('edited while waiting')
@@ -240,6 +246,7 @@ def main():
                 page.locator('#chat-menu-button').click()
                 page.locator('[data-mode=conversation]').click()
                 start()
+                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!audioState.session&&!state.pending.size&&submissions.size===1')
                 assert dropped and len(chats)==2

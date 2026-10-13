@@ -1,18 +1,17 @@
 # Current established state — 2026-10-13
 
-Live `usage-countdown-manual-scroll-v1-20261013`, commit
-`c9e8c9854ce90de7b945062a64cebe9b3d0d17b4`, has durable succeeded receipt
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/37bea66eea3274f2dfaddb58a993ff74.json`.
-Read-only verification confirms every served asset matches that receipt. It includes
-all integrated features and initial-bottom/subsequent-manual chat scrolling fixes.
+Live `audio-format-pass-through-usage-v1-20261013`, commit
+`cd0b3ecf69000475665cb124256e660883793c4b`, has durable succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/f62b8538f5233c8957cbf5da873a8772.json`.
+Read-only inspection matched all 12 served assets to that receipt. It includes provider-decided
+whole-file audio format handling, lowercase usage durations and all prior integrated functionality.
 
-Current integrated candidate `audio-format-pass-through-usage-v1-20261013` removes audio upload extension/MIME/
-signature format gates and retains original bytes/name/MIME for provider decisions.
-Readable-file duration, recording duration, size/auth/empty limits and draft lifecycle
-remain. Provider rejection is safely surfaced. It retains the prepared lowercase usage
-candidate described below byte-for-byte in usage.js. No deployment requested/performed.
-Exact manifest establishes prepared status; no matching succeeded receipt exists.
-Report: `/home/codex/.local/share/linko-bot-manager/deployments/audio-pass-through-20261013/REPORT.md`; sibling manager-summary.json records routine delivery facts.
+New candidate `compact-expanding-composer-v1-20261013` implements the compact/active/overflow
+composer, best-effort keyboard-aware muted caret, identical gray activation border, blank empty
+conversation, Upload-style Send and selected red category text without underlines.
+Implementation/verification/preparation evidence: /home/codex/.local/share/linko-bot-manager/deployments/expanding-composer-20261013/REPORT.md.
+Deployment remains pending a new owner request. No production restart/data mutation performed.
+Current keyboard/browser limits and preserved flows: docs/chat-history.md.
 
 Candidate `usage-compact-lowercase-v2-20261013` in
 `/home/codex/checkouts/linko-usage-compact-20261013` changes only duration formatting:
