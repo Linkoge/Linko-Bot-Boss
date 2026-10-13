@@ -70,7 +70,7 @@ def main():
                 page.locator('#setup-token').fill((root / 'data/setup-token').read_text())
                 page.locator('#login-button').click()
                 page.wait_for_function('()=>state.ready&&state.history?.messages.length===35')
-                assert page.locator('#messages').evaluate('(n)=>n.scrollTop') == 0
+                assert page.locator('#messages').evaluate('(n)=>Math.abs(n.scrollTop+n.clientHeight-n.scrollHeight)<=1')
                 assert page.locator('#messages').evaluate('(n)=>getComputedStyle(n).overflowAnchor') == 'none'
                 assert page.locator('#model-settings-button').count() == 1
                 page.locator('#model-settings-button').click()
@@ -110,6 +110,7 @@ def main():
                 assert page.locator('#model-settings-button').evaluate('(n)=>n===document.activeElement')
                 page.reload()
                 page.wait_for_function('()=>state.ready&&state.history')
+                assert page.locator('#messages').evaluate('(n)=>Math.abs(n.scrollTop+n.clientHeight-n.scrollHeight)<=1')
                 page.locator('#model-settings-button').click()
                 assert page.locator('[data-choice="manager-Astra"]').get_attribute('aria-pressed') == 'true'
                 assert page.locator('[data-choice="manual-Luna-high"]').get_attribute('aria-pressed') == 'true'
@@ -140,7 +141,8 @@ def main():
                 assert page.locator('[data-choice="manager-Sol"]').evaluate('(n)=>n===document.activeElement')
                 page.keyboard.press('Escape')
                 # At top, middle, and old bottom: sends, streams and reconciliation cannot follow.
-                for position in ['top', 'middle', 'bottom']:
+                for width,height,position in [(w,h,p) for w,h in [(1200,900),(393,851),(320,568)] for p in ['top','middle','bottom']]:
+                    page.set_viewport_size({'width':width,'height':height})
                     page.locator('#messages').evaluate('(n,p)=>n.scrollTop=p==="top"?0:p==="middle"?800:n.scrollHeight', position)
                     before = page.locator('#messages').evaluate('(n)=>n.scrollTop')
                     page.locator('#message-input').fill('Viewport ' + position)
@@ -154,7 +156,24 @@ def main():
                     page.evaluate('async()=>{await loadHistory(state.selection);await refresh();}')
                     samples.append(page.locator('#messages').evaluate('(n)=>n.scrollTop'))
                     assert all(abs(value-before) <= 1 for value in samples), (position, before, samples)
-                    results.append({'position': position, 'before': before, 'samples': samples})
+                    results.append({'viewport':[width,height],'position': position, 'before': before, 'samples': samples})
+                # The API tail window dropping old rows is not a deletion request.
+                snapshot=page.evaluate('state.history')
+                snapshot['messages']=snapshot['messages'][5:]
+                count=page.locator('#messages [data-message]').count()
+                page.route('**/api/history?*',lambda route:route.fulfill(json=snapshot))
+                page.evaluate('()=>loadHistory(state.selection)')
+                assert page.locator('#messages [data-message]').count()==count
+                page.unroute('**/api/history?*')
+                results.append({'rolling_tail_retained_rows':count})
+                # A full Markdown rebuild near the bottom used to clamp the offset.
+                page.locator('#messages').evaluate('(n)=>n.scrollTop=n.scrollHeight')
+                before=page.locator('#messages').evaluate('(n)=>n.scrollTop')
+                page.evaluate("()=>{const n=document.querySelector('.message-content');updateMessageContent(n,n._messageSource+' extra','assistant');}")
+                assert abs(page.locator('#messages').evaluate('(n)=>n.scrollTop')-before)<=1
+                page.evaluate("()=>{showView('settings');showView('chat');}")
+                assert abs(page.locator('#messages').evaluate('(n)=>n.scrollTop')-before)<=1
+                results.append({'markdown_rebuild_and_view_return':before})
                 # User scrolling continues normally; mutations above the viewport don't anchor.
                 page.locator('#messages').evaluate('(n)=>n.scrollTop=800')
                 page.locator('#messages').hover()

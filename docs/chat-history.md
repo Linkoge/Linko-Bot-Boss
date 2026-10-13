@@ -284,3 +284,16 @@ Live production remains baseline `5ff6d7f`, schema **9**, PID **1410**, active s
 To complete this already authorized release, use an operator session outside the manager service after this assignment and its manager reporting turn have finished. Arrange an owner submission quiet window; settle ambiguous legacy browser submissions and retain tab drafts/request IDs. Recheck live baseline/clean status, unfinished manager and worker executions, task leases, pending deliveries/questions, queued tasks and recovery eligibility; preserve unrelated work and wait if any work is active. Take fresh verified manager/native-history backups and repeat migration rehearsal on copies. Immediately recheck idleness before stopping only the dedicated service; while stopped, recheck persisted state and take the final manager snapshot. If new work appeared, start the original service and defer the release. Otherwise fast-forward the live checkout to this release receipt commit from the local release checkout and start the existing service with its existing environment and `.venv`.
 
 Verify startup commit, schema 10, integrity/foreign keys, preserved pre-stop records/sessions/native references, scheduler health and exact committed assets over loopback/private HTTPS, with unauthenticated APIs still protected. Run focused chat reliability smoke on disposable data using the deployed code; do not create production acceptance assignments. Preserve `chat_requests` and newly accepted work for rollback; do not restore this older preparation snapshot over later work. A receipt-aware selective rollback needs its own reviewed implementation, and a complete baseline rollback needs every unresolved submission accounted for in a quiet window. The validated restore and additive-schema compatibility are preparation evidence, not authorization to discard new data.
+
+## Initial positioning and manual updates — 2026-10-13
+
+Candidate `usage-countdown-manual-scroll-v1-20261013`: initial authenticated website load/reload
+positions the loaded chat at the bottom once fonts and two animation frames have completed.
+Browser scroll restoration is disabled for this document. A chat gesture during initialization
+cancels delayed positioning; subsequent updates never follow replies or sends. Render batches
+and Markdown replacements preserve the numeric scroll offset; leaving/returning to another view
+retains it. A genuinely shorter conversation can only retain an offset within its available range.
+The rolling 200-message API tail is not a deletion list: already loaded older message rows stay
+until context/conversation replacement or clear/archive. Manual wheel/touch/keyboard scrolling and
+existing disabled scroll anchoring remain. Physical-device browser/keyboard sessions are not claimed.
+This supersedes older startup-at-top behavior; deployment awaits an owner request.

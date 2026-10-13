@@ -1,5 +1,24 @@
 'use strict';
 const $ = id => document.getElementById(id);
+// Reload starts at the loaded chat bottom; browser restoration must not race it.
+if('scrollRestoration' in history)history.scrollRestoration='manual';
+let initialChatPosition=true,hiddenChatPosition=0;
+function preserveChatPosition(render){
+  const messages=$('messages'),top=messages.scrollTop;
+  try{return render();}finally{messages.scrollTop=top;}
+}
+async function positionInitialChat(selection){
+  if(!initialChatPosition)return;
+  await document.fonts.ready;
+  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+  if(selection!==state.selection||$('app').hidden||state.view!=='chat')return;
+  $('messages').scrollTop=$('messages').scrollHeight;
+  initialChatPosition=false;
+}
+// A deliberate gesture during startup wins over delayed layout positioning.
+for(const type of ['wheel','touchstart','pointerdown','keydown']){
+  $('messages').addEventListener(type,()=>{initialChatPosition=false;},{passive:true});
+}
 const draftRecovery=JSON.parse(sessionStorage.getItem('linko-drafts-v1')||'[]');
 const appliedTranscripts=new Set(draftRecovery.transcripts||[]);
 const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
@@ -41,13 +60,13 @@ function action(fn){return async event=>{const button=event?.currentTarget;if(bu
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
 function showAuth(){if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
-async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);state.ready=true;}
+async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
 let refreshVersion=0;
 async function refresh(loadChat=true){
   const version=++refreshVersion,selection=state.selection,project=state.project;
   const portfolio=await api('/api/portfolio'+(project?'?project_id='+encodeURIComponent(project):''));
   if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return false;
-  state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();
+  preserveChatPosition(()=>{state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();});
   if(portfolio.queue_error)notice(portfolio.queue_error);
   if(state.view==='todo')await loadTodos(selection);
   if(loadChat&&!state.source&&!state.pending.has(project))await loadHistory(selection);
@@ -204,13 +223,16 @@ async function loadHistory(selection=state.selection){
   const request=state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
   const history=await api(`/api/history?${query}`);if(selection!==state.selection||request!==state.loadHistoryRequest)return;
   const messages=$('messages'),fresh=state.history?.conversation.id!==history.conversation.id;
+  const previousTop=messages.scrollTop;
   state.history=history;updateChatActions();
   if(fresh||!history.messages.length)messages.replaceChildren();
   if(history.messages.length)messages.querySelector('.welcome')?.remove();
   if(!history.messages.length){const welcome=element('div',undefined,'welcome');welcome.append(element('div','Ai','mark'),element('h2','What should we move forward?'),element('p','Talk through a goal, review project state, or plan the next useful step. Your context stays with each project.'));const suggestions=element('div',undefined,'suggestions');for(const text of ['What needs my attention?','Summarize current project state','Help me prioritize the next tasks','Brainstorm a plan for this project']){const b=element('button',text);b.onclick=()=>{$('message-input').value=text;$('message-input').focus();};suggestions.append(b);}welcome.append(suggestions);$('messages').append(welcome);}
   const rows=new Map([...messages.querySelectorAll('[data-message]')].map(row=>[row.dataset.message,row]));
   const ids=new Set(history.messages.map(m=>m.id));
-  for(const [id,row] of rows)if(!ids.has(id))row.remove();
+  // /api/history is a rolling 200-message tail, not a deletion list. Keep
+  // already loaded older rows until the conversation changes or is cleared.
+  for(const [id,row] of rows)if(fresh&&!ids.has(id))row.remove();
   for(const m of history.messages){
     let row=rows.get(m.id);
     if(!row){row=element('article',undefined,`message ${m.role}`);row.setAttribute('aria-label',messageAuthor(m));const body=element('div'),label=element('div',undefined,'message-label');label.append(element('span',undefined,'badge'));body.append(label,element('div',messageText(m),'message-content'));row.append(body);row.dataset.message=m.id;messages.append(row);}
@@ -222,6 +244,7 @@ async function loadHistory(selection=state.selection){
     updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);renderMessageAttachments(row,m);
 
   }
+  if(!fresh)messages.scrollTop=previousTop;
   const active=history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
   state.execution=active?.execution_id||null;
   $('stop-chat').hidden=!active;$('send').disabled=state.pending.has(state.project);
@@ -237,7 +260,7 @@ function updateMessageContent(node,text,role='assistant'){
   if(node._messageSource===text&&node.classList.contains('markdown')===markdown){delete node._pendingMessage;return;}
   if(chatHasSelection(node)){node._pendingMessage={text,role};return;}
   delete node._pendingMessage;
-  if(markdown)node.replaceChildren(renderChatMarkdown(text));
+  if(markdown)preserveChatPosition(()=>node.replaceChildren(renderChatMarkdown(text)));
   else if(node.firstChild?.nodeType===Node.TEXT_NODE&&text.startsWith(node.textContent))node.firstChild.appendData(text.slice(node.textContent.length));
   else node.textContent=text;
   node.classList.toggle('markdown',markdown);node._messageSource=text;
@@ -360,7 +383,7 @@ async function openSavedHistory(id,older=false,search=''){
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
-function showView(view){closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));}
+function showView(view){if(state.view==='chat'&&view!=='chat')hiddenChatPosition=$('messages').scrollTop;const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning)$('messages').scrollTop=hiddenChatPosition;}
 function editor(title,fields,onSave,reloadContext=true){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}

@@ -84,7 +84,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent-focus);outli
 #usage-last-refresh{color:var(--muted);font-size:12px;margin:12px 0}
 .usage-window{border-bottom:1px solid var(--border);padding:12px 0}
 .usage-window h3{font-size:14px;margin:0 0 6px}.usage-window p{margin:0}
-.usage-remaining{font-size:20px}.usage-reset{color:var(--muted);font-size:12px}
+.usage-remaining,.usage-reset{font-size:20px}
 .usage-remaining.stale{color:#e4c58b;text-decoration:underline dotted}
 @media(min-width:901px){.workspace-row{padding-inline:16px}}
 /* Memory review evidence and controls remain readable on narrow screens. */

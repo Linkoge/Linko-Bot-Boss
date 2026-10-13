@@ -6,6 +6,12 @@ function usageWindows(){return usageData?.buckets.find(b=>b.id==='codex')?.windo
 function usageStale(window){return window.stale||(window.resets_at!==null&&window.resets_at<=usageNow())||window.observed_at+180<=usageNow();}
 function usagePercent(value){return value===null?'Unavailable':`${value}%`;}
 
+function usageDuration(timestamp){
+  if(!Number.isFinite(timestamp))return 'Unavailable';
+  const minutes=Math.max(0,Math.ceil((timestamp-usageNow())/60));
+  const hours=Math.floor(minutes/60),rest=minutes%60;
+  return `${hours} ${hours===1?'hour':'hours'} ${rest} ${rest===1?'minute':'minutes'}`;
+}
 function renderUsage(){
   const windows=usageWindows(),labels=[];
   for(const [id,minutes,name] of [['usage-five',300,'Five-hour'],['usage-week',10080,'Weekly']]){
@@ -26,11 +32,11 @@ function renderUsage(){
     const matches=windows.filter(w=>w.duration_minutes===minutes),w=matches.length===1?matches[0]:null;
     const section=element('section',undefined,'usage-window');
     section.append(element('h3',label));
-    const remaining=element('p',w?.remaining_percent!=null?`${usagePercent(w.remaining_percent)} remaining`:'Unavailable','usage-remaining');
+    const remaining=element('p',w?.remaining_percent!=null?usagePercent(w.remaining_percent):'Unavailable','usage-remaining');
     const isStale=!!w&&(usageStale(w)||!!usageData?.error);
     remaining.classList.toggle('stale',isStale);
     if(isStale){remaining.title='Previous reading is stale';remaining.setAttribute('aria-label',remaining.textContent+'. Previous reading is stale.');}
-    section.append(remaining,element('p',w?.resets_at!=null?localTime(w.resets_at):'Unavailable','usage-reset'));
+    section.append(remaining,element('p',usageDuration(w?.resets_at),'usage-reset'));
     details.append(section);
   }
   $('usage-last-refresh').textContent='Last refresh '+(usageData?.last_successful_refresh_at!=null?localTime(usageData.last_successful_refresh_at):'Never');

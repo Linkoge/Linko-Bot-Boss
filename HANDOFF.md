@@ -1,3 +1,11 @@
+# Countdown and manual scroll release — 2026-10-13
+
+Review candidate `usage-countdown-manual-scroll-v1-20261013` in
+`/home/codex/checkouts/linko-countdown-scroll-20261013`. Based on succeeded integrated live commit
+`2a893c93d161e6020d8969aa8563abd05fc1b40c`; preserve all integrated changes. No deployment
+without a new owner request. Exact manifest and full private report linked from STATE.md establish
+preparation/verification; deployment requires this release's own succeeded receipt.
+
 # Integrated release handoff — 2026-10-13
 
 Exact integrated release ID: `integrated-recovery-append-popup-v1-20261013`. Isolated checkout:

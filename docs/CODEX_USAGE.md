@@ -19,9 +19,9 @@ The existing live navigation/audio baseline `nav-audio-upload-v2-20261013`, comm
 Older usage implementation/deployment narrative remains in Git history.
 
 The popup displays exactly two stacked sections: **5 hour**, then **Weekly**. Each shows
-exact percentage remaining and reset time in the established Tbilisi format below it.
+exact percentage remaining and hours/minutes until reset below it, in the same font styling.
 Missing, ambiguous or unsupported windows show `Unavailable`. There is no allowance label,
-plan/bucket description, used percentage, duration, countdown or technical timestamp.
+plan/bucket description, used percentage, absolute reset date or reset/remaining prose.
 Close/Refresh remain accessible. The bottom **Last refresh** footer retains the prior
 system font, muted color, 12px size and 12px vertical margins.
 
@@ -73,3 +73,13 @@ This separate delivery does not pause or append to assignments
 No main checkout edit, merge, restart, deployment request or production task/data mutation.
 If another delivery advances live HEAD, coordinate/rebase and prepare a fresh ID against
 that exact baseline; never deploy this old-base candidate over unrelated changes.
+
+## Reset duration revision — 2026-10-13
+
+Candidate `usage-countdown-manual-scroll-v1-20261013` preserves section labels and successful-refresh
+semantics. Durations use the server-adjusted clock and ceil positive seconds to whole minutes
+(never show zero before expiry), split into total hours and minutes with singular/plural units.
+Expired timestamps show `0 hours 0 minutes` and the percentage stays stale; missing/nonfinite
+timestamps show `Unavailable`. The existing 15-second display tick and visibility refresh keep
+the countdown current without changing the successful-refresh footer. No quota reset is inferred.
+This revision supersedes the absolute-reset presentation above and is prepared, not deployed.

@@ -101,7 +101,9 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert page.locator('#usage-details h3').all_text_contents() == ['5 hour', 'Weekly']
                     assert 'allowance' not in page.locator('#usage-dialog').inner_text()
                     assert page.locator('#usage-last-refresh').inner_text() == page.evaluate("'Last refresh '+localTime(usageData.last_successful_refresh_at)")
-                    assert 'Tbilisi' in page.locator('#usage-details').inner_text()
+                    assert 'Tbilisi' not in page.locator('#usage-details').inner_text()
+                    assert page.locator('.usage-reset').all_text_contents() == ['1 hour 0 minutes', '24 hours 0 minutes']
+                    assert page.locator('.usage-reset').first.evaluate('(n)=>getComputedStyle(n).font') == page.locator('.usage-remaining').first.evaluate('(n)=>getComputedStyle(n).font')
                     dialog = page.locator('#usage-dialog').bounding_box()
                     assert dialog['x'] >= 0 and dialog['x']+dialog['width'] <= width
                     assert dialog['height'] <= height
@@ -137,7 +139,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.evaluate("usageData.buckets[0].windows.reverse();renderUsage()")
                 assert page.locator('#usage-five').inner_text() == '88%'
                 page.locator('#usage-button').click()
-                assert page.locator('.usage-remaining').all_text_contents() == ['87.5% remaining', '0% remaining']
+                assert page.locator('.usage-remaining').all_text_contents() == ['87.5%', '0%']
                 successful_footer = page.locator('#usage-last-refresh').inner_text()
                 # HTTP success containing a backend refresh failure preserves last success.
                 failed = json.loads(json.dumps(response))
@@ -170,11 +172,16 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 assert page.locator('#usage-last-refresh').inner_text() != successful_footer
                 assert page.locator('.usage-remaining.stale').count() == 0
                 page.evaluate("usageData.buckets[0].windows[1].duration_minutes=15;usageData.buckets[0].windows[1].label='15-minute allowance';renderUsage()")
-                assert page.locator('.usage-remaining').nth(0).inner_text() == '87.5% remaining'
+                assert page.locator('.usage-remaining').nth(0).inner_text() == '87.5%'
                 assert page.locator('.usage-remaining').nth(1).inner_text() == 'Unavailable'
                 page.evaluate("usageData.buckets[0].windows[0].resets_at=usageNow()-1;renderUsage()")
                 assert 'stale' in page.locator('#usage-button').get_attribute('aria-label')
                 assert page.locator('.usage-remaining.stale').count() == 1
+                assert page.locator('.usage-reset').nth(0).inner_text() == '0 hours 0 minutes'
+                page.evaluate('usageData.buckets[0].windows[0].resets_at=null;renderUsage()')
+                assert page.locator('.usage-reset').nth(0).inner_text() == 'Unavailable'
+                assert page.evaluate('usageDuration(usageNow()+22320)') == '6 hours 12 minutes'
+                assert page.evaluate('usageDuration(usageNow()+1)') == '0 hours 1 minute'
                 page.unroute('**/api/account-usage')
                 page.route('**/api/account-usage', lambda route: route.abort())
                 page.evaluate("usageData=null;renderUsage()")

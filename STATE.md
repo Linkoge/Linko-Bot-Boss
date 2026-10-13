@@ -1,18 +1,15 @@
-# Current state — 2026-10-13
+# Current established state — 2026-10-13
 
-Current live is `nav-audio-upload-v2-20261013`, commit
-`08f0ba712f194ea0f985740ef408c9e033511b98`, established by succeeded receipt
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json`.
-Read-only integration checks confirm unchanged service PID/start, active scheduler and all matching served assets.
+Live `integrated-recovery-append-popup-v1-20261013`, commit `2a893c93d161e6020d8969aa8563abd05fc1b40c`,
+has succeeded receipt `deployment-helper/results/800a05e655530f78ab17a9e581832b4a.json` under
+`/home/codex/.local/share/linko-bot-manager`. Served app hash matches; service PID 1011647,
+active since 2026-10-13 13:45:45 +04 at read-only inspection. All integrated features are retained.
 
-Integrated release: `integrated-recovery-append-popup-v1-20261013` in
-`/home/codex/checkouts/linko-integrated-deliveries-20261013`. This combines the three completed
-independent deliveries without reimplementing them: unfinished-recovery-family-ui-v2, manager-append-rule-v1
-and popup-cleanup-v1, all dated 20261013. Owner explicitly authorized deployment after their reports;
-that authorization persists. The manager reviews and calls `deploy_release` with this integrated ID.
-The integration worker does not request deployment, restart the service or alter production state.
-Prepared status requires the exact manifest at `/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/integrated-recovery-append-popup-v1-20261013/manifest.json`;
-only this release's own later succeeded result receipt establishes deployed status.
+Candidate `usage-countdown-manual-scroll-v1-20261013` changes reset presentation and chat positioning.
+Exact preparation requires its helper manifest; no deployment is requested or performed.
+Full evidence/report: `/home/codex/.local/share/linko-bot-manager/deployments/countdown-scroll-20261013/REPORT.md`.
+Contracts: docs/CODEX_USAGE.md and docs/chat-history.md. Production data, native histories, owner holds,
+settings, audio/upload, memory/recovery, popup layering and private hosting remain preserved.
 
 Lasting candidate effects: durable assignment follow-up and idle recovery respecting owner holds;
 latest supported catalog version within the chosen family for new work, exact retained routes for
