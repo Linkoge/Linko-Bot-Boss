@@ -58,7 +58,7 @@ async function api(path, options={}){
 }
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
-function showAuth(){if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
+function showAuth(){$('agent-list').replaceChildren();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
 let refreshVersion=0;
@@ -145,6 +145,7 @@ renderChatModes();
 async function selectProject(id){
   closeChatMenu();
   if(id!==state.project)audioChanged();
+  $('agent-list').replaceChildren();
   state.drafts.set(state.project,$('message-input').value);saveDrafts();
   const selection=++state.selection;
   state.todoSelection=new Map();state.todos=[];renderTodos(true);
@@ -203,17 +204,30 @@ function renderTasks(){
 }
 function renderAgents(){
   const count=state.portfolio.active_agents||0,badge=$('agent-count'),scope=projectName(state.project);badge.textContent=count;badge.hidden=count===0;badge.title=`${count} working · ${scope}`;
-  document.querySelector('[data-view=agents]').setAttribute('aria-label',`Agents · ${scope}${count?' · '+count+' working':''}`);$('agent-list').replaceChildren();
-  for(const e of state.portfolio.executions.filter(e=>!state.project||e.project_id===state.project)){
-    const row=element('article',undefined,'panel');row.dataset.executionId=e.id;row.append(element('h3',`${e.agent_id} · ${taskStateLabel(e.status)} · ${projectName(e.project_id)}`));
-    row.append(e.work_started_at!=null?timestamp('Work started',e.work_started_at):element('small',['queued','starting'].includes(e.status)?'Work has not started':'Work start not recorded'));row.append(timestamp('Queued',e.started_at));
-    const d=element('details');d.append(element('summary','Output and execution references'),element('pre',[e.output,e.error,e.thread_id,e.turn_id].filter(Boolean).join('\n')));row.append(d);
+  document.querySelector('[data-view=agents]').setAttribute('aria-label',`Agents · ${scope}${count?' · '+count+' working':''}`);
+  const list=$('agent-list'),top=window.scrollY;
+  const reading=[...list.querySelectorAll('details[open] pre')].find(node=>{const box=node.getBoundingClientRect();return box.bottom>0&&box.top<innerHeight;});
+  const readingY=reading?.getBoundingClientRect().top;
+  const existing=new Map([...list.children].map(row=>[row.dataset.executionId,row]));
+  const visible=state.portfolio.executions.filter(e=>!state.project||e.project_id===state.project);
+  const ids=new Set(visible.map(e=>e.id));
+  // Retain an expanded result even when it rolls out of the bounded server list.
+  for(const [id,row] of existing)if(!ids.has(id)&&!row.querySelector('details').open)row.remove();
+  for(const [index,e] of visible.entries()){
+    let row=existing.get(e.id);
+    if(!row){row=element('article',undefined,'panel');row.dataset.executionId=e.id;row.append(element('div',undefined,'agent-metadata'));const details=element('details');details.append(element('summary','Output and execution references'),element('pre',undefined,'agent-output'));row.append(details,element('div',undefined,'agent-controls'));const next=visible.slice(index+1).map(item=>existing.get(item.id)).find(Boolean);list.insertBefore(row,next||null);}
+    const metadata=row.querySelector('.agent-metadata'),controls=row.querySelector('.agent-controls');metadata.replaceChildren(element('h3',`${e.agent_id} · ${taskStateLabel(e.status)} · ${projectName(e.project_id)}`));controls.replaceChildren();
+    metadata.append(e.work_started_at!=null?timestamp('Work started',e.work_started_at):element('small',['queued','starting'].includes(e.status)?'Work has not started':'Work start not recorded'));metadata.append(timestamp('Queued',e.started_at));
+    const output=row.querySelector('pre'),text=[e.output,e.error,e.thread_id,e.turn_id].filter(Boolean).join('\n');
+    if(chatHasSelection(output))output._pendingAgentOutput=text;
+    else if(output.textContent!==text){const scroll=output.scrollTop,left=output.scrollLeft;output.textContent=text;output.scrollTop=scroll;output.scrollLeft=left;delete output._pendingAgentOutput;}
     const task=state.portfolio.tasks.find(t=>t.id===e.task_id&&t.lease_owner===e.id);
-    if(!e.finished_at&&task){const controls=element('div',undefined,'task-controls');appendTaskControls(controls,task);row.append(controls);}
-    else if(!e.finished_at&&!e.task_id){const selection=state.selection,b=element('button','Stop reply');b.onclick=action(async()=>{if(selection!==state.selection)return;await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});if(selection===state.selection)await refresh();});row.append(b);}
-    $('agent-list').append(row);
+    if(!e.finished_at&&task){const controls=element('div',undefined,'task-controls');appendTaskControls(controls,task);row.querySelector('.agent-controls').append(controls);}
+    else if(!e.finished_at&&!e.task_id){const selection=state.selection,b=element('button','Stop reply');b.onclick=action(async()=>{if(selection!==state.selection)return;await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});if(selection===state.selection)await refresh();});controls.append(b);}
   }
+  if(state.view==='agents')window.scrollTo({top:reading?.isConnected?window.scrollY+reading.getBoundingClientRect().top-readingY:top,behavior:'instant'});
 }
+document.addEventListener('selectionchange',()=>{for(const output of document.querySelectorAll('.agent-output')){if(output._pendingAgentOutput!==undefined&&!chatHasSelection(output)){const top=output.scrollTop,left=output.scrollLeft;output.textContent=output._pendingAgentOutput;delete output._pendingAgentOutput;output.scrollTop=top;output.scrollLeft=left;}}});
 
 function renderQuestions(){$('questions').replaceChildren();for(const q of state.portfolio.questions.filter(q=>!state.project||q.project_id===state.project)){const request=JSON.parse(q.request),form=element('form',undefined,'panel');form.append(element('h3','Codex needs your answer · '+projectName(q.project_id)));if(q.kind==='item/tool/requestUserInput'){for(const question of request.questions){const label=element('label',question.question),input=element('input');input.name=question.id;input.required=true;if(question.options)label.append(element('small',question.options.map(x=>x.label).join(' / ')));label.append(input);form.append(label);}form.append(element('button','Send answer','primary'));form.onsubmit=action(async event=>{event.preventDefault();await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:Object.fromEntries(new FormData(form))})});await refresh();});}else{form.append(element('pre',JSON.stringify(request,null,2)));for(const [label,approve] of [['Confirm exact action',true],['Decline',false]]){const b=element('button',label);b.type='button';b.onclick=action(async()=>{await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:{approve}})});await refresh();});form.append(b);}}$('questions').append(form);}}
 async function loadHistory(selection=state.selection){
@@ -297,8 +311,16 @@ function attachStream(execution,messageId,cursor=0){
 function updateChatActions(){
   const disabled=!state.history?.messages.length||state.pending.has(state.project)||!!state.execution||state.history.messages.some(m=>['queued','streaming','waiting'].includes(m.status));
   for(const id of ['archive-chat','clear-chat'])$(id).disabled=disabled;
+  updateChatTrashAvailability();
   for(const id of ['copy-all','copy-five'])$(id).disabled=!state.history?.messages.length||!!state.copyingChat;
   renderAttachments();
+}
+function updateChatTrashAvailability(){
+  const changing=state.pending.has(state.project)||submissions.has(state.project)||!!state.execution||!!audioState.session;
+  const files=attachmentDraft(state.project).length||attachmentState.uploads.has(state.project);
+  $('restore-trash').disabled=!state.history?.trash||changing||!!files;
+  $('restore-trash').title=files?'Send or remove draft attachments before restoring a different chat':'Restore cleared chat; swaps with a nonempty current chat';
+  $('empty-trash').disabled=!state.history?.trash||changing;
 }
 async function copyChat(all){
   const history=state.history;if(!history?.messages.length||state.copyingChat)return;
@@ -332,7 +354,7 @@ function confirmChatReset(archive){
   if(!state.history?.messages.length)return;
   const project=state.project,selection=state.selection,history=state.history;
   $('chat-confirm-title').textContent=archive?'Archive this chat?':'Clear this chat?';
-  $('chat-confirm-description').textContent=archive?`Save the entire ${projectName(project)} conversation in a searchable archive and start a fresh chat.`:`Remove all messages from the current ${projectName(project)} chat? This cannot be undone. Existing archives, tasks and project memory are preserved.`;
+  $('chat-confirm-description').textContent=archive?`Save the entire ${projectName(project)} conversation in a searchable archive and start a fresh chat.`:`Move the current ${projectName(project)} chat to the single trash slot? It replaces the previous trash. Restore swaps with a nonempty current chat. Archives, tasks and recovery evidence are preserved.`;
   $('chat-archive-label').hidden=!archive;
   $('chat-archive-name').value=`${projectName(project)} · ${new Date().toLocaleString()}`.slice(0,120);
   $('chat-confirm-submit').textContent=archive?'Archive chat':'Clear chat';
@@ -349,6 +371,23 @@ function confirmChatReset(archive){
 }
 $('archive-chat').onclick=()=>confirmChatReset(true);$('clear-chat').onclick=()=>confirmChatReset(false);
 $('chat-confirm-cancel').onclick=()=>$('chat-confirm').close();
+function confirmTrash(restore){
+  closeChatMenu(true);const history=state.history;if(!history?.trash)return;
+  const project=state.project,selection=state.selection;
+  $('chat-confirm-title').textContent=restore?'Restore Trash?':'Empty Trash?';
+  $('chat-confirm-description').textContent=restore?'Restore the cleared chat. If this chat has messages, it moves to trash so you can swap back. Your unsent text stays in the composer.':'Remove the cleared chat from the recoverable trash slot? Conversation and task evidence remains retained internally.';
+  $('chat-archive-label').hidden=true;$('chat-confirm-submit').textContent=restore?'Restore Trash':'Empty Trash';
+  $('chat-confirm-submit').className=restore?'primary':'danger';$('chat-confirm-error').textContent='';
+  $('chat-confirm-form').onsubmit=async event=>{
+    event.preventDefault();const button=$('chat-confirm-submit');if(button.disabled)return;button.disabled=true;
+    try{
+      if(selection!==state.selection||audioState.session||(restore&&(attachmentDraft(project).length||attachmentState.uploads.has(project)||submissions.has(project))))throw new Error('Chat or draft attachments changed. Confirm again.');
+      const result=await api('/api/chat/trash/'+(restore?'restore':'empty'),{method:'POST',body:JSON.stringify({project_id:project,conversation_id:history.conversation.id,last_message_id:history.messages.at(-1)?.id||null,trash_id:history.trash.conversation_id,confirmed:true})});
+      $('chat-confirm').close();notice(result.message);if(selection===state.selection)await loadHistory(selection);
+    }catch(error){$('chat-confirm-error').textContent=error.message;}finally{button.disabled=false;}
+  };$('chat-confirm').showModal();
+}
+$('restore-trash').onclick=()=>confirmTrash(true);$('empty-trash').onclick=()=>confirmTrash(false);
 function historyQuery(){const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);return query;}
 async function searchHistory(append=false){
   const request=state.historyRequest=(state.historyRequest||0)+1,query=historyQuery(),offset=append?state.historyOffset||0:0;
@@ -381,7 +420,7 @@ async function openSavedHistory(id,older=false,search=''){
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
-function showView(view){if(state.view==='chat'&&view!=='chat')hiddenChatPosition=$('messages').scrollTop;const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning)$('messages').scrollTop=hiddenChatPosition;}
+function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')hiddenChatPosition=$('messages').scrollTop;const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning)$('messages').scrollTop=hiddenChatPosition;}
 function editor(title,fields,onSave,reloadContext=true){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}
@@ -483,7 +522,8 @@ function updateComposer(){
   const form=$('chat-form'),input=$('message-input');
   const focused=document.activeElement===input,scroll=input.scrollTop;
   const mobile=mobileComposer();
-  const active=composerKeyboard.active&&form.contains(document.activeElement)&&(!mobile||!composerKeyboard.closed);
+  const recording=typeof audioState!=='undefined'&&audioState.session?.project===state.project&&['starting','recording','stopping','transcribing'].includes(audioState.session.phase);
+  const active=recording||(composerKeyboard.active&&form.contains(document.activeElement)&&(!mobile||!composerKeyboard.closed));
   form.classList.toggle('composer-active',active);
   form.classList.toggle('composer-caret',focused&&!document.hidden&&(!mobile||(composerKeyboard.seen&&!composerKeyboard.closed)));
   $('send').hidden=!active;
@@ -547,13 +587,37 @@ function renderTodos(force=false){
       checkbox.onchange=()=>{if(checkbox.checked)state.todoSelection.set(entry.id,entry.revision);else state.todoSelection.delete(entry.id);renderTodos();};
       label.append(checkbox,element('strong',entry.title));row.append(label,element('small',projectName(entry.project_id)),element('p',entry.details,'todo-details'));
       if(entry.source_task_id)row.append(element('small','Linked recording assignment: '+entry.source_task_id));
-      const edit=element('button','Edit');edit.dataset.todo=entry.id;edit.type='button';edit.onclick=()=>editTodo(entry);row.append(edit);list.append(row);
+      const edit=element('button','Edit');edit.dataset.todo=entry.id;edit.type='button';edit.onclick=()=>editTodo(entry);row.append(edit);
+      const start=element('button','Start');start.type='button';start.dataset.todoStart=entry.id;start.onclick=action(()=>startTodo(entry));row.append(start);list.append(row);
     }
     if(!state.todos.length)list.append(element('p','No future ideas in this context.','empty'));
     if(listFocused&&focusId)list.querySelector(`[data-todo="${focusId}"][type="${focusKind}"]`)?.focus({preventScroll:true});
   }
   for(const box of list.querySelectorAll('input[type=checkbox]'))box.checked=state.todoSelection.has(box.dataset.todo);
   $('todo-delete').disabled=!state.todoSelection.size;
+}
+const todoStarts=new Map(JSON.parse(sessionStorage.getItem('linko-todo-starts-v1')||'[]'));
+function saveTodoStarts(){sessionStorage.setItem('linko-todo-starts-v1',JSON.stringify([...todoStarts]));}
+async function startTodo(entry){
+  const selection=state.selection,key=entry.id+':'+entry.revision;
+  let request=todoStarts.get(key);
+  if(!request){
+    const history=await api('/api/history?project_id='+encodeURIComponent(entry.project_id));
+    if(selection!==state.selection)throw new Error('Context changed. Select the To-Do again.');
+    request={project_id:entry.project_id,conversation_id:history.conversation.id,mode:'auto',request_id:crypto.randomUUID(),todos:[{id:entry.id,revision:entry.revision}],content:`Explicitly start this To-Do as one assignment. Preserve its source and consume it only after successful task acceptance. To-Do ID: ${entry.id}; revision: ${entry.revision}.\n${entry.title}\n\n${entry.details}`};
+    todoStarts.set(key,request);saveTodoStarts();
+  }
+  try{
+    await api('/api/chat',{method:'POST',body:JSON.stringify(request)});
+    todoStarts.delete(key);saveTodoStarts();
+  }catch(error){
+    // Keep the exact request across ambiguous network failures. A later deliberate
+    // Start after accepted manager failure gets a fresh request, never a stale receipt.
+    if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){todoStarts.delete(key);saveTodoStarts();}
+    throw error;
+  }
+  notice('Start requested. The To-Do stays listed until an assignment is accepted.');
+  if(selection===state.selection)await refresh();
 }
 function editTodo(entry=null){
   const project=state.project,selection=state.selection;

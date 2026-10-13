@@ -8,7 +8,9 @@ Choose a project and describe the objective naturally. Conversation allows defer
 
 Tasks and Agents expose Pause/Cancel while coding, with requested versus confirmed cleanup state. Pause retains progress and Resume queues the same assignment/thread; Cancel immediately interrupts owned execution and retains partial work for review. Manager Auto/Execute can pause and append instructions into that same assignment. Project pause prevents future dispatch. See [agent controls](AGENT_CONTROLS.md) for partial-work limits, latency, recovery and release evidence. Completed remains a worker-reported outcome.
 
-Question prompts bind the exact native request to the execution. Explicit answers are required. Stale questions expire when the worker ends; continuation asks afresh. Archived origin results are delivered in that exact archived conversation. Clearing a conversation preserves its assignments but discards later delivery to the deleted origin.
+Question prompts bind the exact native request to the execution. Explicit answers are required. Stale questions expire when the worker ends; continuation asks afresh. Archived origin results are delivered in that exact archived conversation. In the bundled To-Do/chat candidate, Clear retains the original conversation in one per-context trash slot;
+replacement/Empty retain internal evidence, and later result delivery stays in that exact origin.
+See [chat history](chat-history.md) for reversible swap restore and durable evidence boundaries.
 
 Historical unfinished tasks remain waiting after the simplification migration. Continue explicitly only when that objective is still wanted; Codex receives historical workspace/output references and inspects actual source before proceeding. Old completed/cancelled/failed dispositions and supervision evidence remain historical. There is no automatic clone merge or old-operation replay.
 
@@ -18,7 +20,9 @@ To-Do immediately follows Agents. It is the authoritative project backlog, disti
 All Projects lists every project's ideas; adding there requires a project. Add/Edit records future work without
 scheduling it. Select entries and Delete selected to archive only those ideas, retaining their data and audit.
 Changed revisions reject stale edits/deletion atomically. The manager uses list_todos/save_todo in every mode
-for future requests; explicit later scheduling is a separate assignment. The linked memory-compaction proposal
+for future requests; explicit later scheduling is a separate assignment. The bundled candidate adds explicit
+Start through the manager queue and atomic delegate/continue consumption with original source/task evidence.
+Failed dispatch leaves entries active; To-Do CRUD never schedules. See [To-Do](STARTUP_TODO.md). The linked memory-compaction proposal
 remains deferred. Startup chooses the highest existing meaningful-use context, including global, with the same
 name/ID tie ordering as navigation; viewing, reloading, polling and To-Do edits do not manufacture recency.
 

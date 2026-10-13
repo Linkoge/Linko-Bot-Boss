@@ -68,7 +68,7 @@ class Tasks:
                 ON CONFLICT(key) DO UPDATE SET value=excluded.value""", (json.dumps(archived),))
             return cleared
 
-    def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None, model_route=None):
+    def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None, model_route=None, todos=None):
         if not description.strip() or len(description) > 24000:
             raise ValueError("Objective must be 1–24000 characters")
         if not isinstance(acceptance, str) or len(acceptance) > 12000:
@@ -85,6 +85,9 @@ class Tasks:
                 if previous:
                     if previous["project_id"] != project_id:
                         raise ValueError("Delegation belongs to another project")
+                    if todos:
+                        from .todos import Todos
+                        Todos(self.db).consume(conn, todos, project_id, previous["id"])
                     return self.get(previous["id"])
             previous = conn.execute(
                 """SELECT id FROM tasks WHERE project_id=? AND description=? AND origin_conversation IS ?
@@ -94,6 +97,9 @@ class Tasks:
             if previous:
                 if request_key:
                     self.db.event(conn, "task.reused", {"request_key": request_key}, project_id, previous["id"])
+                if todos:
+                    from .todos import Todos
+                    Todos(self.db).consume(conn, todos, project_id, previous["id"])
                 return self.get(previous["id"])
             conn.execute(
                 """INSERT INTO tasks(id,project_id,description,acceptance,created_at,updated_at,
@@ -108,6 +114,9 @@ class Tasks:
                 self.db.event(conn, "task.model_selected", model_route, project_id, task_id)
             if selected:
                 self.db.event(conn, "task.context", selected, project_id, task_id)
+            if todos:
+                from .todos import Todos
+                Todos(self.db).consume(conn, todos, project_id, task_id)
         return self.get(task_id)
 
     def control(self, task_id, action, revision):

@@ -1,3 +1,31 @@
+# Bundled To-Do / current-chat release — implementation candidate, 2026-10-13
+
+Actual live base is succeeded `pwa-standalone-v1-20261013`, commit
+`3bb554b7efa26d8fae695c5340e8a12366d75339`, durable receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/09f882af21fb28ab5870da74fee1c3b6.json`.
+All 20 loopback served aliases matched the receipt. Earlier PWA-pending/live statements below are historical.
+
+Candidate `todo-handoff-chat-trash-recording-agents-v1-20261013` is in
+`/home/codex/checkouts/linko-todo-chat-20261013`. Preparation is established only by its exact
+immutable deployment-helper manifest. No deployment is authorized or performed for this candidate.
+Implements atomic To-Do-to-assignment archival, explicit Start through the manager queue,
+per-context single-slot chat trash with reversible swap restore and separate right-side Empty Trash,
+focus-independent recording expansion/Send, and stable expanded Agents output across polling.
+Preserves PWA/cache/update, owner authentication, drafts/attachments, queue/recovery and helper workflow;
+no schema/dependency change. Source entries and original conversation/task/native evidence remain retained.
+
+Owner explicitly scheduled entries `91793f5c9e4e483c893bbdae80cdfd19`,
+`f26f20a22342434695ee76c352a9dabc`, `5b8d6fb245e44153bb9abab6a0b40374` are archived
+and linked to existing resumed assignment `46690e845e75461cbfe9309f5c734662`.
+Old entry `5bdfa1dc8b7f42a6a766ab9f99574935` is archived solely on owner confirmation
+that it is done, retaining reference `a01b6c008c19464f883d5709937fc906`;
+no old-item investigation/reimplementation was performed. Other backlog entries are unchanged.
+
+Authoritative updated contracts: docs/STARTUP_TODO.md, docs/chat-history.md, docs/AUDIO.md.
+Full validation/status, limitations and exact release evidence: `/home/codex/.local/share/linko-bot-manager/deployments/todo-chat-20261013/REPORT.md` and sibling
+`manager-summary.json`. Manager should use these for its routine brief/recent-delivery update;
+keep implemented/verified/prepared separate from deployed. Deployment remains pending.
+
 # PWA candidate — prepared release, deployment pending, 2026-10-13
 
 Actual live base is `microphone-any-files-composer-v2-20261013`, commit

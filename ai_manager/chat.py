@@ -72,7 +72,8 @@ class Chat:
         for row in rows:
             row["status"] = row.pop("authoritative_status")
             row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
-        return {"conversation": conversation, "messages": list(reversed(rows))}
+        return {"conversation": conversation, "messages": list(reversed(rows)),
+                "trash": self.db.setting("chat_trash:" + (project_id or "global"))}
 
     def reset(self, project_id, conversation_id, last_message_id, confirmed, archive=False, title=""):
         if not confirmed:
@@ -117,10 +118,15 @@ class Chat:
                 )
                 conn.execute("INSERT INTO chat_archives VALUES(?,?,?)", (conversation_id, title, now))
             else:
-                conn.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
-                conn.execute("DELETE FROM conversations WHERE id=?", (conversation_id,))
-                conn.execute("DELETE FROM settings WHERE key=?", ("manager_tool_schema:" + conversation_id,))
-                conn.execute("DELETE FROM settings WHERE key=?", ("manager_context:" + conversation_id,))
+                key = "chat_trash:" + (project_id or "global")
+                previous = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+                if previous:
+                    conn.execute("UPDATE conversations SET context=? WHERE id=?",
+                                 ("evidence:" + json.loads(previous["value"])["conversation_id"],
+                                  json.loads(previous["value"])["conversation_id"]))
+                conn.execute("UPDATE conversations SET context=? WHERE id=?", ("trash:" + conversation_id, conversation_id))
+                conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                             (key, json.dumps({"conversation_id": conversation_id, "cleared_at": now})))
             fresh_id = new_id()
             conn.execute(
                 "INSERT INTO conversations(id,context,project_id,created_at) VALUES(?,?,?,?)",
@@ -141,9 +147,54 @@ class Chat:
             "result": "accepted",
             "message": f"Chat archived as “{title}”. A fresh chat is ready."
             if archive
-            else "Chat cleared. A fresh chat is ready.",
+            else "Chat moved to trash. Only the latest cleared chat can be restored.",
             "conversation_id": fresh_id,
         }
+
+    def change_trash(self, project_id, conversation_id, last_message_id, trash_id, confirmed, restore=False):
+        if not confirmed:
+            raise ValueError("Confirm before changing trash")
+        if project_id:
+            self.registry.get(project_id)
+        context, key = project_id or "global", "chat_trash:" + (project_id or "global")
+        with self.db.transaction() as conn:
+            slot = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            if not slot or json.loads(slot["value"])["conversation_id"] != trash_id:
+                raise ValueError("Trash changed. Refresh and confirm again")
+            current = conn.execute("SELECT * FROM conversations WHERE context=?", (context,)).fetchone()
+            if not current or current["id"] != conversation_id:
+                raise ValueError("Chat changed. Refresh and confirm again")
+            trash = conn.execute("SELECT * FROM conversations WHERE id=? AND project_id IS ? AND context=?",
+                                 (trash_id, project_id, "trash:" + trash_id)).fetchone()
+            if not trash:
+                raise ValueError("Trash is unavailable in this context")
+            if restore:
+                last = conn.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                                    (conversation_id,)).fetchone()
+                if (last["id"] if last else None) != last_message_id:
+                    raise ValueError("New messages arrived. Refresh and confirm again")
+                if conn.execute("""SELECT 1 FROM messages m LEFT JOIN executions e ON e.id=m.execution_id
+                    WHERE m.conversation_id IN (?,?) AND (m.status IN ('queued','streaming')
+                    OR (e.id IS NOT NULL AND e.finished_at IS NULL)) LIMIT 1""", (conversation_id, trash_id)).fetchone():
+                    raise ValueError("Wait for the response to finish or stop it before restoring")
+                # Swapping keeps a nonempty current chat reversible in the same single slot.
+                conn.execute("UPDATE conversations SET context=? WHERE id=?",
+                             (("trash:" if last else "evidence:") + conversation_id, conversation_id))
+                conn.execute("UPDATE conversations SET context=? WHERE id=?", (context, trash_id))
+                if last:
+                    conn.execute("UPDATE settings SET value=? WHERE key=?",
+                                 (json.dumps({"conversation_id": conversation_id, "cleared_at": time.time()}), key))
+                else:
+                    conn.execute("DELETE FROM settings WHERE key=?", (key,))
+            else:
+                conn.execute("UPDATE conversations SET context=? WHERE id=?", ("evidence:" + trash_id, trash_id))
+                conn.execute("DELETE FROM settings WHERE key=?", (key,))
+            self.db.event(conn, "chat.trash_restored" if restore else "chat.trash_emptied",
+                          {"conversation_id": conversation_id, "trash_id": trash_id,
+                           "replacement_trash_id": conversation_id if restore and last else None,
+                           "evidence_retained": True}, project_id)
+        return {"result": "accepted", "message": ("Trash restored. Previous chat moved to trash." if last else "Trash restored.") if restore
+                else "Trash emptied. Task and conversation recovery evidence is retained."}
 
     def search_history(self, project_id=None, search="", offset=0):
         if project_id:
@@ -289,7 +340,7 @@ class Chat:
             return json.loads(row["receipt"])
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto", request_id=None,
-                     attachment_ids=None, recovery_task=None):
+                     attachment_ids=None, recovery_task=None, todos=None):
         from .deployment import Handoff
         handoff = Handoff(self.db.path.parent)
         if handoff.ready_to_stop() or (handoff.gated() and not (delivery or recovery_task)):
@@ -298,6 +349,10 @@ class Chat:
         payload = [project_id, conversation_id, content, mode]
         if attachment_ids:
             payload.append(attachment_ids)
+        if todos:
+            if mode=="conversation" or not project_id or delivery or recovery_task:
+                raise ValueError("To-Do Start requires an owner Auto/Execute message in its project")
+            payload.append(todos)
         payload_hash = hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
         if request_id:
             if delivery or recovery_task or not 16 <= len(request_id) <= 100 or not all(c.isalnum() or c in "-_" for c in request_id):
@@ -333,6 +388,14 @@ class Chat:
                 (conversation["id"], project_id, bool(delivery or recovery_task), project_id or "global"),
             ).fetchone():
                 raise ValueError("Chat changed. Refresh before sending")
+            if todos:
+                if len({entry["id"] for entry in todos}) != len(todos):
+                    raise ValueError("Select distinct To-Do entries")
+                for entry in todos:
+                    if not conn.execute("SELECT 1 FROM todos WHERE id=? AND project_id=? AND revision=? AND archived_at IS NULL",
+                                        (entry["id"],project_id,entry["revision"])).fetchone():
+                        raise ValueError("To-Do changed. Refresh before starting")
+                conn.execute("INSERT INTO settings VALUES(?,?)", ("execution_todo_sources:"+execution_id,json.dumps(todos)))
             if delivery or recovery_task:
                 if conn.execute("SELECT 1 FROM executions WHERE agent_id='manager' AND conversation_id=? AND finished_at IS NULL", (conversation['id'],)).fetchone():
                     raise ValueError('Conversation already has a pending manager response')

@@ -18,10 +18,11 @@ function renderAudio(){
   $('microphone').disabled=audioState.loading||busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));
   $('audio-upload').hidden=!recording;$('audio-upload').disabled=!recording;
   $('send').type=session?'button':'submit';
-  $('send').disabled=session?!recording||session.project!==state.project||state.pending.has(state.project):state.pending.has(state.project);
+  $('send').disabled=session?!recording||session.project!==state.project||state.pending.has(state.project)||submissions.has(state.project):state.pending.has(state.project);
   if(typeof attachmentState!=='undefined'&&attachmentState.uploads.has(state.project))$('send').disabled=true;
   if(typeof updateComposer==='function')updateComposer();
-  for(const id of ['archive-chat','clear-chat'])if(session&&session.project===state.project)$(id).disabled=true;
+  for(const id of ['archive-chat','clear-chat','restore-trash','empty-trash'])if(session&&session.project===state.project)$(id).disabled=true;
+  if(!session&&state.history)updateChatTrashAvailability();
 }
 function audioChanged(auth=false){
   const session=audioState.session;if(!session)return;

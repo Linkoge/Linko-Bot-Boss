@@ -92,6 +92,8 @@ def main():
                     page.wait_for_function("()=>audioState.session?.phase==='recording'")
                     assert page.locator('#audio-status').inner_text() == '00:00'
                     page.wait_for_function("()=>$('audio-status').textContent==='00:01'")
+                    assert page.locator('#send').is_visible()
+                    assert page.locator('#chat-form').evaluate("node=>node.classList.contains('composer-active')")
                     # Capture actual browser audio, not a synthetic MediaRecorder implementation.
                     page.wait_for_function('()=>audioState.session.bytes>0')
 
@@ -113,7 +115,6 @@ def main():
 
                 # Capture and explicit whole-file Send while a real fixture manager turn is active.
                 page.locator('#message-input').fill('Busy recording')
-                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!!state.execution&&!state.pending.size')
                 assert page.locator('#microphone').is_enabled()
@@ -127,7 +128,6 @@ def main():
                 page.wait_for_timeout(100)
                 assert len(chats) == before_chats and not interrupts
                 assert page.evaluate("audioState.session.phase==='recording'&&!!state.execution")
-                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!audioState.session&&!state.pending.size')
                 assert len(chats) == 2 and chats[-1]['content'] == 'spoken transcript'
@@ -142,7 +142,6 @@ def main():
                 start()
                 page.locator('#chat-menu-button').click()
                 page.locator('[data-mode=auto]').click()
-                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function("()=>!audioState.session&&!state.pending.size&&!state.execution&&$('message-input').value===''")
                 assert len(chats) == 1 and chats[-1]['content'] == 'spoken transcript'
@@ -154,7 +153,6 @@ def main():
                 start()
                 held = []
                 page.route('**/api/audio/transcribe', lambda route: held.append(route))
-                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
                 switch(beta)
@@ -181,7 +179,6 @@ def main():
                 page.route('**/api/audio/transcribe', lambda route: route.fulfill(status=502, json={'detail': 'Provider unavailable'}))
                 page.locator('#message-input').fill('preserved')
                 start()
-                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function("()=>audioState.session?.phase==='error'")
                 assert page.locator('#message-input').input_value() == 'preserved'
@@ -210,7 +207,6 @@ def main():
                 # Editing after pressing recording Send cancels automatic submission.
                 start()
                 page.route('**/api/audio/transcribe', lambda route: held.append(route))
-                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
                 page.locator('#message-input').fill('edited while waiting')
@@ -246,7 +242,6 @@ def main():
                 page.locator('#chat-menu-button').click()
                 page.locator('[data-mode=conversation]').click()
                 start()
-                page.locator('#message-input').focus()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!audioState.session&&!state.pending.size&&submissions.size===1')
                 assert dropped and len(chats)==2
@@ -470,6 +465,63 @@ def main():
                 page.evaluate('()=>{window.MediaRecorder=window.savedRecorder;Object.defineProperty(window,"isSecureContext",{value:false,configurable:true})}')
                 page.locator('#microphone').click()
                 assert 'HTTPS' in page.locator('#notice-text').inner_text()
+                page.evaluate('()=>Object.defineProperty(window,"isSecureContext",{value:true,configurable:true})')
+                switch(alpha)
+                for width,height in [(1440,1000),(393,851),(320,420)]:
+                    page.set_viewport_size({'width':width,'height':height})
+                    page.locator('#message-input').fill('typed draft')
+                    page.locator('#attachment-input').set_input_files({'name':'direct.txt','mimeType':'text/plain','buffer':b'recording send attachment'})
+                    page.wait_for_function('()=>attachmentDraft(state.project).length===1')
+                    intended_attachments=page.evaluate('attachmentDraft(state.project).map(f=>f.id)')
+                    page.locator('#chat-menu-button').focus()
+                    start()
+                    assert page.locator('#send').is_visible()
+                    assert page.locator('#chat-form').evaluate("n=>n.classList.contains('composer-active')")
+                    before=len(chats)
+                    held=[]
+                    page.route('**/api/audio/transcribe',lambda route:held.append(route))
+                    page.locator('#send').click()
+                    page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
+                    assert page.locator('#send').is_disabled()
+                    page.locator('#send').dispatch_event('click')
+                    page.wait_for_timeout(100)
+                    assert len(held)==1 and len(chats)==before
+                    held[0].fulfill(status=200,content_type='application/json',body=json.dumps({'text':'direct recording'}))
+                    page.unroute('**/api/audio/transcribe')
+                    page.wait_for_function("()=>!audioState.session&&!state.pending.size&&!state.execution")
+                    assert len(chats)==before+1 and chats[-1]['content']=='typed draft\n\ndirect recording'
+                    assert chats[-1]['attachment_ids']==intended_attachments
+                    assert page.evaluate('attachmentDraft(state.project).length')==0
+                # Send followed by failure/Discard never submits, even after a late success.
+                page.locator('#message-input').fill('retain me')
+                before=len(chats)
+                held=[]
+                page.route('**/api/audio/transcribe',lambda route:held.append(route))
+                start()
+                page.locator('#send').click()
+                page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
+                page.wait_for_timeout(100)
+                held[0].fulfill(status=502,content_type='application/json',body=json.dumps({'detail':'fixture STT failure'}))
+                page.wait_for_function("()=>audioState.session?.phase==='error'")
+                assert len(chats)==before and page.locator('#message-input').input_value()=='retain me'
+                page.locator('#microphone').click()
+                page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
+                page.wait_for_timeout(100)
+                held[1].fulfill(status=200,content_type='application/json',body=json.dumps({'text':'retry for editing'}))
+                page.wait_for_function("()=>!audioState.session")
+                assert len(chats)==before and page.locator('#message-input').input_value()=='retain me\n\nretry for editing'
+                start()
+                page.locator('#send').click()
+                page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
+                page.wait_for_timeout(100)
+                page.locator('#audio-cancel').click()
+                try:
+                    held[2].fulfill(status=200,content_type='application/json',body=json.dumps({'text':'discarded late response'}))
+                except Exception:
+                    pass
+                page.wait_for_timeout(300)
+                assert len(chats)==before and page.locator('#message-input').input_value()=='retain me\n\nretry for editing'
+                page.unroute('**/api/audio/transcribe')
                 assert not interrupts, interrupts
                 assert page.locator("#audio-stop").count() == 0
                 assert not errors, errors

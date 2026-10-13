@@ -1,6 +1,10 @@
 # Installable Linko Bot Manager
 
-Prepared release: `pwa-standalone-v1-20261013`. Not deployed.
+Live release: `pwa-standalone-v1-20261013`. Deployment succeeded; receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/09f882af21fb28ab5870da74fee1c3b6.json`,
+commit `3bb554b7efa26d8fae695c5340e8a12366d75339`. All 20 served loopback aliases matched.
+The later bundled To-Do/chat candidate preserves this cache/launch/update contract and is not deployed.
+Physical Android install/update acceptance remains pending.
 Candidate: `/home/codex/checkouts/linko-pwa-20261013`.
 Full evidence and manager facts:
 `/home/codex/.local/share/linko-bot-manager/deployments/pwa-20261013/REPORT.md`

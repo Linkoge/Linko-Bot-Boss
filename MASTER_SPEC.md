@@ -55,3 +55,15 @@ Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
   display with normal system bars, root URLs and existing private HTTPS/auth/state;
   uncached HTML plus content-hashed immutable JS/CSS, no service worker/offline
   cache. Implementation/device verification/deployment status remain distinct.
+
+## Bundled owner-scheduled To-Do / current-chat candidate (2026-10-13)
+
+The prepared manifest (not code changes alone) establishes release readiness; this candidate is not deployed.
+To-Do CRUD remains nonexecuting. Explicit Start or owner manager scheduling consumes exact source revisions
+only with accepted task creation/reuse/continuation, atomically retaining original source and durable task links.
+Failure leaves entries active. Older done work is not automatically rescheduled. Contract: docs/STARTUP_TODO.md.
+Clear retains one recoverable chat per context. Restore swaps with nonempty current chat; Empty/replacement
+remove UI recovery only, retaining conversation/manager/task/native/archive evidence and unrelated chats.
+Recording expands composer and exposes Send, using safe whole-file transcription/draft/attachment/FIFO semantics.
+Expanded Agents output retains open/reading/selection state across updates until explicit close/navigation.
+Contracts and validation limits: docs/chat-history.md and docs/AUDIO.md. Exact release/report: STATE.md.

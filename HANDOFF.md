@@ -1,3 +1,17 @@
+# Bundled To-Do / current-chat handoff — no deployment, 2026-10-13
+
+Use the current STATE.md section and `/home/codex/.local/share/linko-bot-manager/deployments/todo-chat-20261013/REPORT.md` / sibling manager-summary.json.
+Exact release ID: `todo-handoff-chat-trash-recording-agents-v1-20261013`; immutable prepared manifest is the preparation gate.
+Live PWA succeeded at `3bb554b`, receipt nonce `09f882af21fb28ab5870da74fee1c3b6`.
+Candidate is isolated from live source. Owner explicitly forbids deployment; do not call deploy_release,
+restart, publish or fast-forward live. All older deployment authorization below is historical for prior releases.
+
+Three explicitly scheduled entries are archived with source preimages and linked to assignment
+`46690e845e75461cbfe9309f5c734662`. The old Pause/Cancel entry is owner-confirmed already done
+and archived with its existing task reference, without further investigation. Other older To-Dos are excluded.
+Manager: record the current facts and evidence in existing brief/recent delivery; no full reconciliation.
+The report distinguishes the authorized immediate backlog cleanup from pending code activation.
+
 # PWA delivery — deployment pending, 2026-10-13
 
 Read [docs/PWA.md](docs/PWA.md) and its private REPORT.md/manager-summary.json for

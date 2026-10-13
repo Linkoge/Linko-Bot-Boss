@@ -59,11 +59,17 @@ class ProjectUpdate(BaseModel):
     status: str | None = None
 
 
+class TodoSelection(BaseModel):
+    id: str
+    revision: int
+
+
 class MessageBody(BaseModel):
     request_id: str | None = Field(default=None, min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     project_id: str | None = None
     content: str = Field(default='', max_length=64000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
+    todos: list[TodoSelection] = Field(default_factory=list, max_length=200)
     conversation_id: str | None = None
     mode: Literal["conversation", "auto", "execute"] = "auto"
 
@@ -81,6 +87,14 @@ class ChatResetBody(BaseModel):
     title: str = Field(default="", max_length=120)
 
 
+class ChatTrashBody(BaseModel):
+    project_id: str | None = None
+    conversation_id: str = Field(min_length=1, max_length=100)
+    last_message_id: str | None = Field(default=None, max_length=100)
+    trash_id: str = Field(min_length=1, max_length=100)
+    confirmed: bool = False
+
+
 class InstructionsBody(BaseModel):
     content: str = Field(max_length=10000)
 
@@ -90,11 +104,6 @@ class TodoBody(BaseModel):
     title: str = Field(min_length=1, max_length=200)
     details: str = Field(default="", max_length=24000)
     revision: int | None = None
-
-
-class TodoSelection(BaseModel):
-    id: str
-    revision: int
 
 
 class TodoArchive(BaseModel):
@@ -323,6 +332,14 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     def clear_chat(body: ChatResetBody):
         return chat.reset(body.project_id, body.conversation_id, body.last_message_id, body.confirmed)
 
+    @app.post("/api/chat/trash/restore", dependencies=[Depends(require_owner)])
+    def restore_trash(body: ChatTrashBody):
+        return chat.change_trash(**body.model_dump(), restore=True)
+
+    @app.post("/api/chat/trash/empty", dependencies=[Depends(require_owner)])
+    def empty_trash(body: ChatTrashBody):
+        return chat.change_trash(**body.model_dump())
+
     @app.post("/api/chat/archive", dependencies=[Depends(require_owner)])
     def archive_chat(body: ChatResetBody):
         return chat.reset(
@@ -517,7 +534,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     async def submit(body: MessageBody):
         return await chat.submit(
             body.project_id, body.content, body.conversation_id, mode=body.mode, request_id=body.request_id,
-            attachment_ids=body.attachment_ids
+            attachment_ids=body.attachment_ids, todos=[entry.model_dump() for entry in body.todos]
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])

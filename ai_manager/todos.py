@@ -1,5 +1,6 @@
 """Deferred project ideas. These records never enter the execution queue."""
 
+import json
 import time
 
 from .db import new_id
@@ -118,3 +119,28 @@ class Todos:
                 )
                 self.db.event(conn, "todo.archived", {"todo_id": row["id"]}, row["project_id"])
         return {"archived": len(selected)}
+
+    def consume(self, conn, selected, project_id, task_id, reason="Explicit owner scheduling"):
+        """Archive exact source revisions only inside the accepting task transaction."""
+        if not selected or len(selected) > 200 or len({e["id"] for e in selected}) != len(selected):
+            raise ValueError("Select 1–200 distinct To-Do entries")
+        task = conn.execute("SELECT project_id FROM tasks WHERE id=?", (task_id,)).fetchone()
+        if not task or task["project_id"] != project_id:
+            raise ValueError("To-Do handoff needs an accepted assignment in the same project")
+        for entry in selected:
+            key = "todo_handoff:" + entry["id"]
+            prior = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+            if prior:
+                handoff = json.loads(prior["value"])
+                if handoff["task_id"] == task_id and handoff["source"]["revision"] == entry["revision"]:
+                    continue
+                raise ValueError("To-Do already started in another assignment; continue that assignment")
+            row = conn.execute("SELECT * FROM todos WHERE id=? AND revision=? AND archived_at IS NULL",
+                               (entry["id"], entry["revision"])).fetchone()
+            if not row or row["project_id"] != project_id:
+                raise ValueError("To-Do changed or belongs to another project; refresh before starting")
+            record = {"task_id": task_id, "source": dict(row), "reason": reason, "at": time.time()}
+            conn.execute("INSERT INTO settings VALUES(?,?)", (key, json.dumps(record)))
+            conn.execute("UPDATE todos SET archived_at=?,updated_at=?,revision=revision+1 WHERE id=?",
+                         (record["at"], record["at"], row["id"]))
+            self.db.event(conn, "todo.consumed", record, project_id, task_id)

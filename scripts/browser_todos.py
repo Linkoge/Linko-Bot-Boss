@@ -106,7 +106,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.locator("#editor-form .primary").click()
                 page.wait_for_function("() => state.todos.length===1")
                 # Edit binds the originally opened selection; context change rejects saving.
-                page.locator("#todo-list button").click()
+                page.locator("#todo-list button", has_text="Edit").click()
                 page.evaluate("selectProject(null)")
                 page.wait_for_function("() => state.todos.length===2")
                 page.locator("[name=title]").fill("Wrong context mutation")

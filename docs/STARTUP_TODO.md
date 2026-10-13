@@ -1,3 +1,35 @@
+# Explicit To-Do handoff — bundled candidate, 2026-10-13
+
+Release `todo-handoff-chat-trash-recording-agents-v1-20261013`; full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/todo-chat-20261013/REPORT.md`.
+This candidate preserves startup recency and the existing active backlog table; no migration is added.
+
+Add/Edit/Delete remain backlog-only. The explicit Start button submits an owner Auto message to the
+existing project conversation and FIFO manager queue, preserving the composer draft/attachments.
+Acceptance of that message alone does not consume a To-Do. The Start request binds exact IDs/revisions
+to its durable manager execution in `execution_todo_sources:<execution>`, atomically with message acceptance;
+its eventual delegate/continue inherits those sources even if the model omits the explicit tool field.
+Invalid/stale/wrong-project sources reject before queuing; request replay after successful handoff returns
+the original receipt. Natural scheduling also supports explicitly supplied tool selections. An ambiguous request retains its exact
+request ID/payload for retry in per-tab session storage; a later deliberate Start after accepted manager
+failure has a fresh ID. No background action starts entries. Natural owner scheduling (including bundled
+"do todo list") uses the same manager delegate/continue actions with `todos:[{id,revision}]`.
+Conversation mode still cannot dispatch; internal results/recovery cannot consume To-Dos.
+
+Task creation/reuse or bundled continuation and consumption occur in one SQLite write transaction.
+Stale/wrong-project/previously consumed selections reject and roll back the whole dispatch;
+model/setup failure leaves the entries active. Same-task/source-revision replay is idempotent.
+On success `archived_at` removes the entries from the active list. Original title/details/source_task_id,
+full preimage, accepted task ID, reason/time are retained in `todo_handoff:<id>` settings and
+`todo.consumed` task-linked events. Original source_task_id is never repurposed (one original recording
+assignment can differ from execution assignment). `list_todos(todo_id=...)` retrieves archived source
+and its handoff link for recovery/reuse, with the same project boundary. No physical row is deleted.
+
+Current authorized data cleanup is already applied, separately from candidate activation: three scheduled
+entries link existing assignment `46690e845e75461cbfe9309f5c734662`; old Pause/Cancel entry is archived
+on owner confirmation with reference `a01b6c008c19464f883d5709937fc906`, without new investigation.
+Full preimages and the accepting assignment are in the private `todo-owner-handoff.json` receipt.
+No other old entries are scheduled or investigated. Earlier deferred wording below is historical.
+
 # Startup / To-Do release preparation — 2026-10-12
 
 Status: implemented and reviewed in the isolated checkout; **activation pending outside the manager service**.

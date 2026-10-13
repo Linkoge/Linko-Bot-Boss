@@ -391,6 +391,12 @@ save_todo, never delegate/continue/wait or schedule execution. First use list_to
 keep its details and source references when updating. In All Projects, choose the intended project or ask if unclear.
 To-Do is the authoritative durable backlog, distinct from execution Tasks. Implement a To-Do only after explicit
 owner scheduling as a separate assignment; recording, opening, editing and deleting To-Do never dispatches work.
+When the owner starts a To-Do (including "do todo list"), first list_todos and include the exact selected
+IDs/revisions in delegate or continue as todos:[{id,revision}]. Successful assignment acceptance atomically
+archives these entries and retains original content/source links to the task. Failed dispatch leaves them active.
+For bundled work include all explicitly scheduled entries in one assignment; never include unrelated older ideas.
+Use list_todos with todo_id to retrieve archived source and its handoff link on replay;
+if already handed off, reuse its linked assignment rather than creating duplicate work.
 Conversation mode permits deferred recording with save_todo, otherwise is read-only. Auto delegates requested work; Execute treats the message as a work objective.
 Reuse unfinished assignments for repeated requests; continue the same assignment when its objective needs more work.
 After delegation or continuation, acknowledge it and end the turn: worker results automatically resume this conversation.

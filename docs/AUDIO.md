@@ -1,3 +1,25 @@
+# Recording composer / direct Send — bundled candidate, 2026-10-13
+
+Release `todo-handoff-chat-trash-recording-agents-v1-20261013`; full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/todo-chat-20261013/REPORT.md`. Not deployed.
+
+Starting/active/stopping/transcribing recording expands the composer and exposes Send regardless of
+textarea focus or mobile keyboard detection. Existing bounded geometry/overflow, typed caret detection,
+Record toggle, general attachments, audio Upload replacement, Download/Discard and recovery remain.
+Send is active only during capture in its own visible project/context without pending submission/retry
+or attachment upload. First click changes phase synchronously; later clicks cannot stop/submit twice.
+
+Reuse the established whole-Blob STT pipeline: explicit recording Send finishes capture, transcribes,
+checks original conversation, appends once to the current typed draft, and directly submits that merged
+text with current draft attachments and the recording's original mode through ordinary request replay/FIFO.
+Incoming manager work permits queued Send; recording never interrupts the manager. Concurrent typing
+while capturing is included; editing during stopping/transcription cancels automatic Send and leaves text
+for review. Project/view/auth/visibility changes, changed history, capture interruption, limits, Discard,
+transcription failure, pending retry and uploads suppress automatic submission. Retry after STT failure
+is edit-only, not an implicit Send. Late discarded results/checkpoints cannot resurrect or send a session.
+Transcript/typed draft/attachments remain available on rejected/ambiguous submission under existing rules.
+Existing synthetic duration and Chromium capture checks do not establish paid STT, physical permission UI,
+Android keyboard/suspension or installed-device acceptance.
+
 # Microphone icon and general attachment separation — 2026-10-13
 
 See [chat attachment contract](chat-history.md) for integrated prepared release,

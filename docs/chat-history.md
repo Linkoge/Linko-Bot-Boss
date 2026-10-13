@@ -1,3 +1,38 @@
+# Single-slot chat trash and stable Agents output — bundled candidate, 2026-10-13
+
+Release `todo-handoff-chat-trash-recording-agents-v1-20261013`; full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/todo-chat-20261013/REPORT.md`. Not deployed.
+
+Clear moves the entire current conversation (including thread/summary/settings/messages and task origins)
+to one persistent trash slot per selected project / All Projects context and creates a fresh conversation.
+Another Clear replaces that context's slot. Restore Trash is in the chat menu; Empty Trash is a separate
+44px trash icon on the opposite right side of its row. Restore into a nonempty current conversation swaps
+the two, so another Restore reverses it. Restore into an empty current conversation consumes the slot.
+Unsent text stays in the composer. Restore requires draft attachments to be sent/removed first because
+uploads belong to their original conversation; upload/pending-retry state also blocks restore. Removal retains
+file bytes. Trash actions never silently send/discard draft text or attachment bytes.
+
+Clear/Restore guard exact conversation/tail identity and unfinished responses. Restore also checks
+unfinished responses in the trashed origin. Trash actions guard exact slot identity, project, owner/CSRF
+and the existing deployment mutation gate. Empty/replace irreversibly remove that chat from UI trash
+recovery, but do NOT physically delete conversations/messages/native references/manager context, task
+history, archives or attachment bytes. Superseded/emptied rows have `evidence:<id>` contexts and are
+excluded from normal History/Search; exact original IDs remain retrievable for manager recovery/audit.
+Worker delivery stays in the exact retained original conversation, including trash/evidence, never leaks
+into the replacement chat. There is no automatic accumulation of UI trash/history and no evidence GC.
+Reopen/restart retains the single slot via existing settings; schema/dependencies remain unchanged.
+Older assertions below that Clear deletes rows/discards later origin delivery are superseded.
+
+Diagnosed Agents cause: successful three-second portfolio polling called renderAgents, whose unconditional
+replaceChildren rebuilt every details/pre and reset native details.open, internal scroll and selection.
+Rows/details/output now retain DOM identity by execution ID. Metadata/status/actions update without
+replacing expanded content. Changed output retains inner scroll; selected text is held until deselection
+then the latest update is applied. The first visible expanded output anchors document reading position
+where practical; normal range clamping if content shrinks still applies. An expanded row survives the
+server history limit rolling it out until closed/navigation; it shows its last fetched retained output.
+Explicit close remains closed across refresh. View/project/auth navigation ends expansion; refresh,
+status/result changes, and output updates never close it. Existing lifecycle controls remain intact.
+No separate stream/poller/supervision layer is introduced.
+
 # General file formats and microphone — prepared candidate, 2026-10-13
 
 Integrated release `microphone-any-files-composer-v2-20261013` descends from the exact

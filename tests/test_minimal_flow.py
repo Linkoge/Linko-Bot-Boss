@@ -445,9 +445,11 @@ async def test_cleared_origin_does_not_receive_results_in_new_chat(system):
         )
     chat.reset(project["id"], origin, "prior", True)
     await chat.deliver_results()
-    assert not chat.jobs
+    await settled(chat)
     assert chat.history(project["id"])["messages"] == []
-    assert db.one("SELECT delivery FROM executions WHERE task_id IS NOT NULL")["delivery"] == "discarded"
+    assert db.one("SELECT delivery FROM executions WHERE task_id IS NOT NULL")["delivery"] == "delivered"
+    assert db.one("SELECT id FROM messages WHERE conversation_id=? AND role='worker'", (origin,))
+    assert db.one("SELECT context FROM conversations WHERE id=?", (origin,))["context"] == "trash:" + origin
 
 
 def test_migration_recovers_previously_stranded_deliveries(system):

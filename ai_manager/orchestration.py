@@ -67,6 +67,9 @@ MANAGER_TOOL = {
             "task_id": {"type": "string"},
             "execution_id": {"type": "string"},
             "todo_id": {"type": "string"},
+            "todos": {"type": "array", "minItems": 1, "maxItems": 200, "items": {
+                "type": "object", "properties": {"id": {"type": "string"}, "revision": {"type": "integer"}},
+                "required": ["id", "revision"], "additionalProperties": False}},
             "release_id": {"type": "string"},
             "title": {"type": "string"},
             "details": {"type": "string"},
@@ -108,8 +111,14 @@ class Scheduler:
         if execution and (execution["stop_requested"] or execution["finished_at"] is not None):
             raise ValueError("This manager execution has stopped")
         internal = params.get('internal', False)
+        if not internal and action in {'delegate', 'continue'} and not args.get('todos'):
+            sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
+            if sources:
+                args = {**args, 'todos': sources}
         if internal and action in {'deploy_release', 'resume_project'}:
             raise ValueError('Internal results/recovery are not owner authorization for deployment or project resume')
+        if args.get("todos") and (internal or action not in {"delegate", "continue"}):
+            raise ValueError("To-Do handoff requires explicit owner scheduling")
         if internal and action in {'continue', 'delegate'}:
             from .assignment_workflow import get
             target_id = args.get('task_id') if action == 'continue' else params.get('internal_task')
@@ -182,6 +191,11 @@ class Scheduler:
             project_id = args.get("project_id") or selected_project
             if selected_project and selected_project != project_id:
                 raise ValueError("To-Do belongs to another project")
+            if args.get("todo_id"):
+                row = self.db.one("SELECT * FROM todos WHERE id=?", (args["todo_id"],))
+                if not row or (project_id and row["project_id"] != project_id):
+                    raise ValueError("To-Do belongs to another project or does not exist")
+                return {"entry": row, "handoff": self.db.setting("todo_handoff:" + row["id"])}
             rows = Todos(self.db).list(project_id)
             rows = [r for r in rows if args.get("query", "").lower() in (r['title']+' '+r['details']).lower()]
             return {"entries": rows[offset:offset+20], "next_offset": offset+20 if len(rows)>offset+20 else None}
@@ -234,7 +248,7 @@ class Scheduler:
                     args["objective"],
                     params["conversation_id"],
                     params["manager_execution_id"] + ":" + project_id,
-                    acceptance=args.get("acceptance", ""), selected=selected, model_route=route,
+                    acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
                 )
             )
         if action == 'job_followup':
@@ -286,6 +300,8 @@ class Scheduler:
                     (params["manager_execution_id"], task["id"]),
                 ).fetchone()
                 if previous:
+                    if args.get("todos"):
+                        Todos(self.db).consume(conn, args["todos"], project_id, task["id"])
                     return self.tasks.context(self.tasks.get(task["id"]))
                 if task["lease_owner"] or task["status"] in {"cancelled", "queued", "running", "pause_requested", "cancel_requested"}:
                     raise ValueError("Wait for confirmed pause/cleanup before bundling this assignment")
@@ -313,6 +329,8 @@ class Scheduler:
                 )
                 if changed.rowcount != 1:
                     raise ValueError("Assignment changed while continuing")
+                if args.get("todos"):
+                    Todos(self.db).consume(conn, args["todos"], project_id, task["id"])
                 from .assignment_workflow import update
                 update(self.db, conn, task["id"], "actionable", "Explicit authorized continuation", reset_retry=True)
                 if context:

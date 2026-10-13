@@ -83,7 +83,7 @@ def test_clear_preserves_archives_and_other_contexts_and_resets_thread(chat, tmp
     assert chat.history()["conversation"]["thread_id"] is None
     assert chat.saved_history(old)["messages"]
     assert chat.history(project["id"])["messages"]
-    assert not chat.db.one("SELECT id FROM conversations WHERE id=?", (current,))
+    assert chat.db.one("SELECT context FROM conversations WHERE id=?", (current,))["context"] == "trash:" + current
     assert len(chat.search_history()["conversations"]) == 2
     assert [c["id"] for c in chat.search_history(project["id"])["conversations"]] == [other]
     with pytest.raises(ValueError, match="selected context"):
@@ -153,3 +153,75 @@ async def test_durable_submission_blocks_archive_while_model_setup_is_waiting(ch
     chat.reset(None, old, request["message_id"], True, archive=True)
     assert len(chat.saved_history(old)["messages"]) == 4
     assert chat.history()["messages"] == []
+
+
+def test_trash_single_slot_swap_empty_and_restart_preserve_evidence(chat):
+    old, last = seed(chat)
+    old_messages = chat.db.all("SELECT * FROM messages")
+    chat.reset(None, old, last, True)
+    second, tail = seed(chat)
+    chat.reset(None, second, tail, True)
+    assert chat.history()["trash"]["conversation_id"] == second
+    assert chat.db.one("SELECT context FROM conversations WHERE id=?", (old,))["context"] == "evidence:" + old
+    assert chat.db.all("SELECT * FROM messages WHERE conversation_id=?", (old,)) == old_messages
+    current, last = seed(chat)
+    chat.change_trash(None, current, last, second, True, restore=True)
+    assert chat.history()["conversation"]["id"] == second
+    assert chat.history()["trash"]["conversation_id"] == current
+    assert chat.history()["conversation"]["thread_id"] == "saved-thread"
+    chat.change_trash(None, second, tail, current, True, restore=True)
+    assert chat.history()["conversation"]["id"] == current
+    restarted = Chat(Database(chat.db.path), chat.registry, chat.server)
+    restarted.change_trash(None, current, last, second, True)
+    assert restarted.history()["trash"] is None
+    assert len(chat.db.all("SELECT * FROM conversations")) == 3
+    assert len(chat.db.all("SELECT * FROM messages")) == 6
+    assert len(chat.search_history()["conversations"]) == 1
+    with pytest.raises(ValueError, match="selected context"):
+        chat.saved_history(second)
+
+
+def test_trash_restore_empty_current_stale_running_and_atomic_failure(chat, monkeypatch):
+    old, last = seed(chat)
+    chat.reset(None, old, last, True)
+    fresh = chat.history()["conversation"]["id"]
+    for identity, tail, trash, confirmed, reason in [
+        (fresh, None, old, False, "Confirm"), (fresh, None, "wrong", True, "Trash changed"),
+        ("wrong", None, old, True, "Chat changed"), (fresh, "stale", old, True, "New messages")]:
+        with pytest.raises(ValueError, match=reason):
+            chat.change_trash(None, identity, tail, trash, confirmed, restore=True)
+    def fail(*args, **kwargs):
+        raise RuntimeError("fixture persistence failed")
+    with monkeypatch.context() as m:
+        m.setattr(chat.db, "event", fail)
+        with pytest.raises(RuntimeError):
+            chat.change_trash(None, fresh, None, old, True, restore=True)
+    assert chat.history()["conversation"]["id"] == fresh
+    assert chat.history()["trash"]["conversation_id"] == old
+    with chat.db.transaction() as conn:
+        conn.execute("UPDATE messages SET status='streaming' WHERE id=?", (last,))
+    with pytest.raises(ValueError, match="finish"):
+        chat.change_trash(None, fresh, None, old, True, restore=True)
+    with chat.db.transaction() as conn:
+        conn.execute("UPDATE messages SET status='completed' WHERE id=?", (last,))
+    chat.change_trash(None, fresh, None, old, True, restore=True)
+    assert chat.history()["conversation"]["id"] == old and chat.history()["trash"] is None
+
+
+def test_trash_context_isolation_keeps_unrelated_chat_and_task_evidence(chat, tmp_path):
+    project_path = tmp_path / "other"
+    project_path.mkdir()
+    chat.registry.roots = (tmp_path,)
+    project = chat.registry.add(project_path)["id"]
+    other, other_last = seed(chat, project)
+    old, last = seed(chat)
+    chat.reset(None, old, last, True)
+    chat.reset(project, other, other_last, True)
+    before = chat.db.all("SELECT * FROM conversations WHERE project_id=?", (project,))
+    assert chat.history(project)["trash"]["conversation_id"] == other
+    fresh = chat.history()["conversation"]["id"]
+    with pytest.raises(ValueError, match="Trash changed"):
+        chat.change_trash(None, fresh, None, other, True)
+    chat.change_trash(None, fresh, None, old, True)
+    assert chat.db.all("SELECT * FROM conversations WHERE project_id=?", (project,)) == before
+    assert chat.db.one("SELECT id FROM messages WHERE conversation_id=?", (old,))
