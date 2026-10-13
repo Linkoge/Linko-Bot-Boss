@@ -1,3 +1,17 @@
+# Manager pause/append rule — isolated instruction candidate, 2026-10-13
+
+Exact release ID: `manager-append-rule-v1-20261013`; checkout:
+`/home/codex/checkouts/linko-manager-append-rule-20261013`. Only manager instruction text and its
+documentation change. Loading/activation contract: [agent controls](docs/AGENT_CONTROLS.md).
+Durable report and routine brief/recent-delivery facts:
+`/home/codex/.local/share/linko-bot-manager/deployments/manager-append-rule-20261013/REPORT.md`
+and sibling `manager-summary.json`. Preparation is established only by the exact release manifest.
+Activation requires deployment/restart; none is requested or performed. Assignment
+`aa7832895c764317b1e87517e13d3090` and its recovery/UI/model checkout remain untouched.
+This candidate starts at live `08f0ba7`; it does not include that separate candidate's changes.
+If another release activates first, integrate this instruction and reprepare against the new live base;
+the helper rejects a stale base. Preserve the separate assignment's evidence and pending release.
+
 # Unfinished-work/model/audio/Tasks delivery — prepared only, 2026-10-13
 
 Exact release `unfinished-recovery-family-ui-v2-20261013`, checkout `/home/codex/checkouts/linko-unfinished-recovery-20261013`.

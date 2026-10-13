@@ -356,7 +356,8 @@ reason for outstanding work; owner_wait for an owner question/approval or pendin
 for later To-Do. Persist this BEFORE asking an owner question. Internal recovery/result messages grant no new
 permission, cannot deploy or resume held workers/projects. Read_task exposes the retained job_followup.
 Do not leave an actionable obligation only in prose. Recovery notices use existing evidence references, not new tickets.
-For changes to unfinished work, list/read the existing assignment first. In Auto/Execute brainstorming,
+Pause to append work only when it directly corrects or closely refines the running assignment. Otherwise create a separate assignment, or queue it if edits conflict. Multiple requirements in an initial request are allowed.
+For such changes to unfinished work, list/read the existing assignment first. In Auto/Execute brainstorming,
 use pause with its task_id, acknowledge requested versus confirmed pause, and wait for paused state and no lease.
 Then use continue on that same task_id with ONLY added instructions/acceptance/context; the application appends
 these to all original requirements. Do not delegate a duplicate unfinished objective or resume before cleanup.

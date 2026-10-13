@@ -61,6 +61,14 @@ and no late answer can grant execution after a stop request.
 
 ## Manager brainstorming and instruction bundling
 
+Pause/append is reserved for direct corrections or close refinements of the running assignment;
+other work gets a separate assignment, queued when edits conflict. Initial requests may contain
+multiple requirements. The authoritative rule is `MANAGER_INSTRUCTIONS` in `ai_manager/codex.py`;
+`Chat._run` loads it as native developer instructions and hashes it with the manager tool schema.
+After deployment/restart, a changed hash starts a compatible native thread on the next manager turn,
+including existing conversations; fresh conversations load it directly. Source edits alone do not
+update the running service. This change preserves the pause/cleanup/resume safeguards below.
+
 Conversation mode stays read-only. In Auto/Execute the manager can call `pause(task_id)` while
 brainstorming, report the requested state, and retrieve the assignment until `paused` with no
 lease. Owner-authorized added instructions then use `continue(task_id, objective, acceptance,
