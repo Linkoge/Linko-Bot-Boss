@@ -80,7 +80,7 @@ function renderProjects(){
   $('all-projects').classList.toggle('selected',!state.project);$('all-projects').setAttribute('aria-pressed',String(!state.project));
   if(!$('project-menu').hidden)renderProjectMenu();
 }
-function closeProjectMenu(focus=false){$('project-menu').hidden=true;$('project-menu-button').setAttribute('aria-expanded','false');if(focus)$('project-menu-button').focus();}
+function closeProjectMenu(focus=false){$('project-menu').closest('.navigation').classList.remove('project-menu-open');$('project-menu').hidden=true;$('project-menu-button').setAttribute('aria-expanded','false');if(focus)$('project-menu-button').focus();}
 function renderProjectMenu(){
   const menu=$('project-menu'),focused=menu.contains(document.activeElement)?document.activeElement.dataset.project:undefined;menu.replaceChildren();
   for(const p of [null,...state.portfolio.projects].sort(compareContexts)){
@@ -91,7 +91,7 @@ function renderProjectMenu(){
   if(state.project){const rename=element('button','Rename selected project…');rename.setAttribute('role','menuitem');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};menu.append(rename);}
   if(focused!==undefined)menu.querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
 }
-$('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-checked="true"]').focus();};
+$('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu').closest('.navigation').classList.add('project-menu-open');$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-checked="true"]').focus();};
 $('project-menu').onkeydown=event=>{
   const buttons=[...$('project-menu').querySelectorAll('button')],index=buttons.indexOf(document.activeElement);
   if(event.key==='Escape'){event.preventDefault();closeProjectMenu(true);}

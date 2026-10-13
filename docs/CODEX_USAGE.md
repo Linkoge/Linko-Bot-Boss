@@ -1,46 +1,66 @@
-# Codex account allowance display — 2026-10-12
+# Codex account usage and project popup contract — 2026-10-13
 
-Implemented in the isolated standalone checkout `/home/codex/checkouts/linko-codex-usage-20261012`.
-Activation is pending the deployment helper's first external bootstrap. Full evidence and exact handoff:
-`/home/codex/.local/share/linko-bot-manager/deployments/codex-usage-20261012/REPORT.md`.
-Prepared release ID: `codex-account-usage-v1-20261012`. Do not overwrite the original helper release.
+Current candidate: `popup-cleanup-v1-20261013`, isolated checkout
+`/home/codex/checkouts/linko-popup-cleanup-20261013`. Implemented and browser-verified;
+preparation is established only by its exact helper `manifest.json`. **Do not deploy.**
+Full report and evidence: `/home/codex/.local/share/linko-bot-manager/deployments/popup-cleanup-20261013/REPORT.md`.
+The existing live navigation/audio baseline `nav-audio-upload-v2-20261013`, commit
+`08f0ba712f194ea0f985740ef408c9e033511b98`, has succeeded receipt
+`deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json` under the private data directory.
+Older usage implementation/deployment narrative remains in Git history.
 
-The candidate descends from the reviewed helper candidate e120c4d and includes the live combined
-startup/To-Do/Markdown release 7999d1a. It preserves both deliveries. The original helper assignment
-89a0b3a118004443936df2dea272ed5a had finished at inspection; the helper is independently running,
-but its cooperative manager integration is not live. This worker is inside the manager cgroup;
-no safe self-activation is possible. No live source, service or release request was changed.
+The popup displays exactly two stacked sections: **5 hour**, then **Weekly**. Each shows
+exact percentage remaining and reset time in the established Tbilisi format below it.
+Missing, ambiguous or unsupported windows show `Unavailable`. There is no allowance label,
+plan/bucket description, used percentage, duration, countdown or technical timestamp.
+Close/Refresh remain accessible. The bottom **Last refresh** footer retains the prior
+system font, muted color, 12px size and 12px vertical margins.
 
-Two 44px square controls align at the right of the existing two navigation rows. The lower control
-shows rounded remaining five-hour and weekly allowances in horizontal halves. Each half maps by
-actual window duration (300/10080 minutes), not primary/secondary position. Unavailable, ambiguous
-or absent expected windows show a dash. The account dashboard shows exact reported used and derived
-remaining percentages, actual window duration/label, reset UTC timestamp and Tbilisi time, time remaining,
-last reading/refresh attempt and stale/error status. Other reported buckets/windows remain visible there.
-The square summarizes only the Codex account bucket, never a model-specific quota substituted as Codex.
+`last_successful_refresh_at` is separate from `last_attempt_at`. An accepted metadata read
+or notification containing a usable Codex 300/10080-minute percentage window establishes
+successful freshness at observation time. Cache reads, failed attempts, invalid/no-window
+responses and updates to unrelated buckets do not advance it. Account invalidation resets it.
+Before any usable successful data, the footer says `Last refresh Never`; sections remain
+unavailable. Backend or browser failures retain the last successful time and mark retained
+percentages stale with subdued warning color/dotted underline, title and accessible text.
+Age >=180 seconds or a passed reset also marks stale; no restored quota is fabricated.
+An accepted empty response may clear readings while retaining the truthful historical success time.
 
-Existing ChatGPT-authenticated App Server supplies metadata via account/rateLimits/read with
-excludeResetCreditDetails. No credentials are copied/read, no API key/provider is added, and no thread
-or inference turn is started to obtain usage. A coalesced metadata request is allowed at most once per
-60 seconds per process; hidden pages do not poll. Existing rate-limit notifications update the cache.
-Account changes invalidate old readings, including initialization notifications. Cached readings become
-stale after 180 seconds or a passed reset; an expired reset never invents restored allowance. Failed
-refresh retains marked-stale previous readings. No prior reading or invalid numbers remain unavailable.
-Remaining is max(0, 100-used), with exact used preserved even above 100; percentage precision is preserved
-in details, while the compact face rounds. A reset without data is unavailable, not a fabricated countdown.
+The account button and details both map only the Codex account bucket by actual window duration,
+never slot order or a model-specific substitute. Remaining is max(0,100-used); the square
+rounds while details preserve precision. Fetching, account scope, metadata-only RPC,
+excludeResetCreditDetails, notifications, request coalescing, 60-second cache throttle,
+hidden-page behavior, session fences and account invalidation remain intact. Authentication,
+CSRF/CSP, modal semantics, live announcements, focus trap, Escape/backdrop dismissal and
+focus restoration remain intact. No inference or credential inspection is used for quota data.
 
-Authenticated API/CSP and existing API client patterns are retained. Native modal semantics, explicit
-accessible label, Tab/Shift+Tab containment, Escape, touch, outside dismissal and focus restoration are
-validated. Project selection/drafts, scrolling, zero badges, To-Do and Markdown are preserved. Navigation
-is 98px before safe-area padding at tested widths. Physical Android/iOS keyboard behavior is unverified.
-No dependency/schema change, remote push, unrelated work or production inference acceptance is claimed.
+## Project/repository picker layering
 
-Primary protocol reference: [official OpenAI App Server documentation](https://learn.chatgpt.com/docs/app-server),
-account/rateLimits/read and account/rateLimits/updated. The installed codex-cli 0.162.1 JSON schema and
-an authenticated live read verify the actual usedPercent/windowDurationMins/resetsAt fields. The returned
-account reported 300-minute and 10080-minute windows; these are observations, not assumed universal plans.
+The correct menu is `#project-menu` opened by **Choose project**, including selection and
+**Rename selected project…**. Its panel background was already fully opaque `#171d29`.
+The apparent transparency came from the later positioned `.workspace-row` painting above
+the absolutely positioned menu with automatic z-index. Underlying tabs/buttons could also
+receive input. The menu now has explicit local z-index 2; while open its sticky navigation
+context uses z-index 65 (matching the chat utilities) above global notices. The opaque
+surface, existing anchored positioning, scroll height/overflow, rounded border/shadow,
+selection/rename handlers, keyboard controls and outside dismissal are retained. The
+menu is outside the independently scrolling tab strips; it is not clipped by them.
+The 2×2 navigation controls and dark red theme are preserved.
 
-See docs/DEPLOYMENT_HELPER.md for the external idle/bootstrap/backup/health/rollback procedure.
-Use the exact combined usage release ID above in place of the original helper release ID only while
-live HEAD remains 7999d1a and the final manifest matches. If the original helper is activated first,
-reprepare this candidate against the new live base under a new release ID; never bypass baseline checks.
+## Validation and activation limits
+
+Backend tests cover first failure, success, cache hits, later failure and recovery, usable
+window validation, notifications, account invalidation and generation rejection. Responsive
+Chromium checks cover 1440×1000, 393×851, 320×420 and 393×420: lean exact content,
+modal keyboard/touch, success/failure freshness, opaque surface and actual hit testing,
+menu selection/rename/outside dismissal, menu scrolling and sticky document scrolling.
+Screenshots include the reproduced old stacking defect, corrected open/scrolled menus,
+lean usage, stale failure and never-refreshed placeholders. Physical-device native UI and
+screen-reader sessions are not claimed. The fixed preparation CLI runs the existing full
+regression gate; its hashed log and exact source/assets bundle establish readiness.
+
+This separate delivery does not pause or append to assignments
+`aa7832895c764317b1e87517e13d3090` or `0fda950d113946a794d9afe71daf8194`.
+No main checkout edit, merge, restart, deployment request or production task/data mutation.
+If another delivery advances live HEAD, coordinate/rebase and prepare a fresh ID against
+that exact baseline; never deploy this old-base candidate over unrelated changes.

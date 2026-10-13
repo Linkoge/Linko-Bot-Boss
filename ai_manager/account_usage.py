@@ -32,6 +32,7 @@ class AccountUsage:
         self.lock = asyncio.Lock()
         self.buckets = {}
         self.last_attempt = None
+        self.last_successful_refresh = None
         self.attempt_mono = None
         self.error = None
         self.generation = 0
@@ -43,6 +44,7 @@ class AccountUsage:
         self.buckets.clear()
         self.attempt_mono = None
         self.last_attempt = None
+        self.last_successful_refresh = None
         self.error = None
 
     def update(self, payload, replace=False):
@@ -58,7 +60,17 @@ class AccountUsage:
             candidates = [(snapshot.get("limitId") or "codex", snapshot)] if isinstance(snapshot, dict) else []
         for key, value in candidates:
             if isinstance(key, str) and isinstance(value, dict):
-                self.buckets[key] = (value, self.clock())
+                observed = self.clock()
+                self.buckets[key] = (value, observed)
+                # Only a usable account window establishes successful freshness.
+                if key == "codex" and any(
+                    isinstance(value.get(slot), dict)
+                    and value[slot].get("windowDurationMins") in (300, 10080)
+                    and number(value[slot].get("usedPercent"))
+                    and value[slot]["usedPercent"] >= 0
+                    for slot in ("primary", "secondary")
+                ):
+                    self.last_successful_refresh = observed
 
     async def read(self):
         async with self.lock:
@@ -111,7 +123,8 @@ class AccountUsage:
             })
         return {
             "scope": "account", "buckets": buckets, "last_attempt_at": self.last_attempt,
-            "server_time": now, "refresh_seconds": self.refresh_seconds, "error": self.error,
+            "last_successful_refresh_at": self.last_successful_refresh, "server_time": now,
+            "refresh_seconds": self.refresh_seconds, "error": self.error,
             "status": "unavailable" if not any(w["used_percent"] is not None for b in buckets for w in b["windows"]) else
             "stale" if any(w["stale"] for b in buckets for w in b["windows"]) else "available",
         }

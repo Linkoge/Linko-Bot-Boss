@@ -1,3 +1,16 @@
+# Focused popup cleanup — implemented/verified; do not deploy, 2026-10-13
+
+Candidate `popup-cleanup-v1-20261013` simplifies usage to 5 hour/Weekly percentage and reset,
+retains a truthful last-successful-refresh footer and fixes project-menu painting/input layering.
+Contract/evidence: [Codex usage and project popup](docs/CODEX_USAGE.md). Isolated checkout:
+`/home/codex/checkouts/linko-popup-cleanup-20261013`. Exact manifest is the preparation gate.
+Full private report and routine manager facts: `deployments/popup-cleanup-20261013/REPORT.md`
+and `manager-summary.json` under `/home/codex/.local/share/linko-bot-manager`.
+Current live baseline nav/audio v2 succeeded with nonce `0b09a6f825a34572dd8bcf5773f149b1`,
+commit `08f0ba712f194ea0f985740ef408c9e033511b98`; older pending/live statements below are historical.
+Activation is pending. Keep the independent recovery/UI/model and queued instruction assignments
+untouched; a newer live baseline requires coordinated integration and a new exact preparation.
+
 # Navigation/audio successor — verified candidate, 2026-10-13
 
 Exact candidate `nav-audio-upload-v2-20261013` aligns navigation squares in two columns and adds recording

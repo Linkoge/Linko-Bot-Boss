@@ -34,6 +34,7 @@ def test_installed_shape_multi_bucket_precedence_and_reset_math():
     assert (one["label"], two["label"], two["remaining_percent"]) == (
         "Five-hour allowance", "Weekly allowance", 59)
     assert result["scope"] == "account" and result["status"] == "available"
+    assert result["last_successful_refresh_at"] == 1000
 
 
 @pytest.mark.parametrize("used", [None, True, -1, "41", float('nan'), float('inf')])
@@ -96,12 +97,22 @@ async def test_coalesced_metadata_only_read_cooldown_stale_failure_and_recovery(
 
     usage.server.request = fail
     usage.monotonic = lambda: 71
+    usage.clock = lambda: 1061
     result = await usage.read()
     assert result["status"] == "stale" and 'private' not in result["error"]
+    assert result["last_attempt_at"] == 1061
+    assert result["last_successful_refresh_at"] == 1000
     assert result["buckets"][0]["windows"][0]["remaining_percent"] == 52
     usage.server.request = request
     usage.monotonic = lambda: 132
-    assert (await usage.read())["error"] is None
+    usage.clock = lambda: 1122
+    recovered = await usage.read()
+    assert recovered["error"] is None
+    assert recovered["last_successful_refresh_at"] == 1122
+    usage.clock = lambda: 1130
+    cached = await usage.read()
+    assert cached["last_successful_refresh_at"] == 1122
+    assert len(calls) == 2
 
 
 @pytest.mark.asyncio
@@ -167,3 +178,31 @@ def test_absent_codex_bucket_is_not_replaced_by_model_specific_quota():
     usage = cache()
     usage.update({'rateLimitsByLimitId': {'codex_other': {'primary': snapshot(42, 300)}}})
     assert [b['id'] for b in usage.view()['buckets']] == ['codex_other']
+
+
+@pytest.mark.asyncio
+async def test_failed_first_refresh_never_establishes_success():
+    usage = cache()
+
+    async def fail():
+        raise RuntimeError("unavailable")
+
+    usage.server.start = fail
+    result = await usage.read()
+    assert result["last_attempt_at"] == 1000
+    assert result["last_successful_refresh_at"] is None
+    assert result["status"] == "unavailable"
+
+
+def test_successful_freshness_requires_usable_account_window_and_invalidates():
+    usage = cache()
+    for reading in ({}, {"rateLimits": {"primary": snapshot(None)}},
+                    {"rateLimitsByLimitId": {"codex_other": {"primary": snapshot()}}}):
+        usage.update(reading, replace=True)
+        assert usage.view()["last_successful_refresh_at"] is None
+    usage.update(payload(), replace=True)
+    usage.clock = lambda: 1100
+    usage.update({"rateLimitsByLimitId": {"codex_other": {"primary": snapshot()}}})
+    assert usage.view()["last_successful_refresh_at"] == 1000
+    usage.invalidate()
+    assert usage.view()["last_successful_refresh_at"] is None
