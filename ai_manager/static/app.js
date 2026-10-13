@@ -205,7 +205,8 @@ function renderTasks(){
 function renderAgents(){
   const count=state.portfolio.active_agents||0,badge=$('agent-count'),scope=projectName(state.project);badge.textContent=count;badge.hidden=count===0;badge.title=`${count} working · ${scope}`;
   document.querySelector('[data-view=agents]').setAttribute('aria-label',`Agents · ${scope}${count?' · '+count+' working':''}`);
-  const list=$('agent-list'),top=window.scrollY;
+  const list=$('agent-list'),top=window.scrollY,focused=document.activeElement;
+  const selection=window.getSelection(),selected=selection?.rangeCount&&list.contains(selection.anchorNode)&&list.contains(selection.focusNode)?{anchor:selection.anchorNode,start:selection.anchorOffset,focus:selection.focusNode,end:selection.focusOffset}:null;
   const reading=[...list.querySelectorAll('details[open] pre')].find(node=>{const box=node.getBoundingClientRect();return box.bottom>0&&box.top<innerHeight;});
   const readingY=reading?.getBoundingClientRect().top;
   const existing=new Map([...list.children].map(row=>[row.dataset.executionId,row]));
@@ -225,6 +226,14 @@ function renderAgents(){
     if(!e.finished_at&&task){const controls=element('div',undefined,'task-controls');appendTaskControls(controls,task);row.querySelector('.agent-controls').append(controls);}
     else if(!e.finished_at&&!e.task_id){const selection=state.selection,b=element('button','Stop reply');b.onclick=action(async()=>{if(selection!==state.selection)return;await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});if(selection===state.selection)await refresh();});controls.append(b);}
   }
+  // Keep the established active-first server order as statuses change. Native
+  // moveBefore preserves interaction state; fallback restores output selection/focus.
+  const rendered=new Map([...list.children].map(row=>[row.dataset.executionId,row]));
+  const outputPositions=[...list.querySelectorAll('pre')].map(node=>({node,top:node.scrollTop,left:node.scrollLeft}));
+  for(const [index,e] of visible.entries()){const row=rendered.get(e.id),before=list.children[index];if(row!==before){if(typeof list.moveBefore==='function')list.moveBefore(row,before||null);else list.insertBefore(row,before||null);}}
+  for(const position of outputPositions){position.node.scrollTop=position.top;position.node.scrollLeft=position.left;}
+  if(selected?.anchor.isConnected&&selected.focus.isConnected)selection.setBaseAndExtent(selected.anchor,selected.start,selected.focus,selected.end);
+  if(focused!==document.activeElement&&list.contains(focused))focused.focus({preventScroll:true});
   if(state.view==='agents')window.scrollTo({top:reading?.isConnected?window.scrollY+reading.getBoundingClientRect().top-readingY:top,behavior:'instant'});
 }
 document.addEventListener('selectionchange',()=>{for(const output of document.querySelectorAll('.agent-output')){if(output._pendingAgentOutput!==undefined&&!chatHasSelection(output)){const top=output.scrollTop,left=output.scrollLeft;output.textContent=output._pendingAgentOutput;delete output._pendingAgentOutput;output.scrollTop=top;output.scrollLeft=left;}}});

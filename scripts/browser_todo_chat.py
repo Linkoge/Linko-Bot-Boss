@@ -158,12 +158,15 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')'''
                                            'error':'', 'thread_id':'fixture-thread', 'turn_id':'fixture-turn'}]
                     if updates[0]>2:
                         data['executions'].insert(0, {**data['executions'][0], 'id':'new-fixture', 'output':'New result above reading', 'finished_at':3, 'status':'completed'})
+                    if updates[0]%2==0:
+                        data['executions'].reverse()
                     if hide_reading[0]:
                         data['executions']=[e for e in data['executions'] if e['id']!='reading-fixture']
                     route.fulfill(response=response, json=data)
                 page.route('**/api/portfolio*', portfolio)
                 for width,height in [(1440,1000), (393,851), (320,420)]:
                     page.set_viewport_size({'width':width, 'height':height})
+                    page.evaluate("fallback=>{$('agent-list').moveBefore=fallback?undefined:Element.prototype.moveBefore;}", width==393)
                     page.locator('[data-view=agents]').click()
                     page.evaluate('()=>refresh(false)')
                     panel = page.locator('[data-execution-id=reading-fixture]')
