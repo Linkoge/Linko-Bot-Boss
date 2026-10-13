@@ -166,8 +166,13 @@ def main():
                 assert page.locator('#message-input').input_value() == 'Alpha draft\n\nlate Alpha text'
                 page.unroute('**/api/audio/transcribe')
 
-                # Switching while recording ends capture and inserts, with no send.
+                # Switching during capture is blocked; explicit stop retains the transcript.
                 start()
+                page.evaluate('(id)=>selectProject(id)', beta)
+                assert page.evaluate('state.project') == alpha
+                assert page.evaluate('audioState.session.phase') == 'recording'
+                assert page.locator('#all-projects').is_disabled()
+                finish_stop()
                 switch(beta)
                 page.wait_for_function('()=>!audioState.session')
                 assert page.locator('#message-input').input_value() == 'Beta draft'

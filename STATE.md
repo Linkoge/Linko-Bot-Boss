@@ -1,3 +1,29 @@
+# Stashed projects candidate — 2026-10-14
+
+Latest integrated candidate: `stash-rename-todo-chat-v1-20261014`, based on exact
+rename/To-Do/chat commit `d7ba7bd0f9e80ac6e07ef98b56ffe222ccff9407` in
+`/home/codex/checkouts/linko-project-stash-20261013`. Application visibility is separate
+from project execution/archive status; dropdown checkboxes stash/restore navigation,
+with an expandable Stashed projects section. Existing data and worker delivery remain.
+See [operations contract](docs/operations.md) and full private evidence:
+`/home/codex/.local/share/linko-bot-manager/deployments/project-stash-20261013/REPORT.md`.
+Exact preparation requires its immutable helper manifest; UI activation remains pending.
+No worker deployment, restart or GitHub push is authorized on this assignment.
+
+Immediate authorized cleanup is separate: both narrowly specified test paths are now
+absent and existing registry IDs are lifecycle `removed`. Recency-review was already
+absent when checked (this worker does not claim deleting it); acceptance fixture was
+deleted after active-use checks. No tasks/conversations/executions were attached; its
+five memory rows and all scoped history were retained. Cleanup evidence is `cleanup.json`
+in the private report directory, with the deleted acceptance fixture retained as a scoped
+archive outside project discovery roots. Main application and other repositories remain.
+
+A pre-existing manager request targets older `todo-handoff-chat-trash-recording-agents-v1-20261013`,
+nonce `2bf6554aecb9fd66c9ab49554bfb95ac`, observed `waiting_idle`; it omits rename/stash.
+This worker did not modify/cancel/fulfil that request. Manager must reconcile it before
+future activation. Require an exact durable succeeded receipt; if live base advances,
+reprepare under a fresh immutable ID rather than bypass helper base/idle gates.
+
 # Repository rename — candidate, 2026-10-13
 
 Live Git origin and existing project registry now point to `git@github.com:Linkoge/Linko-Bot-Boss.git`; registry name is `Linko-Bot-Boss`, revision 5, with owner display name **Bot Boss** and original ID/path retained. This is an immediate metadata change. No push, restart or deployment is authorized by this rename assignment.

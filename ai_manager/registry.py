@@ -1,3 +1,4 @@
+import json
 import subprocess
 import time
 from pathlib import Path
@@ -60,7 +61,7 @@ class Registry:
         path = self.allowed_path(path)
         existing = self.db.one("SELECT * FROM projects WHERE path=?", (str(path),))
         if existing:
-            return existing
+            return self.get(existing["id"])
         project_id, now = new_id(), time.time()
         with self.db.transaction() as conn:
             conn.execute(
@@ -101,15 +102,35 @@ class Registry:
         return [p for p in found if p["status"] != "removed"]
 
     def list(self):
-        return self.db.all(
-            "SELECT * FROM projects WHERE status != 'removed' ORDER BY last_used_at DESC,COALESCE(display_name,name) COLLATE NOCASE,id"
+        projects = self.db.all(
+            "SELECT p.*,COALESCE(s.value,'true') AS visibility FROM projects p "
+            "LEFT JOIN settings s ON s.key='project_visible:' || p.id "
+            "WHERE p.status != 'removed' ORDER BY p.last_used_at DESC,COALESCE(p.display_name,p.name) COLLATE NOCASE,p.id"
         )
+        for project in projects:
+            project["visible"] = json.loads(project.pop("visibility"))
+        return projects
 
     def get(self, project_id):
         project = self.db.one("SELECT * FROM projects WHERE id=?", (project_id,))
         if not project:
             raise ValueError("Unknown project")
+        project["visible"] = self.db.setting("project_visible:" + project_id, True)
         return project
+
+    def set_visibility(self, project_id: str, visible: bool):
+        if not isinstance(visible, bool):
+            raise ValueError("Visibility must be a boolean")
+        with self.db.transaction() as conn:
+            project = conn.execute("SELECT status FROM projects WHERE id=?", (project_id,)).fetchone()
+            if not project or project["status"] == "removed":
+                raise ValueError("Unknown or removed project")
+            conn.execute(
+                "INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                ("project_visible:" + project_id, json.dumps(visible)),
+            )
+            self.db.event(conn, "project.visibility_changed", {"visible": visible}, project_id)
+        return self.get(project_id)
 
     def update(self, project_id: str, revision: int, changes: dict):
         allowed = {"display_name", "description", "objective", "success_criteria", "instructions", "priority", "status"}

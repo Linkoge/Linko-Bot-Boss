@@ -48,6 +48,10 @@ class ProjectBody(BaseModel):
     name: str | None = Field(default=None, max_length=200)
 
 
+class ProjectVisibility(BaseModel):
+    visible: bool = Field(strict=True)
+
+
 class ProjectUpdate(BaseModel):
     revision: int
     display_name: str | None = Field(default=None, max_length=80)
@@ -491,6 +495,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
     @app.patch("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
     def update_project(project_id: str, body: ProjectUpdate):
         return registry.update(project_id, body.revision, body.model_dump(exclude={"revision"}, exclude_none=True))
+
+    @app.put("/api/projects/{project_id}/visibility", dependencies=[Depends(require_owner)])
+    def project_visibility(project_id: str, body: ProjectVisibility):
+        return registry.set_visibility(project_id, body.visible)
 
     @app.get("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
     def detail(project_id: str):

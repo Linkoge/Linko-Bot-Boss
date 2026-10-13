@@ -34,6 +34,8 @@ def prepare(repo, live, data, release_id, python):
               [str(python), 'scripts/browser_audio.py'],
               [str(python), 'scripts/browser_chat_reliability.py'],
               [str(python), 'scripts/browser_project_ui.py'],
+              [str(python), 'scripts/browser_project_stash.py'],
+              [str(python), 'scripts/browser_global_recency.py'],
               [str(python), 'scripts/browser_agent_controls.py'],
               [str(python), 'scripts/browser_todos.py'],
               [str(python), 'scripts/browser_todo_chat.py'],

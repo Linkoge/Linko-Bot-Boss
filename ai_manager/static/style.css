@@ -183,3 +183,10 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .microphone-icon{width:24px;height:24px;display:block;margin:auto;fill:currentColor;pointer-events:none}
 
 .chat-trash-controls{display:flex;align-items:center;justify-content:space-between;gap:12px}#chat-menu .chat-trash-controls #restore-trash{width:auto;flex:1}#chat-menu .chat-trash-controls #empty-trash{margin-left:auto;width:44px;min-width:44px;flex:none;text-align:center;padding:10px}#empty-trash svg{display:block;margin:auto}#view-agents,.agent-output{overflow-anchor:none}
+
+.project-menu-row{display:flex;align-items:center;gap:8px;min-height:44px;padding-left:4px}
+#project-menu .project-menu-row button{flex:1;min-width:0;width:auto}
+#project-menu input[type=checkbox]{flex:none;width:24px;height:24px;margin:8px;accent-color:var(--accent);cursor:pointer}
+#project-menu .project-menu-row span{min-width:0;overflow-wrap:anywhere;padding:8px;color:var(--muted)}
+#project-menu summary{min-height:44px;padding:12px 8px;box-sizing:border-box;cursor:pointer;color:var(--muted)}
+#project-menu details{border-top:1px solid var(--border);margin-top:4px}

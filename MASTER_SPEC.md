@@ -67,3 +67,14 @@ remove UI recovery only, retaining conversation/manager/task/native/archive evid
 Recording expands composer and exposes Send, using safe whole-file transcription/draft/attachment/FIFO semantics.
 Expanded Agents output retains open/reading/selection state across updates until explicit close/navigation.
 Contracts and validation limits: docs/chat-history.md and docs/AUDIO.md. Exact release/report: STATE.md.
+
+## Project visibility
+
+Project dropdown checkboxes persist navigation visibility independently of active/paused/archived
+execution status. Unchecked projects appear under expandable Stashed projects; rechecking restores
+them to main navigation. Preserve project files, IDs, conversations, drafts/uploads, tasks, memory
+and native thread links. Stashing does not pause/resume work or suppress results/questions. Selected
+stashing preserves the draft and switches to All Projects; active capture blocks switch/stash until
+stopped. Rescans preserve visibility, new IDs default visible and only removed records are excluded.
+Existing explicit Add/manual/startup discovery, including empty repositories, remains. See operations
+for pending release status and verification evidence.

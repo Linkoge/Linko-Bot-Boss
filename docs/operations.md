@@ -14,6 +14,40 @@ See [chat history](chat-history.md) for reversible swap restore and durable evid
 
 Historical unfinished tasks remain waiting after the simplification migration. Continue explicitly only when that objective is still wanted; Codex receives historical workspace/output references and inspects actual source before proceeding. Old completed/cancelled/failed dispositions and supervision evidence remain historical. There is no automatic clone merge or old-operation replay.
 
+## Project visibility and discovery
+
+In the prepared `stash-rename-todo-chat-v1-20261014` candidate, project dropdown
+checkboxes control persistent visibility. Uncheck to remove a project from the main
+navigation and place it under expandable **Stashed projects**; recheck to restore it
+without selecting it. Visibility is an owner preference keyed by existing project ID
+in SQLite settings (`project_visible:<id>`), exposed by the authenticated/CSRF-protected
+`PUT /api/projects/{id}/visibility` with a strict boolean `visible`. It does not change
+project revision, execution status, recency, archive status or project files.
+
+Stashed active workers keep running and delivering results/questions into their original
+conversations. All Projects still includes their tasks, agents, questions and To-Do;
+project references and history/search retain the same identity. Paused projects stay
+paused, archived projects stay archived. Only lifecycle `removed` records are excluded
+from the registry. Stashing the selected project saves its draft and attachments under
+the same ID, then switches to All Projects. Restoring and selecting it retains its chat
+and draft. Startup considers visible projects plus All Projects. Another tab's stash
+is reconciled by polling; capture finishes before automatic context departure.
+
+Project switching and visibility checkboxes are disabled while microphone acquisition,
+recording or capture stop is active. Stop recording first; the existing transcription,
+draft and checkpoint recovery behavior remains. In-flight visibility writes disable
+new microphone capture. Late transcription stays attached to its originating project.
+The dropdown supports native checkboxes, Space/Tab, arrows/Home/End and Escape with
+focus preservation, mobile scrolling and the established theme.
+
+Discovery remains startup/manual Settings → Discover repositories, bounded by existing
+roots/depth/skips; this change adds no watcher or automatic discovery overhaul. Empty
+Git repositories qualify. Use Settings → Add project for a single exact directory to
+avoid importing unrelated eligible repositories. Newly registered IDs default visible;
+rescanning/re-adding existing paths retains visibility and IDs. A removed record is not
+resurrected by rediscovery. No live rescan or unrelated repository import was performed
+for this delivery. Physical mobile device behavior is not established by browser fixtures.
+
 ## Future ideas
 
 To-Do immediately follows Agents. It is the authoritative project backlog, distinct from executable Tasks.
