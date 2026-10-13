@@ -1,5 +1,6 @@
 import asyncio
 import fcntl
+import hashlib
 import hmac
 import json
 import logging
@@ -11,7 +12,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
@@ -212,7 +213,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Cache-Control"] = "no-store"
+        response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     def require_owner(request: Request):
@@ -422,7 +423,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
 
     @app.get("/")
     def index():
-        return FileResponse(static / "index.html")
+        return HTMLResponse(index_html)
 
     @app.get("/api/todos", dependencies=[Depends(require_owner)])
     def todo_list(project_id: str | None = None):
@@ -578,5 +579,29 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
         return {"global_instructions": db.setting("global_instructions", ""), "max_workers": settings.max_workers}
 
     static = Path(__file__).parent / "static"
+    # Pin content and URLs to this process/release; never cache mutable aliases.
+    assets = {}
+    index_html = (static / "index.html").read_text()
+    for path in static.rglob("*"):
+        if path.suffix not in {".js", ".css"}:
+            continue
+        name = path.relative_to(static).as_posix()
+        content = path.read_bytes()
+        digest = hashlib.sha256(content).hexdigest()
+        assets[(digest, name)] = content
+        index_html = index_html.replace(f'"/static/{name}"', f'"/static/assets/{digest}/{name}"')
+
+    @app.get("/manifest.webmanifest")
+    def manifest():
+        return FileResponse(static / "manifest.webmanifest", media_type="application/manifest+json")
+
+    @app.get("/static/assets/{digest}/{name:path}")
+    def versioned_asset(digest: str, name: str):
+        content = assets.get((digest, name))
+        if content is None:
+            raise HTTPException(404, "Unknown asset version")
+        return Response(content, media_type="text/css" if name.endswith(".css") else "text/javascript",
+                        headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
     app.mount("/static", StaticFiles(directory=static), name="static")
     return app

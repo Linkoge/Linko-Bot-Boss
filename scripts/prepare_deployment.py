@@ -38,7 +38,8 @@ def prepare(repo, live, data, release_id, python):
               [str(python), 'scripts/browser_project_memory.py'],
               [str(python), 'scripts/browser_fetch_recovery.py'],
               [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_markdown.py'], [str(python), 'scripts/browser_deployment.py'],
-              [str(python), 'scripts/browser_account_usage.py']]
+              [str(python), 'scripts/browser_account_usage.py'],
+              ['xvfb-run', '-a', str(python), 'scripts/browser_pwa.py']]
     with (target / 'validation.log').open('w') as log:
         for argv in checks:
             result = subprocess.run(argv, cwd=repo, stdout=log, stderr=log, timeout=180)

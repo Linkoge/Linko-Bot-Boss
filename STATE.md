@@ -1,3 +1,20 @@
+# PWA candidate — prepared release, deployment pending, 2026-10-13
+
+Actual live base is `microphone-any-files-composer-v2-20261013`, commit
+`35711af31b712370bec9fbd87b4ffd2bced71fe9`; durable succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/19c7b38baf0e78f924e04320c1a02d1d.json`.
+Read-only loopback and private HTTPS checks matched all 16 served assets.
+Older live/pending statements below are historical and superseded by this evidence.
+
+Candidate `pwa-standalone-v1-20261013` in `/home/codex/checkouts/linko-pwa-20261013`
+adds linked manifest, owner koi/binary icons, mobile metadata and content-hashed
+immutable JS/CSS while retaining no-store HTML/API/aliases and existing behavior.
+No service worker, dependency/schema change or deployment performed. Exact prepared
+manifest and validation outcomes are retained in [PWA contract](docs/PWA.md) and
+its private full report/manager facts. Physical Android acceptance and activation
+remain pending. Use the existing controlled deployment helper only after a future
+owner deployment instruction; current instruction explicitly says do not deploy.
+
 # Integrated microphone/files candidate — 2026-10-13
 
 Current candidate `microphone-any-files-composer-v2-20261013` integrates completed

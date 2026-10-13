@@ -50,3 +50,8 @@ Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
   generic-to-STT routing. Only verified supported raster bytes become native image input;
   files/provider limitations remain honest. Owner microphone SVG and original recoverable
   asset provenance: ai_manager/static/icons/README.md; contract: docs/chat-history.md.
+
+- Installable PWA follows [PWA contract](docs/PWA.md): owner artwork, standalone
+  display with normal system bars, root URLs and existing private HTTPS/auth/state;
+  uncached HTML plus content-hashed immutable JS/CSS, no service worker/offline
+  cache. Implementation/device verification/deployment status remain distinct.

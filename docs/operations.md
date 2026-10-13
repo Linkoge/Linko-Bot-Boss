@@ -47,6 +47,13 @@ Run `pytest`, Ruff and JavaScript syntax checks. `scripts/browser_smoke.py` uses
 
 ## Deployment
 
+Installable PWA launch, update/cache policy and device acceptance are documented
+in [PWA contract](PWA.md). Current release/deployment evidence is at the top of
+STATE.md; older release claims in this document are historical. PWA preparation
+changes application cache responses only, retaining the same controlled helper,
+private HTTPS listener and service configuration.
+
+
 The controlled independent helper is documented in [deployment helper](DEPLOYMENT_HELPER.md).
 It has durable succeeded releases; current navigation/audio success is referenced in STATE.md.
 Owner has authorized `integrated-recovery-append-popup-v1-20261013`; the manager reviews and calls `deploy_release`.

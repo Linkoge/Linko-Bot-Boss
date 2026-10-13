@@ -1,3 +1,11 @@
+# PWA delivery — deployment pending, 2026-10-13
+
+Read [docs/PWA.md](docs/PWA.md) and its private REPORT.md/manager-summary.json for
+current live evidence, prepared release `pwa-standalone-v1-20261013`, cache/launch
+contract and actual validation limitations. Owner explicitly requested no deployment.
+Manager should record the routine brief/recent-delivery facts from that summary;
+do not run memory reconciliation or assert activation/device acceptance.
+
 # Integrated microphone and any-format files — preparation only
 
 Use `microphone-any-files-composer-v2-20261013` as the combined future activation target,

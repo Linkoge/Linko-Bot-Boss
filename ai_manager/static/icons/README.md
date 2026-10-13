@@ -21,3 +21,20 @@ To restore, replace the normal index.html SVG with that span and keep the existi
 clone behavior in audio.js; remove/adapt microphone-icon sizing if desired.
 Platform emoji rendering remains platform-dependent, just as before.
 These authored assets are unrelated to untrusted user attachment rendering.
+
+
+# PWA koi/binary artwork
+
+Owner-supplied PNG (decoded as image data only), confirmed by owner/manager:
+`/home/codex/.local/share/linko-bot-manager/chat-workspace/attachments/ca10952521084c92b838edf8c44eb754.png`.
+Source SHA256: `ab2f52d61920f6425e6e34c13409fbb5b580a7d44ea755ea86ac8ab580448a58`;
+512×512. No upstream license or creator is inferred.
+
+Chromium Canvas2D decodes the original, fills an opaque #10141e square and draws
+it with high-quality smoothing. pwa-192.png and pwa-512.png contain the full
+artwork at their stated dimensions. pwa-maskable-512.png centers the full artwork
+in a 280×280 square (116px padding); even its corners fit within the maskable
+safe circle of radius 204.8px. No cropping/redesign/generative alteration.
+All three are opaque PNGs. Browser checks decode pixels and ensure the maskable
+safe-circle exterior is entirely the theme background. Private generation recipe
+and validation evidence: deployments/pwa-20261013 under the existing runtime data root.
