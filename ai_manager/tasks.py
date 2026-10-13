@@ -23,11 +23,12 @@ class Tasks:
         if not row:
             raise ValueError("Unknown assignment")
         selected = self.db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.model_selected' ORDER BY seq DESC LIMIT 1", (task_id,))
-        return {**self.record(row), "worker_route": json.loads(selected['payload']) if selected else None}
+        return {**self.record(row), "worker_route": json.loads(selected['payload']) if selected else None,
+                "job_followup": self.db.setting("assignment_workflow:" + task_id)}
 
     @staticmethod
     def context(task):
-        return {k: task[k] for k in ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision")} | {"worker_route": task.get("worker_route")}
+        return {k: task[k] for k in ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision")} | {"worker_route": task.get("worker_route"), "job_followup": task.get("job_followup")}
 
     def list(self, project_id=None):
         rows = self.db.all(
@@ -101,6 +102,8 @@ class Tasks:
                 (task_id, project_id, description.strip(), acceptance, now, now, origin_conversation, request_key),
             )
             self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
+            from .assignment_workflow import update
+            update(self.db, conn, task_id, "actionable", "Authorized assignment; worker outcome requires manager review")
             if model_route:
                 self.db.event(conn, "task.model_selected", model_route, project_id, task_id)
             if selected:
@@ -140,6 +143,9 @@ class Tasks:
                 "UPDATE tasks SET lifecycle=?,blocker=?,revision=revision+1,updated_at=? WHERE id=?",
                 (status, blocker, time.time(), task_id),
             )
+            from .assignment_workflow import update
+            update(self.db, conn, task_id, 'actionable' if action == 'continue' else 'owner_wait',
+                   'Explicit assignment ' + action, reset_retry=action == 'continue')
             self.db.event(conn, "task." + action, {}, task["project_id"], task_id)
         return self.get(task_id)
 

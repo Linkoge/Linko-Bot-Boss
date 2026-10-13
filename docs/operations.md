@@ -47,9 +47,9 @@ Run `pytest`, Ruff and JavaScript syntax checks. `scripts/browser_smoke.py` uses
 
 ## Deployment
 
-The controlled independent helper and one-time bootstrap are documented in
-[deployment helper](DEPLOYMENT_HELPER.md). Its first manager activation is pending; use its exact gate
-and release receipts instead of restarting a releasing worker. The older manual procedure below is historical
+The controlled independent helper is documented in [deployment helper](DEPLOYMENT_HELPER.md).
+It has durable succeeded releases; current navigation/audio success is referenced in STATE.md.
+Use its exact preparation manifest and owner-requested deployment receipts instead of restarting a releasing worker. The older manual procedure below is historical
 context for code-only releases and requires an external quiet operator window.
 
 Prepare and test a separate checkout. Create an online SQLite backup and rehearse startup against its copy. When no active execution needs interruption, stop only `linko-bot-manager.service`, fast-forward this repository to the tested commit, and start the same user service. Its existing `.venv`, environment, daily backup timer and Tailscale listener are retained. Check service PID/start time, loopback/private HTTPS, served asset hashes, SQLite integrity and preserved records. Do not run acceptance assignments against production data.
@@ -77,3 +77,12 @@ Unfinished recording checkpoints are browser-local IndexedDB; draft/recovery key
 sessionStorage. Same-tab reload recovery is best effort, not a server audio archive. Stop or Download
 before leaving long mobile recordings; Android/browser suspension and storage eviction cannot be
 prevented by this app. No background service is installed.
+
+
+## Unfinished job follow-up candidate
+
+See [automatic recovery](AUTOMATIC_RECOVERY.md) for assignment-level review/actionable/owner-wait/deferred/
+complete state, 15-second metadata-free SQL checks, 30-second idle grace, deduplicated internal wakeups,
+persisted retry delays and explicit hold exclusions. These settings and exact executions are included in
+existing SQLite backups; no separate recovery store/service is introduced. New work resolves catalog
+family versions; retained exact routes never silently upgrade. These candidate behaviors require deployment.

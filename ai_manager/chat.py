@@ -231,6 +231,12 @@ class Chat:
         prompt = {"mode": mode, "message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
         if source:
             prompt["worker_result"] = self.result_notice(source)
+        recovery_task = self.db.setting('execution_recovery:' + execution_id)
+        if recovery_task:
+            prompt['message'] = 'Internal unfinished-work review; inspect this existing assignment and result only. Preserve owner holds. No deployment authorization.'
+            prompt['assignment_followup'] = {'task_id': recovery_task, 'state': self.db.setting('assignment_workflow:' + recovery_task),
+                                             'evidence_actions': ['read_task', 'read_result']}
+
         if prior and saved.get("thread_id") == thread_id:
             updates = {k: v for k, v in context.items() if saved.get("context", {}).get(k) != v}
             if updates:
@@ -267,9 +273,10 @@ class Chat:
         return prompt, context
 
     async def routes(self):
+        from .model_families import resolve
         await self.server.start()
         return {
-            role: self.server.route(**self.db.setting("model_routes", {}).get(role, {"effort": effort}))
+            role: resolve(self.server, self.db.setting("model_routes", {}).get(role, {"effort": effort}))
             for role, effort in ROLES.items()
         }
 
@@ -281,10 +288,10 @@ class Chat:
             return json.loads(row["receipt"])
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto", request_id=None,
-                     attachment_ids=None):
+                     attachment_ids=None, recovery_task=None):
         from .deployment import Handoff
         handoff = Handoff(self.db.path.parent)
-        if handoff.ready_to_stop() or (handoff.gated() and not delivery):
+        if handoff.ready_to_stop() or (handoff.gated() and not (delivery or recovery_task)):
             raise ValueError('Deployment pending; wait before submitting new work')
         display_content = content
         payload = [project_id, conversation_id, content, mode]
@@ -292,7 +299,7 @@ class Chat:
             payload.append(attachment_ids)
         payload_hash = hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
         if request_id:
-            if delivery or not 16 <= len(request_id) <= 100 or not all(c.isalnum() or c in "-_" for c in request_id):
+            if delivery or recovery_task or not 16 <= len(request_id) <= 100 or not all(c.isalnum() or c in "-_" for c in request_id):
                 raise ValueError("Invalid owner request ID")
             with self.db.transaction() as conn:
                 if receipt := self.request_receipt(conn, request_id, payload_hash):
@@ -308,7 +315,7 @@ class Chat:
             raise ValueError("Message must be 1–64000 characters")
         conversation = (
             self.db.one("SELECT * FROM conversations WHERE id=? AND project_id IS ?", (conversation_id, project_id))
-            if delivery and conversation_id
+            if (delivery or recovery_task) and conversation_id
             else self.conversation(project_id)
         )
         if not conversation or (conversation_id and conversation["id"] != conversation_id):
@@ -322,21 +329,30 @@ class Chat:
                 return original
             if not conn.execute(
                 "SELECT 1 FROM conversations WHERE id=? AND project_id IS ? AND (? OR context=?)",
-                (conversation["id"], project_id, bool(delivery), project_id or "global"),
+                (conversation["id"], project_id, bool(delivery or recovery_task), project_id or "global"),
             ).fetchone():
                 raise ValueError("Chat changed. Refresh before sending")
-            conn.execute(
-                "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,?)",
-                (
-                    "result:" + delivery if delivery else new_id(),
-                    conversation["id"],
-                    "worker" if delivery else "user",
-                    display_content if items else content,
-                    "completed",
-                    execution_id,
-                    now,
-                ),
-            )
+            if delivery or recovery_task:
+                if conn.execute("SELECT 1 FROM executions WHERE agent_id='manager' AND conversation_id=? AND finished_at IS NULL", (conversation['id'],)).fetchone():
+                    raise ValueError('Conversation already has a pending manager response')
+                if any(self.db.one('SELECT conversation_id FROM executions WHERE id=?', (k,))['conversation_id'] == conversation['id'] for k in self.jobs):
+                    raise ValueError('Previous manager runner is still cleaning up')
+            if recovery_task:
+                from .assignment_workflow import claim
+                claim(conn, recovery_task, execution_id, now, project_id, conversation["id"])
+            if not recovery_task:
+                conn.execute(
+                    "INSERT OR IGNORE INTO messages VALUES(?,?,?,?,?,?,?)",
+                    (
+                        "result:" + delivery if delivery else new_id(),
+                        conversation["id"],
+                        "worker" if delivery else "user",
+                        display_content if items else content,
+                        "completed",
+                        execution_id,
+                        now,
+                    ),
+                )
             conn.execute(
                 "INSERT INTO messages VALUES(?,?,?,?,?,?,?)",
                 (response_id, conversation["id"], "assistant", "", "queued", execution_id, now + 0.0001),
@@ -372,7 +388,7 @@ class Chat:
                 conn.execute(
                     "INSERT INTO chat_requests VALUES(1,?,?,?,?)", (request_id, payload_hash, json.dumps(receipt), now)
                 )
-            self.db.event(conn, "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
+            self.db.event(conn, "recovery.queued" if recovery_task else "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
         self.launch(execution_id, response_id, conversation, content, route, mode)
         return receipt
 
@@ -402,11 +418,18 @@ class Chat:
         new_output = False
         usage = TurnUsage()
         try:
+            recovery_task = self.db.setting('execution_recovery:' + execution_id)
+            from .assignment_workflow import ready_to_run
+            if recovery_task and not ready_to_run(self.db, recovery_task):
+                self._finish(execution_id, response_id, 'interrupted', 'Follow-up held or resolved before dispatch', output)
+                return
             if not reserve(self.db, execution_id):
                 wait_for_gate(self.db, execution_id)
                 return
             await self.server.start()
-            route = self.server.route(**route)
+            from .model_families import resolve
+            execution = self.db.one('SELECT thread_id,launch_key FROM executions WHERE id=?', (execution_id,))
+            route = resolve(self.server, route) if not execution['thread_id'] and execution['launch_key'] == 'not-started' else self.server.route(**route)
             with self.db.transaction() as conn:
                 conn.execute(
                     "UPDATE executions SET model=?,effort=?,status='queued',retry_at=NULL WHERE id=?",
@@ -425,7 +448,9 @@ class Chat:
             self.server.queues[thread_id] = queue
             self.server.tool_handlers[thread_id] = lambda params: self.action_handler(
                 conversation["project_id"],
-                {**params, "manager_execution_id": execution_id, "conversation_id": conversation["id"], "mode": mode},
+                {**params, "manager_execution_id": execution_id, "conversation_id": conversation["id"], "mode": mode,
+                 "internal": bool(recovery_task or self.db.one("SELECT 1 FROM executions WHERE delivery_execution=?", (execution_id,))),
+                 "internal_task": recovery_task or (self.db.one("SELECT task_id FROM executions WHERE delivery_execution=?", (execution_id,)) or {}).get('task_id')},
             )
             with self.db.transaction() as conn:
                 conn.execute("UPDATE conversations SET thread_id=? WHERE id=?", (thread_id, conversation["id"]))
@@ -457,6 +482,9 @@ class Chat:
                 self.db.event(
                     conn, "model.context", {"prompt": prompt}, conversation["project_id"], execution_id=execution_id
                 )
+            if recovery_task and not ready_to_run(self.db, recovery_task):
+                self._finish(execution_id, response_id, 'interrupted', 'Follow-up changed during provider preparation', output)
+                return
             launch_key = launching(self.db, execution_id, json.dumps(prompt, ensure_ascii=False, separators=(",", ":")))
             native_input = [{"type": "text", "text": json.dumps(prompt, ensure_ascii=False, separators=(",", ":"))}]
             native_input.extend({'type': 'localImage', 'path': item['path']} for item in
@@ -597,6 +625,9 @@ class Chat:
             AND (reply.id IS NULL OR reply.finished_at<=?) ORDER BY e.finished_at""",
             (time.time() - 30,),
         ):
+            workflow = self.db.setting('assignment_workflow:' + result['task_id'], {})
+            if workflow.get('state') == 'owner_wait' and workflow.get('reason', '').startswith('Manager stopped by owner'):
+                continue
             if result["origin_conversation"]:
                 conversation = self.db.one("SELECT * FROM conversations WHERE id=?", (result["origin_conversation"],))
                 # A deliberately cleared chat must not leak into its replacement.
@@ -616,7 +647,8 @@ class Chat:
                 continue
             content = json.dumps(self.result_notice(result), ensure_ascii=False)
             try:
-                await self.submit(conversation["project_id"], content, conversation["id"], result["id"])
+                await self.submit(conversation["project_id"], content, conversation["id"], result["id"],
+                                  mode="conversation" if result["task_status"] in {"paused", "waiting", "cancelled"} else "auto")
             except ValueError:
                 continue
 
@@ -626,6 +658,9 @@ class Chat:
             raise ValueError("No active manager turn")
         with self.db.transaction() as conn:
             conn.execute("UPDATE executions SET stop_requested=1,retry_at=NULL WHERE id=?", (execution_id,))
+            self.db.event(conn, 'chat.stop_requested', {'source': 'authenticated_owner_interrupt_endpoint'}, row['project_id'], execution_id=execution_id)
+            from .assignment_workflow import hold_conversation
+            hold_conversation(self.db, conn, row['conversation_id'], execution_id)
         if row["status"] == "recovering" and execution_id not in self.jobs:
             if row["turn_id"] and self.server.process and row["pid"] == self.server.process.pid:
                 try:

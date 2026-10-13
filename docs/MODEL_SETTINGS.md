@@ -1,3 +1,70 @@
+# Catalog-backed family resolution candidate — 2026-10-13
+
+Exact prepared candidate `unfinished-recovery-family-ui-v1-20261013`; **not deployed**.
+Current deployed baseline is `nav-audio-upload-v2-20261013`, commit
+`08f0ba712f194ea0f985740ef408c9e033511b98`, succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json`.
+Older pending/live assertions below are superseded by this observation.
+Full report/catalog/native runtime evidence:
+`/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/`.
+
+## Deployed answer and new behavior
+
+The deployed mapping is fixed: Luna `gpt-6-luna`, Sol `gpt-6.1-sol`, Astra `gpt-6-astra`.
+It does **not** dynamically advance Sol when a newer Sol appears. At inspection, production settings
+revision 13 choose Manager Sol/Low, Bot Automatic with retained manual Sol/Medium. Automatic policy
+allows Luna/Medium only, all three Sol levels, and denies Astra. Recent actual manager/native settings
+receipts confirm `gpt-6.1-sol`/low; the bundled worker runtime is `gpt-6.1-sol`/medium.
+A fresh authenticated ChatGPT `model/list` snapshot from codex-cli 0.162.1 includes `gpt-6.1-sol`,
+`gpt-6-sol`, `gpt-5.6-sol`, `gpt-6-astra`, `gpt-6-luna`, `gpt-5.6-luna`, and `gpt-5.6-terra`.
+The provider cache records fetched-at `2026-10-13T08:30:12.641864813Z`; this is observed metadata freshness,
+not a guarantee of immediate discovery of every future public model. All selected families support Low,
+Medium and High. The official [Sol page](https://developers.openai.com/api/docs/models/gpt-6.1-sol)
+and [App Server model discovery](https://learn.chatgpt.com/docs/app-server) were fetched using OpenAI Docs;
+account-authenticated catalog capability data is authoritative for this app's available choices.
+
+The candidate resolves **new** work within the explicitly chosen Luna/Sol/Astra family from the provider
+catalog, without a hardcoded current version. Recognized exact IDs match `gpt-<numeric version>-<family>`;
+compare numeric version components, not text/catalog ordering/default or cross-family upgrade metadata.
+Only visible text-capable catalog entries with an app-supported effort participate; unknown naming,
+preview/snapshot suffixes, other families and hidden entries are excluded. If a future naming convention
+changes, it needs an explicit resolver update; never guess an alias or switch family. Unrecognized legacy
+custom routes remain exact. Existing legacy IDs are compatibility constants for callers/fixtures, not
+latest-version dispatch defaults. Unavailable families remain visibly chosen and disabled.
+
+Retained global IDs denote family preference for new work. Reads project settings and automatic policies
+to current family versions; no background settings rewrite or revision bump. Denies migrate by family;
+conflicting legacy keys intersect allow states, never erase a deny. New manual work honors the retained
+family/effort regardless of automatic suggestions. New automatic delegation validates the resolved pair
+against current family/level policy, without an extra router/model call. If the newest supported family
+model cannot use the chosen effort, reject/wait rather than downgrade effort, pick an older model or cross
+families. Missing families/catalog access similarly block; explicit owner choices stay intact.
+
+An assignment's existing `task.model_selected` exact model/effort stays pinned through continue and
+recovery. Each resumed automatic assignment checks current family policy and its **exact** catalog support,
+even if mode changed or a newer family version appeared. Denied or removed exact pairs wait with their
+original thread/route; no silent reroute. New manager executions resolve the family before initial native
+launch and record the exact model/effort in executions; interrupted manager executions with native identity
+retain the exact ID. Native thread/settings/turn events retain runtime evidence too.
+
+`model/list` is metadata, not inference. App Server startup loads a complete paginated snapshot; a live
+manager refreshes metadata on use at most hourly, with an atomic snapshot replacement. Refresh failure
+retains the last complete snapshot for up to 24 hours, retries no faster than five minutes and exposes
+catalog timestamp/error through `/api/models`. Empty/partial/too-stale cache blocks instead of inventing
+models. Restart requires an authenticated fresh catalog; no fabricated persistent fallback. Existing
+provider/client cache behavior can delay discovery beyond application refresh; no zero-delay latest claim.
+
+Family selection buttons have a subtle dark-red gradient consistently in both role settings; effort
+buttons remain plain. Existing aria-pressed, focus, disabled/selected states, minimal labels, full visible
+choices and keyboard interaction remain. Chromium checks computed background treatments, persistence,
+policy/deny behavior and layout at 1200/393/320px; screenshots retain the actual rendering. Backend tests
+cover numeric 6.9/6.10 resolution, hidden/unknown IDs, missing families/efforts, deny preservation, pinned
+assignments and manager recovery, metadata pagination/atomic failure/TTL/backoff/stale/empty cases.
+
+---
+
+## Historical model-settings delivery
+
 # Manager and bot choices — 2026-10-13
 
 Current deployed release: `model-settings-manual-scroll-v2-20261013`, commit

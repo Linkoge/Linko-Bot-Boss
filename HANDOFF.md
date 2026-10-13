@@ -1,3 +1,22 @@
+# Unfinished-work/model/audio/Tasks delivery — prepared only, 2026-10-13
+
+Exact release `unfinished-recovery-family-ui-v1-20261013`, checkout `/home/codex/checkouts/linko-unfinished-recovery-20261013`.
+Do not deploy without a **new owner request**. Preparation requires its exact helper manifest;
+only a later matching succeeded receipt can establish activation. Current live is the succeeded
+`nav-audio-upload-v2-20261013`, commit `08f0ba712f194ea0f985740ef408c9e033511b98`, receipt `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json`.
+
+Manager: retain one routine delivery ID for this bundled objective. Record implemented/verified/prepared
+versus deployment pending, exact release/report, lasting effects and unresolved limitations using
+`/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/manager-summary.json`. Full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/REPORT.md`.
+Preserve task/execution linkage from that summary, retrieved original interruption evidence, current
+production model policy/runtime and authenticated catalog. Do not bulk inject these reports or run full
+memory reconciliation. Natural owner explanation: the immediate interruption was an interrupt HTTP
+request; its triggering gesture is unknown. Deployed Sol is pinned to 6.1; the candidate follows the latest
+supported catalog version per family for new work, keeping existing routes stable. History editor Cancel
+is a pre-existing unrelated follow-up; Escape works. See current STATE.md and linked authoritative docs.
+
+---
+
 # Navigation/audio delivery — verified candidate; do not deploy, 2026-10-13
 
 One complete delivery: `nav-audio-upload-v2-20261013`. Candidate checkout:

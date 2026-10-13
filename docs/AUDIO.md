@@ -1,3 +1,23 @@
+# Recording toggle candidate — 2026-10-13
+
+Exact candidate `unfinished-recovery-family-ui-v1-20261013` removes **only the separate recording Stop button**.
+Record remains the stop/transcribe toggle; Discard, Upload, Download/Retry, explicit Send and the
+existing recording replacement/cancellation/checkpoint/selection/focus/20-minute behavior remain.
+No recording/picker action sends an owner message, interrupts the manager or queues a manager wake.
+Chromium uses real microphone capture and fixture STT to verify toggle/removal, focus, picker cancellation,
+replacement bytes, stopped tracks, stale callbacks, sequential append, retained attachments and narrow
+navigation geometry. It tracks zero manager-interrupt requests during all audio flows. No physical device
+or paid STT acceptance is claimed. Historical interruption evidence and its limits:
+[automatic recovery](AUTOMATIC_RECOVERY.md). Full report: `/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/REPORT.md`.
+
+**Not deployed; wait for a new owner deployment request.** Preparation requires the exact helper manifest.
+Actual live is `nav-audio-upload-v2-20261013`, `08f0ba712f194ea0f985740ef408c9e033511b98`,
+proven by succeeded receipt `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json` and matching served assets. Thus the navigation/upload release
+below did activate; its old pending statements are historical. Its behavior is retained except for this
+candidate's redundant Stop removal. Fully manual scrolling and 2×2 navigation remain.
+
+---
+
 # Navigation symmetry and recording Upload — 2026-10-13
 
 Candidate release `nav-audio-upload-v2-20261013` in `/home/codex/checkouts/linko-nav-audio-upload-20261013`.

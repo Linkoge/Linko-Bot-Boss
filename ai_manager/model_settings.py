@@ -1,5 +1,8 @@
 """Global role choices and bot policy, using existing settings and task audit events."""
+import copy
 import json
+
+from .model_families import FAMILIES, family, latest, policy_item, resolve
 
 
 class RouteBlocked(ValueError):
@@ -7,23 +10,41 @@ class RouteBlocked(ValueError):
 
 
 LEVELS = ('low', 'medium', 'high')
-# Exact official IDs; availability and efforts still come from model/list.
+# Legacy IDs for compatibility consumers only. Runtime selection uses authenticated catalog families.
 MODELS = {'Luna': 'gpt-6-luna', 'Sol': 'gpt-6.1-sol', 'Astra': 'gpt-6-astra'}
 
 
 def choices(server):
-    return [{'name': name, 'model': model, 'levels': [e['reasoningEffort'] for e in
-             next((m['supportedReasoningEfforts'] for m in server.catalog if m['model'] == model), [])
-             if e['reasoningEffort'] in LEVELS]} for name, model in MODELS.items()]
+    result = []
+    for name in FAMILIES:
+        try:
+            model = latest(server, name)
+        except ValueError:
+            model = name  # Stable unavailable family label; never a version fallback.
+        levels = [e['reasoningEffort'] for e in next(
+            (m['supportedReasoningEfforts'] for m in server.catalog if m['model'] == model and not m.get('hidden')), [])
+            if e['reasoningEffort'] in LEVELS]
+        result.append({'name': name, 'model': model, 'levels': levels})
+    return result
 
 
 def current(db, server):
     saved = db.setting('model_settings')
     if saved:
+        saved = copy.deepcopy(saved)
+        for pair in (saved['manager'], saved['bot']['manual']):
+            name = family(pair['model'])
+            if name:
+                try:
+                    pair['model'] = latest(server, name)
+                except ValueError:
+                    pair['model'] = name  # Retain the chosen family visibly unavailable.
+        policy = saved['bot']['policy']
+        saved['bot']['policy'] = {m['model']: policy_item(policy, m['model']) for m in choices(server)}
         return saved
     routes = db.setting('model_routes', {})
-    return {'revision': 0, 'manager': server.route(**routes.get('interactive', {'effort': 'low'})),
-            'bot': {'mode': 'manual', 'manual': server.route(**routes.get('execution', {'effort': 'medium'})),
+    return {'revision': 0, 'manager': resolve(server, routes.get('interactive', {'effort': 'low'})),
+            'bot': {'mode': 'manual', 'manual': resolve(server, routes.get('execution', {'effort': 'medium'})),
                     'policy': {m['model']: {'allowed': m['name'] != 'Astra',
                                'levels': {e: e in m['levels'] for e in LEVELS}} for m in choices(server)}}}
 
@@ -31,15 +52,15 @@ def current(db, server):
 def validate_pair(server, pair):
     if not isinstance(pair, dict) or set(pair) != {'model', 'effort'}:
         raise ValueError('Choose an exact model and reasoning pair')
-    if pair['model'] not in MODELS.values() or pair['effort'] not in LEVELS:
+    if not isinstance(pair['model'], str) or family(pair['model']) not in FAMILIES or pair['effort'] not in LEVELS:
         raise ValueError('Choose Luna, Sol or Astra and Low, Medium or High')
-    return server.route(**pair)
+    return resolve(server, pair)
 
 
 def permitted(config, server):
     policy = config['bot']['policy']
     return [{'model': m['model'], 'effort': e} for m in choices(server) for e in m['levels']
-            if policy[m['model']]['allowed'] and policy[m['model']]['levels'][e]]
+            if policy_item(policy, m['model'])['allowed'] and policy_item(policy, m['model'])['levels'][e]]
 
 
 def save(db, server, value):
@@ -52,7 +73,7 @@ def save(db, server, value):
     if value['bot']['mode'] not in {'manual', 'automatic'}:
         raise ValueError('Choose Manual or Automatic')
     policy = value['bot']['policy']
-    if not isinstance(policy, dict) or set(policy) != set(MODELS.values()):
+    if not isinstance(policy, dict) or len(policy) != len(FAMILIES) or {family(k) for k in policy} != set(FAMILIES):
         raise ValueError('Policy must include every model')
     for item in policy.values():
         if (not isinstance(item, dict) or set(item) != {'allowed', 'levels'} or not isinstance(item['levels'], dict)
@@ -77,12 +98,11 @@ def save(db, server, value):
 
 def delegation(db, server, requested=None):
     if not db.setting('model_settings'):
-        pair = server.route(**db.setting('model_routes', {}).get('execution', {'effort': 'medium'}))
+        pair = resolve(server, db.setting('model_routes', {}).get('execution', {'effort': 'medium'}))
         return {**pair, 'mode': 'manual', 'settings_revision': 0}
     config = current(db, server)
     if config['bot']['mode'] == 'manual':
-        pair = config['bot']['manual']
-        server.route(**pair)  # Retained legacy model is never silently replaced.
+        pair = resolve(server, config['bot']['manual'])
     else:
         pair = validate_pair(server, requested)
         if pair not in permitted(config, server):
@@ -114,6 +134,8 @@ def assignment_route(db, server, task):
         server.route(**pair)
     except ValueError as error:
         raise RouteBlocked(str(error)) from error
-    if selected['mode'] == 'automatic' and pair not in permitted(current(db, server), server):
-        raise RouteBlocked('Saved bot pair is now denied or unavailable; enable it before resuming this assignment')
+    if selected['mode'] == 'automatic':
+        item = policy_item(current(db, server)['bot']['policy'], pair['model'])
+        if not item['allowed'] or not item['levels'].get(pair['effort'], False):
+            raise RouteBlocked('Saved bot pair is now denied or unavailable; enable it before resuming this assignment')
     return pair

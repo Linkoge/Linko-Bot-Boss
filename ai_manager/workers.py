@@ -336,6 +336,10 @@ class Workers:
                 "UPDATE tasks SET lifecycle=?,blocker=?,revision=revision+1,updated_at=? WHERE id=?",
                 (status, error, time.time(), execution["task_id"]),
             )
+            from .assignment_workflow import get, update
+            workflow = get(conn, execution['task_id'])
+            if workflow and workflow['state'] in {'actionable', 'review'} and not execution['stop_requested']:
+                update(self.db, conn, execution['task_id'], 'review', 'Worker finished; result review and authorized follow-up remain', execution_id)
             release_gate(conn, execution_id, status == "completed")
             self.db.event(
                 conn,
@@ -440,6 +444,8 @@ class Workers:
                     else "Historical assignment retained; continue explicitly",
                     controlled=bool(row["stop_requested"]),
                 )
+            elif self.db.one("SELECT 1 FROM questions WHERE execution_id=? AND status='pending'", (execution_id,)):
+                continue  # Restart/disconnect must not bypass an unanswered owner question.
             elif not reserve(self.db, execution_id):
                 continue
             else:

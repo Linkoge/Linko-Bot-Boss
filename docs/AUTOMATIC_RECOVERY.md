@@ -1,3 +1,88 @@
+# Unfinished job recovery candidate — 2026-10-13
+
+Exact release: `unfinished-recovery-family-ui-v1-20261013`. Implemented and fixture-tested in
+`/home/codex/checkouts/linko-unfinished-recovery-20261013`; deployment is pending a **new owner request**.
+Preparation is established only by its helper `manifest.json`, and activation only by a later exact succeeded receipt.
+Current live remains `nav-audio-upload-v2-20261013`, commit `08f0ba712f194ea0f985740ef408c9e033511b98`,
+proven by [/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json](/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json) and matching served assets. Older pending/live statements below are historical.
+Full evidence and manager delivery facts: [/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/REPORT.md](/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/REPORT.md).
+
+## Assignment workflow, without a separate ticket system
+
+Worker `completed` is an execution outcome, not full job completion. Existing assignments retain an
+`assignment_workflow:<task_id>` value in the existing settings table: state, bounded reason, update time,
+idle-since, next eligible time, retry count and wake execution ID. Assignment creation/explicit continuation
+atomically opens actionable follow-up; uncontrolled worker finish changes open work to review. Nothing
+closes it merely because the worker or manager response finishes. `read_task` exposes this state.
+The existing manager tool adds `job_followup(task_id,followup_state,reason)`: `complete` after result review
+and all authorized follow-up, `actionable` for concrete outstanding work, `owner_wait` before asking an
+owner question or waiting for deployment authorization, and `deferred` for later work. Only inactive
+completed/failed assignments can become actionable/complete; explicit continue retains its normal controls.
+Manager instructions require recording a disposition before ending result review or asking an owner question.
+This does not infer obligations from prose or invent historical work. Existing pre-candidate assignments
+without workflow metadata stay unchanged; old pending results still use their durable delivery path.
+
+Every 15 seconds, the existing scheduler performs a SQLite-only follow-up check. It never calls a model
+or provider while checking. Eligible work must remain actionable/review with an active project, retained
+origin, inactive completed/failed worker, no held project lease (including uncertain ownership), no pending
+question, no unfinished origin manager/worker, and no existing pending/running result delivery. Queued/running
+coding uses existing dispatch/recovery. Legacy/archived assignments and deleted origins are excluded.
+A fresh observed idle interval must last 30 seconds, including after busy work/holds disappear.
+After grace/backoff, submit rechecks everything under BEGIN IMMEDIATE and atomically queues one manager
+execution and stores its wake identity. Competing checkers cannot queue another pending wake; the existing
+service lock, conversation head ordering and runner cleanup guards serialize execution. On restart, native
+outcome reconciliation resumes the saved execution rather than creating a replacement wake.
+
+Follow-up retries have persisted delays of 60, 120, 240 seconds and so on, capped at 30 minutes; an
+unfinished existing manager response instead uses the existing native recovery/backoff/account gate.
+No arbitrary retry limit drops an outstanding job. A manager disposition resets eligibility; `complete`,
+owner-wait/deferred and explicit controls stop retries. Success without a disposition leaves review open,
+so a missed manager follow-up cannot disappear. This is a bounded safeguard, not deterministic understanding
+of completion or an exactly-once guarantee for external side effects.
+
+Pause, cancel, project pause, owner-wait, To-Do and explicit manager Stop never authorize resumed work.
+Manager Stop atomically holds open assignments in its origin and records `chat.stop_requested`; stopped
+result delivery remains held until an explicit owner follow-up/continuation. Task pause/cancel/continue and
+manager wait update workflow in their existing control transaction. Pending native owner questions also block
+worker restart inference until answered. Paused/waiting/cancelled completion reports use Conversation mode;
+internal result/recovery tools cannot resume a held target or project or request deployment. Ordinary owner
+Auto/Execute retains explicit continuation/deployment behavior. Worker results are not permission grants.
+
+Internal wake notices have no user/worker chat message row, no owner Send/recency event, no bulk worker
+output/objective/history transport, and a compact task/state/evidence reference in the normal manager prompt.
+The manager's natural answer remains an ordinary assistant response. Existing result rows remain hidden by
+provenance. Existing focused context and on-demand evidence retrieval remain unchanged. No dependency,
+schema, queue service, ticket architecture, supervisor or extra routing AI role is added.
+
+## Interruption investigation
+
+Reply `c15b0690b4364daba3be90a10b67d28a` began 2026-10-13 12:02:31 +04 and ended interrupted at
+12:03:07 +04. SQLite records `stop_requested=1`; journal shows successful
+`POST /api/executions/c15b0690b4364daba3be90a10b67d28a/interrupt` at 12:03:07.
+This establishes the immediate cause: the authenticated interrupt endpoint set the durable stop flag
+and interrupted that reply. It was the model-version response, not the deployed navigation release.
+The journal separately records transcription 502s at 12:02:52, 12:03:10 and 12:03:13; it does not establish
+that those requests caused the stop. No chat Send appears between initial request and stop in this window.
+Only Stop reply handlers reference the manager interrupt endpoint; Record/picker/STT/Discard handlers do not.
+No gesture trace or pointer coordinates were retained, so an accidental Stop reply activation versus another
+browser request cannot be distinguished. Do not claim recording/upload interrupted the manager or claim
+an audio interruption defect was fixed. Add a durable endpoint-specific stop audit for future diagnosis.
+Chromium checks real capture/record toggle/picker cancellation while a fixture manager is active, zero
+interrupt requests throughout audio flows and unchanged explicit Send behavior. Physical-device/native
+picker accidents and the historical STT-provider 502 root cause are not established by these tests.
+
+## Validation
+
+Regression tests cover grace/no checking inference, competing checks/transactional dedup, restart after
+queue commit, interrupted result delivery, exact original response identity, failed-review retry/backoff,
+completed-worker-pending-review, owner holds/To-Do states, project pause, valid/uncertain leases, unanswered
+questions after restart, pause after queue but before launch, internal deployment/paused-worker rejection,
+and Conversation read-only behavior. Existing tests retain native process-death/lost-start reconciliation,
+project exclusivity, policy recheck and control races. Release validation retains exact test/browser output.
+Audio and latest-family details: [AUDIO.md](AUDIO.md), [MODEL_SETTINGS.md](MODEL_SETTINGS.md).
+
+---
+
 # Automatic recovery
 
 The existing path remains **User → Manager → Codex → Manager → User**. Recovery runs in the existing scheduler with SQLite eligibility checks; no recovery model, supervisor, queue service, project configuration or routine approval is added.

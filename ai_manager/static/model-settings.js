@@ -13,7 +13,7 @@ async function changeModels(change){
   finally{modelSaving=false;renderModels();}
 }
 function modelRow(label){const row=element('div',undefined,'model-choice-row');row.setAttribute('role','group');row.setAttribute('aria-label',label);return row;}
-function addChoice(row,b,key){b.dataset.choice=key;row.append(b);}
+function addChoice(row,b,key){b.dataset.choice=key;if(/^(manager|manual)-(Luna|Sol|Astra)$/.test(key))b.classList.add('model-family');row.append(b);}
 function renderModels(){
   const focused=modelDialog.contains(document.activeElement)?document.activeElement.dataset.choice:null;
   const {settings,choices}=modelPanel,bot=settings.bot,automatic=bot.mode==='automatic';

@@ -63,8 +63,9 @@ def main():
             with sync_playwright() as playwright:
                 browser = playwright.chromium.launch(args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
                 page = browser.new_page(viewport={'width': 393, 'height': 851})
-                errors, chats, uploads = [], [], []
+                errors, chats, uploads, interrupts = [], [], [], []
                 page.on('pageerror', lambda error: errors.append(str(error)))
+                page.on('request', lambda request: interrupts.append(request.url) if request.url.endswith('/interrupt') else None)
                 page.on('request', lambda request: chats.append(request.post_data_json) if request.url.endswith('/api/chat') else None)
                 page.on('request', lambda request: uploads.append(request.headers.get('content-type')) if request.url.endswith('/api/audio/transcribe') else None)
                 def delayed_audio(route):
@@ -115,6 +116,14 @@ def main():
                 assert page.locator('#microphone').is_enabled()
                 start()
                 assert page.evaluate('!!state.execution')
+                assert page.locator('#audio-stop').count() == 0
+                before_chats = len(chats)
+                with page.expect_file_chooser():
+                    page.locator('#audio-upload').click()
+                page.locator('#audio-file-input').dispatch_event('cancel')
+                page.wait_for_timeout(100)
+                assert len(chats) == before_chats and not interrupts
+                assert page.evaluate("audioState.session.phase==='recording'&&!!state.execution")
                 page.locator('#send').click()
                 page.wait_for_function('()=>!audioState.session&&!state.pending.size')
                 assert len(chats) == 2 and chats[-1]['content'] == 'spoken transcript'
@@ -282,7 +291,7 @@ def main():
                 assert len(chats) == 3
                 # A subsequent recording appends once after the uploaded transcript.
                 start()
-                page.locator('#audio-stop').click()
+                page.locator('#microphone').click()
                 page.wait_for_function('()=>!audioState.session')
                 assert page.locator('#message-input').input_value() == 'replacement draft\n\nselected file transcript\n\nspoken transcript'
                 # Selection while a picker-open recording is finishing fences late STT.
@@ -392,7 +401,7 @@ def main():
                     assert page.locator('#context-hint').count() == 0
                     assert page.locator('.composer-note').count() == 0
                     assert page.locator('#audio-status').inner_text() == '00:01'
-                    for control in ['microphone', 'audio-stop', 'audio-cancel', 'audio-upload', 'send']:
+                    for control in ['microphone', 'audio-cancel', 'audio-upload', 'send']:
                         assert page.locator('#'+control).is_visible()
                     assert page.locator('#messages').inner_text().strip()
                     boxes = {control: page.locator('#'+control).bounding_box() for control in ['project-menu-button', 'model-settings-button', 'chat-menu-button', 'usage-button']}
@@ -402,7 +411,7 @@ def main():
                     assert boxes['model-settings-button']['x'] == boxes['usage-button']['x']
                     assert boxes['project-menu-button']['y'] == boxes['model-settings-button']['y']
                     assert boxes['chat-menu-button']['y'] == boxes['usage-button']['y']
-                    action_boxes = [page.locator('#'+control).bounding_box() for control in ['audio-stop', 'audio-cancel', 'audio-upload']]
+                    action_boxes = [page.locator('#'+control).bounding_box() for control in ['audio-cancel', 'audio-upload']]
                     assert len({box['y'] for box in action_boxes}) == 1
                     assert all(box['y']+box['height']<=height and box['x']+box['width']<=width for box in action_boxes)
                     page.screenshot(path=str(evidence / f'recording-{width}.png'))
@@ -415,6 +424,8 @@ def main():
                 page.evaluate('()=>{window.MediaRecorder=window.savedRecorder;Object.defineProperty(window,"isSecureContext",{value:false,configurable:true})}')
                 page.locator('#microphone').click()
                 assert 'HTTPS' in page.locator('#notice-text').inner_text()
+                assert not interrupts, interrupts
+                assert page.locator("#audio-stop").count() == 0
                 assert not errors, errors
                 print(json.dumps({'result': 'passed', 'real_capture': True, 'provider': 'fixture only', 'uploads': len(uploads), 'chat_submissions': len(chats), 'viewports': [1440, 393, 320]}))
                 browser.close()

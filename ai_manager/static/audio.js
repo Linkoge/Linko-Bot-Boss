@@ -14,7 +14,6 @@ function renderAudio(){
   $('microphone').title=audioSupported()?'Record microphone':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
   $('microphone').disabled=audioState.loading||busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));
   $('audio-upload').hidden=!recording;$('audio-upload').disabled=!recording;
-  $('audio-stop').hidden=!recording;$('audio-stop').disabled=!recording;
   $('send').type=session?'button':'submit';
   $('send').disabled=session?!recording||session.project!==state.project||state.pending.has(state.project):state.pending.has(state.project);
   if(typeof attachmentState!=='undefined'&&attachmentState.uploads.has(state.project))$('send').disabled=true;
@@ -138,7 +137,6 @@ $('message-input').addEventListener('input',()=>{const session=audioState.sessio
 document.addEventListener('visibilitychange',()=>{const session=audioState.session;if(!session)return;session.background=document.hidden;if(session.phase==='recording'){session.send=false;if(!document.hidden&&Date.now()-session.lastTick>5000)interruptAudio(session,'Browser suspended capture; audio continuity is uncertain');else{if(document.hidden)try{session.recorder.requestData();}catch{}renderAudio();}}});
 document.addEventListener('freeze',()=>{const session=audioState.session;if(session)interruptAudio(session,'Browser froze capture');});
 window.addEventListener('pagehide',()=>{const session=audioState.session;if(session)interruptAudio(session,'Page left; capture interrupted');});
-$('audio-stop').onclick=()=>finishAudio(false);
 $('audio-cancel').onclick=discardAudio;
 $('audio-download').onclick=()=>{
   const session=audioState.session;if(!session?.blob)return;

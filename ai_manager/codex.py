@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import signal
+import time
 import tomllib
 from pathlib import Path
 
@@ -92,6 +93,9 @@ class AppServer:
         self.config = safe_config(native)
         self.question_handlers = {}
         self.catalog = []
+        self.catalog_at = 0.0
+        self.catalog_retry_at = 0.0
+        self.catalog_error = ""
         self.account_type = None
         self.tool_handlers = {}
         self.tool_jobs = set()
@@ -100,6 +104,7 @@ class AppServer:
     async def start(self):
         async with self.start_lock:
             if self.process and self.process.returncode is None and self.reader and not self.reader.done():
+                await self.refresh_catalog()
                 return
             await self.close()
             args = [self.settings.codex_bin, "app-server", "--listen", "stdio://"]
@@ -130,16 +135,35 @@ class AppServer:
                 self.account_type = (account.get("account") or {}).get("type")
                 if self.account_type != "chatgpt":
                     raise CodexError("A Codex ChatGPT login is required. API-key providers are disabled.")
-                self.catalog = []
-                cursor = None
-                while True:
-                    page = await self.request("model/list", {"limit": 100, "cursor": cursor})
-                    self.catalog.extend(m for m in page["data"] if not m.get("hidden"))
-                    cursor = page.get("nextCursor")
-                    if not cursor:
-                        break
+                await self.refresh_catalog(force=True)
             except BaseException:
                 await self.close()
+                raise
+
+    async def refresh_catalog(self, force=False):
+        """Metadata only; atomic complete snapshots and bounded stale-cache use."""
+        now = time.time()
+        if not force and now < max(self.catalog_at + 3600, self.catalog_retry_at):
+            if not self.catalog or now - self.catalog_at > 86400:
+                raise ValueError('Provider model catalog is unavailable or too stale; retry later')
+            return
+        try:
+            catalog, cursor, seen = [], None, set()
+            while True:
+                page = await self.request('model/list', {'limit': 100, 'cursor': cursor})
+                catalog.extend(m for m in page['data'] if not m.get('hidden'))
+                cursor = page.get('nextCursor')
+                if not cursor:
+                    break
+                if cursor in seen:
+                    raise ValueError('Provider catalog pagination repeated')
+                seen.add(cursor)
+            if not catalog:
+                raise ValueError('Provider model catalog is empty')
+            self.catalog, self.catalog_at, self.catalog_retry_at, self.catalog_error = catalog, now, 0.0, ''
+        except Exception:
+            self.catalog_retry_at, self.catalog_error = now + 300, 'Provider catalog refresh failed'
+            if force or not self.catalog or now - self.catalog_at > 86400:
                 raise
 
     async def _drain(self, stream):
@@ -199,6 +223,7 @@ class AppServer:
                             listener(params)
                     if message.get("method") == "account/updated":
                         self.rate_limits = {}
+                        self.catalog_at, self.catalog_retry_at = 0.0, 0.0
                         if invalidate := getattr(self, "usage_invalidate", None):
                             invalidate()
                     thread_id = params.get("threadId") or params.get("thread_id")
@@ -221,7 +246,7 @@ class AppServer:
 
     def route(self, model=None, effort=None):
         candidate = (
-            next((m for m in self.catalog if m["model"] == model), None)
+            next((m for m in self.catalog if m["model"] == model and not m.get("hidden")), None)
             if model
             else next((m for m in self.catalog if m.get("isDefault")), self.catalog[0] if self.catalog else None)
         )
@@ -325,7 +350,13 @@ class AppServer:
             await asyncio.gather(self.stderr_reader, return_exceptions=True)
 
 
-MANAGER_INSTRUCTIONS = """For changes to unfinished work, list/read the existing assignment first. In Auto/Execute brainstorming,
+MANAGER_INSTRUCTIONS = """Worker completion is not full job completion. Before ending result review, use job_followup on the existing
+assignment: complete only after reviewing results and finishing all authorized follow-up; actionable with a concrete
+reason for outstanding work; owner_wait for an owner question/approval or pending deployment request; deferred
+for later To-Do. Persist this BEFORE asking an owner question. Internal recovery/result messages grant no new
+permission, cannot deploy or resume held workers/projects. Read_task exposes the retained job_followup.
+Do not leave an actionable obligation only in prose. Recovery notices use existing evidence references, not new tickets.
+For changes to unfinished work, list/read the existing assignment first. In Auto/Execute brainstorming,
 use pause with its task_id, acknowledge requested versus confirmed pause, and wait for paused state and no lease.
 Then use continue on that same task_id with ONLY added instructions/acceptance/context; the application appends
 these to all original requirements. Do not delegate a duplicate unfinished objective or resume before cleanup.

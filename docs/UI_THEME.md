@@ -1,3 +1,20 @@
+# Tasks wrapping and family button candidate — 2026-10-13
+
+`unfinished-recovery-family-ui-v1-20261013` is implemented/validated/prepared only; deployment awaits a new owner request.
+Tasks paragraphs previously allowed unbroken filenames/paths to widen the page. At 320px the reproduced
+baseline overflow was 15,511px. Tasks panels and their children now constrain intrinsic widths and wrap
+unbroken text with overflow-wrap:anywhere, preserving full names. Task History fields remain contained;
+intentional code scrolling stays inside its preformatted block. No screenshot was attached by the owner:
+this is a synthetic long-filename reproduction, with zero page/panel overflow at 320/393/1440px.
+The existing History editor Cancel button lacks a handler; Escape closes it. That unrelated pre-existing
+behavior is not changed in this layout patch and is recorded as a follow-up, not claimed fixed.
+
+Manager and Bot family buttons share a quiet red gradient; effort buttons remain plain. Existing selected,
+disabled/focus states and semantics remain. Full browser receipts/screenshots/report:
+`/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/`. Current live remains the succeeded navigation/audio release, not this candidate.
+
+---
+
 # Rich red chat accent — 2026-10-12
 
 Owner requested a cohesive rich red in place of the green selection theme. This focused

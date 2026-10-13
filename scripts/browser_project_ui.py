@@ -15,6 +15,8 @@ from playwright.sync_api import sync_playwright
 
 def main():
     receipts = []
+    evidence = Path(os.environ.get('LINKO_PROJECT_EVIDENCE', '/tmp/linko-project-evidence'))
+    evidence.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='linko-project-ui-') as temporary:
         root = Path(temporary)
         projects = root / 'projects'
@@ -193,11 +195,56 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 assert 'Beta' in page.locator('#agent-list .panel').first.inner_text()
                 assert page.locator('#agent-list .panel').count() == 2
                 receipts.append({'ordering':'Older running task and confirmed active agent first; history retained'})
+                # Reproduce long filenames/paths without relying on an unattached screenshot.
+                filename = 'photo_' + 'unbrokenfilename' * 60 + '.png'
+                content = filename + '\n/home/owner/uploads/' + ('nestedpath' * 100) + '/' + filename
+                with sqlite3.connect(root/'data/manager.sqlite3') as conn:
+                    conn.execute('UPDATE tasks SET description=?,blocker=?', (content, 'Review ' + filename))
+                    conn.execute('UPDATE executions SET task_id=(SELECT id FROM tasks WHERE tasks.project_id=executions.project_id LIMIT 1),output=?', (content,))
+                page.evaluate('()=>refresh()')
+                page.locator('[data-view=tasks]').click()
+                page.wait_for_function('(text)=>state.portfolio.tasks.every(t=>t.description===text)',arg=content)
+                for width,height in ((320,568),(393,851),(1440,1000)):
+                    page.set_viewport_size({'width':width,'height':height})
+                    geometry = page.evaluate("""() => ({page:document.documentElement.scrollWidth-innerWidth,
+                        panels:[...document.querySelectorAll('#task-list .panel')].map(p=>({
+                        width:p.clientWidth,scroll:p.scrollWidth,paragraph:p.querySelector('p').getBoundingClientRect().height,
+                        wrap:getComputedStyle(p).overflowWrap}))})""")
+                    assert geometry['page'] == 0, geometry
+                    assert all(p['scroll'] <= p['width'] and p['paragraph'] > 50 and p['wrap']=='anywhere' for p in geometry['panels'])
+                    assert filename in page.locator('#task-list .panel').first.inner_text()
+                    page.evaluate('window.scrollTo(0,0)')
+                    page.screenshot(path=str(evidence / f'tasks-long-names-{width}.png'))
+                    page.locator('#task-list .panel').first.get_by_role('button',name='History',exact=True).evaluate('(b)=>b.click()')
+                    page.locator('#editor').wait_for(state='visible')
+                    textarea = page.locator('#editor textarea')
+                    assert filename in textarea.input_value()
+                    assert page.locator('#editor').evaluate('(n)=>n.scrollWidth<=n.clientWidth')
+                    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    page.keyboard.press('Escape')
+                    page.locator('#editor').wait_for(state='hidden')
+                    receipts.append({'tasks_long_names':[width,height],**geometry,'full_names_retained':True,'history_within_panel':True})
+                page.set_viewport_size({'width':320,'height':568})
+                old_css = subprocess.check_output(['git','show','08f0ba712f194ea0f985740ef408c9e033511b98:ai_manager/static/style.css'],text=True)
+                page.route('**/static/style.css?long-name-baseline', lambda route:route.fulfill(body=old_css,content_type='text/css'))
+                page.evaluate("""() => new Promise(resolve=>{const link=document.querySelector('link[rel=stylesheet]');
+                    link.onload=resolve;link.href='/static/style.css?long-name-baseline'})""")
+                old_overflow = page.evaluate('document.documentElement.scrollWidth-innerWidth')
+                assert old_overflow > 0
+                page.evaluate("""() => new Promise(resolve=>{const link=document.querySelector('link[rel=stylesheet]');
+                    link.onload=resolve;link.href='/static/style.css?candidate-long-names'})""")
+                assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                page.evaluate("""() => {const pre=document.createElement('pre');pre.textContent='local_code_token'.repeat(100);
+                    document.querySelector('#task-list .panel').append(pre)}""")
+                assert page.locator('#task-list pre').evaluate('(n)=>n.scrollWidth>n.clientWidth')
+                assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                receipts.append({'long_name_baseline_overflow':old_overflow,'fixed_page_overflow':0,'code_scroll':'local only'})
                 assert not errors, errors
                 browser.close()
         finally:
             process.terminate()
             process.wait(timeout=10)
+    (evidence / 'browser-results.json').write_text(json.dumps(receipts,indent=2))
     print(json.dumps(receipts,indent=2))
 
 

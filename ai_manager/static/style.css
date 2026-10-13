@@ -159,3 +159,15 @@ input,textarea,select{accent-color:var(--accent-solid)}
 @media(max-width:380px){#model-dialog{padding:12px;width:calc(100% - 16px)}.model-choice-row{gap:4px}.model-choice-row button{font-size:12px}.policy-cell{gap:2px}}
 
 #audio-file-input{padding:0;border:0}
+
+/* Intrinsic widths must not let task filenames/paths enlarge their containers. */
+#view-tasks,#task-list,#task-list .panel{min-width:0;max-width:100%;overflow-wrap:anywhere}
+#task-list .panel>*{min-width:0;max-width:100%}
+#task-list .task-controls>*{min-width:0;max-width:100%;white-space:normal;overflow-wrap:anywhere}
+#task-list pre{min-width:0;max-width:100%;overflow-x:auto}
+#editor-form,#editor-fields,#editor-fields label{min-width:0;max-width:100%;overflow-wrap:anywhere}
+#editor-fields textarea{min-width:0;max-width:100%;white-space:pre-wrap;overflow-wrap:anywhere}
+/* Families carry a quiet red sheen; reasoning choices keep their plain surface. */
+.model-choice-row button.model-family{background:linear-gradient(145deg,#352330,#211e2b 70%);color:#d9c4cd}
+.model-choice-row button.model-family[aria-pressed=true]{background:linear-gradient(145deg,#623044,var(--accent-bg) 75%);color:var(--accent)}
+.model-choice-row button.model-family:hover:not(:disabled){background:linear-gradient(145deg,#583043,var(--accent-bg-hover) 75%)}

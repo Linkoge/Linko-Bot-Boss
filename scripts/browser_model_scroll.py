@@ -120,6 +120,13 @@ def main():
                     assert geometry['scrollWidth'] <= geometry['width']
                     assert geometry['scrollHeight'] <= geometry['height']  # All controls visible at once.
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    style = page.evaluate("""() => ({families:[...document.querySelectorAll('.model-family')].map(b=>({
+                        image:getComputedStyle(b).backgroundImage,pressed:b.getAttribute('aria-pressed')})),
+                        efforts:[...document.querySelectorAll('[data-choice="manager-low"],[data-choice="manual-Sol-low"]')].map(b=>getComputedStyle(b).backgroundImage)})""")
+                    assert len(style['families']) == 6
+                    assert all('linear-gradient' in b['image'] for b in style['families'])
+                    assert all(image=='none' for image in style['efforts'])
+                    results.append({'family_button_style':style,'viewport':width})
                     page.screenshot(path=str(evidence / f'panel-{width}.png'))
                     # Native modal focus containment, plus explicit first/last wrapping.
                     page.locator('#model-close').focus()

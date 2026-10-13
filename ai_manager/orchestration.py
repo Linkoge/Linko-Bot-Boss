@@ -3,6 +3,7 @@
 import asyncio
 import json
 import logging
+import time
 
 from .chat import internal_result
 from .deployment import Handoff
@@ -30,6 +31,7 @@ MANAGER_TOOL = {
                     "pause",
                     "cancel",
                     "wait",
+                    "job_followup",
                     "read_document",
                     "read_memory",
                     "read_project",
@@ -71,6 +73,7 @@ MANAGER_TOOL = {
             "revision": {"type": "integer", "minimum": 0},
             "path": {"type": "string"},
             "reason": {"type": "string"},
+            "followup_state": {"type": "string", "enum": ["actionable", "owner_wait", "deferred", "complete"]},
             "query": {"type": "string"},
             "message_id": {"type": "string"},
             "offset": {"type": "integer", "minimum": 0},
@@ -88,6 +91,7 @@ class Scheduler:
         self.tasks, self.job = Tasks(db), None
         self.lock = asyncio.Lock()
         self.error = ""
+        self.followup_check_at = 0.0
         self.deployment = Handoff(settings.data_dir)
         self.deployment_busy = lambda: False
 
@@ -103,6 +107,18 @@ class Scheduler:
         )
         if execution and (execution["stop_requested"] or execution["finished_at"] is not None):
             raise ValueError("This manager execution has stopped")
+        internal = params.get('internal', False)
+        if internal and action in {'deploy_release', 'resume_project'}:
+            raise ValueError('Internal results/recovery are not owner authorization for deployment or project resume')
+        if internal and action in {'continue', 'delegate'}:
+            from .assignment_workflow import get
+            target_id = args.get('task_id') if action == 'continue' else params.get('internal_task')
+            with self.db.transaction() as conn:
+                held = conn.execute('SELECT id,lifecycle FROM tasks WHERE id=?', (target_id,)).fetchone()
+                workflow = get(conn, target_id) if held else None
+                if held and (held['lifecycle'] in {'paused', 'waiting', 'cancelled', 'pause_requested', 'cancel_requested'} or
+                             (workflow or {}).get('state') in {'owner_wait', 'deferred', 'complete'}):
+                    raise ValueError('Owner pauses/waits are retained; explicit owner continuation is required')
         if action == 'deployment_status':
             return self.deployment.status()
         if action == 'deploy_release':
@@ -173,6 +189,8 @@ class Scheduler:
         if not project_id or (selected_project and selected_project != project_id):
             raise ValueError("Select the intended project; cross-project work requires All Projects context")
         project = self.registry.get(project_id)
+        if internal and action in {'continue', 'delegate'} and project['status'] != 'active':
+            raise ValueError('Internal review cannot schedule work in a paused project')
         if action == "save_todo":
             # Deferred recording is allowed in every mode and never calls Tasks.add/control.
             return Todos(self.db).save(project_id, args["title"], args.get("details", ""),
@@ -219,6 +237,22 @@ class Scheduler:
                     acceptance=args.get("acceptance", ""), selected=selected, model_route=route,
                 )
             )
+        if action == 'job_followup':
+            task = self.tasks.get(args['task_id'])
+            state, reason = args.get('followup_state'), args.get('reason', '').strip()
+            if task['project_id'] != project_id or state not in {'actionable', 'owner_wait', 'deferred', 'complete'} or not reason:
+                raise ValueError('Follow-up needs the existing assignment, a state and review/reason')
+            if state in {'complete', 'actionable'} and (task['lease_owner'] or task['status'] not in {'completed', 'failed'}):
+                raise ValueError('Review the inactive worker result first; use explicit continue for held work')
+            from .assignment_workflow import get, update
+            with self.db.transaction() as conn:
+                actual = conn.execute('SELECT lifecycle,lease_owner FROM tasks WHERE id=?', (task['id'],)).fetchone()
+                if state in {'complete', 'actionable'} and (actual['lease_owner'] or actual['lifecycle'] not in {'completed', 'failed'}):
+                    raise ValueError('Assignment changed while recording follow-up')
+                previous = get(conn, task['id'])
+                if internal and state == 'actionable' and previous and previous['state'] in {'owner_wait', 'deferred', 'complete'}:
+                    raise ValueError('An internal result cannot reopen held or completed work')
+                return update(self.db, conn, task['id'], state, reason, params['manager_execution_id'], reset_retry=not internal)
         if action == "wait":
             task = self.tasks.get(args["task_id"])
             reason = args.get("reason", "").strip()
@@ -231,6 +265,8 @@ class Scheduler:
                 )
                 if changed.rowcount != 1:
                     raise ValueError("Assignment changed while recording the wait")
+                from .assignment_workflow import update
+                update(self.db, conn, task["id"], "owner_wait", reason)
                 self.db.event(conn, "task.waiting", {"reason": reason[:2000]}, project_id, task["id"])
             return self.tasks.context(self.tasks.get(task["id"]))
         if action in {"pause", "cancel"}:
@@ -277,6 +313,8 @@ class Scheduler:
                 )
                 if changed.rowcount != 1:
                     raise ValueError("Assignment changed while continuing")
+                from .assignment_workflow import update
+                update(self.db, conn, task["id"], "actionable", "Explicit authorized continuation", reset_retry=True)
                 if context:
                     self.db.event(conn, "task.context", context, project_id, task["id"])
                 self.db.event(
@@ -366,6 +404,15 @@ class Scheduler:
             while task := self.tasks.claim(self.settings.max_workers):
                 self.workers.launch(task)
             await self.chat.deliver_results()
+            if not self.deployment.gated() and time.monotonic() >= self.followup_check_at:
+                from .assignment_workflow import CHECK_INTERVAL, due
+                self.followup_check_at = time.monotonic() + CHECK_INTERVAL
+                for task in due(self.db):
+                    try:
+                        await self.chat.submit(task['project_id'], 'Internal unfinished assignment review',
+                                               task['origin_conversation'], recovery_task=task['id'])
+                    except ValueError:
+                        pass  # A competing checker/owner transition won the transaction.
             self.deployment.acknowledge(self.db, bool(self.chat.jobs or self.workers.jobs or self.deployment_busy()))
 
     async def run(self):

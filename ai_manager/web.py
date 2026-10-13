@@ -385,6 +385,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
             "models": chat.server.catalog,
             "routes": routes,
             "account_type": chat.server.account_type,
+            "catalog_at": chat.server.catalog_at, "catalog_error": chat.server.catalog_error,
         }
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])

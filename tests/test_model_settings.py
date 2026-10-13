@@ -215,3 +215,107 @@ async def test_policy_edit_during_thread_start_blocks_dispatch(system):
     assert len(CatalogServer.turns) == before
     assert Tasks(db).get(task['id'])['status'] == 'waiting'
     assert db.one('SELECT launch_key FROM executions WHERE id=?', (claim['lease_owner'],))['launch_key'] == 'not-started'
+
+
+def test_latest_family_numeric_order_policy_migration_and_pinned_assignment(system):
+    from ai_manager.model_families import latest
+    db, registry, _, server, chat, *_ = system
+    config = current(db, server)
+    config['bot']['mode'] = 'automatic'
+    config['bot']['policy'][MODELS['Sol']]['levels']['high'] = False
+    save(db, server, config)
+    pair = {'model': MODELS['Sol'], 'effort': 'medium'}
+    task = Tasks(db).add(registry.list()[0]['id'], 'Pinned original', chat.conversation(registry.list()[0]['id'])['id'],
+                         model_route=delegation(db, server, pair))
+    sol = next(m for m in server.catalog if m['model'] == MODELS['Sol'])
+    server.catalog += [{**sol, 'model': model} for model in ('gpt-6.9-sol','gpt-6.10-sol','gpt-6.10-sol-preview','gpt-9-terra')]
+    server.catalog.append({**sol, 'model': 'gpt-99-sol', 'hidden': True})
+    assert latest(server, 'Sol') == 'gpt-6.10-sol'
+    migrated = current(db, server)
+    assert migrated['manager'] == {'model':'gpt-6.10-sol','effort':'low'}
+    assert not migrated['bot']['policy']['gpt-6.10-sol']['levels']['high']
+    assert not migrated['bot']['policy'][MODELS['Astra']]['allowed']
+    assert delegation(db, server, pair)['model'] == 'gpt-6.10-sol'
+    with pytest.raises(ValueError, match='denied'):
+        delegation(db, server, {'model':'gpt-6.10-sol','effort':'high'})
+    assert assignment_route(db, server, task) == pair
+    server.catalog = [m for m in server.catalog if m['model'] != pair['model']]
+    from ai_manager.model_settings import RouteBlocked
+    with pytest.raises(RouteBlocked, match='catalog'):
+        assignment_route(db, server, task)  # Never upgrades a retained assignment.
+
+
+def test_latest_family_missing_reasoning_blocks_without_older_fallback(system):
+    db, _, _, server, *_ = system
+    saved = save(db, server, current(db, server))
+    sol = next(m for m in server.catalog if m['model'] == MODELS['Sol'])
+    server.catalog.append({**sol,'model':'gpt-7-sol','supportedReasoningEfforts':[{'reasoningEffort':'low'}]})
+    assert current(db, server)['bot']['manual']['model'] == 'gpt-7-sol'
+    with pytest.raises(ValueError, match='reasoning'):
+        delegation(db, server)
+    server.catalog = [m for m in server.catalog if not m['model'].endswith('-sol')]
+    with pytest.raises(ValueError, match='catalog'):
+        delegation(db, server)
+    assert db.setting('model_settings') == saved
+
+
+@pytest.mark.asyncio
+async def test_manager_new_execution_resolves_family_but_recovery_keeps_exact_id(system):
+    db, _, _, server, chat, *_ = system
+    save(db, server, current(db, server))
+    sol = next(m for m in server.catalog if m['model'] == MODELS['Sol'])
+    server.catalog.append({**sol,'model':'gpt-7.2-sol'})
+    result = await chat.submit(None, 'Use selected Sol family')
+    await asyncio.gather(*list(chat.jobs.values()))
+    assert db.one('SELECT model FROM executions WHERE id=?', (result['execution_id'],))['model'] == 'gpt-7.2-sol'
+    assert CatalogServer.turns[-1]['model'] == 'gpt-7.2-sol'
+    # A retained execution already has a native thread; its route cannot drift.
+    result = await chat.submit(None, 'Retained route')
+    await asyncio.gather(*list(chat.jobs.values()))
+    with db.transaction() as conn:
+        conn.execute("UPDATE executions SET model=?,finished_at=NULL,status='queued',retry_at=0,launch_key='not-started',turn_id=NULL WHERE id=?",
+                     (MODELS['Sol'],result['execution_id']))
+    await chat.recover()
+    await asyncio.gather(*list(chat.jobs.values()))
+    assert CatalogServer.turns[-1]['model'] == MODELS['Sol']
+
+
+@pytest.mark.asyncio
+async def test_catalog_refresh_ttl_atomic_pages_bounded_failure_and_empty_cache(system, monkeypatch):
+    from ai_manager.codex import AppServer
+    from ai_manager.config import Settings
+    server = AppServer(Settings())
+    calls = []
+    now = [100000.0]
+    monkeypatch.setattr('ai_manager.codex.time.time', lambda: now[0])
+    pages = [{'data':[{'model':'gpt-6-sol'}],'nextCursor':'next'},
+             {'data':[{'model':'gpt-6.1-sol'}, {'model':'gpt-99-sol','hidden':True}], 'nextCursor':None}]
+    async def request(method, params):
+        calls.append((method,params))
+        page = pages.pop(0)
+        if isinstance(page,Exception):
+            raise page
+        return page
+    server.request = request
+    await server.refresh_catalog()
+    assert [m['model'] for m in server.catalog] == ['gpt-6-sol','gpt-6.1-sol']
+    await server.refresh_catalog()
+    assert len(calls) == 2 and all(m == 'model/list' for m,_ in calls)
+    now[0] += 3601
+    pages.extend([{'data':[{'model':'gpt-7-sol'}],'nextCursor':'next'}, RuntimeError('metadata outage')])
+    await server.refresh_catalog()
+    assert [m['model'] for m in server.catalog] == ['gpt-6-sol','gpt-6.1-sol']
+    assert server.catalog_error
+    await server.refresh_catalog()
+    assert len(calls) == 4  # Five-minute retry delay, no repeated metadata calls.
+    now[0] += 86400
+    pages.append(RuntimeError('still unavailable'))
+    with pytest.raises(RuntimeError):
+        await server.refresh_catalog()
+    with pytest.raises(ValueError, match='stale'):
+        await server.refresh_catalog()
+    empty = AppServer(Settings())
+    empty.request = request
+    pages.append({'data':[]})
+    with pytest.raises(ValueError, match='empty'):
+        await empty.refresh_catalog()
