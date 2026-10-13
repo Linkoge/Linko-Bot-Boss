@@ -396,12 +396,12 @@ $('message-input').addEventListener('input',()=>{state.drafts.set(state.project,
 // in particular file-picker activation must stay synchronous inside its trusted click.
 function preserveDraftFocus(event){
   if(event.button!==0||!event.isPrimary||document.activeElement!==$('message-input'))return;
-  if(event.target.closest('#microphone,#attach,#audio-stop,#audio-cancel,#audio-download'))event.preventDefault();
+  if(event.target.closest('#microphone,#attach,#audio-stop,#audio-cancel,#audio-download,#audio-upload'))event.preventDefault();
 }
 $('chat-form').addEventListener('pointerdown',preserveDraftFocus);
 // Older mouse browsers without Pointer Events still get the same focus protection.
 if(!window.PointerEvent)$('chat-form').addEventListener('mousedown',event=>{
-  if(event.button===0&&document.activeElement===$('message-input')&&event.target.closest('#microphone,#attach,#audio-stop,#audio-cancel,#audio-download'))event.preventDefault();
+  if(event.button===0&&document.activeElement===$('message-input')&&event.target.closest('#microphone,#attach,#audio-stop,#audio-cancel,#audio-download,#audio-upload'))event.preventDefault();
 });
 
 // Textarea Enter (including IME composition) keeps the browser's native multiline editing.

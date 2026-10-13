@@ -1,3 +1,16 @@
+# Navigation/audio successor — verified candidate, 2026-10-13
+
+Exact candidate `nav-audio-upload-v1-20261013` aligns navigation squares in two columns and adds recording
+Upload with selection-only replacement and stale-session protection. Contract, validation limits,
+exact preparation gate and full report: [audio](docs/AUDIO.md). Activation remains pending owner
+instruction; no deployment/restart requested or performed for this delivery.
+
+# Current deployed baseline — 2026-10-13
+
+`model-settings-manual-scroll-v2-20261013`, commit `0745c1a6af91f09d62f414c0c63326d2afe82260`,
+succeeded with nonce `c9a21304d22c36785e25b66f914ec90b`. Receipt is referenced in [model settings](docs/MODEL_SETTINGS.md).
+The earlier pending/live statements below are historical.
+
 # Model settings and manual scrolling — verified candidate, 2026-10-13
 
 Exact release `model-settings-manual-scroll-v2-20261013` implements the owner-approved panel,

@@ -13,6 +13,7 @@ function renderAudio(){
   $('microphone').setAttribute('aria-label',recording?'Stop recording and transcribe':phase==='error'?'Retry recording transcription':'Record microphone');
   $('microphone').title=audioSupported()?'Record microphone':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
   $('microphone').disabled=audioState.loading||busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));
+  $('audio-upload').hidden=!recording;$('audio-upload').disabled=!recording;
   $('audio-stop').hidden=!recording;$('audio-stop').disabled=!recording;
   $('send').type=session?'button':'submit';
   $('send').disabled=session?!recording||session.project!==state.project||state.pending.has(state.project):state.pending.has(state.project);
@@ -31,7 +32,7 @@ function releaseMicrophone(session){clearInterval(session.timer);session.stream?
 function discardAudio(){
   const session=audioState.session;if(!session||session.phase==='sending')return;
   audioState.session=null;clearAudioCheckpoint();session.controller?.abort();
-  if(session.recorder?.state==='recording')session.recorder.stop();
+  if(session.recorder&&session.recorder.state!=='inactive')session.recorder.stop();
   releaseMicrophone(session);renderAudio();
 }
 async function startAudio(){
@@ -52,9 +53,9 @@ async function startAudio(){
     session.recorder.ondataavailable=event=>{if(audioState.session!==session)return;if(event.data.size){session.chunks.push(event.data);session.bytes+=event.data.size;if(Date.now()-(session.checkpointAt||0)>2000){session.checkpointAt=Date.now();checkpointAudio(session);}if(session.bytes>=config.max_bytes&&session.phase==='recording'){session.message='Size limit reached';finishAudio(false);}}};
     session.recorder.onerror=()=>interruptAudio(session,'Microphone interrupted');
     session.recorder.onstop=()=>{
-      if(session.phase==='recording'){session.interrupted=true;session.send=false;session.message='Capture stopped unexpectedly';}
       releaseMicrophone(session);
       if(audioState.session!==session)return;
+      if(session.phase==='recording'){session.interrupted=true;session.send=false;session.message='Capture stopped unexpectedly';}
       session.blob=new Blob(session.chunks,{type:session.recorder.mimeType});session.chunks=[];checkpointAudio(session,true);
       if(session.authLost){session.phase='error';session.message='Recording saved in this tab. Sign in, then retry.';renderAudio();return;}
       if(session.interrupted){session.phase='error';session.message=(session.message||'Capture interrupted')+'. Captured audio kept; Retry transcribes it. Missing audio cannot be recovered.';renderAudio();return;}
@@ -62,14 +63,14 @@ async function startAudio(){
     };
     session.recorder.start(250);session.phase='recording';session.message='00:00';session.started=performance.now();session.lastTick=Date.now();
     session.timer=setInterval(()=>{
-      if(session.phase!=='recording')return;
+      if(audioState.session!==session||session.phase!=='recording')return;
       const now=Date.now();if(now-session.lastTick>5000){interruptAudio(session,'Browser suspended capture; audio continuity is uncertain');return;}session.lastTick=now;
       const elapsed=Math.floor((performance.now()-session.started)/1000);
       session.message=`${String(Math.floor(elapsed/60)).padStart(2,'0')}:${String(elapsed%60).padStart(2,'0')}`;
       if(session.background||session.muted)session.message+=' · '+(session.muted?'Microphone paused; audio may be missing':'Background capture may pause');
       renderAudio();if(elapsed>=config.max_seconds)finishAudio(false);
     },250);
-    for(const track of stream.getTracks()){track.onended=()=>interruptAudio(session,'Microphone ended');track.onmute=()=>{session.muted=true;renderAudio();};track.onunmute=()=>{if(session.muted)interruptAudio(session,'Microphone was paused; audio may be missing');};}
+    for(const track of stream.getTracks()){track.onended=()=>interruptAudio(session,'Microphone ended');track.onmute=()=>{if(audioState.session!==session)return;session.muted=true;renderAudio();};track.onunmute=()=>{if(audioState.session===session&&session.muted)interruptAudio(session,'Microphone was paused; audio may be missing');};}
     renderAudio();
   }catch(error){
     releaseMicrophone(session);if(audioState.session!==session)return;
@@ -174,3 +175,37 @@ audioStorageOperation('readonly',store=>store.get(audioTabKey)).then(saved=>{
   if(saved&&!audioState.session){audioState.session={...saved,phase:'error',send:false,changed:true,chunks:[],message:'Interrupted recording recovered. Retry transcribes captured audio; missing audio cannot be recovered.'};}
   audioState.loading=false;renderAudio();
 });
+
+// Picker activation does not end capture. Only a nonempty selection replaces the
+// exact session that opened it; context changes cannot discard a newer recording.
+let audioPicker=null;
+function restoreAudioPickerFocus(picker){restoreAttachmentFocus(picker,[$('audio-upload'),$('audio-file-input')]);}
+$('audio-upload').onclick=()=>{
+  const session=audioState.session;if(session?.phase!=='recording')return;
+  const draft=$('message-input');
+  audioPicker={session,project:session.project,conversation:session.conversation,selection:state.selection,focused:document.activeElement===draft,value:draft.value,start:draft.selectionStart,end:draft.selectionEnd,direction:draft.selectionDirection};
+  $('audio-file-input').value='';$('audio-file-input').click();
+};
+$('audio-file-input').addEventListener('cancel',()=>{const picker=audioPicker;audioPicker=null;restoreAudioPickerFocus(picker);});
+function audioPickerReturned(){
+  const picker=audioPicker;
+  if(picker&&!document.hidden)requestAnimationFrame(()=>{if(audioPicker===picker)restoreAudioPickerFocus(picker);});
+}
+window.addEventListener('focus',audioPickerReturned);
+document.addEventListener('visibilitychange',audioPickerReturned);
+$('audio-file-input').onchange=()=>{
+  const picker=audioPicker,file=$('audio-file-input').files[0];audioPicker=null;$('audio-file-input').value='';restoreAudioPickerFocus(picker);
+  if(!file||!picker)return;
+  const previous=picker.session;
+  if(audioState.session!==previous||previous.phase==='sending'||picker.selection!==state.selection||picker.project!==state.project||picker.conversation!==state.history?.conversation.id||state.view!=='chat'){notice('Recording or chat changed. Selected audio was not uploaded.');return;}
+  // Invalidate before stop: queued final chunks, checkpoints and transcript replies
+  // from the microphone are fenced by session identity, including synchronous stop.
+  discardAudio();
+  const mime=file.type.split(';')[0].toLowerCase();
+  const extensions={webm:'audio/webm',ogg:'audio/ogg',oga:'audio/ogg',mp4:'audio/mp4',m4a:'audio/mp4',wav:'audio/wav'};
+  const type=previous.config.mime_types.includes(mime)?mime:extensions[file.name.split('.').pop().toLowerCase()];
+  if(!type||!previous.config.mime_types.includes(type)){notice('Unsupported audio file. Use WebM, Ogg, MP4/M4A or WAV.');return;}
+  if(!file.size||file.size>previous.config.max_bytes){notice('Audio file must contain data and be at most 32 MiB.');return;}
+  const session={id:crypto.randomUUID(),project:previous.project,conversation:previous.conversation,mode:previous.mode,label:previous.label,config:previous.config,blob:file.slice(0,file.size,type),chunks:[],phase:'stopping',send:false,changed:true};
+  audioState.session=session;transcribeAudio(session);
+};

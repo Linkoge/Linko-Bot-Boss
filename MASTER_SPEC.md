@@ -22,6 +22,7 @@ Current architecture, superseding prior supervision requirements as authorized o
 - No new orchestration framework, supervision AI calls, speculative policy engines or manager-created subagent hierarchy.
 
 - Manager and Bot settings follow [model settings](docs/MODEL_SETTINGS.md): manual Manager, retained manual Bot plus independent Automatic policy, supported exact pairs enforced and durably selected before dispatch; no extra router.
+- Navigation retains four 44px square controls in aligned upper project/Settings and lower chat-utilities/usage columns; only project/view tabs scroll. Recording exposes Stop/Discard/Upload; cancellation retains capture, selection replaces and safely discards microphone capture through supported whole-file STT. Preserve drafts, attachments, sequential append and context-bound focus. Contract: docs/AUDIO.md.
 - Chat scrolling is fully manual during sends, streaming and updates, with browser anchoring disabled. Preserve existing composer/audio/lifecycle/security and rich red theme.
 
 Implementation uses existing FastAPI, SQLite, plain JavaScript and Codex App Server. Model settings contain only manager and worker roles. Old requirements are retained in Git history and historical stage reports.

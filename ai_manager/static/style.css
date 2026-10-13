@@ -157,3 +157,5 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #model-error{color:#f2a7a7;font-size:12px;margin:6px 0 0}
 #model-error:empty{display:none}
 @media(max-width:380px){#model-dialog{padding:12px;width:calc(100% - 16px)}.model-choice-row{gap:4px}.model-choice-row button{font-size:12px}.policy-cell{gap:2px}}
+
+#audio-file-input{padding:0;border:0}

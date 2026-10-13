@@ -13,10 +13,10 @@ function renderAttachments(){
 }
 // Bind native selection and return focus to the context that actually opened the picker.
 let attachmentPicker=null;
-function restoreAttachmentFocus(picker){
+function restoreAttachmentFocus(picker,controls=[$('attach'),$('attachment-input')]){
   if(!picker?.focused||picker.project!==state.project||picker.selection!==state.selection||picker.conversation!==state.history?.conversation.id||state.view!=='chat'||$('app').hidden)return;
   // Do not steal focus if the owner selected another field/control while returning.
-  if(![document.body,$('message-input'),$('attach'),$('attachment-input')].includes(document.activeElement))return;
+  if(![document.body,$('message-input'),...controls].includes(document.activeElement))return;
   if(document.activeElement===$('message-input'))return;
   $('message-input').focus({preventScroll:true});
   if($('message-input').value===picker.value)$('message-input').setSelectionRange(picker.start,picker.end,picker.direction);

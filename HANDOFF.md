@@ -1,3 +1,18 @@
+# Navigation/audio delivery — verified candidate; do not deploy, 2026-10-13
+
+One complete delivery: `nav-audio-upload-v1-20261013`. Candidate checkout:
+`/home/codex/checkouts/linko-nav-audio-upload-20261013`. Full report: `/home/codex/.local/share/linko-bot-manager/deployments/nav-audio-upload-20261013/REPORT.md`;
+manager update: `/home/codex/.local/share/linko-bot-manager/deployments/nav-audio-upload-20261013/manager-summary.json`. Behavior/evidence contract: [audio](docs/AUDIO.md).
+Manager routine brief/recent delivery should record implemented/verified, prepared only after the
+exact release manifest exists, activation pending. Lasting effects: aligned upper project/Settings
+and lower chat/usage squares; recording Upload retains capture on cancellation, replaces only on
+selection, releases microphone resources and fences stale callbacks/results while retaining drafts,
+attachments, sequential append, focus and manual scrolling. Fixtures/disposable data only.
+Current live is model-settings/manual-scroll v2, commit `0745c1a`, succeeded receipt nonce
+`c9a21304d22c36785e25b66f914ec90b`. No deployment, restart, production mutation or publication.
+Pending: owner activation and optional physical-device picker/keyboard acceptance. Historical
+pending/live claims below are superseded by the baseline receipt; preserve their old evidence.
+
 # Model settings / manual scrolling — verified, do not deploy, 2026-10-13
 
 Owner authorized implementation, validation and exact release preparation, explicitly withholding

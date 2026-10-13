@@ -1,10 +1,11 @@
 # Manager and bot choices — 2026-10-13
 
-Implemented candidate: `model-settings-manual-scroll-v2-20261013`, isolated checkout
-`/home/codex/checkouts/linko-model-scroll-20261013`. **Do not deploy yet.** The owner authorized
-implementation, verification and exact release preparation only. Existing deployed rich-red
-baseline remains `361a18f43f7d2fca2e211ce5b2673f808003ea20`, proven by succeeded receipt
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/4dc90c51e97f8497303717091cf126a7.json`.
+Current deployed release: `model-settings-manual-scroll-v2-20261013`, commit
+`0745c1a6af91f09d62f414c0c63326d2afe82260`, proven by succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/c9a21304d22c36785e25b66f914ec90b.json`.
+The prepared navigation/audio successor moves the gear to the upper row beside the project
+dropdown, with matching chat-utilities/usage columns below; see [audio](AUDIO.md).
+That successor is not deployed. All settings behavior below is preserved.
 
 The fourth 44px navigation utility opens one responsive modal. Manager has two exclusive
 choice rows and no policy/mode controls. Bot has Manual/Automatic and three vertical model

@@ -1,3 +1,45 @@
+# Navigation symmetry and recording Upload — 2026-10-13
+
+Candidate release `nav-audio-upload-v1-20261013` in `/home/codex/checkouts/linko-nav-audio-upload-20261013`.
+Implemented and Chromium-verified; preparation is established only by the exact manifest at
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/nav-audio-upload-v1-20261013/manifest.json`.
+**Do not deploy:** this objective authorizes preparation only. Full evidence: [/home/codex/.local/share/linko-bot-manager/deployments/nav-audio-upload-20261013/REPORT.md](/home/codex/.local/share/linko-bot-manager/deployments/nav-audio-upload-20261013/REPORT.md).
+
+Recording displays Stop, Discard and Upload together. Upload synchronously opens a single-file
+native picker for WebM, Ogg, MP4/M4A or WAV through the existing whole-file `/api/audio/transcribe`
+workflow. This is transcription into the original draft, not a chat attachment or automatic Send.
+32 MiB/20-minute server validation, recoverable errors, Download/Retry and sequential append remain.
+MIME is normalized from a supported browser type or supported filename extension; the server
+still validates the actual container, audio stream and duration before calling the provider.
+
+Opening/cancelling the picker or an empty change leaves capture intact. A nonempty selection
+invalidates the exact originating microphone session before stopping its recorder/tracks and
+clearing its serialized checkpoint. Late chunks/Stop/track events and STT replies cannot affect
+its replacement. Selected files get a fresh session ID and never inherit automatic Send.
+Unsupported/empty/oversized selected files discard the prior recording and show a notice;
+a supported but unreadable file retains existing recoverable transcription-error behavior.
+Context/session changes while the picker is open reject the selection rather than discarding
+another recording or writing into a replacement chat. Normal browser suspension/interruption
+recovery still applies while any native picker is open; continuous OS capture is not guaranteed.
+
+Upload uses the existing pointer focus protection and context-bound picker-return restoration.
+Draft text, caret selection on cancellation, attachments and manual chat scrolling are preserved.
+The 44px Settings gear is now beside the project dropdown in the upper row; chat utilities and
+usage occupy matching columns below. Project/view tabs remain independently scrollable.
+Chromium covers real microphone capture, native picker activation, cancellation, raw-file
+replacement, stopped tracks, queued stale callbacks, delayed transcript fencing, attachments,
+sequential append and 1440/393/320px layouts. Existing browser/backend gates cover model settings,
+manual scroll, recovery and security. STT/native turns use fixtures; physical device picker/
+keyboard/OS suspension and paid transcription are not claimed. Detailed outcomes/logs live in
+the full report and fixed preparation validation log.
+
+Current live baseline is `model-settings-manual-scroll-v2-20261013`, commit
+`0745c1a6af91f09d62f414c0c63326d2afe82260`, established by succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/c9a21304d22c36785e25b66f914ec90b.json`.
+Older candidate/live assertions below are historical and superseded by that receipt.
+
+---
+
 # Mobile focus and recording controls — 2026-10-12, candidate only
 
 Exact candidate release: `chat-ui-mobile-composer-v4-20261012`; isolated checkout

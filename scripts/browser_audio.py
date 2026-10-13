@@ -39,6 +39,8 @@ uvicorn.run(app,host='127.0.0.1',port=PORT,log_level='error')
 
 
 def main():
+    evidence = Path(os.environ.get('LINKO_AUDIO_EVIDENCE', '/tmp/linko-audio-evidence'))
+    evidence.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='linko-audio-browser-') as directory:
         root = Path(directory)
         for name in ('Alpha', 'Beta'):
@@ -238,6 +240,93 @@ def main():
                 assert sum(m['role']=='user' for m in history['messages'])==4
                 page.locator('#message-input').fill('preserved\n\nspoken transcript')
 
+                # Native Upload activation, cancellation and replacement of real capture.
+                page.locator('#message-input').fill('replacement draft')
+                page.locator('#attachment-input').set_input_files({'name': 'keep.txt', 'mimeType': 'text/plain', 'buffer': b'keep attachment'})
+                page.wait_for_function('()=>attachmentDraft(state.project).length===1')
+                attachment_ids = page.evaluate('attachmentDraft(state.project).map(f=>f.id)')
+                start()
+                page.locator('#message-input').focus()
+                page.locator('#message-input').evaluate('(el)=>el.setSelectionRange(3,8)')
+                original = page.evaluate('audioState.session.id')
+                before = len(uploads)
+                with page.expect_file_chooser() as chooser:
+                    page.locator('#audio-upload').click()
+                assert page.evaluate('audioState.session.id') == original
+                # Native cancel event and empty change both retain the exact capture.
+                page.locator('#audio-file-input').dispatch_event('cancel')
+                assert page.evaluate("audioState.session.phase==='recording'&&document.activeElement===$('message-input')")
+                assert page.evaluate("$('message-input').selectionStart===3&&$('message-input').selectionEnd===8")
+                chooser.value.set_files([])
+                assert page.evaluate('audioState.session.id') == original
+                assert len(uploads) == before
+                # Save the actual raw WebM chunks and all queued recorder callbacks.
+                raw = bytes(page.evaluate("async()=>{window.replaced=audioState.session;window.lateData=replaced.recorder.ondataavailable;window.lateStop=replaced.recorder.onstop;window.lateMute=replaced.stream.getTracks()[0].onmute;return Array.from(new Uint8Array(await new Blob(replaced.chunks,{type:replaced.recorder.mimeType}).arrayBuffer()))}"))
+                page.route('**/api/audio/transcribe', lambda route: held.append(route))
+                with page.expect_file_chooser() as chooser:
+                    page.locator('#audio-upload').click()
+                chooser.value.set_files({'name': 'recording.webm', 'mimeType': '', 'buffer': raw})
+                page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
+                assert page.evaluate("audioState.session.id!==window.replaced.id&&window.replaced.recorder.state==='inactive'&&window.replaced.stream.getTracks().every(t=>t.readyState==='ended')")
+                assert len(held) == 1 and len(uploads) == before + 1
+                assert held[0].request.post_data_buffer == raw
+                assert held[0].request.headers['content-type'] == 'audio/webm'
+                page.evaluate("()=>{lateData({data:new Blob(['stale bytes'])});lateStop();lateMute();}")
+                assert page.evaluate('audioState.session.blob.size') == len(raw)
+                held.pop().fulfill(status=200, json={'text': 'selected file transcript'})
+                page.wait_for_function('()=>!audioState.session')
+                page.unroute('**/api/audio/transcribe')
+                assert len(uploads) == before + 1
+                assert page.locator('#message-input').input_value() == 'replacement draft\n\nselected file transcript'
+                assert page.evaluate('attachmentDraft(state.project).map(f=>f.id)') == attachment_ids
+                assert len(chats) == 3
+                # A subsequent recording appends once after the uploaded transcript.
+                start()
+                page.locator('#audio-stop').click()
+                page.wait_for_function('()=>!audioState.session')
+                assert page.locator('#message-input').input_value() == 'replacement draft\n\nselected file transcript\n\nspoken transcript'
+                # Selection while a picker-open recording is finishing fences late STT.
+                start()
+                page.route('**/api/audio/transcribe', lambda route: held.append(route))
+                with page.expect_file_chooser() as chooser:
+                    page.locator('#audio-upload').click()
+                page.evaluate('finishAudio(false)')
+                page.wait_for_function("()=>audioState.session?.phase==='transcribing'")
+                assert len(held) == 1
+                chooser.value.set_files({'name': 'saved.webm', 'mimeType': 'audio/webm', 'buffer': raw})
+                page.wait_for_function("()=>audioState.session?.phase==='transcribing'&&audioState.session.blob.size===%d" % len(raw))
+                page.wait_for_timeout(100)
+                assert len(held) == 2
+                held.pop(0).fulfill(status=200, json={'text': 'stale microphone transcript'})
+                held.pop(0).fulfill(status=200, json={'text': 'second file transcript'})
+                page.wait_for_function('()=>!audioState.session')
+                page.unroute('**/api/audio/transcribe')
+                assert page.locator('#message-input').input_value() == 'replacement draft\n\nselected file transcript\n\nspoken transcript\n\nsecond file transcript'
+                # A changed session while picker is open must not discard its replacement.
+                start()
+                with page.expect_file_chooser() as chooser:
+                    page.locator('#audio-upload').click()
+                page.locator('#audio-cancel').click()
+                start()
+                newer = page.evaluate('audioState.session.id')
+                before = len(uploads)
+                chooser.value.set_files({'name': 'saved.webm', 'mimeType': 'audio/webm', 'buffer': raw})
+                assert page.evaluate('audioState.session.id') == newer
+                assert len(uploads) == before
+                page.locator('#audio-cancel').click()
+
+                # Unsupported selection discards capture, reports format, never submits.
+                start()
+                before = len(uploads)
+                with page.expect_file_chooser() as chooser:
+                    page.locator('#audio-upload').click()
+                chooser.value.set_files({'name': 'bad.txt', 'mimeType': 'text/plain', 'buffer': b'invalid'})
+                assert page.evaluate('!audioState.session')
+                assert 'Unsupported audio' in page.locator('#notice-text').inner_text()
+                assert len(uploads) == before
+                page.evaluate('clearSentAttachments(state.project,attachmentDraft(state.project).map(f=>f.id))')
+                page.locator('#message-input').fill('preserved\n\nspoken transcript')
+
                 # Media permission denial is compact and retryable, no draft loss.
                 page.evaluate("()=>{window.savedGetUserMedia=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);navigator.mediaDevices.getUserMedia=async()=>{throw new DOMException('denied','NotAllowedError')}}")
                 page.locator('#microphone').click()
@@ -291,6 +380,7 @@ def main():
                 assert page.locator('#message-input').input_value() == 'preserved\n\nspoken transcript\n\nspoken transcript'
                 assert len(chats) == 3
 
+                page.locator('#notice-dismiss').click()
                 for width, height in [(1440, 1000), (393, 851), (320, 420)]:
                     page.set_viewport_size({'width': width, 'height': height})
                     start()
@@ -302,10 +392,20 @@ def main():
                     assert page.locator('#context-hint').count() == 0
                     assert page.locator('.composer-note').count() == 0
                     assert page.locator('#audio-status').inner_text() == '00:01'
-                    for control in ['microphone', 'audio-cancel', 'send']:
+                    for control in ['microphone', 'audio-stop', 'audio-cancel', 'audio-upload', 'send']:
                         assert page.locator('#'+control).is_visible()
                     assert page.locator('#messages').inner_text().strip()
-                    page.screenshot(path=f'/tmp/linko-audio-{width}.png')
+                    boxes = {control: page.locator('#'+control).bounding_box() for control in ['project-menu-button', 'model-settings-button', 'chat-menu-button', 'usage-button']}
+                    for box in boxes.values():
+                        assert box['width'] == 44 and box['height'] == 44
+                    assert boxes['project-menu-button']['x'] == boxes['chat-menu-button']['x']
+                    assert boxes['model-settings-button']['x'] == boxes['usage-button']['x']
+                    assert boxes['project-menu-button']['y'] == boxes['model-settings-button']['y']
+                    assert boxes['chat-menu-button']['y'] == boxes['usage-button']['y']
+                    action_boxes = [page.locator('#'+control).bounding_box() for control in ['audio-stop', 'audio-cancel', 'audio-upload']]
+                    assert len({box['y'] for box in action_boxes}) == 1
+                    assert all(box['y']+box['height']<=height and box['x']+box['width']<=width for box in action_boxes)
+                    page.screenshot(path=str(evidence / f'recording-{width}.png'))
                     page.locator('#audio-cancel').click()
                 # Unsupported browser and insecure mobile origins use dismissible compact notices.
                 page.evaluate("()=>{window.savedRecorder=window.MediaRecorder;window.MediaRecorder=undefined}")
