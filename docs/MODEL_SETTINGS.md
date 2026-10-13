@@ -1,3 +1,12 @@
+# Integrated activation status — 2026-10-13
+
+Current integrated activation target: `integrated-recovery-append-popup-v1-20261013`; see [STATE.md](../STATE.md).
+The owner has authorized combined deployment. Manager review and controlled `deploy_release` remain;
+the worker does not deploy or restart. Exact manifest establishes preparation; only a matching later
+succeeded receipt establishes activation. Original source reports and candidate IDs below retain their
+historical scope and evidence; their prior requirement for a new owner request has been satisfied.
+Full integration report: `/home/codex/.local/share/linko-bot-manager/deployments/integrated-deliveries-20261013/REPORT.md`.
+
 # Catalog-backed family resolution candidate — 2026-10-13
 
 Exact prepared candidate `unfinished-recovery-family-ui-v2-20261013`; **not deployed**.

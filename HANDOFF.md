@@ -1,35 +1,34 @@
-# Manager pause/append rule — isolated instruction candidate, 2026-10-13
+# Integrated release handoff — 2026-10-13
 
-Exact release ID: `manager-append-rule-v1-20261013`; checkout:
-`/home/codex/checkouts/linko-manager-append-rule-20261013`. Only manager instruction text and its
-documentation change. Loading/activation contract: [agent controls](docs/AGENT_CONTROLS.md).
-Durable report and routine brief/recent-delivery facts:
-`/home/codex/.local/share/linko-bot-manager/deployments/manager-append-rule-20261013/REPORT.md`
-and sibling `manager-summary.json`. Preparation is established only by the exact release manifest.
-Activation requires deployment/restart; none is requested or performed. Assignment
-`aa7832895c764317b1e87517e13d3090` and its recovery/UI/model checkout remain untouched.
-This candidate starts at live `08f0ba7`; it does not include that separate candidate's changes.
-If another release activates first, integrate this instruction and reprepare against the new live base;
-the helper rejects a stale base. Preserve the separate assignment's evidence and pending release.
+Exact integrated release ID: `integrated-recovery-append-popup-v1-20261013`. Isolated checkout:
+`/home/codex/checkouts/linko-integrated-deliveries-20261013`. Current live and all lasting candidate
+changes are in [STATE.md](STATE.md). Preparation requires the exact helper manifest:
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/integrated-recovery-append-popup-v1-20261013/manifest.json`. Deployment is owner-authorized and reserved for manager-controlled `deploy_release`.
+Do not deploy any individual candidate and lose the others. No shell deployment/restart by this worker.
+Only a matching later succeeded receipt establishes activation; the live nav/audio receipt is base evidence.
 
-# Unfinished-work/model/audio/Tasks delivery — prepared only, 2026-10-13
+Source deliveries and durable reports under `/home/codex/.local/share/linko-bot-manager/deployments/`:
 
-Exact release `unfinished-recovery-family-ui-v2-20261013`, checkout `/home/codex/checkouts/linko-unfinished-recovery-20261013`.
-Do not deploy without a **new owner request**. Preparation requires its exact helper manifest;
-only a later matching succeeded receipt can establish activation. Current live is the succeeded
-`nav-audio-upload-v2-20261013`, commit `08f0ba712f194ea0f985740ef408c9e033511b98`, receipt `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json`.
+- Recovery/model/recording/Tasks/style: `unfinished-recovery-family-ui-v2-20261013`, task
+  `aa7832895c764317b1e87517e13d3090`, execution `540134d352474ed2892c0bfa250385b2`,
+  `unfinished-recovery-20261013/REPORT.md`.
+- Concise append rule: `manager-append-rule-v1-20261013`, task `0fda950d113946a794d9afe71daf8194`,
+  execution `03708cf29f3c44bc92a741244ddd1f17`, `manager-append-rule-20261013/REPORT.md`.
+- Usage/project menu: `popup-cleanup-v1-20261013`, task `5f37d4cbba134edb903b3d19ba1b70bc`,
+  execution `d5a2ca08dcd8400bbde9440b39d59897`, `popup-cleanup-20261013/REPORT.md`.
 
-Manager: retain one routine delivery ID for this bundled objective. Record implemented/verified/prepared
-versus deployment pending, exact release/report, lasting effects and unresolved limitations using
-`/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/manager-summary.json`. Full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/REPORT.md`.
-Preserve task/execution linkage from that summary, retrieved original interruption evidence, current
-production model policy/runtime and authenticated catalog. Do not bulk inject these reports or run full
-memory reconciliation. Natural owner explanation: the immediate interruption was an interrupt HTTP
-request; its triggering gesture is unknown. Deployed Sol is pinned to 6.1; the candidate follows the latest
-supported catalog version per family for new work, keeping existing routes stable. History editor Cancel
-is a pre-existing unrelated follow-up; Escape works. See current STATE.md and linked authoritative docs.
+Manager routine brief/recent-delivery update uses one integrated delivery ID and the full evidence:
+`/home/codex/.local/share/linko-bot-manager/deployments/integrated-deliveries-20261013/REPORT.md` and `manager-summary.json`. Retain all three source links/lasting effects,
+existing pending work and exact release/manifest/base receipt. Record implemented/verified/prepared
+separately from deployed; after activation retrieve this exact release's durable succeeded receipt.
+Keep owner holds/deferred work and unrelated History Cancel follow-up. No full memory reconciliation,
+bulk report injection, task lifecycle mutation or direct production memory write was performed.
+If live base changes before activation, integrate/reprepare against it under a fresh ID; never force stale base.
 
----
+## Historical delivery handoffs
+
+The sections below retain previous scopes/status at their original handoff time. Current live state and
+owner authorization are established above and in STATE.md; old requests for fresh permission are historical.
 
 # Navigation/audio delivery — verified candidate; do not deploy, 2026-10-13
 

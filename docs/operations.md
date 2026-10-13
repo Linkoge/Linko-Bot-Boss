@@ -49,7 +49,8 @@ Run `pytest`, Ruff and JavaScript syntax checks. `scripts/browser_smoke.py` uses
 
 The controlled independent helper is documented in [deployment helper](DEPLOYMENT_HELPER.md).
 It has durable succeeded releases; current navigation/audio success is referenced in STATE.md.
-Use its exact preparation manifest and owner-requested deployment receipts instead of restarting a releasing worker. The older manual procedure below is historical
+Owner has authorized `integrated-recovery-append-popup-v1-20261013`; the manager reviews and calls `deploy_release`.
+Use its exact preparation manifest and succeeded deployment receipt. The integration worker does not restart or deploy. The older manual procedure below is historical
 context for code-only releases and requires an external quiet operator window.
 
 Prepare and test a separate checkout. Create an online SQLite backup and rehearse startup against its copy. When no active execution needs interruption, stop only `linko-bot-manager.service`, fast-forward this repository to the tested commit, and start the same user service. Its existing `.venv`, environment, daily backup timer and Tailscale listener are retained. Check service PID/start time, loopback/private HTTPS, served asset hashes, SQLite integrity and preserved records. Do not run acceptance assignments against production data.

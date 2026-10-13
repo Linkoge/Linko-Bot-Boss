@@ -55,7 +55,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
             response = usage.view()
             with sync_playwright() as p:
                 browser = p.chromium.launch()
-                context = browser.new_context(has_touch=True)
+                context = browser.new_context(has_touch=True, timezone_id="Asia/Tbilisi", locale="en-GB")
                 page = context.new_page()
                 errors = []
                 page.on('pageerror', lambda err: errors.append(str(err)))
@@ -97,8 +97,10 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     page.locator('#usage-button').tap()
                     assert page.locator('#usage-dialog').is_visible()
                     assert '87.5%' in page.locator('#usage-details').inner_text()
-                    assert '12.5%' in page.locator('#usage-details').inner_text()
-                    assert '300 minutes' in page.locator('#usage-details').inner_text()
+                    assert '12.5%' not in page.locator('#usage-details').inner_text()
+                    assert page.locator('#usage-details h3').all_text_contents() == ['5 hour', 'Weekly']
+                    assert 'allowance' not in page.locator('#usage-dialog').inner_text()
+                    assert page.locator('#usage-last-refresh').inner_text() == page.evaluate("'Last refresh '+localTime(usageData.last_successful_refresh_at)")
                     assert 'Tbilisi' in page.locator('#usage-details').inner_text()
                     dialog = page.locator('#usage-dialog').bounding_box()
                     assert dialog['x'] >= 0 and dialog['x']+dialog['width'] <= width
@@ -131,32 +133,115 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.keyboard.press('Enter')
                 assert page.locator('#usage-dialog').is_visible()
                 page.locator('#usage-close').click()
-                # Actual duration determines compact slots; reversed slots retain meaning.
+                # Duration rather than primary/secondary slot determines both lean sections.
                 page.evaluate("usageData.buckets[0].windows.reverse();renderUsage()")
                 assert page.locator('#usage-five').inner_text() == '88%'
-                page.evaluate("usageData.buckets[0].windows[1].duration_minutes=15;usageData.buckets[0].windows[1].label='15-minute allowance';renderUsage()")
-                assert page.locator('#usage-five').inner_text() == '—'
-                page.evaluate("$('usage-dialog').showModal();renderUsage()")
-                assert '15-minute allowance' in page.locator('#usage-details').inner_text()
-                page.keyboard.press('Escape')
-                page.evaluate("usageData.buckets[0].windows[0].resets_at=usageNow()-1;renderUsage()")
-                assert 'stale' in page.locator('#usage-button').get_attribute('aria-label')
-                page.evaluate("$('usage-dialog').showModal();renderUsage()")
-                assert 'Reset passed' in page.locator('#usage-details').inner_text()
-                page.keyboard.press('Escape')
+                page.locator('#usage-button').click()
+                assert page.locator('.usage-remaining').all_text_contents() == ['87.5% remaining', '0% remaining']
+                successful_footer = page.locator('#usage-last-refresh').inner_text()
+                # HTTP success containing a backend refresh failure preserves last success.
+                failed = json.loads(json.dumps(response))
+                failed['last_attempt_at'] = response['server_time'] + 120
+                failed['error'] = 'Account usage refresh failed.'
+                failed['status'] = 'stale'
+                for bucket in failed['buckets']:
+                    for window in bucket['windows']:
+                        window['stale'] = True
+                page.unroute('**/api/account-usage')
+                page.route('**/api/account-usage', lambda route: route.fulfill(json=failed))
+                page.locator('#usage-refresh').click()
+                page.wait_for_function('() => !usageRequest')
+                assert page.locator('#usage-last-refresh').inner_text() == successful_footer
+                assert page.locator('.usage-remaining.stale').count() == 2
+                # Browser/network failure also retains success and explicitly marks stale.
                 page.unroute('**/api/account-usage')
                 page.route('**/api/account-usage', lambda route: route.abort())
-                page.evaluate('refreshUsage()')
-                page.locator('#usage-button').click()
-                page.wait_for_function("() => document.getElementById('usage-status').textContent.includes('Refresh failed')")
+                page.locator('#usage-refresh').click()
+                page.wait_for_function('() => !usageRequest')
+                assert page.locator('#usage-last-refresh').inner_text() == successful_footer
+                assert page.locator('.usage-remaining.stale').count() == 2
+                page.screenshot(path=str(evidence/'failed-refresh.png'))
+                recovered = json.loads(json.dumps(response))
+                recovered['last_successful_refresh_at'] += 600
+                page.unroute('**/api/account-usage')
+                page.route('**/api/account-usage', lambda route: route.fulfill(json=recovered))
+                page.locator('#usage-refresh').click()
+                page.wait_for_function('() => !usageRequest')
+                assert page.locator('#usage-last-refresh').inner_text() != successful_footer
+                assert page.locator('.usage-remaining.stale').count() == 0
+                page.evaluate("usageData.buckets[0].windows[1].duration_minutes=15;usageData.buckets[0].windows[1].label='15-minute allowance';renderUsage()")
+                assert page.locator('.usage-remaining').nth(0).inner_text() == '87.5% remaining'
+                assert page.locator('.usage-remaining').nth(1).inner_text() == 'Unavailable'
+                page.evaluate("usageData.buckets[0].windows[0].resets_at=usageNow()-1;renderUsage()")
+                assert 'stale' in page.locator('#usage-button').get_attribute('aria-label')
+                assert page.locator('.usage-remaining.stale').count() == 1
+                page.unroute('**/api/account-usage')
+                page.route('**/api/account-usage', lambda route: route.abort())
+                page.evaluate("usageData=null;renderUsage()")
+                page.locator('#usage-refresh').click()
+                page.wait_for_function('() => !usageRequest')
+                assert page.locator('.usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
+                assert page.locator('#usage-last-refresh').inner_text() == 'Last refresh Never'
+                page.screenshot(path=str(evidence/'never-refreshed.png'))
                 page.keyboard.press('Escape')
-                page.evaluate("usageData={buckets:[],server_time:usageNow(),last_attempt_at:null,error:null};renderUsage()")
-                assert page.locator('#usage-five').inner_text() == '—' and page.locator('#usage-week').inner_text() == '—'
-                page.locator('#usage-button').click()
-                assert 'No account allowance reading' in page.locator('#usage-details').inner_text()
-                page.keyboard.press('Escape')
+                # Project menu must paint and receive input above the workspace row.
+                for width,height in [(1440,1000),(393,851),(320,420),(393,420)]:
+                    page.set_viewport_size({'width':width,'height':height})
+                    page.locator('#project-menu-button').tap()
+                    if width == 393 and height == 851:
+                        page.locator('#project-menu').evaluate("m=>m.style.zIndex='auto'")
+                        baseline_hit = page.locator('#project-menu').evaluate('(m)=>{const r=m.getBoundingClientRect();return m.contains(document.elementFromPoint(r.x+20,r.y+20));}')
+                        assert not baseline_hit
+                        page.screenshot(path=str(evidence/'baseline-menu-overlap.png'))
+                        page.locator('#project-menu').evaluate("m=>m.style.removeProperty('z-index')")
+                    surface = page.locator('#project-menu').evaluate("""menu => {
+                      const r=menu.getBoundingClientRect(),nav=document.querySelector('.workspace-row').getBoundingClientRect();
+                      const x=Math.max(r.left,nav.left)+20,y=Math.max(r.top,nav.top)+20;
+                      const css=getComputedStyle(menu);
+                      return {background:css.backgroundColor,zIndex:css.zIndex,
+                        hitInside:menu.contains(document.elementFromPoint(x,y)),
+                        rect:{left:r.left,right:r.right,bottom:r.bottom,top:r.top},
+                        scrollable:menu.scrollHeight>menu.clientHeight};
+                    }""")
+                    assert surface['background'] == 'rgb(23, 29, 41)' and surface['hitInside'], surface
+                    assert surface['rect']['left'] >= 0 and surface['rect']['right'] <= width
+                    assert surface['rect']['bottom'] <= height and surface['scrollable']
+                    page.screenshot(path=str(evidence/f'{width}x{height}-project-menu.png'))
+                    page.keyboard.press('End')
+                    page.locator('#project-menu').evaluate('(m)=>m.scrollTop=m.scrollHeight')
+                    assert page.locator('#project-menu button').last.evaluate('(b)=>{const r=b.getBoundingClientRect();return b.contains(document.elementFromPoint(r.x+20,r.y+20));}')
+                    page.screenshot(path=str(evidence/f'{width}x{height}-project-menu-scrolled.png'))
+                    page.keyboard.press('Escape')
+                    assert page.locator('#project-menu-button').evaluate('(b)=>b===document.activeElement')
+                    page.locator('#project-menu-button').tap()
+                    alpha_id = page.evaluate("state.portfolio.projects.find(p=>p.name==='Alpha').id")
+                    page.locator(f'#project-menu [data-project="{alpha_id}"]').tap()
+                    page.wait_for_function("() => state.history && state.portfolio.projects.find(p=>p.id===state.project)?.name==='Alpha'")
+                    assert page.locator('#project-menu').is_hidden()
+                    page.locator('#project-menu-button').tap()
+                    page.locator('#project-menu').get_by_role('menuitem',name='Rename selected project…').tap()
+                    page.locator('#editor-fields input').fill('Alpha renamed')
+                    page.locator('#editor-form').get_by_role('button',name='Save',exact=True).tap()
+                    page.wait_for_function("() => state.portfolio.projects.some(p=>p.display_name==='Alpha renamed')")
+                    page.locator('#project-menu-button').tap()
+                    page.locator('#project-menu').get_by_role('menuitemradio',name='Beta',exact=True).tap()
+                    page.wait_for_function("() => state.history && state.portfolio.projects.find(p=>p.id===state.project)?.name==='Beta'")
+                    page.locator('#project-menu-button').tap()
+                    page.locator('#message-input').tap()
+                    assert page.locator('#project-menu').is_hidden()
+                    # Document scrolling retains sticky menu layering outside chat layout.
+                    page.locator('[data-view=settings]').tap()
+                    page.evaluate("document.querySelector('#view-settings').style.minHeight='2000px';scrollTo(0,200)")
+                    page.locator('#project-menu-button').tap()
+                    assert page.locator('.navigation').bounding_box()['y'] == 0
+                    assert page.locator('#project-menu').evaluate('(m)=>{const r=m.getBoundingClientRect();return m.contains(document.elementFromPoint(r.x+20,r.y+20));}')
+                    page.screenshot(path=str(evidence/f'{width}x{height}-sticky-menu.png'))
+                    page.keyboard.press('Escape')
+                    page.evaluate('scrollTo(0,0)')
+                    page.locator('[data-view=chat]').tap()
+                    receipts.append({'project_menu_viewport':[width,height],**surface,'selection_rename_dismissal':'passed','sticky_document_scroll':'passed'})
                 assert not errors, errors
-                (evidence/'browser.json').write_text(json.dumps({'viewports':receipts,'page_errors':errors},indent=2))
+                (evidence/'browser.json').write_text(json.dumps({'viewports':receipts,'page_errors':errors,'refresh_checks':{'successful_footer':successful_footer,'backend_failure_preserved':True,'network_failure_preserved':True,'recovery_advanced':True,'never_placeholder':True},'baseline_overlap_reproduced':True},indent=2))
                 browser.close()
             print('Account usage desktop/mobile/narrow, exact values, unavailable/stale/error, scrolling, keyboard/touch passed')
         finally:

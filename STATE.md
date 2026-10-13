@@ -1,29 +1,37 @@
 # Current state — 2026-10-13
 
-Current live: `nav-audio-upload-v2-20261013`, commit `08f0ba712f194ea0f985740ef408c9e033511b98`,
-succeeded receipt `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json`. Read-only checks confirm active scheduler and matching served assets.
+Current live is `nav-audio-upload-v2-20261013`, commit
+`08f0ba712f194ea0f985740ef408c9e033511b98`, established by succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json`.
+Read-only integration checks confirm unchanged service PID/start, active scheduler and all matching served assets.
 
-Candidate `unfinished-recovery-family-ui-v2-20261013` is implemented and verified in the isolated checkout
-`/home/codex/checkouts/linko-unfinished-recovery-20261013`. Exact helper manifest is the preparation
-receipt. **Not deployed; new owner deployment request required.** Includes assignment job follow-up/
-internal idle recovery, redundant recording Stop removal, catalog latest-family resolution with exact
-assignment continuity, long Tasks wrapping, and distinct family-button backgrounds. Existing 2×2
-navigation, rich-red theme, manual chat scrolling and owner controls are retained.
+Integrated release: `integrated-recovery-append-popup-v1-20261013` in
+`/home/codex/checkouts/linko-integrated-deliveries-20261013`. This combines the three completed
+independent deliveries without reimplementing them: unfinished-recovery-family-ui-v2, manager-append-rule-v1
+and popup-cleanup-v1, all dated 20261013. Owner explicitly authorized deployment after their reports;
+that authorization persists. The manager reviews and calls `deploy_release` with this integrated ID.
+The integration worker does not request deployment, restart the service or alter production state.
+Prepared status requires the exact manifest at `/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/integrated-recovery-append-popup-v1-20261013/manifest.json`;
+only this release's own later succeeded result receipt establishes deployed status.
 
-Evidence-backed interruption diagnosis: an authenticated interrupt request stopped the exact version
-reply at 12:03:07 +04. No retained gesture trace establishes why it was sent; audio provider 502s do not
-prove a causal link. Browser capture/picker flows produced zero manager interrupt requests. Future stops
-get endpoint-specific durable audit. Existing History editor Cancel lacks a handler; Escape works, and
-that unrelated issue remains pending. No physical-device gesture reproduction or paid STT test claimed.
+Lasting candidate effects: durable assignment follow-up and idle recovery respecting owner holds;
+latest supported catalog version within the chosen family for new work, exact retained routes for
+existing assignments/recovery; separate recording Stop removed while Record toggles stop/transcribe;
+long Tasks names wrap; model-family buttons have distinct subtle red backgrounds; concise manager
+pause/append scope; lean 5 hour/Weekly usage with last successful refresh time; project-menu layering
+and input corrected. Existing 2×2 navigation, recording Upload/cancellation/replacement, drafts,
+attachments, manual chat scrolling, rich-red theme, lifecycle controls and live base remain.
+No schema/dependency change, separate router or new supervision service is introduced.
 
-Deployed model mapping pins Sol to gpt-6.1-sol. Observed manager Sol/Low and bot Sol/Medium match
-native runtime; saved Bot mode is Automatic (Astra denied). Fresh authenticated catalog supports latest
-Luna gpt-6-luna, Sol gpt-6.1-sol and Astra gpt-6-astra. Candidate resolves future new work within the
-chosen family; interrupted turns and assignments keep the exact recorded pair. Missing/denied/unsupported
-routes block conservatively. Full factual/verification/preparation references for the manager's one routine
-recent-delivery entry: `/home/codex/.local/share/linko-bot-manager/deployments/unfinished-recovery-20261013/REPORT.md` and `manager-summary.json`.
+Owner pauses, waits, cancellations, deferred To-Do and unrelated unfinished work remain respected.
+The History editor Cancel handler remains an unrelated pre-existing follow-up (Escape works).
+Historical interruption was caused immediately by an authenticated interrupt request; triggering gesture
+and STT-provider 502 cause remain unknown. Physical-device/native picker and paid STT acceptance are
+not claimed. Original model/catalog observations are historical snapshots, not current settings claims.
 
 Authoritative contracts: [recovery](docs/AUTOMATIC_RECOVERY.md), [models](docs/MODEL_SETTINGS.md),
-[audio](docs/AUDIO.md), [UI](docs/UI_THEME.md), [project memory](docs/PROJECT_MEMORY.md).
-Earlier milestone state and full history remain in Git/private receipts. Production database, native threads,
-owner notes, project work and unrelated services are unchanged by candidate preparation.
+[audio](docs/AUDIO.md), [controls](docs/AGENT_CONTROLS.md), [UI](docs/UI_THEME.md),
+[usage/project popup](docs/CODEX_USAGE.md), [memory](docs/PROJECT_MEMORY.md),
+[deployment](docs/DEPLOYMENT_HELPER.md). Full report, source mapping, verification and manager routine
+brief/recent-delivery facts: `/home/codex/.local/share/linko-bot-manager/deployments/integrated-deliveries-20261013/REPORT.md` and sibling `manager-summary.json`.
+Earlier state remains in Git and original private reports/receipts. No full memory reconciliation.

@@ -1,7 +1,9 @@
 # Controlled deployment helper — 2026-10-12
 
 Implementation is prepared in `/home/codex/checkouts/linko-deploy-helper-20261012`.
-**First manager activation is pending.** The independent helper can be installed while a worker is active;
+**The helper is active; first activation succeeded.** Current live is navigation/audio v2,
+with exact succeeded receipt linked in [STATE.md](../STATE.md). The bootstrap procedure below is historical;
+this integrated delivery uses manager-controlled `deploy_release` after its required preparation gate. The independent helper can be installed while a worker is active;
 installation starts only `linko-deployment-helper.service` and never restarts the manager.
 The observed combined startup-selection/zero-Tasks-badge/To-Do/Markdown release is already live at
 `7999d1a5b4dbaeeeaea506553b90d58090cb6fce`, schema11. Existing pending-release docs are historical;
