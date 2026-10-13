@@ -76,8 +76,12 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     bottom = page.locator('#usage-button').bounding_box()
                     nav = page.locator('.navigation').bounding_box()
                     settings_button = page.locator('#model-settings-button').bounding_box()
-                    assert top['x'] == settings_button['x']
-                    assert bottom['x'] + 44 + 4 == settings_button['x']
+                    chat_button = page.locator('#chat-menu-button').bounding_box()
+                    assert top['x'] == chat_button['x']
+                    assert bottom['x'] == settings_button['x']
+                    assert top['x'] + 44 + 4 == settings_button['x']
+                    assert top['y'] == settings_button['y']
+                    assert bottom['y'] == chat_button['y']
                     assert top['width'] == bottom['width'] == settings_button['width'] == 44
                     assert top['height'] == bottom['height'] == 44
                     assert 0 < bottom['y']-top['y'] < 55 and nav['height'] <= 100

@@ -1,6 +1,6 @@
 # Navigation/audio successor — verified candidate, 2026-10-13
 
-Exact candidate `nav-audio-upload-v1-20261013` aligns navigation squares in two columns and adds recording
+Exact candidate `nav-audio-upload-v2-20261013` aligns navigation squares in two columns and adds recording
 Upload with selection-only replacement and stale-session protection. Contract, validation limits,
 exact preparation gate and full report: [audio](docs/AUDIO.md). Activation remains pending owner
 instruction; no deployment/restart requested or performed for this delivery.

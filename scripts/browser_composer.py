@@ -66,6 +66,12 @@ def main():
                     activate('#microphone')
                     target.wait_for_function("()=>audioState.session?.phase==='recording'&&audioState.session.bytes>0")
                     assert target.evaluate("document.activeElement===$('message-input')&&draftBlurs===0")
+                    with target.expect_file_chooser() as audio_cancel:
+                        activate('#audio-upload')
+                    assert not audio_cancel.value.is_multiple()
+                    assert target.evaluate("document.activeElement===$('message-input')&&draftBlurs===0&&audioState.session.phase==='recording'")
+                    audio_cancel.value.set_files([])
+                    assert target.evaluate("audioState.session.phase==='recording'&&document.activeElement===$('message-input')")
                     activate('#audio-cancel')
                     assert target.evaluate("document.activeElement===$('message-input')&&draftBlurs===0&&!audioState.session")
                     if device == 'touch':
@@ -242,12 +248,12 @@ def main():
                     assert composer['height'] <= 160 and composer['y']+composer['height'] <= height
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     assert page.locator('#audio-stop').is_visible() and page.locator('#audio-cancel').is_visible()
-                    recording_controls=[page.locator('#'+id).bounding_box() for id in ('audio-stop','audio-cancel')]
+                    recording_controls=[page.locator('#'+id).bounding_box() for id in ('audio-stop','audio-cancel','audio-upload')]
                     input_box=page.locator('.composer-input').bounding_box()
                     assert all(box['height']>=44 and box['width']>=64 for box in recording_controls)
                     assert abs(recording_controls[-1]['x']+recording_controls[-1]['width']-(input_box['x']+input_box['width']))<1
                     assert recording_controls[-1]['x']>=input_box['x']+input_box['width']/2
-                    assert all(page.evaluate('(id)=>{const b=$(id).getBoundingClientRect();return document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===$(id)}',id) for id in ('audio-stop','audio-cancel','attach','send','microphone'))
+                    assert all(page.evaluate('(id)=>{const b=$(id).getBoundingClientRect();return document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===$(id)}',id) for id in ('audio-stop','audio-cancel','audio-upload','attach','send','microphone'))
                     page.screenshot(path=f'/tmp/linko-compact-composer-{width}.png')
                     geometry.append({'viewport': [width,height], 'composer': composer, 'controls': boxes, 'recording_controls': recording_controls})
                     page.locator('#audio-cancel').click()

@@ -1,8 +1,8 @@
 # Navigation symmetry and recording Upload — 2026-10-13
 
-Candidate release `nav-audio-upload-v1-20261013` in `/home/codex/checkouts/linko-nav-audio-upload-20261013`.
+Candidate release `nav-audio-upload-v2-20261013` in `/home/codex/checkouts/linko-nav-audio-upload-20261013`.
 Implemented and Chromium-verified; preparation is established only by the exact manifest at
-`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/nav-audio-upload-v1-20261013/manifest.json`.
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/nav-audio-upload-v2-20261013/manifest.json`.
 **Do not deploy:** this objective authorizes preparation only. Full evidence: [/home/codex/.local/share/linko-bot-manager/deployments/nav-audio-upload-20261013/REPORT.md](/home/codex/.local/share/linko-bot-manager/deployments/nav-audio-upload-20261013/REPORT.md).
 
 Recording displays Stop, Discard and Upload together. Upload synchronously opens a single-file

@@ -1,6 +1,6 @@
 # Navigation/audio delivery — verified candidate; do not deploy, 2026-10-13
 
-One complete delivery: `nav-audio-upload-v1-20261013`. Candidate checkout:
+One complete delivery: `nav-audio-upload-v2-20261013`. Candidate checkout:
 `/home/codex/checkouts/linko-nav-audio-upload-20261013`. Full report: `/home/codex/.local/share/linko-bot-manager/deployments/nav-audio-upload-20261013/REPORT.md`;
 manager update: `/home/codex/.local/share/linko-bot-manager/deployments/nav-audio-upload-20261013/manager-summary.json`. Behavior/evidence contract: [audio](docs/AUDIO.md).
 Manager routine brief/recent delivery should record implemented/verified, prepared only after the
