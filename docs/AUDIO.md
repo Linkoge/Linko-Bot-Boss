@@ -1,3 +1,10 @@
+# Microphone icon and general attachment separation — 2026-10-13
+
+See [chat attachment contract](chat-history.md) for integrated prepared release,
+unrestricted + uploads during recording and retained original microphone asset.
+Audio-specific Upload remains provider-decided whole-file transcription; it is distinct
+from general attachments. No transcription format/routing or capture lifecycle changes.
+
 # Audio format pass-through — candidate, 2026-10-13
 
 Exact integrated candidate `audio-format-pass-through-usage-v1-20261013` in

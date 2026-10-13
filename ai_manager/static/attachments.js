@@ -5,7 +5,7 @@ function saveAttachments(){sessionStorage.setItem('linko-attachments-v1',JSON.st
 function clearSentAttachments(project,ids){attachmentState.drafts.set(project,attachmentDraft(project).filter(file=>!ids.includes(file.id)));saveAttachments();renderAttachments();}
 function renderAttachments(){
   const files=attachmentDraft(state.project),list=$('attachment-list');list.replaceChildren();list.hidden=!files.length;
-  for(const file of files){const row=element('div'),link=element('a',file.name);link.href='/api/attachments/'+file.id;link.download=file.name;const remove=element('button','×');remove.type='button';remove.setAttribute('aria-label','Remove '+file.name+' from draft');remove.disabled=state.pending.has(state.project)||submissions.has(state.project);remove.onclick=()=>clearSentAttachments(state.project,[file.id]);row.append(link,remove);list.append(row);}
+  for(const file of files){const row=element('div'),link=element('a',file.name);link.href='/api/attachments/'+file.id;link.download=file.name;link.title=file.handling||'File attachment; interpretation depends on format and provider';const remove=element('button','×');remove.type='button';remove.setAttribute('aria-label','Remove '+file.name+' from draft');remove.disabled=state.pending.has(state.project)||submissions.has(state.project);remove.onclick=()=>clearSentAttachments(state.project,[file.id]);row.append(link,remove);list.append(row);}
   const uploading=attachmentState.uploads.has(state.project);
   $('attach').disabled=uploading||state.pending.has(state.project)||submissions.has(state.project)||!state.history;
   $('attachment-status').hidden=!uploading;$('attachment-status').textContent=uploading?'Uploading…':'';
@@ -63,7 +63,7 @@ function renderMessageAttachments(row,message){
   row.dataset.attachments=JSON.stringify(message.attachments||[]);row.querySelector('.message-attachments')?.remove();
   if(!message.attachments?.length)return;
   const links=element('div',undefined,'message-attachments');
-  for(const file of message.attachments){const link=element('a',file.name);link.href='/api/attachments/'+file.id;link.download=file.name;links.append(link);}
+  for(const file of message.attachments){const link=element('a',file.name);link.href='/api/attachments/'+file.id;link.download=file.name;link.title=file.handling||'File attachment; interpretation depends on format and provider';links.append(link);}
   row.append(links);
 }
 renderAttachments();

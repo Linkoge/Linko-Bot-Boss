@@ -283,6 +283,41 @@ def main():
                 stop()
                 assert 'STALE' not in page.locator('#message-input').input_value()
                 assert page.locator('#message-input').input_value().endswith('\n\nrecording 4')
+                # SVG/unknown MIME and audio use the general picker during recording;
+                # they remain attachments and never trigger STT or execute script.
+                page.locator('#microphone').click()
+                page.wait_for_function("()=>audioState.session?.phase==='recording'")
+                stt = []
+                page.on('request', lambda request: stt.append(request.url) if '/api/audio/transcribe' in request.url else None)
+                for name, mime, data in [('active.svg','image/svg+xml',b'<svg><script>window.attachmentExecuted=true</script></svg>'),
+                                         ('owner.unknown','application/x-unknown',b'\x00\xffdata'),
+                                         ('clip.mp3','audio/mpeg',b'ID3audio')]:
+                    with page.expect_file_chooser() as generic:
+                        page.locator('#attach').click()
+                    generic.value.set_files({'name': name, 'mimeType': mime, 'buffer': data})
+                    page.wait_for_function('()=>attachmentDraft(state.project).length===1&&!attachmentState.uploads.size')
+                    generic_id=page.evaluate('attachmentDraft(state.project)[0].id')
+                    receipt=page.request.get(url+'/api/attachments/'+generic_id)
+                    assert receipt.body()==data and receipt.headers['content-type']=='application/octet-stream'
+                    assert receipt.headers['content-disposition'].startswith('attachment;')
+                    assert not page.evaluate('Boolean(window.attachmentExecuted)')
+                    assert page.evaluate("audioState.session.phase")=='recording' and not stt
+                    page.locator('#attachment-list button').click()
+                page.locator('#audio-cancel').click()
+                page.wait_for_function('()=>!audioState.session')
+                # Monochrome icon geometry and accessible states on mobile and desktop.
+                for width in [1440,393,320]:
+                    page.set_viewport_size({'width':width,'height':900})
+                    page.locator('#message-input').focus()
+                    page.wait_for_function("()=>!$('send').hidden")
+                    icon=page.locator('#microphone svg')
+                    assert icon.get_attribute('viewBox')=='-3 0 19 19'
+                    assert icon.get_attribute('aria-hidden')=='true'
+                    assert page.locator('#microphone').get_attribute('aria-label')=='Record microphone'
+                    assert icon.evaluate('(e)=>getComputedStyle(e).fill===getComputedStyle(e.parentElement).color')
+                    assert icon.bounding_box()['width']==24 and icon.bounding_box()['height']==24
+                    page.screenshot(path=str(Path(os.environ.get('LINKO_EVIDENCE_DIR', str(root))) / f'microphone-{width}.png'))
+                page.set_viewport_size({'width':393,'height':851})
                 # Native upload bytes survive Send/lost receipt/reload and remain downloadable in history.
                 assert page.locator('#attach').is_enabled()
                 with page.expect_file_chooser() as upload:
@@ -293,7 +328,8 @@ def main():
                 assert page.request.get(url+'/api/attachments/'+identifier).body() == b'real file contents'
                 page.locator('#attachment-input').set_input_files({'name': 'wrong.heic', 'mimeType': 'image/heic', 'buffer': b'not supported'})
                 page.wait_for_function('()=>!attachmentState.uploads.size')
-                assert 'Convert' in page.locator('#notice-text').inner_text()
+                assert page.evaluate('attachmentDraft(state.project).length') == 2
+                page.locator('#attachment-list button').nth(1).click()
                 assert page.evaluate('attachmentDraft(state.project).length') == 1
                 def drop(route):
                     assert route.fetch().status == 200

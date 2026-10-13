@@ -1,3 +1,11 @@
+# Integrated microphone and any-format files — preparation only
+
+Use `microphone-any-files-composer-v1-20261013` as the combined future activation target,
+including the preceding composer/tab/Send work. No deployment is requested or performed.
+Details, evidence, manager routine update and pending work are in
+`/home/codex/.local/share/linko-bot-manager/deployments/microphone-any-files-20261013/REPORT.md`;
+current contract: docs/chat-history.md. Preserve original microphone assets and all owner holds.
+
 # Compact expanding composer — 2026-10-13, deployment pending
 
 Exact release: `compact-expanding-composer-v2-20261013`; isolated checkout

@@ -44,3 +44,9 @@ Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
   three-control active, one further square-control increment for overflow, bounded draft scrolling;
   muted caret follows supported keyboard signals, gray composer focus border, blank empty chat.
   Send shares Upload appearance; selected workspace category text stays red without an underline.
+
+- General attachments accept arbitrary formats including SVG and unknown MIME/extensions,
+  with existing size/resource/auth/storage protections. No unsafe SVG/HTML rendering or
+  generic-to-STT routing. Only verified supported raster bytes become native image input;
+  files/provider limitations remain honest. Owner microphone SVG and original recoverable
+  asset provenance: ai_manager/static/icons/README.md; contract: docs/chat-history.md.

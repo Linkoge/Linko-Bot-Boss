@@ -1,3 +1,14 @@
+# Integrated microphone/files candidate — 2026-10-13
+
+Current candidate `microphone-any-files-composer-v1-20261013` integrates completed
+composer release `compact-expanding-composer-v2-20261013` without competing edits.
+Exact preparation requires its immutable manifest. Implemented; validation/report records
+actual outcomes. Not deployed; owner request and durable succeeded receipt remain pending.
+Report and manager facts: `/home/codex/.local/share/linko-bot-manager/deployments/microphone-any-files-20261013/REPORT.md`
+and sibling manager-summary.json. Current live base is cd0b3ec, succeeded receipt
+`deployment-helper/results/f62b8538f5233c8957cbf5da873a8772.json`.
+See docs/chat-history.md and asset README for format/security/icon behavior and restoration.
+
 # Current established state — 2026-10-13
 
 Live `audio-format-pass-through-usage-v1-20261013`, commit

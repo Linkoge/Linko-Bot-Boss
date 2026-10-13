@@ -179,3 +179,5 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .composer textarea{height:auto;min-height:32px;max-height:none;overflow-y:auto}
 .composer.composer-caret #message-input{caret-color:#77808e}
 .composer:focus-within{border-color:#3a4858;box-shadow:none}
+
+.microphone-icon{width:24px;height:24px;display:block;margin:auto;fill:currentColor;pointer-events:none}

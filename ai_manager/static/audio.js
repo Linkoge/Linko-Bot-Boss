@@ -1,6 +1,8 @@
 'use strict';
 // A recording belongs to its originating project, conversation and mode for its entire lifetime.
 const audioState={session:null};
+// Clone trusted repository markup only; uploaded SVG files never enter the DOM.
+const microphoneIcon=$('microphone').firstElementChild.cloneNode(true);
 function audioSupported(){return window.isSecureContext&&navigator.mediaDevices?.getUserMedia&&window.MediaRecorder;}
 function renderAudio(){
   const session=audioState.session,phase=session?.phase;
@@ -9,7 +11,8 @@ function renderAudio(){
   $('audio-status').textContent=recording?session.message:session?`${session.label} · ${session.message||({starting:'Requesting microphone…',recording:'Recording',stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
   $('audio-cancel').disabled=phase==='sending';
   $('audio-download').hidden=!session?.blob;
-  $('microphone').textContent=recording?'■':phase==='error'?'Retry':'🎙';
+  if(recording||phase==='error')$('microphone').textContent=recording?'■':'Retry';
+  else $('microphone').replaceChildren(microphoneIcon.cloneNode(true));
   $('microphone').setAttribute('aria-label',recording?'Stop recording and transcribe':phase==='error'?'Retry recording transcription':'Record microphone');
   $('microphone').title=audioSupported()?'Record microphone':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
   $('microphone').disabled=audioState.loading||busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));

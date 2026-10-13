@@ -639,6 +639,9 @@ async def test_uploaded_files_and_photos_reach_delegated_worker(system):
     path = settings.data_dir / 'test-photo.png'
     path.write_bytes(b'fixture; native image bytes are validated by upload tests')
     refs = [{'id': 'a'*32, 'name': 'photo.png', 'mime': 'image/png', 'path': str(path), 'sha256': 'fixture', 'size': 1}]
+    refs.extend([{'id': 'b'*32, 'name': 'active.svg', 'mime': 'image/svg+xml', 'path': str(path),
+                  'native_image': False}, {'id': 'c'*32, 'name': 'bad.png', 'mime': 'image/png',
+                  'path': str(path), 'native_image': False}])
     db.set_setting('execution_attachments:origin-manager', refs)
     captured = []
     class AttachmentFixture(NativeFixture):
@@ -656,5 +659,6 @@ async def test_uploaded_files_and_photos_reach_delegated_worker(system):
     assert claimed['id'] == task['id']
     workers.launch(claimed)
     await settled(workers)
+    assert len(captured[0]) == 2
     assert captured[0][1] == {'type': 'localImage', 'path': str(path)}
     assert json.loads(captured[0][0]['text'])['task_context']['attachments'] == refs

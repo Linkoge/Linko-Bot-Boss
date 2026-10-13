@@ -17,6 +17,11 @@ MAX_STORAGE = 512 * 1024 * 1024
 IMAGES = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp'}
 
 
+def native_image(item):
+    # Legacy image references were validated on upload. New ones carry an explicit hint.
+    return item.get('native_image', item.get('mime') in IMAGES)
+
+
 def backup_attachments(data_dir, database_snapshot, destination):
     """Copy exactly the immutable uploads referenced by an already verified DB snapshot."""
     destination.mkdir(mode=0o700)
@@ -66,7 +71,10 @@ class Attachments:
 
     def reference(self, item):
         return {'id': item['id'], 'name': item['name'], 'mime': item['mime'], 'size': item['size'],
-                'path': str(self.root / item['stored_name']), 'sha256': item['sha256']}
+                'path': str(self.root / item['stored_name']), 'sha256': item['sha256'],
+                'native_image': native_image(item),
+                'handling': 'native image; provider support may vary' if native_image(item) else
+                            'file bytes for tool inspection; interpretation is not guaranteed'}
 
     async def upload(self, request, name, project, conversation):
         chat = self.db.one('SELECT * FROM conversations WHERE id=? AND project_id IS ? AND context=?',
@@ -76,8 +84,6 @@ class Attachments:
         if not name or len(name) > 180 or any(ord(c) < 32 for c in name) or '/' in name or '\\' in name:
             raise HTTPException(422, 'Use a filename of at most 180 characters without path separators.')
         mime = request.headers.get('content-type', '').split(';')[0].lower()
-        if mime.startswith('image/') and mime not in IMAGES:
-            raise HTTPException(415, 'Photos support PNG, JPEG and WebP. Convert HEIC/SVG or other images first.')
         if self.busy:
             raise HTTPException(429, 'Another file is uploading. Retry shortly.')
         self.busy = True
@@ -99,38 +105,44 @@ class Attachments:
             with path.open('xb') as file:
                 path.chmod(0o600)
                 file.write(data)
+            image_ready = False
             if mime in IMAGES:
                 # Bound parser output/time/allocation and decoded image dimensions.
                 signatures = {'image/png': data.startswith(b'\x89PNG\r\n\x1a\n'),
                               'image/jpeg': data.startswith(b'\xff\xd8\xff'),
                               'image/webp': data[:4] == b'RIFF' and data[8:12] == b'WEBP'}
-                if not signatures[mime]:
-                    raise HTTPException(415, 'Photo content does not match its format.')
-                process = await asyncio.create_subprocess_exec(
-                    self.settings.audio_probe, '-v', 'error', '-max_alloc', '16777216',
-                    '-protocol_whitelist', 'file', '-i', str(path), '-show_entries',
-                    'stream=width,height,codec_name', '-of', 'json', stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.DEVNULL)
-                try:
-                    output, _ = await asyncio.wait_for(process.communicate(), 10)
-                except BaseException:
-                    if process.returncode is None:
-                        process.kill()
-                    await process.wait()
-                    raise
-                streams = json.loads(output).get('streams', []) if not process.returncode else []
-                codecs = {'image/png': 'png', 'image/jpeg': 'mjpeg', 'image/webp': 'webp'}
-                if not streams or any(s.get('codec_name') != codecs[mime] or
-                                      not 0 < s.get('width', 0) * s.get('height', 0) <= 20000000 for s in streams):
-                    raise HTTPException(422, 'Photo is unreadable or exceeds 20 megapixels.')
+                # Unsupported/mislabeled files remain attachments, never native image input.
+                if signatures[mime]:
+                    try:
+                        process = await asyncio.create_subprocess_exec(
+                            self.settings.audio_probe, '-v', 'error', '-max_alloc', '16777216',
+                            '-protocol_whitelist', 'file', '-i', str(path), '-show_entries',
+                            'stream=width,height,codec_name', '-of', 'json', stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.DEVNULL)
+                        try:
+                            output, _ = await asyncio.wait_for(process.communicate(), 10)
+                        except BaseException:
+                            if process.returncode is None:
+                                process.kill()
+                            await process.wait()
+                            raise
+                        streams = json.loads(output).get('streams', []) if not process.returncode else []
+                        codecs = {'image/png': 'png', 'image/jpeg': 'mjpeg', 'image/webp': 'webp'}
+                        if any(s.get('width', 0) * s.get('height', 0) > 20000000 for s in streams):
+                            raise HTTPException(422, 'Photo exceeds 20 megapixels.')
+                        image_ready = bool(streams) and all(s.get('codec_name') == codecs[mime] and
+                            0 < s.get('width', 0) * s.get('height', 0) <= 20000000 for s in streams)
+                    except (TimeoutError, OSError, ValueError):
+                        image_ready = False
             item = {'id': identifier, 'stored_name': stored, 'name': name, 'mime': mime,
-                    'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
+                    'native_image': image_ready, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
                     'project_id': project, 'conversation_id': conversation, 'created_at': time.time()}
             self.db.set_setting('attachment:' + identifier, item)
             path = None
-            return {k: item[k] for k in ('id', 'name', 'mime', 'size')}
+            return {**{k: item[k] for k in ('id', 'name', 'mime', 'size')},
+                    'handling': self.reference(item)['handling']}
         except (TimeoutError, OSError, ValueError):
-            raise HTTPException(422, 'Upload validation failed. File was not accepted; retry or convert it.') from None
+            raise HTTPException(422, 'Upload validation failed. File was not accepted; retry.') from None
         finally:
             if path:
                 path.unlink(missing_ok=True)

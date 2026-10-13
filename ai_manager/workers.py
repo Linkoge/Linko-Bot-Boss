@@ -4,6 +4,7 @@ import asyncio
 import json
 import time
 
+from .attachments import native_image
 from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
 from .model_settings import RouteBlocked
@@ -190,7 +191,7 @@ class Workers:
             native_input = [{"type": "text", "text": json.dumps(prompt)}]
             native_input.extend({'type': 'localImage', 'path': item['path']} for item in
                                 full_prompt.get('task_context', {}).get('attachments', [])
-                                if item['mime'].startswith('image/'))
+                                if native_image(item))
             turn = await server.request(
                 "turn/start",
                 {

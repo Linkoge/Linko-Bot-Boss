@@ -1,3 +1,38 @@
+# General file formats and microphone — prepared candidate, 2026-10-13
+
+Integrated release `microphone-any-files-composer-v1-20261013` descends from the exact
+completed composer release `compact-expanding-composer-v2-20261013`, commit
+`14426988467ebee684c98a0b0c054dfac72655f2`. Composer expansion, caret/keyboard behavior,
+blank chat, Send/tab styling and latest live audio pass-through are preserved.
+Candidate: `/home/codex/checkouts/linko-microphone-any-files-20261013`.
+Preparation requires its exact deployment-helper manifest; deployment awaits owner request.
+Evidence/report: `/home/codex/.local/share/linko-bot-manager/deployments/microphone-any-files-20261013/REPORT.md`.
+
+General + picker has no accept/capture filter, extension list or MIME admission list.
+Backend accepts arbitrary formats including SVG, HTML, HEIC, unknown/binary and
+mislabeled image bytes. The former image/* rejection caused SVG failures; removed.
+PNG/JPEG/WebP signature/probe checks now choose native-image handling only, never
+reject unsupported/unreadable formats. Decoded images above 20 megapixels still
+reject as a resource limit. Probe allocation/deadline/protocol restrictions remain;
+unavailable/timed-out parser falls back to file bytes. Explicit native_image metadata
+controls both manager and delegated-worker image input; legacy supported-image
+references remain compatible. Other files retain private paths/checksums and honest
+handling hints; provider interpretation is not promised. No generic upload invokes STT.
+
+Four files/message, nonempty 8 MiB/file, 512 MiB storage, bounded upload time,
+safe basename/generated storage names, private permissions, owner auth/CSRF/origin,
+chat scope, checksum/replay and backups remain. User files appear only as text-created
+filename/download links. Authenticated downloads always use octet-stream, attachment
+disposition and nosniff; SVG/HTML bytes are never inserted into DOM or inline previews.
+General + uploads remain available during recording and retain capture/attachments.
+Audio-specific Upload still replaces capture and uses provider-decided full-file STT
+with its separate 32 MiB/duration limits; draft append/Retry/Discard/Send remain.
+
+Normal microphone uses the exact owner-linked SVG path, currentColor, centered 24px
+inside the shared 44px controls. Stop square/Retry and state-specific accessible names
+remain. Original source and original realistic emoji markup are durably retained:
+[asset provenance and restoration](../ai_manager/static/icons/README.md).
+
 # Compact expanding composer and blank conversation — 2026-10-13
 
 Exact candidate `compact-expanding-composer-v2-20261013`, checkout
@@ -86,8 +121,8 @@ activation/Tab remain native. Send keeps its default focus behavior and may dism
 Upload synchronously clicks the native file input inside the trusted + click, without awaiting,
 deferring or blurring. The visually clipped input is rendered, outside Tab order, with multiple
 selection and no restrictive accept/capture filter, allowing files and photo sources offered by
-the browser/OS. Server signature/size/format restrictions remain authoritative, including the
-existing HEIC conversion error. The input does not overlay/intercept any visible control.
+the browser/OS. Size/resource limits remain authoritative; general file formats are unrestricted as
+described in the current section above. The input does not overlay/intercept any visible control.
 
 Picker open captures project, conversation, selection identity and focused draft/caret. Change,
 cancel and window/visibility return restore the formerly focused draft with `preventScroll`
@@ -135,9 +170,9 @@ owner-authenticated download links; messages and archived history retain downloa
 
 Uploads are real owner-only, CSRF-protected raw-byte uploads, scoped to the exact project
 and conversation. Four per message, 8 MiB each, 512 MiB retained storage cap. Empty files,
-unsafe names, wrong chat scope and invalid photos reject without upload success. PNG/JPEG/WebP
-have signature/ffprobe format and 20 megapixel checks; HEIC/SVG/other photo formats require
-conversion. Other files remain bytes for native tools to read; there is no promise that any
+unsafe names and wrong chat scope reject without upload success. PNG/JPEG/WebP
+signature/ffprobe checks select native image handling, with a retained 20 megapixel
+resource limit; other formats remain file bytes without conversion requirements. Other files remain bytes for native tools to read; there is no promise that any
 arbitrary binary file is understood. Generated immutable private paths/checksums live under
 `DATA/chat-workspace/attachments`; existing settings store metadata, so no schema/dependency
 migration. Chat intake stores execution attachment references atomically, binds them to
