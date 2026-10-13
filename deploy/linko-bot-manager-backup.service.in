@@ -1,5 +1,5 @@
 [Unit]
-Description=AI Manager verified local database backup
+Description=Linko Bot Boss verified local database backup
 
 [Service]
 Type=oneshot

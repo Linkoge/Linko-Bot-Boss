@@ -1,3 +1,13 @@
+# Repository rename — candidate, 2026-10-13
+
+Live Git origin and existing project registry now point to `git@github.com:Linkoge/Linko-Bot-Boss.git`; registry name is `Linko-Bot-Boss`, revision 5, with owner display name **Bot Boss** and original ID/path retained. This is an immediate metadata change. No push, restart or deployment is authorized by this rename assignment.
+
+Application naming and active GitHub links are updated in the isolated candidate `/home/codex/checkouts/linko-bot-boss-rename-20261013`, descended from exact pending To-Do/chat commit `6c42d5b368731cb8615f4726e25bc29b085c16c6`. The original immutable release `todo-handoff-chat-trash-recording-agents-v1-20261013` is preserved. This integrated candidate is intended for exact preparation as `repo-rename-todo-chat-v1-20261013`; only its immutable manifest establishes preparation.
+
+Actual live code remains succeeded PWA commit `3bb554b7efa26d8fae695c5340e8a12366d75339`, receipt `deployment-helper/results/09f882af21fb28ab5870da74fee1c3b6.json`. The earlier audit's deployment authorization did not establish activation; its manager deploy call from an internal-result turn was rejected. Rename work must not deploy. Older status/authorization statements below remain historical.
+
+Full evidence, verification outcomes and manager routine brief/recent-delivery facts: `/home/codex/.local/share/linko-bot-manager/deployments/repo-rename-20261013/REPORT.md` and sibling `manager-summary.json`. Compatibility names are documented in PROJECT.md. Application/PWA title changes and the preserved To-Do/chat bundle remain pending a separate successful controlled deployment receipt.
+
 # Bundled To-Do / current-chat handoff — no deployment, 2026-10-13
 
 Use the current STATE.md section and `/home/codex/.local/share/linko-bot-manager/deployments/todo-chat-20261013/REPORT.md` / sibling manager-summary.json.

@@ -274,7 +274,7 @@ async function loadHistory(selection=state.selection){
   updateChatActions();
 }
 function messageText(m){if(m.attachments?.length&&!m.content)return '';return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Queued':'Thinking…');}
-function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Codex result':'AI Manager';}
+function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Codex result':'Bot Boss';}
 function chatHasSelection(node=$('messages')){const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&selection.containsNode(node,true);}
 function updateMessageContent(node,text,role='assistant'){
   const markdown=role==='assistant'||role==='worker';

@@ -1,5 +1,5 @@
 [Unit]
-Description=AI Manager persistent private portfolio service
+Description=Linko Bot Boss persistent private portfolio service
 After=network-online.target
 Wants=network-online.target
 

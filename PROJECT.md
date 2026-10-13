@@ -1,4 +1,9 @@
-# Linko Bot Manager
+# Linko Bot Boss
+
+Repository: [Linkoge/Linko-Bot-Boss](https://github.com/Linkoge/Linko-Bot-Boss). The existing project ID is `29018771ce9842f2bb52afb7dcf491d0`; owner display name remains **Bot Boss**.
+
+The repository/product rename preserves `/home/codex/projects/Linko-Bot-Manager`, Python package `ai_manager`, distribution `linko-bot-manager`, `AI_MANAGER_*` configuration, `linko_bot_manager` native client identity, existing service/data names, browser storage keys and private URLs. These identify the installed runtime and retained history, and require a separate migration if ever changed. PWA ID `/`, scope/start URL and icon artwork remain stable.
+
 
 A single-owner conversational interface and lightweight orchestrator for a software portfolio.
 

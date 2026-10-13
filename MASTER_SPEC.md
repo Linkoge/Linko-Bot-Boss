@@ -1,4 +1,4 @@
-# Linko Bot Manager requirements
+# Linko Bot Boss requirements
 
 Current architecture, superseding prior supervision requirements as authorized on 2026-10-11:
 

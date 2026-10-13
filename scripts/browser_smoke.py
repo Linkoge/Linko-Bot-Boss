@@ -96,7 +96,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                     chat_control(control)
                     page.wait_for_function(
                         "async () => (await navigator.clipboard.readText()) === "
-                        "'You:\\nDiscuss the project.\\n\\nAI Manager:\\nSaved streamed answer'"
+                        "'You:\\nDiscuss the project.\\n\\nBot Boss:\\nSaved streamed answer'"
                     )
                 chat_control("#archive-chat")
                 page.locator("#chat-archive-name").fill("Fixture archive")
@@ -106,7 +106,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("#history-results button").filter(has_text="Fixture archive").click()
                 page.locator("#history-detail-messages").get_by_text("Saved streamed answer", exact=True).wait_for()
                 assert page.locator('#history-detail-messages .avatar,#history-detail-messages strong').count() == 0
-                assert page.locator('#history-detail-messages .message.assistant').get_attribute('aria-label') == 'AI Manager'
+                assert page.locator('#history-detail-messages .message.assistant').get_attribute('aria-label') == 'Bot Boss'
 
                 page.locator("[data-view=settings]").click()
                 page.locator("#load-models").click()
@@ -146,13 +146,13 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 assert page.evaluate("window.getSelection().anchorNode === window.selectedNode")
                 chat_control("#copy-five")
                 expected = "\n\n".join(
-                    f"{'You' if i % 2 == 0 else 'AI Manager'}:\nFixture message {i}\nSecond line {i}"
+                    f"{'You' if i % 2 == 0 else 'Bot Boss'}:\nFixture message {i}\nSecond line {i}"
                     for i in range(420, 425)
                 )
                 page.wait_for_function("async text => (await navigator.clipboard.readText()) === text", arg=expected)
                 chat_control("#copy-all")
                 expected = "\n\n".join(
-                    f"{'You' if i % 2 == 0 else 'AI Manager'}:\nFixture message {i}\nSecond line {i}"
+                    f"{'You' if i % 2 == 0 else 'Bot Boss'}:\nFixture message {i}\nSecond line {i}"
                     for i in range(425)
                 )
                 page.wait_for_function("async text => (await navigator.clipboard.readText()) === text", arg=expected)
@@ -184,7 +184,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                     assert page.locator('#messages .avatar,#messages .message-label strong').count() == 0
                     assert page.locator('#messages .badge.completed').count() == 0
                     assert page.locator('#messages .message.user').first.get_attribute('aria-label') == 'You'
-                    assert page.locator('#messages .message.assistant').first.get_attribute('aria-label') == 'AI Manager'
+                    assert page.locator('#messages .message.assistant').first.get_attribute('aria-label') == 'Bot Boss'
                     square = page.locator('#chat-menu-button').bounding_box()
                     usage = page.locator('#usage-button').bounding_box()
                     assert square['width'] == square['height'] == 44

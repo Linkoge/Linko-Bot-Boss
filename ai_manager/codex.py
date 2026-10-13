@@ -126,7 +126,7 @@ class AppServer:
                 await self.request(
                     "initialize",
                     {
-                        "clientInfo": {"name": "linko_bot_manager", "title": "AI Manager", "version": "0.1.0"},
+                        "clientInfo": {"name": "linko_bot_manager", "title": "Linko Bot Boss", "version": "0.1.0"},
                         "capabilities": {"experimentalApi": True},
                     },
                 )

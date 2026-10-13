@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "Linko Bot Manager",
-  "short_name": "Linko",
+  "name": "Linko Bot Boss",
+  "short_name": "Bot Boss",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

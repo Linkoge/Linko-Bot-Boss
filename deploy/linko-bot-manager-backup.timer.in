@@ -1,5 +1,5 @@
 [Unit]
-Description=Daily AI Manager database backup
+Description=Daily Linko Bot Boss database backup
 
 [Timer]
 OnCalendar=daily

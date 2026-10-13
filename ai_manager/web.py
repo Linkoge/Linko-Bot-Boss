@@ -178,7 +178,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
             await chat.close()
             lock_file.close()
 
-    app = FastAPI(title="Linko Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Linko Bot Boss", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
     app.state.workers, app.state.scheduler = workers, scheduler
     app.state.audio = audio

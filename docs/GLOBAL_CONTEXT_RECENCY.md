@@ -52,7 +52,7 @@ Navigation-only rollback can revert the navigation code while retaining the harm
 
 ## What All Projects means
 
-Owner explanation: **All Projects is the global manager conversation and portfolio scope. The Linko-Bot-Manager tab supplies that repository's context. Selecting All Projects does not broadcast work.** Requests in Auto/Execute can explicitly delegate to intended projects; Conversation mode is read-only.
+Owner explanation: **All Projects is the global manager conversation and portfolio scope. The Linko-Bot-Boss project (displayed as Bot Boss) tab supplies that repository's context. Selecting All Projects does not broadcast work.** Requests in Auto/Execute can explicitly delegate to intended projects; Conversation mode is read-only.
 
 Evidence: `Chat.conversation` stores context `global` with null `project_id`, separately from the repository-ID conversation. `Chat.context(None)` provides registered projects' IDs/names/objectives/status and global instructions; `Chat.context(project_id)` supplies that project's path, objective, criteria, instructions, notes and assignments. Global Tasks/Agents views show portfolio records through the existing null filter. `selectProject` changes browser context/drafts and reads history (and Memory only when requested); it does not submit or delegate. `Scheduler.action` resolves an explicit target ID or selected project and rejects missing targets; `delegate` creates one task for that target, with an origin conversation. There is no selection-triggered loop over all repositories. Both manager conversations execute in the private chat workspace; project workers separately use the target repository. Global scope permits intentional cross-project coordination, not automatic changes to every project.
 
