@@ -134,6 +134,9 @@ class Tasks:
                 raise ValueError("Completed assignment has no unfinished work to stop")
             if action not in {"continue", "pause", "cancel"}:
                 raise ValueError("Unknown assignment action")
+            if action in {'pause', 'cancel'}:
+                from .deployment_intent import revoke
+                revoke(self.db, conn, 'Assignment '+action+' requested', task_id=task_id)
             if task["lease_owner"]:
                 if action == "continue":
                     raise ValueError("Wait for confirmed worker cleanup before resuming")

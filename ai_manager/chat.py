@@ -281,11 +281,16 @@ class Chat:
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         source = self.db.one("SELECT e.*,t.lifecycle AS task_status,t.blocker FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery_execution=?", (execution_id,))
         prompt = {"mode": mode, "message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
+        from .deployment_intent import Intents
+        intents = [v for v in Intents(self.db).list(conversation['project_id'])
+                   if v['conversation_id'] == conversation['id'] and v['status'] in {'recorded', 'reviewed', 'dispatch_failed'}]
+        if intents:
+            prompt['deployment_intents'] = intents
         if source:
             prompt["worker_result"] = self.result_notice(source)
         recovery_task = self.db.setting('execution_recovery:' + execution_id)
         if recovery_task:
-            prompt['message'] = 'Internal unfinished-work review; inspect this existing assignment and result only. Preserve owner holds. No deployment authorization.'
+            prompt['message'] = 'Internal unfinished-work review; inspect this existing assignment and result only. Preserve owner holds. No new deployment authorization; only a matching recorded owner intent may be reviewed/consumed.'
             prompt['assignment_followup'] = {'task_id': recovery_task, 'state': self.db.setting('assignment_workflow:' + recovery_task),
                                              'evidence_actions': ['read_task', 'read_result']}
 
@@ -725,6 +730,8 @@ class Chat:
             self.db.event(conn, 'chat.stop_requested', {'source': 'authenticated_owner_interrupt_endpoint'}, row['project_id'], execution_id=execution_id)
             from .assignment_workflow import hold_conversation
             hold_conversation(self.db, conn, row['conversation_id'], execution_id)
+            from .deployment_intent import revoke
+            revoke(self.db, conn, 'Owner stopped manager reply', conversation_id=row['conversation_id'])
         if row["status"] == "recovering" and execution_id not in self.jobs:
             if row["turn_id"] and self.server.process and row["pid"] == self.server.process.pid:
                 try:

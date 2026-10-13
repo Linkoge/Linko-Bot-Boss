@@ -6,7 +6,8 @@ import logging
 import time
 
 from .chat import internal_result
-from .deployment import Handoff
+from .deployment import Handoff, read
+from .deployment_intent import Intents
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
 from .tasks import Tasks
@@ -15,7 +16,7 @@ from .todos import Todos
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Record/update deferred ideas with save_todo (never schedules execution), retrieve list_todos, delegate, pause/cancel an assignment or append instructions and continue the same assignment, wait with a reason, pause/resume a project, or retrieve project documents, saved memory, assignments and conversation history. Read actions support offset pagination; history query searches older messages.",
+    "description": "Record/update deferred ideas, delegate/control assignments and projects, or retrieve scoped evidence/history. Deployment: record_deployment_intent from the current owner quote BEFORE async audit/preparation, review_deployment_intent against exact prepared evidence, then deploy_release with intent_id and release_id. Internal results may consume matching prior intent only. Later owner corrections require revise_deployment_intent preserve/revoke from the latest owner turn. New prepare-and-deploy delegation uses owner_deployment_quote. Read actions support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -23,6 +24,9 @@ MANAGER_TOOL = {
                 "type": "string",
                 "enum": [
                     "deploy_release",
+                    "record_deployment_intent",
+                    "review_deployment_intent",
+                    "revise_deployment_intent",
                     "deployment_status",
                     "list_todos",
                     "save_todo",
@@ -71,6 +75,10 @@ MANAGER_TOOL = {
                 "type": "object", "properties": {"id": {"type": "string"}, "revision": {"type": "integer"}},
                 "required": ["id", "revision"], "additionalProperties": False}},
             "release_id": {"type": "string"},
+            "intent_id": {"type": "string"},
+            "owner_deployment_quote": {"type": "string"},
+            "task_ids": {"type": "array", "items": {"type": "string"}},
+            "decision": {"type": "string", "enum": ["preserve", "revoke"]},
             "title": {"type": "string"},
             "details": {"type": "string"},
             "revision": {"type": "integer", "minimum": 0},
@@ -96,6 +104,7 @@ class Scheduler:
         self.error = ""
         self.followup_check_at = 0.0
         self.deployment = Handoff(settings.data_dir)
+        self.intents = Intents(db)
         self.deployment_busy = lambda: False
 
     async def manager_action(self, selected_project, params):
@@ -115,7 +124,7 @@ class Scheduler:
             sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
             if sources:
                 args = {**args, 'todos': sources}
-        if internal and action in {'deploy_release', 'resume_project'}:
+        if internal and (action == 'resume_project' or (action == 'deploy_release' and not args.get('intent_id'))):
             raise ValueError('Internal results/recovery are not owner authorization for deployment or project resume')
         if args.get("todos") and (internal or action not in {"delegate", "continue"}):
             raise ValueError("To-Do handoff requires explicit owner scheduling")
@@ -129,17 +138,21 @@ class Scheduler:
                              (workflow or {}).get('state') in {'owner_wait', 'deferred', 'complete'}):
                     raise ValueError('Owner pauses/waits are retained; explicit owner continuation is required')
         if action == 'deployment_status':
-            return self.deployment.status()
-        if action == 'deploy_release':
+            return {**self.deployment.status(), 'intents': self.intents.list(selected_project)}
+        if action in {'deploy_release', 'record_deployment_intent', 'review_deployment_intent', 'revise_deployment_intent'}:
             if params.get('mode') == 'conversation':
                 raise ValueError('Use Auto or Execute to request deployment')
-            from .deployment import read
             config = read(self.deployment.root / 'config.json')
-            if not config or (selected_project and self.registry.get(selected_project)['path'] != config['repo']):
+            project_id = args.get('project_id') or selected_project
+            if not project_id or (selected_project and project_id != selected_project) or not config or self.registry.get(project_id)['path'] != config['repo']:
                 raise ValueError('Deployment is available only for this manager or All Projects')
-            return self.deployment.request(args['release_id'], {
-                'project_id': selected_project, 'conversation_id': params['conversation_id'],
-                'execution_id': params['manager_execution_id']})
+            if action == 'record_deployment_intent':
+                return self.intents.record(project_id, params, args.get('owner_deployment_quote'), args.get('release_id'), args.get('task_ids'))
+            if action == 'revise_deployment_intent':
+                return self.intents.revise(project_id, params, args['intent_id'], args['decision'], args.get('reason', ''))
+            if action == 'review_deployment_intent':
+                return self.intents.review(project_id, params, args['intent_id'], args['release_id'], args.get('reason', ''))
+            return self.intents.dispatch(project_id, params, args.get('intent_id'), args['release_id'])
         offset = args.get("offset", 0)
         if not isinstance(offset, int) or offset < 0:
             raise ValueError("Offset must be a nonnegative integer")
@@ -240,17 +253,35 @@ class Scheduler:
             if args.get("task_id"):
                 raise ValueError("Use continue to bundle instructions into an existing assignment")
             from .model_settings import delegation
+            intent_id = args.get('intent_id')
+            if not intent_id:
+                with self.db.connect() as conn:
+                    from .deployment_intent import rows
+                    intent_id = next((v['id'] for v in rows(conn) if v['project_id'] == project_id
+                                      and v['source_execution_id'] == params['manager_execution_id']
+                                      and v['status'] == 'recorded'), None)
+            if args.get('owner_deployment_quote'):
+                config = read(self.deployment.root / 'config.json')
+                if not config or project['path'] != config['repo']:
+                    raise ValueError('Deployment intent is available only for this manager')
+                intent_id = self.intents.record(project_id, params, args['owner_deployment_quote'],
+                                               task_request=params['manager_execution_id']+':'+project_id)['id']
+            if intent_id:
+                with self.db.transaction() as conn:
+                    source = self.intents.owner(conn, params)
+                    value = self.intents.get(conn, intent_id, project_id, params)
+                    if value['source_message_id'] != source['id'] or value['status'] != 'recorded':
+                        raise ValueError('Delegate preparation/audit from the original recorded owner turn')
             await self.chat.server.start()
             route = delegation(self.db, self.chat.server, args.get('worker_route'))
-            return self.tasks.context(
-                self.tasks.add(
-                    project_id,
-                    args["objective"],
-                    params["conversation_id"],
-                    params["manager_execution_id"] + ":" + project_id,
-                    acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
-                )
+            task = self.tasks.add(
+                project_id, args["objective"], params["conversation_id"],
+                params["manager_execution_id"] + ":" + project_id,
+                acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
             )
+            if intent_id:
+                self.intents.attach(project_id, params, intent_id, task['id'])
+            return {**self.tasks.context(task), **({'deployment_intent_id': intent_id} if intent_id else {})}
         if action == 'job_followup':
             task = self.tasks.get(args['task_id'])
             state, reason = args.get('followup_state'), args.get('reason', '').strip()
@@ -266,6 +297,9 @@ class Scheduler:
                 previous = get(conn, task['id'])
                 if internal and state == 'actionable' and previous and previous['state'] in {'owner_wait', 'deferred', 'complete'}:
                     raise ValueError('An internal result cannot reopen held or completed work')
+                if state in {'owner_wait', 'deferred'}:
+                    from .deployment_intent import revoke
+                    revoke(self.db, conn, reason, task_id=task['id'])
                 return update(self.db, conn, task['id'], state, reason, params['manager_execution_id'], reset_retry=not internal)
         if action == "wait":
             task = self.tasks.get(args["task_id"])
@@ -281,6 +315,8 @@ class Scheduler:
                     raise ValueError("Assignment changed while recording the wait")
                 from .assignment_workflow import update
                 update(self.db, conn, task["id"], "owner_wait", reason)
+                from .deployment_intent import revoke
+                revoke(self.db, conn, reason, task_id=task['id'])
                 self.db.event(conn, "task.waiting", {"reason": reason[:2000]}, project_id, task["id"])
             return self.tasks.context(self.tasks.get(task["id"]))
         if action in {"pause", "cancel"}:

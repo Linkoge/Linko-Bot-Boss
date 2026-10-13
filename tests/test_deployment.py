@@ -209,7 +209,9 @@ async def test_manager_request_mode_scope_and_status(tmp_path):
     params['mode'] = 'auto'
     with pytest.raises(ValueError, match='only'):
         await scheduler.manager_action('other', params)
-    assert (await scheduler.manager_action('manager', params))['phase'] == 'waiting_idle'
+    with pytest.raises(ValueError, match='missing'):
+        await scheduler.manager_action('manager', params)
+    handoff.request('release-1')  # Low-level protocol fixture; scoped owner flow is tested separately.
     params['arguments'] = {'action': 'deployment_status'}
     assert (await scheduler.manager_action(None, params))['release_id'] == 'release-1'
 

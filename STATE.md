@@ -1,3 +1,23 @@
+# Owner deployment authorization handoff — integrated candidate, 2026-10-14
+
+Candidate `owner-deploy-intent-stash-v1-20261014` fixes lost authorization across owner → audit →
+internal result handoff, using source-bound fixed intent and exact prepared evidence/nonce receipts.
+It descends from completed stash release `stash-rename-todo-chat-v1-20261014` commit
+`751ac9374f0c41ee40ffcf6737d11a7170092888`; rename/To-Do/chat/recording/Agents/PWA remain included.
+The exact immutable helper manifest establishes preparation; no deployment is performed or authorized
+by this fix task. Full evidence and manager routine delivery facts:
+`/home/codex/.local/share/linko-bot-manager/deployments/deployment-intent-20261014/REPORT.md` and
+sibling `manager-summary.json`. [Deployment contract and safe legacy activation](docs/DEPLOYMENT_HELPER.md).
+
+Latest verified live remains PWA commit `3bb554b7efa26d8fae695c5340e8a12366d75339`, succeeded
+receipt `deployment-helper/results/09f882af21fb28ab5870da74fee1c3b6.json`. Existing separate request
+`2bf6554aecb9fd66c9ab49554bfb95ac` targets older `todo-handoff-chat-trash-recording-agents-v1-20261013`
+and is waiting_idle. It excludes rename/stash/this fix and is unchanged. Prior owner approval is not
+backfilled to this broader candidate. Activation requires an exact new owner instruction and real
+helper success evidence; if live advances, reprepare against actual HEAD with a fresh immutable ID.
+Older candidate headings below remain historical for their scopes. No unrelated task pause/resume,
+production permission recording, filesystem cleanup, service restart or remote push in this task.
+
 # Stashed projects candidate — 2026-10-14
 
 Latest integrated candidate: `stash-rename-todo-chat-v1-20261014`, based on exact

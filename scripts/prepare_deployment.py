@@ -8,7 +8,7 @@ from pathlib import Path
 from ai_manager.deployment import ID, Handoff, atomic, run, sha
 
 
-def prepare(repo, live, data, release_id, python):
+def prepare(repo, live, data, release_id, python, task_ids=()):
     if not ID.fullmatch(release_id):
         raise ValueError('Invalid release ID')
     if run(['git', 'status', '--porcelain'], repo):
@@ -59,6 +59,20 @@ def prepare(repo, live, data, release_id, python):
     manifest = {'id': release_id, 'base': base, 'commit': commit,
                 'assets': assets(commit), 'base_assets': assets(base),
                 'bundle_sha256': sha(target / 'release.bundle'), 'validation_sha256': sha(target / 'validation.log')}
+    if task_ids:
+        import sqlite3
+
+        from ai_manager.deployment_intent import assignment_evidence
+        with sqlite3.connect(f'file:{data / "manager.sqlite3"}?mode=ro', uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            assignments = {}
+            for task_id in task_ids:
+                task = conn.execute('SELECT t.* FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=? AND p.path=?',
+                                    (task_id, str(live))).fetchone()
+                if not task:
+                    raise ValueError('Preparation assignment belongs to another project or is missing')
+                assignments[task_id] = assignment_evidence(conn, task)
+            manifest['assignments'] = assignments
     atomic(target / 'manifest.json', manifest)
     return manifest
 
@@ -68,8 +82,9 @@ if __name__ == '__main__':
     parser.add_argument('release_id')
     parser.add_argument('--live', type=Path, required=True)
     parser.add_argument('--data', type=Path, required=True)
+    parser.add_argument('--task-id', action='append', default=[])
     args = parser.parse_args()
     os.umask(0o077)
     prepare(Path(__file__).resolve().parents[1], args.live.resolve(), args.data.resolve(), args.release_id,
-            Path(sys.executable))
+            Path(sys.executable), args.task_id)
     print('Prepared release ' + args.release_id)

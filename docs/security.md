@@ -13,3 +13,11 @@ The queue uses transactional exclusive project claims and a single-manager lock.
 Existing historical verification, integration, approval and operation records remain evidence of the old architecture, not active execution requirements. Legacy unfinished tasks are not automatically replayed during migration. Owner-authored private notes remain readable; generated Markdown projections stop updating.
 
 Database backups preserve structured state. Native Codex thread storage and actual project files/Git state must also be retained for complete recovery. Restoring a database cannot undo edits, commits or external effects.
+
+Deployment intent uses actual current owner-message provenance and fixed project/assignment/release scope,
+with exact immutable evidence and one-shot protocol receipts. Internal notices can consume prior reviewed
+intent only; they cannot grant deployment/project-resume permission. Newer queued owner corrections hold
+consumption, explicit holds revoke unused scope, and failed/rollback receipts are never automatically retried.
+The manager remains responsible for interpreting explicit owner language; quoted text/worker prose is not
+permission. The independent helper and existing auth/admission/idle/backup/rollback guards remain unchanged.
+Contract and pre-activation limitations: [deployment helper](DEPLOYMENT_HELPER.md).

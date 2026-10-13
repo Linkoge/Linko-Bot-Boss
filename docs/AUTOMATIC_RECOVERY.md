@@ -54,8 +54,10 @@ Manager Stop atomically holds open assignments in its origin and records `chat.s
 result delivery remains held until an explicit owner follow-up/continuation. Task pause/cancel/continue and
 manager wait update workflow in their existing control transaction. Pending native owner questions also block
 worker restart inference until answered. Paused/waiting/cancelled completion reports use Conversation mode;
-internal result/recovery tools cannot resume a held target or project or request deployment. Ordinary owner
-Auto/Execute retains explicit continuation/deployment behavior. Worker results are not permission grants.
+internal result/recovery tools cannot resume a held target/project or create deployment permission.
+The scoped deployment-intent candidate allows only consumption of previously recorded owner intent after
+exact evidence review; see [deployment contract](DEPLOYMENT_HELPER.md) for activation limitations.
+Ordinary owner Auto/Execute retains explicit continuation behavior. Worker results are not permission grants.
 
 Internal wake notices have no user/worker chat message row, no owner Send/recency event, no bulk worker
 output/objective/history transport, and a compact task/state/evidence reference in the normal manager prompt.

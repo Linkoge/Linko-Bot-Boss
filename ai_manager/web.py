@@ -138,6 +138,10 @@ class DeploymentCancel(BaseModel):
     nonce: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class DeploymentIntentCancel(BaseModel):
+    intent_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
 class TaskControl(BaseModel):
     revision: int
     action: str
@@ -206,7 +210,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
                 if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
                     return JSONResponse({"detail": "CSRF token required"}, status_code=403)
         mutation = request.method not in {'GET', 'HEAD', 'OPTIONS'}
-        drain = request.url.path in {'/api/login', '/api/deployment/cancel'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
+        drain = request.url.path in {'/api/login', '/api/deployment/cancel', '/api/deployment/intents/revoke'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
         if request.method == 'PATCH' and request.url.path.startswith('/api/tasks/'):
             body = await request.json()
             drain = body.get('action') in {'stop', 'pause', 'cancel'}
@@ -258,7 +262,20 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
 
     @app.get('/api/deployment', dependencies=[Depends(require_owner)])
     def deployment_status():
-        return scheduler.deployment.status()
+        return {**scheduler.deployment.status(), 'intents': scheduler.intents.list()}
+
+    @app.post('/api/deployment/intents/revoke', dependencies=[Depends(require_owner)])
+    def revoke_deployment_intent(body: DeploymentIntentCancel):
+        from .deployment_intent import revoke, rows
+        with db.transaction() as conn:
+            value = next((v for v in rows(conn) if v['id'] == body.intent_id), None)
+            if not value or value['status'] == 'dispatched':
+                raise HTTPException(409, 'Use the exact pending deployment cancellation for a dispatched intent')
+            try:
+                revoke(db, conn, 'Owner cancelled deployment intent in Settings', intent_id=body.intent_id)
+            except ValueError as error:
+                raise HTTPException(409, str(error)) from error
+        return {'status': 'revoked'}
 
     @app.post('/api/deployment/cancel', dependencies=[Depends(require_owner)])
     def cancel_deployment(body: DeploymentCancel):

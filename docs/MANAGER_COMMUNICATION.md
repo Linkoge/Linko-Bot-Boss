@@ -1,5 +1,12 @@
 # Manager communication and internal delivery — 2026-10-12
 
+Deployment handoff candidate (2026-10-14): persistent tool/instruction contracts now record actual
+owner intent before asynchronous work and expose compact unused-intent references to the returning
+manager. Internal results may review/consume that fixed prior intent only. Later queued owner
+corrections hold consumption; no old owner message is backfilled. Existing transport filtering,
+read_result evidence retrieval, lean ordinary prompts and compatibility-based future thread rotation
+remain. [Exact contract, pending activation and bootstrap limits](DEPLOYMENT_HELPER.md).
+
 The global owner preference in SQLite `settings.global_instructions` remains the shared,
 editable communication authority for all projects and fresh conversations. Routine owner
 completion/status replies must be extremely brief and natural; normal explanations and

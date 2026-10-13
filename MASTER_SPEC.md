@@ -36,6 +36,8 @@ Implementation uses existing FastAPI, SQLite, plain JavaScript and Codex App Ser
 
 Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
 
+- Owner deployment intent must be recorded before asynchronous preparation/audit, survive result/restart handoff, and consume only one reviewed exact prepared release. Later owner corrections/holds revoke or suspend unused intent; internal messages grant no new permission. Contract: docs/DEPLOYMENT_HELPER.md.
+
 - Outstanding job follow-up persists on existing assignments independently of worker completion; SQLite-only idle/grace checks queue one deduplicated internal manager review with durable backoff. Preserve all owner holds, read-only mode and authorization boundaries. Contract: docs/AUTOMATIC_RECOVERY.md.
 - New work resolves the latest visible supported model within the owner's selected Luna/Sol/Astra family from the authenticated catalog; keep existing assignment/recovery routes exact and policy-compatible. Contract: docs/MODEL_SETTINGS.md.
 - Tasks and History remain within viewport width with complete long filenames/paths/unbroken text wrapping; local code scrolling stays contained. Family buttons have a subtle red gradient distinct from plain effort buttons, with accessible selected/disabled/focus states.
