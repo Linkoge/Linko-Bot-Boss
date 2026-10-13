@@ -50,8 +50,8 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
             from types import SimpleNamespace
             usage = AccountUsage(SimpleNamespace())
             usage.update({'rateLimitsByLimitId': {'codex': {'planType':'plus', 'primary':{
-                'usedPercent':12.5,'windowDurationMins':300,'resetsAt':time.time()+3600},'secondary':{
-                'usedPercent':100,'windowDurationMins':10080,'resetsAt':time.time()+86400}}}})
+                'usedPercent':12.5,'windowDurationMins':300,'resetsAt':time.time()+22320},'secondary':{
+                'usedPercent':100,'windowDurationMins':10080,'resetsAt':time.time()+476100}}}})
             response = usage.view()
             with sync_playwright() as p:
                 browser = p.chromium.launch()
@@ -102,8 +102,11 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert 'allowance' not in page.locator('#usage-dialog').inner_text()
                     assert page.locator('#usage-last-refresh').inner_text() == page.evaluate("'Last refresh '+localTime(usageData.last_successful_refresh_at)")
                     assert 'Tbilisi' not in page.locator('#usage-details').inner_text()
-                    assert page.locator('.usage-reset').all_text_contents() == ['1 hour 0 minutes', '24 hours 0 minutes']
+                    assert page.locator('.usage-reset').all_text_contents() == ['6h 12m', '5d 12h 15m']
                     assert page.locator('.usage-reset').first.evaluate('(n)=>getComputedStyle(n).font') == page.locator('.usage-remaining').first.evaluate('(n)=>getComputedStyle(n).font')
+                    for duration in page.locator('.usage-reset').all():
+                        assert duration.evaluate('(n)=>n.scrollWidth<=n.clientWidth')
+                        assert duration.evaluate('(n)=>getComputedStyle(n).color') == page.locator('.usage-remaining').first.evaluate('(n)=>getComputedStyle(n).color')
                     dialog = page.locator('#usage-dialog').bounding_box()
                     assert dialog['x'] >= 0 and dialog['x']+dialog['width'] <= width
                     assert dialog['height'] <= height
@@ -177,11 +180,22 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.evaluate("usageData.buckets[0].windows[0].resets_at=usageNow()-1;renderUsage()")
                 assert 'stale' in page.locator('#usage-button').get_attribute('aria-label')
                 assert page.locator('.usage-remaining.stale').count() == 1
-                assert page.locator('.usage-reset').nth(0).inner_text() == '0 hours 0 minutes'
+                assert page.locator('.usage-reset').nth(0).inner_text() == '0m'
                 page.evaluate('usageData.buckets[0].windows[0].resets_at=null;renderUsage()')
                 assert page.locator('.usage-reset').nth(0).inner_text() == 'Unavailable'
-                assert page.evaluate('usageDuration(usageNow()+22320)') == '6 hours 12 minutes'
-                assert page.evaluate('usageDuration(usageNow()+1)') == '0 hours 1 minute'
+                assert page.evaluate('usageDuration(usageNow()+22320)') == '6h 12m'
+                assert page.evaluate('usageDuration(usageNow()+1)') == '1m'
+                boundaries = page.evaluate('''() => {
+                  const original=Date.now;Date.now=()=>1000000000;
+                  try{return [-60,0,1,59,60,61,3599,3600,3601,86340,86341,86400,86401,
+                    90000,172800,476100].map(seconds=>({seconds,text:usageDuration(usageNow()+seconds)}));}
+                  finally{Date.now=original;}
+                }''')
+                assert [b['text'] for b in boundaries] == ['0m','0m','1m','1m','1m','2m',
+                    '1h','1h','1h 1m','23h 59m','1d','1d','1d 1m','1d 1h','2d','5d 12h 15m']
+                for invalid in ['null','undefined','NaN','Infinity','-Infinity',"'1000000'"]:
+                    assert page.evaluate(f'usageDuration({invalid})') == 'Unavailable'
+                (evidence/'format-boundaries.json').write_text(json.dumps(boundaries,indent=2))
                 page.unroute('**/api/account-usage')
                 page.route('**/api/account-usage', lambda route: route.abort())
                 page.evaluate("usageData=null;renderUsage()")

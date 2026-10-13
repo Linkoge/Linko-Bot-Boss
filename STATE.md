@@ -1,17 +1,22 @@
 # Current established state — 2026-10-13
 
-Live `integrated-recovery-append-popup-v1-20261013`, commit `2a893c93d161e6020d8969aa8563abd05fc1b40c`,
-has succeeded receipt `deployment-helper/results/800a05e655530f78ab17a9e581832b4a.json` under
-`/home/codex/.local/share/linko-bot-manager`. Served app hash matches; service PID 1011647,
-active since 2026-10-13 13:45:45 +04 at read-only inspection. All integrated features are retained.
+Live `usage-countdown-manual-scroll-v1-20261013`, commit
+`c9e8c9854ce90de7b945062a64cebe9b3d0d17b4`, has durable succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/37bea66eea3274f2dfaddb58a993ff74.json`.
+Read-only verification confirms every served asset matches that receipt. It includes
+all integrated features and initial-bottom/subsequent-manual chat scrolling fixes.
 
-Candidate `usage-countdown-manual-scroll-v1-20261013` changes reset presentation and chat positioning.
-Exact preparation requires its helper manifest; no deployment is requested or performed.
-Full evidence/report: `/home/codex/.local/share/linko-bot-manager/deployments/countdown-scroll-20261013/REPORT.md`.
-Contracts: docs/CODEX_USAGE.md and docs/chat-history.md. Production data, native histories, owner holds,
-settings, audio/upload, memory/recovery, popup layering and private hosting remain preserved.
+Candidate `usage-compact-lowercase-v1-20261013` in
+`/home/codex/checkouts/linko-usage-compact-20261013` changes only duration formatting:
+`6h 12m`, Weekly `5d 12h 15m`, zero components omitted, `1m` for positive sub-minute,
+`0m` expired, truthful `Unavailable`. Owner correction requires lowercase d/h/m.
+Percentage typography, popup labels/freshness and chat scrolling remain preserved.
+Exact preparation requires its helper manifest; deployment is pending owner request.
+Full evidence/report: `/home/codex/.local/share/linko-bot-manager/deployments/usage-compact-20261013/REPORT.md`.
+Contracts: docs/CODEX_USAGE.md and docs/chat-history.md. Production data, native histories,
+owner holds, settings, audio/upload, memory/recovery and private hosting remain preserved.
 
-Lasting candidate effects: durable assignment follow-up and idle recovery respecting owner holds;
+Retained integrated effects: durable assignment follow-up and idle recovery respecting owner holds;
 latest supported catalog version within the chosen family for new work, exact retained routes for
 existing assignments/recovery; separate recording Stop removed while Record toggles stop/transcribe;
 long Tasks names wrap; model-family buttons have distinct subtle red backgrounds; concise manager

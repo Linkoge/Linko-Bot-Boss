@@ -9,8 +9,12 @@ function usagePercent(value){return value===null?'Unavailable':`${value}%`;}
 function usageDuration(timestamp){
   if(!Number.isFinite(timestamp))return 'Unavailable';
   const minutes=Math.max(0,Math.ceil((timestamp-usageNow())/60));
-  const hours=Math.floor(minutes/60),rest=minutes%60;
-  return `${hours} ${hours===1?'hour':'hours'} ${rest} ${rest===1?'minute':'minutes'}`;
+  const days=Math.floor(minutes/1440),hours=Math.floor(minutes%1440/60),rest=minutes%60;
+  const parts=[];
+  if(days)parts.push(`${days}d`);
+  if(hours)parts.push(`${hours}h`);
+  if(rest||!parts.length)parts.push(`${rest}m`);
+  return parts.join(' ');
 }
 function renderUsage(){
   const windows=usageWindows(),labels=[];

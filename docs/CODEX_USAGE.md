@@ -19,7 +19,7 @@ The existing live navigation/audio baseline `nav-audio-upload-v2-20261013`, comm
 Older usage implementation/deployment narrative remains in Git history.
 
 The popup displays exactly two stacked sections: **5 hour**, then **Weekly**. Each shows
-exact percentage remaining and hours/minutes until reset below it, in the same font styling.
+exact percentage remaining and a compact lowercase d/h/m duration below it, in the same font styling.
 Missing, ambiguous or unsupported windows show `Unavailable`. There is no allowance label,
 plan/bucket description, used percentage, absolute reset date or reset/remaining prose.
 Close/Refresh remain accessible. The bottom **Last refresh** footer retains the prior
@@ -74,12 +74,25 @@ No main checkout edit, merge, restart, deployment request or production task/dat
 If another delivery advances live HEAD, coordinate/rebase and prepare a fresh ID against
 that exact baseline; never deploy this old-base candidate over unrelated changes.
 
-## Reset duration revision — 2026-10-13
+## Compact reset durations — 2026-10-13
 
-Candidate `usage-countdown-manual-scroll-v1-20261013` preserves section labels and successful-refresh
-semantics. Durations use the server-adjusted clock and ceil positive seconds to whole minutes
-(never show zero before expiry), split into total hours and minutes with singular/plural units.
-Expired timestamps show `0 hours 0 minutes` and the percentage stays stale; missing/nonfinite
-timestamps show `Unavailable`. The existing 15-second display tick and visibility refresh keep
-the countdown current without changing the successful-refresh footer. No quota reset is inferred.
-This revision supersedes the absolute-reset presentation above and is prepared, not deployed.
+Live `usage-countdown-manual-scroll-v1-20261013`, commit
+`c9e8c9854ce90de7b945062a64cebe9b3d0d17b4`, is established by succeeded receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/37bea66eea3274f2dfaddb58a993ff74.json`.
+The earlier prepared-only wording is historical; current served assets match that receipt.
+
+Candidate `usage-compact-lowercase-v1-20261013` refines only reset durations. Owner's
+lowercase correction supersedes uppercase: single-letter `d`, `h`, `m`, adjacent to
+numbers, with spaces between components. Examples: `6h 12m` and Weekly `5d 12h 15m`.
+Durations use the server-adjusted clock and ceil positive seconds to whole minutes,
+then decompose into days, residual hours and residual minutes. Whole rounded days
+use `d`; zero components are omitted (`1d`, `1d 1m`, `1h`, `12m`). A positive fraction
+of a minute shows `1m`; expired timestamps show `0m` and percentages remain stale.
+Missing/nonfinite timestamps show `Unavailable`. No quota reset is inferred.
+
+Percentage-matching system font, size and color, lean 5 hour/Weekly labels, successful
+refresh footer, stale markings, 15-second display tick, visibility refresh, metadata
+fetching and modal controls remain. Existing manual chat scrolling fixes are retained.
+This candidate is implemented/verified/prepared only when its exact helper manifest
+exists. Deployment requires a new owner request and its own durable succeeded receipt.
+Full report: `/home/codex/.local/share/linko-bot-manager/deployments/usage-compact-20261013/REPORT.md`.
