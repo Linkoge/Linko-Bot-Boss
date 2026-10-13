@@ -159,7 +159,7 @@ def main():
                     page.wait_for_timeout(100)
                     assert page.evaluate("document.documentElement.scrollWidth<=innerWidth"), (width, height)
                     assert reply.locator("pre").evaluate("n=>n.scrollWidth>n.clientWidth")
-                    assert page.locator("#send").bounding_box()["y"] < height
+                    assert page.locator("#chat-form").bounding_box()["y"] < height
                     if os.environ.get("LINKO_MARKDOWN_EVIDENCE"):
                         page.screenshot(path=str(Path(os.environ["LINKO_MARKDOWN_EVIDENCE"]) / f"markdown-{width}-{height}.png"))
                 # Saved/archive reader uses the identical rendering path.

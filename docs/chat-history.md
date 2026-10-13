@@ -1,6 +1,6 @@
 # Compact expanding composer and blank conversation — 2026-10-13
 
-Exact candidate `compact-expanding-composer-v1-20261013`, checkout
+Exact candidate `compact-expanding-composer-v2-20261013`, checkout
 `/home/codex/checkouts/linko-expanding-composer-20261013`, descends from the actually
 succeeded `audio-format-pass-through-usage-v1-20261013` at `cd0b3ecf69000475665cb124256e660883793c4b`.
 Receipt: `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/f62b8538f5233c8957cbf5da873a8772.json`.

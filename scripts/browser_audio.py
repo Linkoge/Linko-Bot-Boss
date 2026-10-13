@@ -438,6 +438,7 @@ def main():
                 for width, height in [(1440, 1000), (393, 851), (320, 420)]:
                     page.set_viewport_size({'width': width, 'height': height})
                     start()
+                    page.locator('#message-input').focus()
                     bounds = page.locator('#send').bounding_box()
                     assert bounds['y']+bounds['height'] <= height
                     assert bounds['x']+bounds['width'] <= width

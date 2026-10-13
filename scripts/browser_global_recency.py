@@ -132,8 +132,8 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                     nav = page.locator('.navigation').bounding_box()
                     assert nav['height'] <= 100
-                    page.wait_for_function("() => $('send').getBoundingClientRect().bottom <= innerHeight")
-                    composer = page.locator('#send').bounding_box()
+                    page.wait_for_function("() => $('chat-form').getBoundingClientRect().bottom <= innerHeight")
+                    composer = page.locator('#chat-form').bounding_box()
                     assert composer['y'] + composer['height'] <= height
                     page.evaluate("$('project-tabs').scrollLeft=10000")
                     page.locator('#project-menu-button').tap()

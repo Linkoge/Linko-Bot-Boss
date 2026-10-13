@@ -86,6 +86,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert top['height'] == bottom['height'] == 44
                     assert 0 < bottom['y']-top['y'] < 55 and nav['height'] <= 100
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+                    page.locator('#message-input').focus()
                     composer = page.locator('#message-input').bounding_box()
                     send = page.locator('#send').bounding_box()
                     assert send['y']+send['height'] <= height and composer['y'] > bottom['y']

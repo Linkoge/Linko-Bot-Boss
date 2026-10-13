@@ -6,7 +6,7 @@ Live `audio-format-pass-through-usage-v1-20261013`, commit
 Read-only inspection matched all 12 served assets to that receipt. It includes provider-decided
 whole-file audio format handling, lowercase usage durations and all prior integrated functionality.
 
-New candidate `compact-expanding-composer-v1-20261013` implements the compact/active/overflow
+New candidate `compact-expanding-composer-v2-20261013` implements the compact/active/overflow
 composer, best-effort keyboard-aware muted caret, identical gray activation border, blank empty
 conversation, Upload-style Send and selected red category text without underlines.
 Implementation/verification/preparation evidence: /home/codex/.local/share/linko-bot-manager/deployments/expanding-composer-20261013/REPORT.md.
