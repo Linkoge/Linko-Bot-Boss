@@ -1,6 +1,6 @@
 # Catalog-backed family resolution candidate — 2026-10-13
 
-Exact prepared candidate `unfinished-recovery-family-ui-v1-20261013`; **not deployed**.
+Exact prepared candidate `unfinished-recovery-family-ui-v2-20261013`; **not deployed**.
 Current deployed baseline is `nav-audio-upload-v2-20261013`, commit
 `08f0ba712f194ea0f985740ef408c9e033511b98`, succeeded receipt
 `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json`.

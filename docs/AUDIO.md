@@ -1,6 +1,6 @@
 # Recording toggle candidate — 2026-10-13
 
-Exact candidate `unfinished-recovery-family-ui-v1-20261013` removes **only the separate recording Stop button**.
+Exact candidate `unfinished-recovery-family-ui-v2-20261013` removes **only the separate recording Stop button**.
 Record remains the stop/transcribe toggle; Discard, Upload, Download/Retry, explicit Send and the
 existing recording replacement/cancellation/checkpoint/selection/focus/20-minute behavior remain.
 No recording/picker action sends an owner message, interrupts the manager or queues a manager wake.

@@ -1,6 +1,6 @@
 # Unfinished-work/model/audio/Tasks delivery — prepared only, 2026-10-13
 
-Exact release `unfinished-recovery-family-ui-v1-20261013`, checkout `/home/codex/checkouts/linko-unfinished-recovery-20261013`.
+Exact release `unfinished-recovery-family-ui-v2-20261013`, checkout `/home/codex/checkouts/linko-unfinished-recovery-20261013`.
 Do not deploy without a **new owner request**. Preparation requires its exact helper manifest;
 only a later matching succeeded receipt can establish activation. Current live is the succeeded
 `nav-audio-upload-v2-20261013`, commit `08f0ba712f194ea0f985740ef408c9e033511b98`, receipt `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/0b09a6f825a34572dd8bcf5773f149b1.json`.

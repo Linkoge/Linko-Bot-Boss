@@ -119,7 +119,9 @@ class Tasks:
                 raise ValueError("Assignment was archived; its history is preserved")
             if task["lifecycle"] == "cancelled":
                 raise ValueError("Assignment was cancelled")
-            if task["lifecycle"] == "completed" and action in {"pause", "cancel"}:
+            from .assignment_workflow import get
+            workflow = get(conn, task_id)
+            if task["lifecycle"] == "completed" and action in {"pause", "cancel"} and (workflow or {}).get('state') not in {'actionable', 'review'}:
                 raise ValueError("Completed assignment has no unfinished work to stop")
             if action not in {"continue", "pause", "cancel"}:
                 raise ValueError("Unknown assignment action")

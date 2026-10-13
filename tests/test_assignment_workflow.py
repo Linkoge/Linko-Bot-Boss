@@ -269,3 +269,15 @@ def test_recording_actionable_reason_cannot_erase_existing_retry_backoff(system)
         update(db,conn,task['id'],'actionable','Review still has a concrete unfinished step','internal-manager')
     retained = db.setting('assignment_workflow:' + task['id'])
     assert retained['attempts']==4 and retained['next_at'] > time.time()+470
+
+
+@pytest.mark.asyncio
+async def test_owner_can_pause_full_job_after_worker_completion(system):
+    db, registry, _, settings = system
+    task, execution, _ = finished(system)
+    workers = Workers(db,registry,settings)
+    current_task = Tasks(db).get(task['id'])
+    paused = await workers.control(task['id'],'pause',current_task['revision'])
+    assert paused['status']=='paused' and paused['job_followup']['state']=='owner_wait'
+    assert db.one('SELECT status FROM executions WHERE id=?',(execution,))['status']=='completed'
+    assert not due(db,time.time()+10000)

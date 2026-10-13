@@ -1,6 +1,6 @@
 # Unfinished job recovery candidate — 2026-10-13
 
-Exact release: `unfinished-recovery-family-ui-v1-20261013`. Implemented and fixture-tested in
+Exact release: `unfinished-recovery-family-ui-v2-20261013`. Implemented and fixture-tested in
 `/home/codex/checkouts/linko-unfinished-recovery-20261013`; deployment is pending a **new owner request**.
 Preparation is established only by its helper `manifest.json`, and activation only by a later exact succeeded receipt.
 Current live remains `nav-audio-upload-v2-20261013`, commit `08f0ba712f194ea0f985740ef408c9e033511b98`,

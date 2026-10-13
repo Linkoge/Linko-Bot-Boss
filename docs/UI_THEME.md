@@ -1,6 +1,6 @@
 # Tasks wrapping and family button candidate — 2026-10-13
 
-`unfinished-recovery-family-ui-v1-20261013` is implemented/validated/prepared only; deployment awaits a new owner request.
+`unfinished-recovery-family-ui-v2-20261013` is implemented/validated/prepared only; deployment awaits a new owner request.
 Tasks paragraphs previously allowed unbroken filenames/paths to widen the page. At 320px the reproduced
 baseline overflow was 15,511px. Tasks panels and their children now constrain intrinsic widths and wrap
 unbroken text with overflow-wrap:anywhere, preserving full names. Task History fields remain contained;
