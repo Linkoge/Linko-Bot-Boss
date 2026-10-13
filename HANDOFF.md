@@ -1,6 +1,6 @@
 # Compact lowercase countdown release — 2026-10-13
 
-Exact candidate: `usage-compact-lowercase-v1-20261013`, checkout
+Exact candidate: `usage-compact-lowercase-v2-20261013`, checkout
 `/home/codex/checkouts/linko-usage-compact-20261013`. Lowercase owner correction
 supersedes uppercase: `6h 12m`, Weekly `5d 12h 15m`; preserve all other requirements.
 Live base is succeeded `usage-countdown-manual-scroll-v1-20261013`, commit
@@ -9,7 +9,7 @@ Live base is succeeded `usage-countdown-manual-scroll-v1-20261013`, commit
 All served assets match. Interrupted execution was paused; native history and clean
 checkout confirmed read-only prior work, with no partial implementation to replay.
 
-Review exact helper manifest in `deployment-helper/releases/usage-compact-lowercase-v1-20261013/`.
+Review exact helper manifest in `deployment-helper/releases/usage-compact-lowercase-v2-20261013/`.
 Full report and manager routine brief/recent-delivery facts:
 `/home/codex/.local/share/linko-bot-manager/deployments/usage-compact-20261013/REPORT.md`
 and sibling `manager-summary.json`. Record implemented/verified/prepared separately

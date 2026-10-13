@@ -81,7 +81,7 @@ Live `usage-countdown-manual-scroll-v1-20261013`, commit
 `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/37bea66eea3274f2dfaddb58a993ff74.json`.
 The earlier prepared-only wording is historical; current served assets match that receipt.
 
-Candidate `usage-compact-lowercase-v1-20261013` refines only reset durations. Owner's
+Candidate `usage-compact-lowercase-v2-20261013` refines only reset durations. Owner's
 lowercase correction supersedes uppercase: single-letter `d`, `h`, `m`, adjacent to
 numbers, with spaces between components. Examples: `6h 12m` and Weekly `5d 12h 15m`.
 Durations use the server-adjusted clock and ceil positive seconds to whole minutes,

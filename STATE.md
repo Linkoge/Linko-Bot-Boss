@@ -6,7 +6,7 @@ Live `usage-countdown-manual-scroll-v1-20261013`, commit
 Read-only verification confirms every served asset matches that receipt. It includes
 all integrated features and initial-bottom/subsequent-manual chat scrolling fixes.
 
-Candidate `usage-compact-lowercase-v1-20261013` in
+Candidate `usage-compact-lowercase-v2-20261013` in
 `/home/codex/checkouts/linko-usage-compact-20261013` changes only duration formatting:
 `6h 12m`, Weekly `5d 12h 15m`, zero components omitted, `1m` for positive sub-minute,
 `0m` expired, truthful `Unavailable`. Owner correction requires lowercase d/h/m.
