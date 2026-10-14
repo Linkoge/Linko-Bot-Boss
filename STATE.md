@@ -28,12 +28,13 @@ with healthy scheduler and succeeded receipt `02220171270ebe62d05f81f8fb71c0da.j
 Dependencies, database schema, deployment helper and static assets are unchanged from live.
 The earlier helper/application-pending headings below are historical for that release.
 
-Deployment intent is revoked by the latest owner correction. No deployment, push, shared
-checkout edit, live data write, service restart, intent consumption or automatic activation
-is authorized or performed. After integration releases, manager/operator may publish the
-exact preparation artifacts to the shared helper store and verify hashes/assignment binding.
-Any later activation requires new owner authorization and controlled helper success; this
-report grants none. If live advances, reprepare against the actual base under a fresh ID.
+The latest owner resume supersedes the earlier revocation: recorded intent
+`c92b72ed0955ee84482c37422ef677eb` binds this exact assignment for manager-controlled
+activation after preparation/review. Worker deployment and push remain prohibited. No shared
+checkout edit, live data write, service restart or intent consumption is performed here. After
+integration releases, manager/operator may publish the exact preparation artifacts to the
+shared helper store, verify hashes/assignment binding, review under that recorded intent and
+activate via the controlled helper. Only a durable succeeded receipt establishes deployment. If live advances, reprepare against the actual base under a fresh ID.
 Contract: [verification tiers](docs/VERIFICATION_TIERS.md).
 
 # Option B verification — implemented and verified, not deployed — 2026-10-14

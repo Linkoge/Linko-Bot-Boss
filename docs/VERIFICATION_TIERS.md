@@ -131,6 +131,7 @@ Only a complete manifest with matching bundle/validation hashes establishes prep
 publication of those exact bytes into the shared release store is a separate step after integration ends.
 No production data writes, shared checkout edits, service restarts, push or deployment are performed.
 
-**Deployment intent is revoked.** The latest owner correction supersedes the earlier existing-intent
-handoff; preparation does not grant activation permission. A future deployment needs new owner authorization,
-current-base verification, immutable evidence review and an actual succeeded helper receipt.
+**Latest owner resume supersedes the earlier revocation.** Recorded intent
+`c92b72ed0955ee84482c37422ef677eb` binds this assignment for manager-controlled activation. The worker
+prepares only; no deployment or push. Manager review requires current-base verification, immutable
+assignment-bound evidence and subsequent actual succeeded helper receipt. Preparation alone is not deployment.

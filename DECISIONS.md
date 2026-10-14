@@ -23,3 +23,5 @@ Historical decisions and evidence remain in Git history; [docs/CODEBASE_CLEANUP.
   bottom-left row with conditional ⇈/Send at right. Contract: docs/PARALLEL_EXECUTION.md and docs/chat-history.md.
 
 - 2026-10-14: Close correction on the retained Option B assignment authorizes actual `ai_manager/` and `scripts/` scope. Deduplicate selected context by equality so dictionary attachment references retain metadata and first-seen order; preserve the regression and all original tier requirements. Prepare only the scoped candidate with its exact task binding. Latest owner explicitly revoked deployment intent; no automatic deployment or activation under the earlier intent. Exact validation/preparation evidence stays in the retained workspace and STATE.md.
+
+- 2026-10-14: Subsequent explicit owner resume supersedes the earlier Option B intent revocation with recorded assignment-bound intent `c92b72ed0955ee84482c37422ef677eb`. Reuse valid retained targeted/smoke checks, finish exact scoped preparation and return publishable artifacts for manager review/activation. Worker does not deploy or push; exclude all partial auto-deploy changes.
