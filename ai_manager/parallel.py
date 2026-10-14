@@ -26,8 +26,9 @@ def policy(db, params, args, project_id):
         if (params.get('internal') or not execution or execution['project_id'] not in {None, project_id}
                 or execution['mode'] == 'conversation' or execution['conversation_id'] != params['conversation_id']
                 or not source or quote not in source['content'] or len(quote) < 8
+                or quote.strip(' \t\r\n.!?') not in {sentence.strip(' \t\r\n.!?') for sentence in re.findall(r'[^.!?\n]+[.!?]?', source['content'])}
                 or not re.search(r'\bparallel\b', quote, re.I)
-                or not re.search(r'\b(run|execute|implement|allow|work|do|proceed|start)\b', quote, re.I)
+                or not re.search(r'\b(run|execute|implement|allow|work|do|proceed|start|enable|approved|authorized|permitted)\b', quote, re.I)
                 or re.search(r'\b(no|not|never|don.t|without|unless|if|could|can|should)\b|\?', quote, re.I)):
             raise ValueError('Parallel permission needs explicit instruction quoted from this owner request')
         permission = {'source': 'chat', 'quote': quote, 'execution_id': params['manager_execution_id']}

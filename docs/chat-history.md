@@ -1,6 +1,6 @@
 # Composer visibility and approved bottom row — 2026-10-14
 
-Candidate `parallel-composer-integrated-v1-20261014`; exact preparation/status: [STATE.md](../STATE.md).
+Candidate `parallel-composer-integrated-v2-20261014`; exact preparation/status: [STATE.md](../STATE.md).
 Any nonempty draft (including whitespace), draft attachment/upload or retained recording keeps the
 composer expanded with Send visible regardless of blur, hidden keyboard or focus. Empty idle may
 collapse; empty focused activation retains the existing best-effort keyboard behavior. Keyboard signals

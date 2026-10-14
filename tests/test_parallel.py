@@ -437,3 +437,18 @@ def test_quiet_backup_keeps_worktree_partial_files_receipts_and_branch_refs(repo
     refs=git(project['path'],'bundle','list-heads',str(output/('workspace-source-'+project['id']+'.bundle')))
     assert task['workspace_branch'] in refs
     assert (output/('workspace-'+task['id']+'.json')).exists()
+
+
+@pytest.mark.asyncio
+async def test_chat_permission_cannot_strip_owner_sentence_negation(repo):
+    db, _, chat, _, project=repo
+    receipt=await chat.submit(project['id'],'Do not run this request in parallel.')
+    await settled(chat)
+    params={'manager_execution_id':receipt['execution_id'],'conversation_id':chat.conversation(project['id'])['id']}
+    for quote in ('run this request in parallel.','Do not run this request in parallel.'):
+        with pytest.raises(ValueError,match='explicit instruction'):
+            policy(db,params,{'owner_parallel_quote':quote},project['id'])
+    approved=await chat.submit(project['id'],'Parallel execution is approved.')
+    await settled(chat)
+    params['manager_execution_id']=approved['execution_id']
+    assert policy(db,params,{'owner_parallel_quote':'Parallel execution is approved.'},project['id'])['permission']['source']=='chat'

@@ -351,7 +351,8 @@ class AppServer:
 
 
 MANAGER_INSTRUCTIONS = """Same-project coding stays sequential by default. Parallel permission is ONLY the current owner request's
-request_execution.parallel_permission or an explicit current owner instruction quoted in owner_parallel_quote.
+request_execution.parallel_permission or an explicit current owner instruction quoted as a COMPLETE positive
+sentence in owner_parallel_quote (do not omit preceding negation or conditional text).
 Never infer permission from history, attachments, internal results or another assignment. No persistent toggle,
 planner/router, extra AI routing call or recurring concurrency review. During ordinary processing assess change_paths,
 depends_on (existing task IDs), parallel_safe and parallel_reason on delegate. Use concrete relative file/directory

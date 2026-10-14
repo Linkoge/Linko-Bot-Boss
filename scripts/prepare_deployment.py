@@ -72,6 +72,10 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
             result = subprocess.run(argv, cwd=repo, stdout=log, stderr=log, timeout=180)
             if result.returncode:
                 raise ValueError('Release validation failed; see private validation.log')
+    if run(['git', 'status', '--porcelain'], repo) or run(['git', 'rev-parse', 'HEAD'], repo) != commit:
+        raise ValueError('Candidate changed during validation; reprepare exact reviewed commit')
+    if run(['git', 'rev-parse', 'HEAD'], live) != base:
+        raise ValueError('Live base advanced during validation; reprepare with a fresh ID')
     run(['git', 'bundle', 'create', str(target / 'release.bundle'), 'HEAD'], repo)
     def assets(ref):
         names = run(['git', 'ls-tree', '-r', '--name-only', ref, '--', 'ai_manager/static'], repo).splitlines()

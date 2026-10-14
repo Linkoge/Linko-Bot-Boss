@@ -20,7 +20,7 @@ mode cannot create permission. Attachments and historical owner text never autho
 The normal manager prompt exposes the current request's permission, including an empty value
 to clear any previous-turn inference. Explicit chat consent uses `delegate.owner_parallel_quote`,
 validated against the current execution's actual owner message, project and conversation;
-negative/conditional language is rejected conservatively. Unsupported phrasing can use ⇈ Send.
+the quote must be a complete positive sentence, preventing omitted negation; negative/conditional language is rejected conservatively. Unsupported phrasing can use ⇈ Send.
 
 Manager `delegate` supplies `change_paths` (concrete relative file/directory scopes, no globs),
 `depends_on` (existing same-project task IDs), `parallel_safe` and `parallel_reason`.

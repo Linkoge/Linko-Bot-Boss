@@ -111,7 +111,7 @@ def main():
                 finish_stop()
                 assert page.locator('#message-input').input_value() == 'typed draft\nspoken transcript'
                 assert len(chats) == 0 and uploads[0].startswith('audio/webm')
-                assert page.evaluate("$('send').nextElementSibling.id") == 'microphone'
+                assert page.evaluate("$('microphone').nextElementSibling.id") == 'send'
 
                 # Capture and explicit whole-file Send while a real fixture manager turn is active.
                 page.locator('#message-input').fill('Busy recording')
