@@ -81,10 +81,10 @@ async def complete(automatic, healthy=True, migration=True, deployment=None):
         if deployment == 'explicit':
             deployment_args['intent_id'] = intent['id']
     task = await call(scheduler, project, params, 'delegate', objective='Implement requested improvement',
-                      change_paths=['ai_manager/', 'server.py', 'test_candidate.py'], **deployment_args)
+                      change_paths=['ai_manager/', 'server.py', 'test_candidate.py', 'uv.lock'], **deployment_args)
     if deployment:
         replay = await call(scheduler, project, params, 'delegate', objective='Implement requested improvement',
-                            change_paths=['ai_manager/', 'server.py', 'test_candidate.py'], **deployment_args)
+                            change_paths=['ai_manager/', 'server.py', 'test_candidate.py', 'uv.lock'], **deployment_args)
         assert replay['id'] == task['id'] and replay['deployment_intent_id'] == task['deployment_intent_id']
     finish_owner(db, params)
     claim = scheduler.tasks.claim(2)
@@ -179,7 +179,7 @@ async def test_owner_work_auto_preparation_activation_and_code_database_rollback
     assert task['id'] == result['origin']['task_id']
 
 
-@pytest.mark.parametrize('reason', ['review', 'tier', 'missing_record', 'wrong_commit', 'dirty'])
+@pytest.mark.parametrize('reason', ['actual_error', 'undeclared', 'missing_record', 'wrong_commit', 'dirty'])
 async def test_unverified_work_never_prepares(automatic, reason):
     db, _, _, _, scheduler, _, _, _, _ = automatic
     task, execution, _ = await complete(automatic)
@@ -189,10 +189,10 @@ async def test_unverified_work_never_prepares(automatic, reason):
         if reason == 'missing_record':
             conn.execute('DELETE FROM events WHERE seq=?', (row['seq'],))
         else:
-            if reason == 'review':
-                record['review']['findings'] = 'Blocking data issue'
-            if reason == 'tier':
-                record['escalated'] = True
+            if reason == 'actual_error':
+                record['actual_error'] = 'Diff unavailable'
+            if reason == 'undeclared':
+                record['undeclared'] = ['other.py']
             if reason == 'wrong_commit':
                 record['commit'] = '0' * 40
             conn.execute('UPDATE events SET payload=? WHERE seq=?', (json.dumps(record), row['seq']))
@@ -492,3 +492,26 @@ async def test_on_new_explicit_work_does_not_revoke_another_assignments_standing
     with db.connect() as conn:
         original = next(v for v in rows(conn) if v.get('kind') == 'auto' and v['task_ids'] == [first['id']])
     assert original['status'] == 'recorded'
+
+
+async def test_obsolete_review_and_tier_findings_do_not_block_exact_candidate(automatic):
+    from ai_manager.auto_deploy import verified
+    from ai_manager.deployment_intent import assignment_evidence
+    db, _, _, _, scheduler, _, _, _, _ = automatic
+    task, execution, _ = await complete(automatic)
+    current = scheduler.tasks.get(task['id'])
+    commit = git(Path(current['workspace']), 'rev-parse', 'HEAD')
+    with db.transaction() as conn:
+        row = conn.execute("SELECT seq,payload FROM events WHERE execution_id=? AND kind='task.verification'", (execution,)).fetchone()
+        record = json.loads(row['payload'])
+        record.update(assigned='small', effective='risky', escalated=True, review_required=True,
+                      review={'status': 'unavailable', 'findings': 'obsolete review failure'})
+        conn.execute('UPDATE events SET payload=? WHERE seq=?', (json.dumps(record), row['seq']))
+        # Pre-tier policy is no longer a deployment veto; exact scope remains necessary.
+        policy = json.loads(conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_policy:' + task['id'],)).fetchone()[0])
+        policy.pop('verification', None)
+        conn.execute('UPDATE settings SET value=? WHERE key=?', (json.dumps(policy), 'assignment_policy:' + task['id']))
+        record['scope'] = assignment_evidence(conn, conn.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone())
+        conn.execute('UPDATE events SET payload=? WHERE seq=?', (json.dumps(record), row['seq']))
+        assert verified(conn, current, execution, commit) == ''
+        assert 'exact clean commit' in verified(conn, current, execution, '0' * 40)

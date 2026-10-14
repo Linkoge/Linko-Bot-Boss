@@ -19,20 +19,20 @@ Unrelated chat, chat cleanup and ordinary result delivery do not revoke that rec
 Internal follow-ups may finish the original assignment but cannot invent an owner request.
 
 The scheduler waits for worker cleanup, delivered results and completed job follow-up. Its
-checks require the current Option B tier record, no tier escalation/error, and a clean commit
-matching `task.verification.commit`. Sensitive actual changes also require a completed cheap diff review
-with no blocking findings. Older records lacking exact commit evidence are not eligible.
+checks require a clean exact committed source and `task.verification` with no diff error or unauthorized
+scope changes. No independent review or tier escalation is required. Retained/pre-tier work receives the same
+Normal prompt and exact post-check on its next execution; old evidence must still bind scope and clean commit.
 `assignment_source` and the actual workspace HEAD/cleanliness must agree. A candidate must
 include the current live commit; stacked sequential workspaces are supported without changing
 another assignment's branch. A diverging candidate needs serialized source reconciliation and
 is reported; it is never silently merged or activated under a different commit.
 
 Preparation fetches that exact source commit into a disposable clone. The running manager's
-preparation script runs smoke and the tier-selected gate: Small-only omits full suites; Normal/Risky
-run backend once and relevant existing browser checks. Changed-file build/lint and targeted checks remain.
-Combined releases use the highest included/actual tier. Selection and coverage reasons stay in the manifest
-and hashed log. The exact attestation is `release_checks: passed`; historical full-suite receipts remain supported. No manifest exists after a failed check. The
-manifest binds the execution, commit, stable Option B v2 assignment scope, live base, asset
+preparation script runs full backend once for every final combined candidate, smoke, relevant build/lint
+and relevant existing browser checks. Policy v3 Deploy/full-backend selection and coverage reasons stay in the
+manifest and hashed log. Exact attestation is `release_checks: passed`; immutable historical receipts remain
+supported. No manifest exists after a failed check. The
+manifest binds the execution, commit, stable v2 semantic assignment scope, live base, asset
 hashes, bundle and validation log. An evidence index inventories every release artifact.
 
 Preparation and dispatch are separate scheduler steps so a quiet-queue wait or the external

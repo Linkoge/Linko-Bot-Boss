@@ -40,7 +40,8 @@ context. Workers inspect relevant code/docs and retain repository/security instr
 neither the whole brief, bulk owner notes nor the manager-only global communication preference.
 Worker completion instructions require durable detailed evidence, relevant authoritative-document
 updates, established facts/effects, pending work, verification and deployment receipts. The manager
-uses `read_memory`, `update_brief` and `record_delivery` for small updates; `list_memory`, paginated
+uses `read_memory`, `update_brief` and `record_delivery` when meaningful established facts change,
+not as a mandatory stage for every task; `list_memory`, paginated
 `read_document`, `read_task`, `list_tasks`, `list_history` and explicit `read_history(conversation_id)`
 retrieve the underlying sources. Archived chats never enter fresh-chat defaults.
 

@@ -2,7 +2,7 @@
 
 Per-project setting "Auto-deploy verified work". When on, the owner's Auto/Execute work request is the recorded
 deployment intent for that assignment's exact release only. No AI call decides deployment: the Option B
-verification record, the fixed preparation gate (tier-selected release checks, migration rehearsal for
+verification record, the fixed preparation gate (full backend once and relevant release checks, migration rehearsal for
 schema/dependency releases) and the existing helper protocol (idle wait, backup, health check, automatic
 rollback) do. Failed verification or preparation never deploys; nothing is retried automatically.
 """
@@ -46,33 +46,21 @@ def git(root, *args):
 
 def verified(conn, task, execution_id, commit=None):
     """'' when the completed attempt passed its required Option B tier checks, else the reason it did not."""
-    row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_policy:' + task['id'],)).fetchone()
-    policy = json.loads(row[0]) if row else {}
-    if not policy.get('verification'):
-        return 'assignment predates risk-tiered verification'
     row = conn.execute("SELECT payload FROM events WHERE execution_id=? AND kind='task.verification' ORDER BY seq DESC LIMIT 1",
                        (execution_id,)).fetchone()
     if not row:
         return 'no verification record for the completed attempt'
     record = json.loads(row[0])
-    from .verification import plan
-    required = plan(policy['verification'], policy.get('integration'))['tier']
-    if record.get('assigned') != required or record.get('effective') != required:
-        return 'verification does not cover the required current tier'
     if record.get('error') or record.get('actual_error'):
         return 'verification post-check failed: ' + (record.get('error') or record['actual_error'])[:300]
-    if record.get('escalated'):
-        return 'actual changes need the higher ' + record['effective'] + ' tier checks'
+    if record.get('undeclared'):
+        return 'actual changed files exceed authorized assignment scope'
     if not record.get('changed_count'):
         return 'no file changes to deploy'
     if record.get('scope') != assignment_evidence(conn, task):
         return 'assignment scope changed after verification'
     if commit and record.get('commit') != commit:
         return 'verification is not bound to the exact clean commit'
-    review = record.get('review') or {}
-    if record.get('review_required', record['effective'] == 'risky') and (review.get('status') != 'completed'
-                                           or not review.get('findings', '').strip().startswith('No blocking findings')):
-        return 'risky diff review did not pass: ' + (review.get('reason') or review.get('findings') or 'unavailable')[:300]
     return ''
 
 
@@ -215,7 +203,7 @@ class AutoDeploy:
             return None
         execution = conn.execute('SELECT * FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1',
                                  (task_id,)).fetchone()
-        # Wait for the manager to review the delivered result and finish follow-up (continue/hold/complete).
+        # Wait for ordinary result delivery; successful worker completion closes normal follow-up.
         if not execution or execution['status'] != 'completed' or execution['stop_requested'] or execution['delivery'] != 'delivered':
             return None
         workflow = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_workflow:' + task_id,)).fetchone()
@@ -277,8 +265,8 @@ class AutoDeploy:
                         self.dispatch(conn, value, candidate)
                         return
                     self.mark(conn, value, 'preparing',
-                              f"Auto-deploy: assignment {candidate['task']['id'][:8]} passed its tier checks; preparing "
-                              f"release {candidate['release_id']} (tier-selected release checks"
+                              f"Auto-deploy: assignment {candidate['task']['id'][:8]} passed its task checks; preparing "
+                              f"release {candidate['release_id']} (full backend once and relevant release checks"
                               + '; migration rehearsal when needed).',
                               execution_id=candidate['execution_id'], release_id=candidate['release_id'],
                               commit=candidate['commit'], scope=candidate['scope'])

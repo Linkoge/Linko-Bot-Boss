@@ -180,9 +180,13 @@ def release_attested(manifest, execution_id):
     """Exact new scoped-gate attestation, with immutable historical full-gate compatibility."""
     common = {'execution_id': execution_id, 'commit': manifest['commit'], 'tier_checks': 'passed'}
     attestation = manifest.get('auto_deploy')
-    return (attestation == {**common, 'full_suite': 'passed'} or
+    return ((attestation == {**common, 'full_suite': 'passed'}
+             and (manifest.get('verification') or {}).get('version') in (None, 1, 2)) or
             (attestation == {**common, 'release_checks': 'passed'}
-             and (manifest.get('verification') or {}).get('version') == 2))
+             and ((manifest.get('verification') or {}).get('version') == 2
+                  or ((manifest.get('verification') or {}).get('version') == 3
+                      and manifest['verification'].get('tier') == 'deploy'
+                      and manifest['verification'].get('full_backend') is True))))
 
 
 def atomic(path, value):

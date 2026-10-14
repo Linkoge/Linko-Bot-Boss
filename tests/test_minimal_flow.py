@@ -112,8 +112,9 @@ def test_idempotency_exclusive_project_and_future_projects(system):
     assert tasks.add(p["id"], "first", request_key="key")["id"] == a["id"]
     tasks.add(p["id"], "next")
     tasks.add(q["id"], "parallel")
-    claimed = [tasks.claim(2), tasks.claim(2)]
-    assert {t["project_id"] for t in claimed} == {p["id"], q["id"]}
+    claimed = tasks.claim(2)
+    assert claimed["id"] == a["id"]
+    assert tasks.claim(2) is None  # Single global worker, even across projects.
     assert tasks.claim(2) is None
     # Unknown surviving process holds its project even in waiting state.
     with db.transaction() as conn:
@@ -123,7 +124,11 @@ def test_idempotency_exclusive_project_and_future_projects(system):
     directory.mkdir()
     future = registry.add(directory)
     tasks.add(future["id"], "works without configuration")
-    assert tasks.claim(3)["project_id"] == future["id"]
+    assert tasks.claim(3) is None  # Unknown surviving owner blocks every new writer.
+    with db.transaction() as conn:
+        conn.execute("UPDATE tasks SET lifecycle='completed',lease_owner=NULL WHERE id=?", (a["id"],))
+        conn.execute("UPDATE executions SET status='completed',finished_at=1 WHERE id=?", (claimed["lease_owner"],))
+    assert tasks.claim(3) is not None
 
 
 @pytest.mark.smoke
@@ -422,7 +427,7 @@ async def test_results_stay_in_their_project_or_global_origin(system):
     for project, origin in zip(projects, origins, strict=True):
         Tasks(db).add(project["id"], "Result for " + project["name"], origin)
         workers.launch(Tasks(db).claim(2))
-    await settled(workers)
+        await settled(workers)
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
     for project, origin in zip(projects, origins, strict=True):
@@ -619,15 +624,17 @@ async def test_background_queue_runs_projects_concurrently_with_capacity(system)
     try:
         await scheduler.tick()
         await asyncio.sleep(0.03)
-        assert len(workers.jobs) == 2
-        assert len({t["project_id"] for t in Tasks(db).list() if t["lease_owner"]}) == 2
+        assert len(workers.jobs) == 1
+        assert len({t["project_id"] for t in Tasks(db).list() if t["lease_owner"]}) == 1
         directory = settings.project_roots[0] / "new-project"
         directory.mkdir()
         future = registry.add(directory)
         Tasks(db).add(future["id"], "New project work")
         await scheduler.tick()
-        assert len(workers.jobs) == 2
+        assert len(workers.jobs) == 1
         NativeFixture.release.set()
+        await settled(workers)
+        await scheduler.tick()
         await settled(workers)
         await scheduler.tick()
         await settled(workers)

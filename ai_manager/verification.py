@@ -1,8 +1,7 @@
-"""Deterministic risk-tiered worker verification. Contract: docs/VERIFICATION_TIERS.md.
+"""Normal task / deploy verification. Contract: docs/VERIFICATION_TIERS.md.
 
-No AI routing call: the backend derives a floor from declared change paths, request text and
-assignment kind. The manager may raise the tier, never lower it. After a worker finishes, the
-actual branch diff is classified the same way, so mis-declared paths cannot keep risky work Small.
+Legacy classification/review helpers retain their regression coverage but do not schedule
+checks or AI review. Actual paths, clean commits and scope still bind release evidence.
 """
 import ast
 import re
@@ -10,7 +9,7 @@ import subprocess
 from pathlib import PurePosixPath
 
 TIERS = ('small', 'normal', 'risky')
-VERSION = 2
+VERSION = 3
 SMALL_MAX_FILES = 3
 DIFF_LIMIT = 60000
 
@@ -39,30 +38,6 @@ RISKY_TEXT = re.compile(
     r'logouts?|passwords?|sessions?|csrf|credentials?|secrets?|encrypt\w*|security|permissions?|rollbacks?|'
     r'backups?|restores?|systemd|leases?)\b', re.I)
 
-PLANS = {
-    'small': {
-        'checks': ['Smoke suite once (here: python -m pytest -q -m smoke)',
-                   'Only tests covering the touched files (find via test names/imports)',
-                   'Build/lint of touched files (e.g. ruff check, node --check)'],
-        'skip': ['Full suites for Small-only releases', 'Reviewer'],
-    },
-    'normal': {
-        'checks': ['Smoke suite once', 'Targeted tests while iterating', 'Build/lint'],
-        'skip': ['End-of-task full backend run: Normal/Risky release preparation runs it once', 'Reviewer'],
-    },
-    'risky': {
-        'checks': ['Smoke suite once', 'Targeted tests while iterating', 'Build/lint',
-                   'Browser/acceptance scripts covering touched behavior'],
-        'skip': ['End-of-task full backend run: Normal/Risky release preparation runs it once',
-                 'Self-review passes: automatic independent diff review only for sensitive actual changes'],
-    },
-}
-ESCALATE = ('If actual changes touch risky areas (DB/schema, auth/session, deploy/release/backup, worker/manager/'
-            'recovery logic) or exceed declared change_paths, apply the higher tier checks. Never lower the tier.')
-REPORT = ('Final reply at most 12 short lines: outcome, files changed, commit, checks run with pass/fail counts, '
-          'limitations/pending. Do not paste logs; commands and outputs are retained in the execution record, '
-          'which is the detailed evidence together with updated authoritative docs. Correct substantive findings/failures and '
-          'rerun affected checks after fixes; full backend runs once at Normal/Risky release preparation.')
 REVIEW_INSTRUCTIONS = """Review one assignment diff read-only. Never modify files, run mutating commands or ask questions.
 Report only concrete defects: correctness, security, data loss, concurrency or missed acceptance criteria,
 each with file:line and a one-line reason. Reply exactly 'No blocking findings.' when there are none. At most 200 words.
@@ -129,20 +104,23 @@ def floor(paths, text='', integration=False, deployment=False):
 
 
 def select(paths, objective='', acceptance='', requested=None, integration=False, deployment=False, previous=None):
-    if requested is not None and requested not in TIERS:
-        raise ValueError('Verification tier must be small, normal or risky')
-    tier, reasons = floor(paths, objective + '\n' + acceptance, integration, deployment)
-    for higher, why in ((requested, 'manager raised tier'), ((previous or {}).get('tier'), 'tier never lowers')):
-        if higher and rank(higher) > rank(tier):
-            tier, reasons = higher, reasons + [why]
-    if requested and rank(requested) < rank(tier):
-        reasons.append(f'requested {requested} not allowed')
-    return {'version': VERSION, 'tier': tier, 'requested': requested, 'reasons': reasons[:12]}
+    """One task check policy. Legacy tier arguments are accepted without escalating checks."""
+    if requested is not None and requested not in (*TIERS, 'deploy'):
+        raise ValueError('Verification tier must be small, normal or risky (legacy), or deploy')
+    return {'version': VERSION, 'tier': 'normal', 'reasons': ['owner-approved targeted task checks']}
 
 
-def plan(record, integration=False):
-    tier = 'risky' if integration else record['tier']
-    return {'tier': tier, 'reasons': record['reasons'], **PLANS[tier], 'escalate': ESCALATE, 'report': REPORT}
+def plan(record=None, integration=False):
+    # Also upgrade retained/pre-tier assignments at prompt time; never require a review retry.
+    return {'version': VERSION, 'tier': 'normal',
+            'checks': ['Smoke suite once, including application startup and /health',
+                       'Changed-behavior targeted tests', 'Relevant build/lint'],
+            'skip': ['Task full backend suite (runs once at release preparation)',
+                     'Separate independent review and tier escalation'],
+            'repair_limit': 3,
+            'report': 'Final reply at most 12 short lines; preserve commands/outputs in the execution record. '
+                      'Fix failures up to three rounds total, rerunning affected checks only; stop and report '
+                      'remaining failures. Full backend runs once against the exact release candidate.'}
 
 
 def git(root, *args):
@@ -464,14 +442,9 @@ def browser_selection(paths):
 
 
 def release_policy(paths, records=()):
-    actual = floor(paths)[0] if paths else 'small'
-    tier = max([actual] + [r['tier'] for r in records if r], key=rank)
+    """The deploy check level always validates the combined candidate once."""
     browsers, coverage = browser_selection(paths)
-    if tier == 'small' and len(browsers) == len(BROWSERS):
-        # Existing representative acceptance covers shared visual Small behavior.
-        browsers = ['composer', 'project_ui', 'smoke']
-        coverage = {b: coverage[b] for b in browsers}
-    return {'version': VERSION, 'tier': tier, 'actual': actual, 'changed_files': sorted(paths),
-            'full_backend': tier != 'small', 'browsers': browsers, 'coverage': coverage,
+    return {'version': VERSION, 'tier': 'deploy', 'changed_files': sorted(paths),
+            'full_backend': True, 'browsers': browsers, 'coverage': coverage,
             'skipped_browsers': [b for b in BROWSERS if b not in browsers],
-            'skipped': ['unrelated browser scripts'] + (['full backend (Small-only)'] if tier == 'small' else [])}
+            'skipped': ['unrelated browser scripts', 'independent AI review']}

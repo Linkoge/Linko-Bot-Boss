@@ -13,15 +13,12 @@ from scripts.prepare_deployment import checks, selected_policy
 
 @pytest.mark.parametrize('paths', [['docs/x.md'], ['tests/test_verification.py'],
                                   ['ai_manager/static/style.css'], ['ai_manager/static/app.js']])
-def test_small_release_omits_full_suites_and_retains_smoke_and_targeted(paths):
+def test_every_release_runs_full_backend_once_including_small(paths):
     policy = release_policy(paths, [{'tier': 'small'}])
     commands = checks(Path(sys.executable), policy)
-    assert policy['tier'] == 'small' and not policy['full_backend']
-    assert [sys.executable, '-m', 'pytest', '-q'] not in commands
+    assert policy['tier'] == 'deploy' and policy['full_backend']
+    assert commands.count([sys.executable, '-m', 'pytest', '-q']) == 1
     assert [sys.executable, '-m', 'pytest', '-q', '-m', 'smoke'] in commands
-    assert len(policy['browsers']) < len(BROWSERS)
-    if paths[0].startswith('tests/'):
-        assert [sys.executable, '-m', 'pytest', '-q', paths[0]] in commands
     if paths[0].endswith('.js'):
         assert ['node', '--check', paths[0]] in commands
 
@@ -30,13 +27,13 @@ def test_small_release_omits_full_suites_and_retains_smoke_and_targeted(paths):
                                          ([{'tier': 'small'}, {'tier': 'risky'}], 'risky')])
 def test_combined_release_preserves_highest_included_floor(records, tier):
     policy = release_policy(['docs/x.md'], records)
-    assert policy['tier'] == tier
+    assert policy['tier'] == 'deploy'
     assert checks(Path(sys.executable), policy).count([sys.executable, '-m', 'pytest', '-q']) == 1
 
 
 def test_actual_release_diff_escalates_and_feature_consumers_are_covered():
     policy = release_policy(['ai_manager/deployment.py'], [{'tier': 'small'}])
-    assert policy['tier'] == 'risky' and policy['full_backend']
+    assert policy['tier'] == 'deploy' and policy['full_backend']
     assert policy['browsers'] == ['deployment', 'auto_deploy']
     assert policy['coverage']['auto_deploy'] == ['ai_manager/deployment.py: feature consumers']
     shared = release_policy(['ai_manager/web.py'])
@@ -93,12 +90,12 @@ def test_preparation_reads_all_assignment_floors_and_actual_diff(tmp_path, monke
                      json.dumps({'integration': True, 'verification': {'tier': 'small'}})))
     monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'docs/x.md\ntest_changed.py')
     result = selected_policy(repo, 'live', 'candidate', tmp_path, ['small', 'normal'])
-    assert result['tier'] == 'normal' and result['existing_files'] == ['test_changed.py']
-    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['small', 'risky'])['tier'] == 'risky'
-    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['missing'])['tier'] == 'risky'
-    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['integration'])['tier'] == 'risky'
+    assert result['tier'] == 'deploy' and result['existing_files'] == ['test_changed.py']
+    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['small', 'risky'])['tier'] == 'deploy'
+    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['missing'])['tier'] == 'deploy'
+    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['integration'])['tier'] == 'deploy'
     monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'ai_manager/deployment.py')
-    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['small'])['tier'] == 'risky'
+    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['small'])['tier'] == 'deploy'
 
 
 def test_real_small_preparation_has_only_smoke_and_exact_evidence(tmp_path):
@@ -128,9 +125,9 @@ def test_real_small_preparation_has_only_smoke_and_exact_evidence(tmp_path):
     manifest = prepare(repo, live, data, 'small-policy', Path(sys.executable))
     target = data / 'deployment-helper/releases/small-policy'
     log = (target / 'validation.log').read_text()
-    assert manifest['verification']['tier'] == 'small'
-    assert not manifest['verification']['full_backend'] and not manifest['verification']['browsers']
-    assert log.count('Check: ') == 1 and '1 passed' in log
+    assert manifest['verification']['tier'] == 'deploy'
+    assert manifest['verification']['full_backend'] and not manifest['verification']['browsers']
+    assert log.count('Check: ') == 2 and '1 passed' in log
     assert manifest['validation_sha256'] == sha(target / 'validation.log')
     assert manifest['bundle_sha256'] == sha(target / 'release.bundle')
     index = json.loads((target / 'evidence-index.json').read_text())
@@ -171,10 +168,12 @@ def test_small_changed_test_helpers_select_consumers_and_root_tests(tmp_path, mo
         conn.execute('CREATE TABLE settings(key TEXT,value TEXT)')
     monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'tests/helper.py')
     policy = selected_policy(repo, 'base', 'candidate', tmp_path, [])
-    assert policy['tier'] == 'small' and policy['target_tests'] == ['tests/test_consumer.py']
-    assert [sys.executable, '-m', 'pytest', '-q', 'tests/test_consumer.py'] in checks(Path(sys.executable), policy)
+    assert policy['tier'] == 'deploy' and policy['full_backend']
+    commands = checks(Path(sys.executable), policy)
+    assert commands.count([sys.executable, '-m', 'pytest', '-q']) == 1
+    assert not any('tests/helper.py' in command for command in commands if 'pytest' in command)
     monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'test_root.py')
-    assert selected_policy(repo, 'base', 'candidate', tmp_path, [])['target_tests'] == ['test_root.py']
+    assert selected_policy(repo, 'base', 'candidate', tmp_path, [])['full_backend']
 
 
 @pytest.mark.parametrize('path,changed,category', [

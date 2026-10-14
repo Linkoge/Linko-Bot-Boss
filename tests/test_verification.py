@@ -13,7 +13,7 @@ from ai_manager.model_settings import MODELS, current, save
 from ai_manager.orchestration import Scheduler
 from ai_manager.registry import Registry
 from ai_manager.tasks import Tasks
-from ai_manager.verification import REVIEW_INSTRUCTIONS, plan, select
+from ai_manager.verification import floor, plan, select
 from ai_manager.workers import Workers
 
 RISKY = ['ai_manager/db.py', 'ai_manager/workers.py', 'ai_manager/orchestration.py', 'ai_manager/chat.py',
@@ -24,43 +24,26 @@ RISKY = ['ai_manager/db.py', 'ai_manager/workers.py', 'ai_manager/orchestration.
 
 
 @pytest.mark.smoke
-def test_tier_floor_is_deterministic_and_risky_paths_never_downgrade():
-    small = {
-        ('ai_manager/static/style.css',): 'Make Send red',
-        ('ai_manager/static/app.js', 'ai_manager/static/style.css', 'docs/UI_THEME.md'): 'Tidy composer spacing',
-        ('docs/DEPLOYMENT_HELPER.md',): 'Fix a typo',  # Text never changes runtime behavior.
-        ('tests/test_deployment.py',): 'Rename a test',
-    }
-    for paths, text in small.items():
-        assert select(list(paths), text)['tier'] == 'small', paths
-    normal = [[], ['docs'], ['ai_manager/registry.py'], ['ai_manager/static/app.js', 'ai_manager/static/audio.js'],
-              ['a.md', 'b.md', 'c.md', 'd.md'], ['Makefile']]
-    for paths in normal:
-        assert select(paths, 'Change it', requested='small')['tier'] == 'normal', paths
-    for path in RISKY:
-        record = select([path], 'Small one-file change', requested='small')
-        assert record['tier'] == 'risky' and 'requested small not allowed' in record['reasons'], path
-        assert select(['ai_manager/static/style.css', path], 'x', requested='normal')['tier'] == 'risky'
-    for text in ('Fix login expiry', 'Add a schema migration', 'Rotate the CSRF secret', 'Restore from backup'):
-        assert select(['ai_manager/static/style.css'], text, requested='small')['tier'] == 'risky', text
-    assert select(['x.css'], 'x', integration=True)['tier'] == 'risky'
-    assert select(['x.css'], 'x', deployment=True)['tier'] == 'risky'
-    assert select(['x.css'], 'x', requested='risky')['reasons'][-1] == 'manager raised tier'
-    assert select(['x.css'], 'x', previous={'tier': 'normal'})['tier'] == 'normal'
-    assert select(['ai_manager/db.py'], 'x') == select(['ai_manager/db.py'], 'x')
-    with pytest.raises(ValueError, match='small, normal or risky'):
-        select(['x.css'], 'x', requested='tiny')
+def test_task_policy_is_uniform_even_for_retained_sensitive_assignments():
+    for paths in (['style.css'], ['docs/x.md'], *([path] for path in RISKY)):
+        for requested in (None, 'small', 'normal', 'risky'):
+            policy = select(paths, 'Fix authentication', requested=requested, previous={'tier': 'risky'})
+            assert policy['version'] == 3 and policy['tier'] == 'normal'
+            assert 'escalate' not in plan(policy)
+    # Historical classification remains deterministic for batching; it schedules no checks.
+    assert floor(['x.css'])[0] == 'small' and floor(['ai_manager/db.py'])[0] == 'risky'
+    with pytest.raises(ValueError):
+        select(['x.css'], requested='tiny')
 
 
 @pytest.mark.smoke
-def test_tier_plans_scale_checks_and_keep_reports_short():
-    small, normal, risky = (plan(select(p, 'x')) for p in (['a.css'], ['a.py'], ['db.py']))
-    assert not any('Full' in check for check in small['checks']) and any('Full suites' in s for s in small['skip'])
-    assert all(any('smoke' in check.lower() for check in p['checks']) for p in (small, normal, risky))
-    assert not any('Full backend' in check for p in (normal, risky) for check in p['checks'])
-    assert 'Reviewer' in normal['skip'] and any('diff review' in s for s in risky['skip'])
-    assert plan(select(['a.css'], 'x'), integration=True)['tier'] == 'risky'
-    assert '12 short lines' in small['report'] and 'execution record' in small['report']
+def test_uniform_task_plan_keeps_smoke_targeted_and_short_report():
+    plans = [plan(p, integration=True) for p in (None, {'tier': 'small'}, {'tier': 'risky'})]
+    assert plans[0] == plans[1] == plans[2]
+    assert plans[0]['tier'] == 'normal' and plans[0]['repair_limit'] == 3
+    assert all(any(term in check.lower() for check in plans[0]['checks']) for term in ('smoke', 'targeted', 'lint'))
+    assert not any('full' in check.lower() for check in plans[0]['checks'])
+    assert '12 short lines' in plans[0]['report'] and 'execution record' in plans[0]['report']
 
 
 def test_smoke_suite_is_bounded_and_covers_core_paths():
@@ -155,26 +138,18 @@ async def test_delegate_records_tier_and_risky_rejects_weak_automatic_pair(syste
     project = registry.list()[0]['id']
     automatic(db, server)
     weak = {'model': MODELS['Luna'], 'effort': 'low'}
-    with pytest.raises(ValueError, match='stronger permitted pair'):
-        await delegate(scheduler, chat, project, 'a', objective='Fix lease', change_paths=['ai_manager/tasks.py'],
-                       worker_route=weak, verification_tier='small')
-    with pytest.raises(ValueError, match='stronger permitted pair'):
-        await delegate(scheduler, chat, project, 'b', objective='Refactor', change_paths=['ai_manager/registry.py'],
-                       worker_route={'model': MODELS['Sol'], 'effort': 'medium'}, verification_tier='risky')
-    risky = await delegate(scheduler, chat, project, 'c', objective='Fix lease', change_paths=['ai_manager/tasks.py'],
-                           worker_route={'model': MODELS['Sol'], 'effort': 'high'})
-    assert risky['execution_policy']['verification']['tier'] == 'risky'
-    small = await delegate(scheduler, chat, project, 'd', objective='Make Send red', change_paths=['style.css'],
-                           worker_route=weak)
-    assert small['execution_policy']['verification'] == {'version': 2, 'tier': 'small', 'requested': None,
-                                                          'reasons': ['UI/text change of at most 3 files']}
+    ordinary = await delegate(scheduler, chat, project, 'a', objective='Fix lease', change_paths=['ai_manager/tasks.py'],
+                              worker_route=weak, verification_tier='risky')
+    assert ordinary['execution_policy']['verification']['tier'] == 'normal'
+    small = await delegate(scheduler, chat, project, 'd', objective='Make Send red', change_paths=['style.css'], worker_route=weak)
+    assert small['execution_policy']['verification'] == select(['style.css'])
     # Manual settings are never overridden by the tier.
     config = current(db, server)
     config['bot']['mode'] = 'manual'
     config['bot']['manual'] = weak
     save(db, server, config)
     manual = await delegate(scheduler, chat, project, 'e', objective='Fix auth', change_paths=['web.py'])
-    assert manual['worker_route']['model'] == weak['model'] and manual['execution_policy']['verification']['tier'] == 'risky'
+    assert manual['worker_route']['model'] == weak['model'] and manual['execution_policy']['verification']['tier'] == 'normal'
 
 
 @pytest.mark.asyncio
@@ -195,10 +170,13 @@ async def test_continue_retiers_monotonically(system):
             conn.execute("UPDATE tasks SET lifecycle='completed' WHERE id=?", (task['id'],))
         return Tasks(db).get(task['id'])['execution_policy']['verification']
 
-    assert (await proceed('b', objective='Also adjust padding'))['tier'] == 'small'
-    assert (await proceed('c', objective='Also keep the session cookie'))['tier'] == 'risky'
+    assert (await proceed('b', objective='Also adjust padding'))['tier'] == 'normal'
+    assert (await proceed('c', objective='Also keep the session cookie'))['tier'] == 'normal'
     lowered = await proceed('d', objective='Only colors after all', verification_tier='small')
-    assert lowered['tier'] == 'risky' and 'requested small not allowed' in lowered['reasons']
+    assert lowered['tier'] == 'normal'
+    with pytest.raises(ValueError, match='Three repair rounds'):
+        await proceed('e', objective='Fourth repair must stop')
+    assert Tasks(db).get(task['id'])['job_followup']['repair_rounds'] == 3
 
 
 @pytest.mark.asyncio
@@ -214,7 +192,7 @@ async def test_batching_merges_only_unstarted_small_work_from_same_conversation(
     assert 'Make Send red' in task['description'] and 'Fix README typo' in task['description']
     assert task['acceptance'] == 'Send is red\n\nTypo fixed'
     assert task['execution_policy']['change_paths'] == ['style.css', 'README.md']
-    assert task['execution_policy']['verification']['tier'] == 'small'
+    assert task['execution_policy']['verification']['tier'] == 'normal'
     # A replayed manager call returns the batched assignment instead of creating a duplicate.
     assert (await delegate(scheduler, chat, project, 'b', objective='Fix README typo', change_paths=['README.md'],
                            batch=True))['id'] == first['id']
@@ -281,17 +259,13 @@ async def test_actual_risky_diff_escalates_small_tier_and_runs_one_cheap_read_on
     execution = db.one('SELECT * FROM executions WHERE id=?', (task['lease_owner'],))
     assert execution['status'] == 'completed'
     prompt = worker_prompt()
-    assert prompt['verification']['tier'] == 'small' and 'verification' not in prompt['execution_policy']
+    assert prompt['verification']['tier'] == 'normal' and 'verification' not in prompt['execution_policy']
     record = json.loads(db.one("SELECT payload FROM events WHERE kind='task.verification'")['payload'])
-    assert record['assigned'] == 'small' and record['actual'] == record['effective'] == 'risky'
-    assert record['escalated'] and record['changed_files'] == ['db.py', 'style.css'] and record['undeclared'] == ['db.py']
-    assert len(TierServer.reviews) == 1
-    review = TierServer.reviews[0]
-    assert review['pair'] == {'model': MODELS['Luna'], 'effort': 'low'}  # Cheapest permitted pair.
-    assert review['instructions'] == REVIEW_INSTRUCTIONS and 'SCHEMA = 2' in review['prompt']['diff']
-    assert record['review']['status'] == 'completed' and record['review']['findings'] == 'Saved streamed answer'
-    notice = chat.verification_notice(execution)
-    assert notice['escalated'] and notice['review']['status'] == 'completed' and notice['undeclared'] == ['db.py']
+    assert record['assigned'] == record['actual'] == record['effective'] == 'normal'
+    assert not record['escalated'] and record['changed_files'] == ['db.py', 'style.css'] and record['undeclared'] == ['db.py']
+    assert not record['review_required'] and TierServer.reviews == []
+    assert record['commit'] == git(task['workspace'], 'rev-parse', 'HEAD')
+    assert chat.verification_notice(execution)['undeclared'] == ['db.py']
 
 
 @pytest.mark.asyncio
@@ -308,7 +282,7 @@ async def test_small_diff_skips_review_and_review_failure_never_blocks_completio
     task = Tasks(db).claim(2)
     await workers._run(task)
     record = json.loads(db.one("SELECT payload FROM events WHERE kind='task.verification'")['payload'])
-    assert record['effective'] == 'small' and not record['escalated'] and 'review' not in record
+    assert record['effective'] == 'normal' and not record['escalated'] and not record['review_required']
     assert TierServer.reviews == []
     TierServer.fail_review = True
 
@@ -322,7 +296,8 @@ async def test_small_diff_skips_review_and_review_failure_never_blocks_completio
     row = db.one("SELECT status,error FROM executions WHERE id=?", (task["lease_owner"],))
     assert row["status"] == "completed", row["error"]
     record = json.loads(db.one("SELECT payload FROM events WHERE kind='task.verification' ORDER BY seq DESC")['payload'])
-    assert record['assigned'] == 'risky' and record['review'] == {'status': 'unavailable', 'reason': 'review provider unavailable'}
+    assert record['assigned'] == 'normal' and record['review']['status'] == 'skipped'
+    assert TierServer.reviews == []
 
 
 @pytest.mark.asyncio
@@ -335,10 +310,11 @@ async def test_pre_tier_assignments_keep_original_prompt_and_skip_post_checks(sy
     claimed = Tasks(db).claim(2)
     await workers._run(claimed)
     prompt = worker_prompt()
-    assert 'verification' not in prompt and prompt['execution_policy'] == Tasks(db).get(task['id'])['execution_policy']
-    assert not db.one("SELECT 1 FROM events WHERE kind='task.verification'") and TierServer.reviews == []
+    assert prompt['verification']['tier'] == 'normal'
+    assert prompt['execution_policy'] == Tasks(db).get(task['id'])['execution_policy']
+    assert db.one("SELECT 1 FROM events WHERE kind='task.verification'") and TierServer.reviews == []
     execution = db.one('SELECT * FROM executions WHERE task_id=?', (task['id'],))
-    assert chat.verification_notice(execution) is None
+    assert chat.verification_notice(execution)['effective'] == 'normal'
 
 
 @pytest.mark.asyncio
@@ -350,13 +326,11 @@ async def test_unexpected_post_check_error_never_changes_completed_outcome(syste
     def timeout(root, base):
         raise subprocess.TimeoutExpired(['git', 'diff'], 60)
 
-    def crash(paths):
+    def crash(root, base):
         raise ZeroDivisionError('classifier bug')
 
-    for call, patch, expected in (('a', ('changes', timeout), 'actual_error'), ('b', ('floor', crash), 'error')):
+    for call, patch, expected in (('a', ('changes', timeout), 'actual_error'), ('b', ('changes', crash), 'error')):
         monkeypatch.setattr(module, *patch)
-        if call == 'b':
-            monkeypatch.setattr(module, 'changes', lambda root, base: (['style.css'], 'diff', False))
         await delegate(scheduler, chat, project, call, objective='Make Send red ' + call, change_paths=['style.css'])
         task = Tasks(db).claim(2)
         await workers._run(task)
@@ -366,7 +340,7 @@ async def test_unexpected_post_check_error_never_changes_completed_outcome(syste
                                    (execution['id'],))['payload'])
         assert expected in record
     assert 'timed out' in json.loads(db.one("SELECT payload FROM events WHERE kind='task.verification' ORDER BY seq")['payload'])['actual_error']
-    assert chat.verification_notice(execution) == {'tier': 'small', 'post_check': 'failed: classifier bug'}
+    assert chat.verification_notice(execution) == {'tier': 'normal', 'post_check': 'failed: classifier bug'}
 
 
 @pytest.mark.parametrize('verdict', ['No blocking findings.', '- worker.py:1 — concrete blocker'])
@@ -414,5 +388,28 @@ async def test_post_check_reviews_sensitive_code_in_ordinary_manager_filename(sy
     task = Tasks(db).claim(2)
     await workers._run(task)
     record = json.loads(db.one("SELECT payload FROM events WHERE kind='task.verification'")['payload'])
-    assert record['effective'] == 'risky' and record['review_required'] is bool(sensitive)
-    assert len(TierServer.reviews) == int(bool(sensitive))
+    assert record['effective'] == 'normal' and not record['review_required']
+    assert record['changed_files'] == ['manager.py'] and record['commit']
+    assert TierServer.reviews == []
+
+
+@pytest.mark.asyncio
+async def test_internal_repair_uses_existing_assignment_and_cannot_evade_budget(system):
+    from ai_manager.assignment_workflow import update
+    db, registry, _, chat, _, scheduler = system
+    project = registry.list()[0]['id']
+    task = await delegate(scheduler, chat, project, 'bounded', objective='Fix output', change_paths=['style.css'])
+    with db.transaction() as conn:
+        conn.execute("UPDATE tasks SET lifecycle='completed' WHERE id=?", (task['id'],))
+        update(db, conn, task['id'], 'complete', 'Normal worker completion', automatic=True)
+    params = {'tool': 'manager_action', 'callId': 'repair', 'manager_execution_id': 'repair-manager',
+              'conversation_id': chat.conversation(project)['id'], 'mode': 'auto', 'internal': True,
+              'internal_task': task['id'], 'arguments': {'action': 'continue', 'task_id': task['id']}}
+    result = await scheduler.manager_action(project, params)
+    assert result['id'] == task['id'] and result['job_followup']['repair_rounds'] == 1
+    # Same native tool replay does not consume a second repair round.
+    assert (await scheduler.manager_action(project, params))['job_followup']['repair_rounds'] == 1
+    params['arguments'] = {'action': 'delegate', 'objective': 'Try with a new counter', 'change_paths': ['style.css']}
+    with pytest.raises(ValueError, match='replacement task'):
+        await scheduler.manager_action(project, params)
+    assert len(scheduler.tasks.list(project)) == 1

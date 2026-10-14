@@ -1,12 +1,12 @@
-# Current verification preparation policy — 2026-10-14
+# Current verification preparation policy — 2026-10-15
 
-The owner-approved [verification reductions](VERIFICATION_TIERS.md) apply within the existing preparation gate.
-Small-only releases omit mandatory full backend/browser suites. Normal/Risky run backend once at preparation and
-existing browser checks relevant to the actual combined diff. Smoke, targeted behavior checks and relevant build/lint
-remain; Risky retains relevant acceptance/rehearsal. Manifest/log retain deterministic selection and coverage reasons.
-Exact automatic attestation is `release_checks: passed` with policy v2; historical `full_suite: passed` remains accepted.
-No new approval/stage: idle/drain, backups, integrity/binding, health/rollback and standing Auto-deploy are unchanged.
-Dated evidence below retains its original verification scope and does not override this current contract.
+The owner-approved [simplification](VERIFICATION_TIERS.md) runs full backend once for every exact combined
+candidate at the existing gate, alongside smoke, relevant build/lint and selected browser behavior checks.
+Schema/dependency rehearsal remains when needed. Task workers run targeted checks and smoke without
+independent AI review or escalation. Version 3 `release_checks: passed` requires Deploy/full-backend policy;
+immutable historical v2 scoped and full-suite attestations remain accepted. Manifest/log retain coverage reasons.
+Automatic ON deployment requires no additional owner approval. Exact binding, idle/drain, backups, health/rollback
+and OFF/holds remain intact. Dated evidence below is historical and does not override this current contract.
 
 # Supported immutable publication and stable scope binding — 2026-10-14
 

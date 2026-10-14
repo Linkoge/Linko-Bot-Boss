@@ -26,7 +26,7 @@ def finished(system, delivery='delivered'):
     task = tasks.add(project, 'Authorized objective including full result review', conversation['id'])
     claim = tasks.claim(2)
     workers = Workers(db, registry, settings, lambda s, native=False: FakeServer(s))
-    workers.finish(claim['lease_owner'], 'completed', 'Worker done; review remains', '')
+    workers.finish(claim['lease_owner'], 'failed', 'Worker done; review remains', '')
     with db.transaction() as conn:
         conn.execute('UPDATE tasks SET lease_owner=NULL WHERE id=?', (task['id'],))
         conn.execute('UPDATE executions SET delivery=? WHERE id=?', (delivery, claim['lease_owner']))
@@ -48,7 +48,7 @@ def make_due(db, task):
 async def test_grace_dedup_competing_checks_restart_and_backoff(system):
     db, registry, chat, settings = system
     task, _, conversation = finished(system)
-    assert db.setting('assignment_workflow:' + task['id'])['state'] == 'review'
+    assert db.setting('assignment_workflow:' + task['id'])['state'] == 'actionable'
     assert not due(db)
     assert not chat.server.prompts  # Even repeated/competing checks are SQLite only.
     assert make_due(db, task)[0]['id'] == task['id']
@@ -73,7 +73,7 @@ async def test_grace_dedup_competing_checks_restart_and_backoff(system):
     prompt = json.loads(restored.server.prompts[0])
     assert prompt['assignment_followup']['task_id'] == task['id']
     assert 'Worker done' not in json.dumps(prompt)
-    assert db.setting('assignment_workflow:' + task['id'])['state'] == 'review'
+    assert db.setting('assignment_workflow:' + task['id'])['state'] == 'actionable'
     assert not due(db)  # A finished manager response is not full job completion.
     wake = db.setting('assignment_workflow:' + task['id'])
     assert wake['attempts'] == 1 and wake['next_at'] > time.time()
@@ -133,7 +133,7 @@ async def test_pending_worker_delivery_and_interrupted_review_remain_single(syst
     await chat.recover()
     await settle(chat)
     assert db.one('SELECT delivery FROM executions WHERE id=?', (execution,))['delivery'] == 'delivered'
-    assert db.setting('assignment_workflow:' + task['id'])['state'] == 'review'
+    assert db.setting('assignment_workflow:' + task['id'])['state'] == 'actionable'
     assert len(db.all("SELECT * FROM messages WHERE role='assistant'")) == 1
     scheduler = Scheduler(db, registry, settings, Workers(db, registry, settings), chat)
     params = {'tool':'manager_action','manager_execution_id':'review-test','conversation_id':conversation['id'],
@@ -265,11 +265,11 @@ def test_recording_actionable_reason_cannot_erase_existing_retry_backoff(system)
     task, _, _ = finished(system)
     with db.transaction() as conn:
         workflow = get(conn,task['id'])
-        workflow.update(attempts=4,next_at=time.time()+480)
+        workflow.update(attempts=2,next_at=time.time()+480)
         put(conn,task['id'],workflow)
         update(db,conn,task['id'],'actionable','Review still has a concrete unfinished step','internal-manager')
     retained = db.setting('assignment_workflow:' + task['id'])
-    assert retained['attempts']==4 and retained['next_at'] > time.time()+470
+    assert retained['attempts']==2 and retained['next_at'] > time.time()+470
 
 
 @pytest.mark.asyncio
@@ -280,5 +280,5 @@ async def test_owner_can_pause_full_job_after_worker_completion(system):
     current_task = Tasks(db).get(task['id'])
     paused = await workers.control(task['id'],'pause',current_task['revision'])
     assert paused['status']=='paused' and paused['job_followup']['state']=='owner_wait'
-    assert db.one('SELECT status FROM executions WHERE id=?',(execution,))['status']=='completed'
+    assert db.one('SELECT status FROM executions WHERE id=?',(execution,))['status']=='failed'
     assert not due(db,time.time()+10000)

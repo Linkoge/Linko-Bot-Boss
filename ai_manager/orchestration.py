@@ -147,6 +147,8 @@ class Scheduler:
             raise ValueError('Internal results/recovery are not owner authorization for deployment or project resume')
         if args.get("todos") and (internal or action not in {"delegate", "continue"}):
             raise ValueError("To-Do handoff requires explicit owner scheduling")
+        if internal and action == 'delegate':
+            raise ValueError('Repair the existing assignment; internal results cannot create a replacement task')
         if internal and action in {'continue', 'delegate'}:
             from .assignment_workflow import get
             target_id = args.get('task_id') if action == 'continue' else params.get('internal_task')
@@ -154,7 +156,9 @@ class Scheduler:
                 held = conn.execute('SELECT id,lifecycle FROM tasks WHERE id=?', (target_id,)).fetchone()
                 workflow = get(conn, target_id) if held else None
                 if held and (held['lifecycle'] in {'paused', 'waiting', 'cancelled', 'pause_requested', 'cancel_requested'} or
-                             (workflow or {}).get('state') in {'owner_wait', 'deferred', 'complete'}):
+                             ((workflow or {}).get('state') in {'owner_wait', 'deferred'}
+                              or ((workflow or {}).get('state') == 'complete'
+                                  and not (workflow or {}).get('automatic_completion')))):
                     raise ValueError('Owner pauses/waits are retained; explicit owner continuation is required')
         if action == 'publish_release':
             if params.get('mode') == 'conversation':
@@ -344,7 +348,8 @@ class Scheduler:
                 if state in {'complete', 'actionable'} and (actual['lease_owner'] or actual['lifecycle'] not in {'completed', 'failed'}):
                     raise ValueError('Assignment changed while recording follow-up')
                 previous = get(conn, task['id'])
-                if internal and state == 'actionable' and previous and previous['state'] in {'owner_wait', 'deferred', 'complete'}:
+                if internal and state == 'actionable' and previous and (previous['state'] in {'owner_wait', 'deferred'}
+                        or (previous['state'] == 'complete' and not previous.get('automatic_completion'))):
                     raise ValueError('An internal result cannot reopen held or completed work')
                 if state in {'owner_wait', 'deferred'}:
                     from .deployment_intent import revoke
@@ -395,6 +400,8 @@ class Scheduler:
                 elif self.db.setting('assignment_policy:' + task['id'], {}).get('integration'):
                     p = self.db.setting('assignment_policy:' + task['id'])
                     reserve_integration(self.db, conn, task, [v['task_id'] for v in p['sources']])
+                from .assignment_workflow import consume_repair
+                consume_repair(conn, {**task, "lifecycle": task["status"]})
                 # Append, never silently replace unfinished objective/acceptance/context.
                 additions = args.get("objective", "").strip()
                 objective = task["description"]
@@ -423,10 +430,8 @@ class Scheduler:
                     Todos(self.db).consume(conn, args["todos"], project_id, task["id"])
                 from .parallel import load, save
                 p = load(conn, 'assignment_policy:' + task['id'], {})
-                if p.get('verification'):  # Pre-tier assignments keep their original verification behavior.
-                    p['verification'] = select(p.get('change_paths', []), objective, acceptance, args.get('verification_tier'),
-                                               integration=bool(p.get('integration')), previous=p['verification'])
-                    save(conn, 'assignment_policy:' + task['id'], p)
+                p['verification'] = select(p.get('change_paths', []), objective, acceptance)
+                save(conn, 'assignment_policy:' + task['id'], p)
                 from .assignment_workflow import update
                 update(self.db, conn, task["id"], "actionable", "Explicit authorized continuation", reset_retry=True)
                 if context:

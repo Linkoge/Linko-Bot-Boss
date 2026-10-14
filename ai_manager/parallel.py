@@ -59,6 +59,8 @@ def overlaps(left, right):
 
 
 def admission(conn, task):
+    if active_workers(conn, task.get('lease_owner') if isinstance(task, dict) else task['lease_owner']):
+        return 'Single sequential execution; waiting for the active assignment'
     p = load(conn, 'assignment_policy:' + task['id'], {})
     integration = load(conn, INTEGRATION)
     if integration and integration['task_id'] != task['id']:
@@ -282,6 +284,8 @@ def preparation_reason(conn):
 
 def worker_admission(conn, task):
     """Recovery/launch cannot bypass a missing integration reservation or shared cwd."""
+    if active_workers(conn, task['lease_owner']):
+        raise ValueError('Single sequential execution; another worker still owns a live process')
     p = load(conn, 'assignment_policy:' + task['id'], {})
     held = load(conn, INTEGRATION)
     others = conn.execute('SELECT * FROM tasks WHERE project_id=? AND id!=? AND lease_owner IS NOT NULL',

@@ -409,6 +409,10 @@ async def test_recovery_review_turn_consumes_retained_exact_intent(flow):
     finish_owner(db, internal)
     with db.transaction() as conn:
         conn.execute("UPDATE executions SET delivery='delivered' WHERE id=?", (source['id'],))
+    # Manual OFF flow may have concrete unfinished activation follow-up. Success itself no longer schedules review.
+    from ai_manager.assignment_workflow import update
+    with db.transaction() as conn:
+        update(db, conn, task['id'], 'actionable', 'Retained explicit manual activation obligation')
     assert make_due(db, task)[0]['id'] == task['id']
     receipt = await chat.submit(project, 'internal recovery', params['conversation_id'], recovery_task=task['id'])
     recovery = {**params, 'internal': True, 'internal_task': task['id'], 'manager_execution_id': receipt['execution_id']}

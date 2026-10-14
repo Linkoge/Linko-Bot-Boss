@@ -4,6 +4,7 @@ import time
 
 GRACE = 30
 CHECK_INTERVAL = 15
+REPAIR_LIMIT = 3
 ACTIVE = {'actionable', 'review'}
 
 
@@ -21,20 +22,25 @@ def put(conn, task_id, value):
                  (key(task_id), json.dumps(value)))
 
 
-def update(db, conn, task_id, state, reason, execution_id=None, reset_retry=False):
+def update(db, conn, task_id, state, reason, execution_id=None, reset_retry=False, automatic=False):
     previous = get(conn, task_id) or {}
     preserve_retry = not reset_retry and state in ACTIVE and previous.get('state') in ACTIVE
-    value = {**previous, 'state': state, 'reason': reason[:2000], 'updated_at': time.time(),
+    value = {**previous, 'state': state, 'automatic_completion': automatic, 'reason': reason[:2000], 'updated_at': time.time(),
              'idle_since': None, 'next_at': max(time.time() + GRACE, previous.get('next_at', 0) if preserve_retry else 0),
-             'attempts': previous.get('attempts', 0) if preserve_retry else 0}
+             'attempts': previous.get('attempts', 0)}
+    lifecycle = conn.execute('SELECT lifecycle FROM tasks WHERE id=?', (task_id,)).fetchone()
+    if (state in ACTIVE and lifecycle and lifecycle[0] in {'completed', 'failed'}
+            and (previous.get('followup_rounds', 0) >= REPAIR_LIMIT
+                 or previous.get('repair_rounds', 0) >= REPAIR_LIMIT)):
+        value.update(state='owner_wait', reason='Three repair/follow-up rounds exhausted; report remaining failure')
     put(conn, task_id, value)
-    db.event(conn, 'assignment.followup', {'state': state, 'reason': reason[:2000]},
+    db.event(conn, 'assignment.followup', {'state': value['state'], 'reason': value['reason']},
              task_id=task_id, execution_id=execution_id)
     return value
 
 
 def allowed(conn, task, workflow):
-    if not workflow or workflow['state'] not in ACTIVE or task['legacy'] or not task['origin_conversation']:
+    if not workflow or workflow.get('followup_rounds', 0) >= REPAIR_LIMIT or workflow.get('repair_rounds', 0) >= REPAIR_LIMIT or workflow['state'] not in ACTIVE or task['legacy'] or not task['origin_conversation']:
         return False
     # Queued/running work belongs to existing dispatch/native recovery. Deliberate
     # waiting/paused/cancelled work can never be manufactured into runnable work.
@@ -95,6 +101,7 @@ def claim(conn, task_id, execution_id, now, project_id, conversation_id):
     if now < max(workflow['idle_since'] + GRACE, workflow.get('next_at', 0)):
         raise ValueError('Follow-up grace/backoff has not elapsed')
     workflow['wake_execution'] = execution_id
+    workflow['followup_rounds'] = workflow.get('followup_rounds', 0) + 1
     workflow['attempts'] = min(workflow.get('attempts', 0) + 1, 16)
     workflow['next_at'] = now + min(1800, GRACE * 2 ** workflow['attempts'])
     workflow['idle_since'] = None
@@ -128,3 +135,37 @@ def hold_conversation(db, conn, conversation_id, execution_id):
         workflow = get(conn, row['id'])
         if workflow and workflow['state'] in ACTIVE:
             update(db, conn, row['id'], 'owner_wait', 'Manager stopped by owner; explicit follow-up authorization required', execution_id)
+
+
+def consume_repair(conn, task):
+    """Charge a committed continuation, not a transport retry or paused resume.
+
+    Both manager and UI continuations use this inside their existing transaction;
+    replay/revision guards run first. No transition/reset can erase this counter.
+    """
+    if task['lifecycle'] not in {'completed', 'failed'}:
+        return
+    value = get(conn, task['id']) or {}
+    used = value.get('repair_rounds', 0)
+    if used >= REPAIR_LIMIT:
+        raise ValueError('Three repair rounds exhausted; retain work and report remaining failure')
+    value['repair_rounds'] = used + 1
+    put(conn, task['id'], value)
+
+
+def finish_wake(db, conn, execution_id):
+    row = conn.execute('SELECT value FROM settings WHERE key=?', ('execution_recovery:' + execution_id,)).fetchone()
+    if not row:
+        return
+    task_id = json.loads(row[0])
+    task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+    value = get(conn, task_id) or {}
+    if (not task or task['lease_owner'] or task['lifecycle'] not in {'completed', 'failed'}
+            or value.get('state') not in ACTIVE or value.get('followup_rounds', 0) < REPAIR_LIMIT):
+        return  # Third wake may have queued a valid last repair; do not hold that worker.
+    update(db, conn, task_id, 'owner_wait', 'Three follow-up rounds exhausted; retained failure needs owner attention', execution_id)
+    conn.execute("INSERT OR IGNORE INTO messages(id,conversation_id,role,content,status,created_at) "
+                 "VALUES(?,?,'assistant',?,'completed',?)",
+                 ('repair-limit:' + task_id, task['origin_conversation'],
+                  'Automatic repair stopped after three follow-up rounds. Work is retained; '
+                  'see the task result for the remaining failure.', time.time()))

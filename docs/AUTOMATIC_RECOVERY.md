@@ -31,7 +31,7 @@ Full evidence and manager delivery facts: [/home/codex/.local/share/linko-bot-ma
 Worker `completed` is an execution outcome, not full job completion. Existing assignments retain an
 `assignment_workflow:<task_id>` value in the existing settings table: state, bounded reason, update time,
 idle-since, next eligible time, retry count and wake execution ID. Assignment creation/explicit continuation
-atomically opens actionable follow-up; uncontrolled worker finish changes open work to review. Nothing
+atomically opens actionable follow-up; successful worker finish closes open work for automatic handoff; failed work stays actionable. Nothing
 closes it merely because the worker or manager response finishes. `read_task` exposes this state.
 The existing manager tool adds `job_followup(task_id,followup_state,reason)`: `complete` after result review
 and all authorized follow-up, `actionable` for concrete outstanding work, `owner_wait` before asking an
@@ -52,12 +52,13 @@ execution and stores its wake identity. Competing checkers cannot queue another 
 service lock, conversation head ordering and runner cleanup guards serialize execution. On restart, native
 outcome reconciliation resumes the saved execution rather than creating a replacement wake.
 
-Follow-up retries have persisted delays of 60, 120, 240 seconds and so on, capped at 30 minutes; an
-unfinished existing manager response instead uses the existing native recovery/backoff/account gate.
-No arbitrary retry limit drops an outstanding job. A manager disposition resets eligibility; `complete`,
-owner-wait/deferred and explicit controls stop retries. Success without a disposition leaves review open,
-so a missed manager follow-up cannot disappear. This is a bounded safeguard, not deterministic understanding
-of completion or an exactly-once guarantee for external side effects.
+Follow-up retains persisted backoff and transactional deduplication, with at most three new manager wakes
+tracked in `followup_rounds`. Old backoff `attempts` are retained without being treated as repair usage.
+Repair continuations have a separate total cap of three in `repair_rounds`, charged by both manager and UI
+paths and never reset by retry flags/state changes/restart. Exhausted failed work becomes owner-wait and must
+be reported; no substitute assignment may evade the budget. Successful worker completion is complete for normal
+automatic handoff, without another review or escalation loop. See [current verification](VERIFICATION_TIERS.md).
+Native transport retries resume the same execution; this is not a new recovery feature or usage-blocking change.
 
 Pause, cancel, project pause, owner-wait, To-Do and explicit manager Stop never authorize resumed work.
 Manager Stop atomically holds open assignments in its origin and records `chat.stop_requested`; stopped

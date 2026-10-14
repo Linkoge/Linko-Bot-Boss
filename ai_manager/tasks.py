@@ -78,15 +78,15 @@ class Tasks:
         The merge keeps the target's route/thread identity and applies only if the combined scope stays Small.
         """
         from .parallel import load, save
-        from .verification import select
-        if (policy.get('verification') or {}).get('tier') != 'small' or policy.get('permission') or policy.get('depends_on'):
+        from .verification import floor, select
+        if floor(policy.get('change_paths', []), description + '\n' + acceptance)[0] != 'small' or policy.get('permission') or policy.get('depends_on'):
             return None
         target = conn.execute("""SELECT * FROM tasks t WHERE project_id=? AND origin_conversation=? AND lifecycle='queued'
             AND lease_owner IS NULL AND legacy=0 AND NOT EXISTS(SELECT 1 FROM executions e WHERE e.task_id=t.id)
             AND NOT EXISTS(SELECT 1 FROM settings s,json_each(s.value) a WHERE s.key='archived_tasks' AND a.key=t.id)
             ORDER BY created_at DESC,id DESC LIMIT 1""", (project_id, origin)).fetchone()
         p = load(conn, 'assignment_policy:' + target['id'], {}) if target else {}
-        if (not target or (p.get('verification') or {}).get('tier') != 'small' or p.get('permission')
+        if (not target or floor(p.get('change_paths', []), target['description'] + '\n' + target['acceptance'])[0] != 'small' or p.get('permission')
                 or p.get('depends_on') or p.get('integration')):
             return None
         objective = target['description'] + '\n\nBatched related request (preserve prior requirements):\n' + description
@@ -104,7 +104,7 @@ class Tasks:
                 if value not in merged:
                     merged.append(value)
             context[key] = merged
-        if (verification['tier'] != 'small' or len(objective) > 24000 or len(combined) > 12000
+        if (floor(paths, objective + '\n' + combined)[0] != 'small' or len(objective) > 24000 or len(combined) > 12000
                 or len(json.dumps(context)) > 12000):
             return None
         conn.execute("UPDATE tasks SET description=?,acceptance=?,revision=revision+1,updated_at=? WHERE id=?",
@@ -221,7 +221,9 @@ class Tasks:
                 "UPDATE tasks SET lifecycle=?,blocker=?,revision=revision+1,updated_at=? WHERE id=?",
                 (status, blocker, time.time(), task_id),
             )
-            from .assignment_workflow import update
+            from .assignment_workflow import consume_repair, update
+            if action == "continue":
+                consume_repair(conn, task)
             update(self.db, conn, task_id, 'actionable' if action == 'continue' else 'owner_wait',
                    'Explicit assignment ' + action, reset_retry=action == 'continue')
             release_integration(conn, task_id)

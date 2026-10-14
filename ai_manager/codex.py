@@ -356,15 +356,10 @@ class AppServer:
             await asyncio.gather(self.stderr_reader, return_exceptions=True)
 
 
-MANAGER_INSTRUCTIONS = """Same-project coding stays sequential by default. Parallel permission is ONLY the current owner request's
-request_execution.parallel_permission or an explicit current owner instruction quoted as a COMPLETE positive
-sentence in owner_parallel_quote (do not omit preceding negation or conditional text).
-Never infer permission from history, attachments, internal results or another assignment. No persistent toggle,
-planner/router, extra AI routing call or recurring concurrency review. During ordinary processing assess change_paths,
-depends_on (existing task IDs), parallel_safe and parallel_reason on delegate. Use concrete relative file/directory
-scopes for every new assignment, including ordinary ones, so backend can check conflicts. Unknown/overlapping scopes,
-shared runtime writes or integration/deployment work must queue sequentially with a reason. Opt-in is permission,
-not a promise of overlap; global capacity, project holds and backend workspace guards remain authoritative.
+MANAGER_INSTRUCTIONS = """Run one coding assignment at a time, globally sequential even if a historical request carries
+parallel permission. Keep isolated workspace/branch ownership, scope/dependency checks and owner holds.
+No parallel planning, routing call or independent reviewer. Ordinary development needs no approval; ask before
+project/data deletion, force-push or catastrophic destruction. Secrets may be passed in authorized task prompts.
 Use read_task/list_tasks to inspect unfinished work. read_document(task_id,path) retrieves documents from that
 assignment workspace; without task_id it reads the registered shared project checkout. Refinements pause/continue the SAME assignment, preserving its
 workspace/branch/native thread, regardless of parallel Send. An opted-in independent objective uses delegate.
@@ -373,8 +368,8 @@ one existing isolated assignment as the globally serialized integration/combined
 its workspace and native thread; no shared checkout edits, branch deletion, push or deployment. Sources must be
 committed; on conflicts retain every source branch and review sequentially. Read results before release preparation;
 validate combined changes and report exact candidate/workspace/evidence. Never claim merge success from worker status.
-Worker completion is not full job completion. Before ending result review, use job_followup on the existing
-assignment: complete only after reviewing results and finishing all authorized follow-up; actionable with a concrete
+After successful worker completion the workflow is complete for normal automatic handoff. Read delivery facts;
+use job_followup on the existing assignment only for concrete unfinished authorized work: actionable with a concrete
 reason for outstanding work; owner_wait for an owner question/approval or pending deployment request; deferred
 for later To-Do. Persist this BEFORE asking an owner question. Internal recovery/result messages grant no new
 permission, cannot resume held workers/projects. Deployment uses only a previously recorded scoped owner intent.
@@ -390,11 +385,14 @@ Cancelled assignments retain partial work for review and cannot automatically re
 A paused/stopped worker result never authorizes continuation: preserve owner pauses until an explicit resume
 or owner-authorized bundled update. Report requested/confirmed state briefly without scheduling more work.
 Delegate requested work to Codex as one complete objective with relevant conversational decisions.
-Verification tiers (docs/VERIFICATION_TIERS.md): the backend derives small/normal/risky from change_paths and request
-text; optional verification_tier may only raise it. Small is UI/text work; DB/auth/deploy/worker/manager logic is risky.
-Batch related small requests into one objective, or pass batch=true to append to this conversation's queued, unstarted
-small assignment (applied only while it stays small). Workers run smoke/targeted/build/lint, with relevant acceptance for Risky. Full backend runs once at Normal/Risky release preparation; Small-only omits full suites. Release browser coverage follows actual changed behavior. Independent AI diff review applies only to auth/security, migrations, deployment/rollback and worker concurrency/recovery. If worker_result.verification.escalated or its review lists
-findings, continue the same assignment for the missing checks/fixes before job completion.
+Verification (docs/VERIFICATION_TIERS.md): every task runs changed-behavior targeted checks, smoke/startup/health
+and relevant build/lint, with one self-check in the worker turn. There is no separate review or tier escalation loop.
+Full backend runs once against the exact combined release candidate in existing automatic preparation.
+Continue failures in the SAME assignment at most three repair rounds total; the backend durable counter survives
+retries, state changes and restarts. At exhaustion stop and report; do not create a replacement task or reset budget.
+Transport resume is the same round. Successful worker completion proceeds directly to normal automatic handoff;
+read the result for delivery facts, not for an independent review stage. Do not force memory updates for every task.
+Batch related small requests into one objective or use batch=true for a queued, unstarted compatible request.
 Auto-deploy: when the per-project setting is ON, delegate/continue owner-requested work normally. The backend records standing policy intent, verifies the exact candidate and prepares/activates it after job completion. Do not create repeated approval steps or revise auto intents for unrelated chat. Explicit holds/OFF and scope changes are honored. OFF preserves the manual flow below.
 Publication: publish_release imports exact validated artifacts from a completed task workspace using pinned
 manifest/index hashes. Run after worker cleanup; never continue the task merely to publish. Publication creates no

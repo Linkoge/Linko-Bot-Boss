@@ -1,114 +1,87 @@
-# Risk-tiered worker verification (Option B)
+# Task and deploy verification — owner-approved simplification, 2026-10-15
 
-Owner-approved 2026-10-14. Updated with the owner-approved execution reductions; Risky retains relevant acceptance and sensitive review.
-Code: `ai_manager/verification.py`, delegate/continue in `ai_manager/orchestration.py`, batching in
-`ai_manager/tasks.py`, worker prompt and post-checks in `ai_manager/workers.py`.
+This policy supersedes Option B's Small/Normal/Risky check tiers and independent AI review.
+The approved owner discussion increased repair rounds to three, made deployment automatic under the
+standing setting, allowed secrets in authorized prompts and retained destructive-action confirmation.
+No new reviewer, validation stage, planning/routing call or recurring AI check is added.
 
-## Tiers (approved reductions, 2026-10-14)
+## Two check levels
 
-| Tier | Worker checks | Release preparation |
-|---|---|---|
-| Small | Smoke, changed-behavior targeted tests, relevant build/lint | Smoke, changed test files, relevant lint/syntax and selected existing behavior checks; no mandatory full backend or full browser suite |
-| Normal | Smoke, targeted tests while iterating, relevant build/lint; no end-of-task full backend | Full backend once plus smoke, relevant build/lint and existing browser checks for changed behavior |
-| Risky | Normal worker checks plus relevant acceptance; independent review only for sensitive actual changes | Normal release checks plus existing relevant migration/dependency rehearsal |
+| Level | Checks |
+|---|---|
+| Normal task | Changed-behavior targeted tests, fast smoke including startup and `/health`, relevant build/lint, one self-check in the worker turn |
+| Deploy | Full backend once against the exact combined committed candidate at existing release preparation, smoke, relevant build/lint and existing browser checks for changed behavior; existing schema/dependency rehearsal when needed |
 
-Correct substantive findings and failures, then rerun affected checks after fixes. Do not repeat successful unrelated
-suites. No additional validation stage, periodic checks, AI planning/routing call, reviewer layer or approval step.
-Worker replies remain at most 12 short lines; full native commands/outputs and `task.verification` stay in the execution
-record. Completed work follows the existing standing Auto-deploy setting and normal manager handoff.
+Every retained, pre-tier and new assignment receives the Normal task prompt. Sensitive/backend filenames,
+request text and integration do not purchase extra worker checks, independent reviews or escalation retries.
+Legacy classifier/review utilities and their test coverage remain available but do not schedule a review;
+the classifier is used only to bound compatible small-request batching. Legacy tier arguments are accepted
+without raising task checks. Model routing uses the same existing setting/catalog machinery, with no extra call.
+Small documentation/UI releases now also run backend once at preparation, replacing the earlier exemption.
 
-## Deterministic classification and combined releases
+## Bounded repair and sequential execution
 
-The existing `select(change_paths, objective, acceptance, requested, integration, deployment, previous)` classifier
-and its broad risky path/text floors are unchanged. DB/auth/deploy/worker/manager/entry-point/configuration code,
-dependency/infra manifests, risky request text, integration and deployment-intent assignments stay Risky. Docs/tests
-are not risky by path. Small requires 1–3 concrete UI/text/test files, at most one script/test; other ordinary scopes
-are Normal. Manager requests and continuations can raise the floor and never lower it. Model routing is unchanged.
+A failed task may continue in the same workspace/thread up to **three repair executions total**. The existing
+assignment workflow setting stores `repair_rounds`; manager and UI continuations charge it atomically after
+replay/revision guards. State changes, explicit retry flags, owner holds and process restarts do not reset it.
+Paused/transport resume is the same round and does not charge another repair. At exhaustion further repair
+continuations are rejected, failed work becomes owner-wait, and remaining failures must be reported. Successful
+third-round completion still proceeds to handoff. Workers receive used/remaining budget and rerun affected checks
+after fixes. Native transport recovery keeps its existing outcome-reconciliation behavior; this changes no
+recovery feature or usage-blocking implementation. The backend counts repair executions, not shell commands.
 
-Post-completion classifies actual changes against `workspace_base`, including untracked files, and records assigned,
-actual/effective tiers, escalation and undeclared paths. Escalations require same-assignment follow-up. Preparation
-classifies the complete live-base-to-candidate diff and takes the highest tier across every included assignment
-policy and actual diff. Unknown/pre-tier included assignments conservatively retain a Risky floor. Integration's
-existing Risky floor remains. Declared Small work cannot conceal an actual risky file.
+Successful worker completion closes the workflow for normal automatic handoff; ordinary result delivery still
+reports established facts. This implicit completion permits a bounded correction on the same assignment; an
+explicit completion/owner hold remains closed. Internal results cannot delegate a replacement task to reset the budget. Failed work has bounded actionable follow-up on its existing assignment; at most three
+idle manager wakes are counted separately in durable `followup_rounds`, preventing response-only loops. Old retry
+backoff counts are not interpreted as new repair usage. No independent reviewer or escalation loop runs.
+One global coding worker is admitted even with historical opt-in permissions or higher capacity settings.
+Workspace/process ownership and recovery admission enforce this. Existing isolated sources, branches and serialized
+integration reservations remain intact for supported reconciliation; no new parallel work or automatic merge.
 
-## Sensitive independent review
+## Integrity, automatic deployment and owner holds
 
-Tier and review eligibility are separate. Review reasons come from actual runtime paths and changed diff lines,
-plus sensitive requested behavior: auth/security, database migrations/schema, deployment/rollback/backup and worker
-concurrency/recovery. Ordinary manager/backend/provider/chat filenames alone no longer purchase a review. Every runtime filename is checked for sensitive added/removed code and enclosing hunk scope, including ordinary
-`routes.py`, `manager.py` and helpers with innocuous requests. Deterministic rules recognize permission/session/
-credential operations, migration identifiers and SQL DDL, deployment/rollback commands, and worker locking,
-scheduling, leases and recovery operations. Authorization role/permission keys in indexing/getter access, principal role assignments and conditional comparisons
-retain a security signal even when their names/values are quoted; removed `user["role"] != "admin"` guards count.
-Python authorization predicates are also read structurally: admin/staff/owner flags and permission/role methods,
-flag mutations and principal identity comparisons against ownership/other identity operands retain review.
-Unrelated ID comparisons and plain author metadata do not become broad keyword triggers. Display dictionaries/labels,
-comments and provider message-role metadata remain excluded. Snake/camel identifiers are normalized; removed guards and changed
-boolean/status decisions in guard context count too. Bare async/await, usage-token counters, display literals,
-comments and unrelated hunks do not select review. New untracked code is included before review-input bounding.
-Sensitive path/request floors remain conservative; broad backend filenames alone still do not select review. Docs/tests alone do not select a path review. The existing cheapest
-permitted read-only process, bounded input/time and interruption behavior remain. Findings remain substantive;
-unavailability never changes worker completion, but required unavailable/failed review prevents automatic deployment.
-The event records `review_required` and reasons. Old events without that field retain their prior Risky review rule.
+Actual changed files, authorized scope, clean committed source and assignment evidence remain bound in
+`task.verification`. Out-of-scope edits, diff errors, missing/changed commit or semantic assignment hash still
+prevent automatic deployment. Tier/review findings from old records do not create a new review obligation.
+The existing automatic pipeline fetches the exact source into a disposable clone and runs the existing preparation
+gate once. Its hashed manifest/log records policy version 3, `tier: deploy`, `full_backend: true` and relevant browser
+selection/coverage/skips. Shared runtime primitives retain justified existing consumers; useful tests are not deleted.
+`release_checks: passed` attestation requires the exact execution/commit plus v3 Deploy/full-backend policy;
+immutable v2 scoped and historical full-suite attestations remain supported. Failed checks create no ready manifest.
 
-## Selected release checks and exact evidence
+Current live ancestry, source quiescence, immutable package/index/asset/log hashes, idle/drain, database/history
+backups, post-activation health, automatic rollback and ON/OFF/explicit holds are preserved. Preparation/publication
+remain internal steps in the existing automatic pipeline, without per-release owner consent or manual AI review.
+Workers never deploy, push, restart services or write shared runtime. Only the controlled manager/helper activation
+with a durable succeeded receipt proves deployment. Ordinary edits need no approval; destructive project/data
+deletion, force-push or catastrophic destruction requires owner confirmation. Authorized prompts may contain secrets.
+No public hosting, authentication, session, CSRF or private-access behavior is relaxed.
 
-`scripts/prepare_deployment.py` uses `release_policy` from `ai_manager/verification.py`, within the existing preparation
-gate. Smoke runs for every release. Normal/Risky run the full backend exactly once there; Small-only omits it.
-Changed Small test files (including root test files) run directly; changed test helpers select importing tests instead of attempting to collect the helper; runtime UI behavior uses existing selected browser acceptance. Python lint
-and JS syntax checks cover changed surviving files, resolved against the candidate rather than the manager checkout.
+Keep detailed execution/report evidence and update relevant authoritative docs. Brief/delivery-memory writes are
+needed when meaningful established facts change, not as a mandatory stage for every task. Related queued small
+requests may still batch while their combined scope is compatible and their workspace/thread identity is preserved.
 
-`BROWSER_FEATURES` maps feature modules to existing consumers: audio/attachments → composer/audio;
-registry/projects → project UI/stash; memory, models, usage, markdown and To-Do → their checks; deployment/publication
-→ deployment/auto-deploy; verification → worker delivery, controls, deployment/auto-deploy; tasks/workers/assignment/
-orchestration/native transport → delivery, controls, parallel/To-Do/model/auto-deploy consumers as applicable.
-Retained `.data` reports/audits are not runtime browser coverage or lint inputs. Changed browser scripts select themselves. Docs/tests alone select no browser. Shared HTTP/auth/DB/config or unknown
-runtime modules conservatively select all consumers, with a per-script reason. Small shared UI changes use existing
-representative composer, project UI and smoke acceptance instead of a mandatory full browser suite, alongside worker
-changed-behavior checks. Tests remain available; no useful coverage is removed.
+## Retained assignment and delivery facts
 
-The manifest and hashed validation log record tier, actual paths, selected browsers/coverage and skipped-check reasons.
-The new automatic attestation says `release_checks: passed`, replacing mandatory `full_suite: passed`. Dispatch and
-the independent helper require the exact new attestation and policy version; immutable historical full-suite
-attestations remain supported. Commit/scope/base/assets/bundle/log/index binding, failed-check rejection, idle/drain,
-backups, post-activation health, rollback and ON/OFF/holds remain intact.
+Assignment `e684e6b33ca14b778ef7769dfc92a0fc` retains its earlier exact source/check evidence. The delayed multiline
+review-selector finding is superseded by removal of automatic independent review; no obsolete keyword/context
+repair is required or claimed. The previous source and positive/negative coverage remain in Git and the report.
+The five-delivery backlog was stale: later durable succeeded receipts cover composer cleanup, controls,
+microphone/file uploads, parallel/composer layout, and verification/handoff releases. This assignment's new
+simplification is implemented separately and is **not deployed**. Full receipt IDs, hashes and historical commit
+coverage are in the retained `.data/verification-reductions/REPORT.md` and evidence inventory.
 
-## Batching
-
-Batch related Small requests into one objective. Alternatively, `delegate(batch=true)` appends to the newest queued,
-never-started Small assignment from the same conversation. It applies only without parallel permission/dependencies.
-It also applies only if the combined paths/text still classify Small and fit assignment limits. The target keeps its
-route, thread and workspace identity. A `task.batched` event and `task.reused` request key make replay idempotent.
-Otherwise a separate assignment is created.
-
-## Existing work
-
-Assignments created before this feature have no tier record. Their prompts, execution policy, continuations and
-completion are unchanged: no tier block, no post-check and no review. `WORKER_INSTRUCTIONS` are unchanged.
-
-## Smoke suite
-
-`python -m pytest -q -m smoke` runs 28 core-path tests (44 cases): auth/CSRF, chat receipts/queue/clear, delegation →
-native worker → delivery, modes, restart/recovery, controls, parallel admission, deployment activation/rollback/idle,
-deployment intent, model routing, worker context, follow-up, To-Do handoff, provider routing and tier selection.
-`tests/conftest.py` registers the marker. Changing `pyproject.toml` would need dependency-level deployment review.
-It fails a smoke run that exceeds 20 s. Measured 2026-10-14 on commit e04548b: 3.0–3.6 s, versus 64.6 s for the
-355-test backend suite. On that commit all 19 browser scripts (247 s, `PYTHONPATH=.`), Ruff and `node --check` also passed.
-`tests/test_verification.py` checks size (20–30) and core-area coverage.
-
-## Rollback on post-deploy health failure
-
-The deployment helper already rolls back automatically when post-activation health fails. See
-[deployment helper](DEPLOYMENT_HELPER.md). `tests/test_rollback_rehearsal.py` rehearses this in a throwaway copy. It uses
-a real Git checkout, a pinned bundle/manifest, snapshot backups, HTTP release/scheduler/auth/asset probes and SQLite
-preservation checks. `systemctl` is simulated by a local server process, so the live service is never touched. An
-unhealthy candidate ends `rolled_back`: detached base checkout, forward `main` preserved, base assets served, database
-untouched, one report. A healthy control ends `succeeded`. `LINKO_REAL_HEALTH_CLOCK=1` keeps the real 45 s deadline.
-It passed in 45.6 s on 2026-10-14.
+Current preparation dependency remains external `d629701957337357b4915e6ca8607d053cdb799a`, from VSCode thread
+`01a13bb6-ec9d-7852-869c-07437c84c71a`, without an eligible isolated source task/integration grant. Latest controlled
+succeeded base is `addfcd092e7a4c34205264156feb8f0f06d2dba7`. Manager needs external writer/source ownership handoff
+and an explicitly granted serialized reconciliation pinning both sources, then combined validation and supported
+preparation with `--task-id e684e6b33ca14b778ef7769dfc92a0fc`. No ancestry bypass, fabricated receipt or shared mutation.
+Cancelled `703f113e1b134a9d8a008307f8c4a3aa` remains cancelled; unrelated recovery work is deferred.
 
 ## Historical evidence before the approved reductions
 
-Dated sections below retain their original checks; the current policy above supersedes mandatory full-suite/review wording.
+Dated sections below retain their original checks; the current policy above supersedes incompatible tier/review wording.
 
 ## Documentation follow-up evidence — 2026-10-14
 

@@ -1,3 +1,11 @@
+# Current sequential policy — 2026-10-15
+
+The owner-approved [simplification](VERIFICATION_TIERS.md) admits one global coding worker, including with
+historical opt-in grants or capacity greater than one. New parallel work is disabled. Existing controls/permissions,
+source branches, isolated workspace identities and serialized source-reconciliation guards remain for retained
+work; no automatic merging or grant inference. The earlier parallel contract below is historical where it permits
+overlap or requires tier review. Source cleanup/ancestry/integration ownership rules continue to apply.
+
 # Per-request parallel coding — owner-approved contract, 2026-10-14
 
 This supersedes unconditional one-worker-per-project requirements. Architecture remains

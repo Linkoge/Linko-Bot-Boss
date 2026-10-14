@@ -1,3 +1,18 @@
+# Simplified verification — implemented candidate, not deployed — 2026-10-15
+
+This retained assignment implements the owner's replacement task/deploy policy: uniform Normal task checks,
+three durable repair rounds, no independent reviewer/escalation loop, one global coding worker, and full backend
+once at exact combined release preparation. See docs/VERIFICATION_TIERS.md. Earlier review-selector findings
+are superseded by this approved scope change; their source/evidence remains retained. The five historical deliveries
+have succeeded receipts; the former pending-backlog claim was stale. Current durable report/check/hash binding:
+`.data/verification-reductions/REPORT.md` and manager-summary.json in this same workspace.
+
+Preparation remains blocked by external d629701 source ownership and absent serialized integration grant;
+latest controlled succeeded base is addfcd09. No shared checkout/runtime operation, external merge, prepared
+artifact or deployment is claimed. Manager must obtain source handoff and supported serialized reconciliation,
+then validate/prepare the combined candidate with this task ID for standing ON auto handoff. Cancelled703f
+remains cancelled; unrelated recovery implementation stays deferred. Historical sections below describe older candidates.
+
 # Authorization predicate finding reconciled — 2026-10-14
 
 The provenance-attempt finding on `55190be0cc5d4c32a15c787c1d062d09` was checked against actual `bac2dc6`

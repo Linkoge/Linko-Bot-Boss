@@ -1,6 +1,7 @@
 """Real Git worktrees plus disposable native/process fixtures. No production writes."""
 import asyncio
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 from test_agent_controls import ControlledServer, Controls
@@ -36,6 +37,12 @@ def p(paths, permission=False, safe=True, dependencies=()):
             'change_paths': paths, 'depends_on': list(dependencies), 'reason': 'Assessment says sequence' if not safe else ''}
 
 
+def historical_claim(tasks):
+    """Construct retained pre-simplification parallel sources for integration regression only."""
+    with patch('ai_manager.parallel.active_workers', return_value=0):
+        return tasks.claim(2)
+
+
 def done(db, task, filename=None, text='changed\n'):
     if filename:
         root = Path(task['workspace'])
@@ -56,7 +63,8 @@ def test_default_fifo_optin_capacity_real_worktrees_and_combined_merge(repo):
     a = tasks.claim(2)
     queued = tasks.add(project['id'], 'ordinary next', execution_policy=p(['third.txt']))
     opted = tasks.add(project['id'], 'independent opt in', execution_policy=p(['second.txt'], True))
-    b = tasks.claim(2)
+    assert tasks.claim(2) is None  # New policy never overlaps, even with old opt-in.
+    b = historical_claim(tasks)  # Existing old branches still reconcile safely.
     assert a['id'] == first['id'] and b['id'] == opted['id']
     assert tasks.claim(2) is None
     assert tasks.get(queued['id'])['status'] == 'queued'
@@ -92,7 +100,7 @@ def test_conflict_unknown_scope_assessment_queue_with_reason(repo, other_paths, 
     tasks.claim(3)
     queued = tasks.add(project['id'], 'opt in', execution_policy=p(other_paths, True, safe))
     assert tasks.claim(3) is None
-    assert reason in tasks.get(queued['id'])['blocker']
+    assert 'sequential' in tasks.get(queued['id'])['blocker']
 
 
 def test_dirty_non_git_historical_and_project_holds_fail_closed(repo):
@@ -109,7 +117,7 @@ def test_dirty_non_git_historical_and_project_holds_fail_closed(repo):
     assert claimed['id'] == ordinary['id'] and claimed['workspace'] is None
     second = tasks.add(project['id'], 'independent', execution_policy=p(['safe'], True))
     assert tasks.claim(3) is None
-    assert 'shared checkout' in tasks.get(second['id'])['blocker']
+    assert 'sequential' in tasks.get(second['id'])['blocker']
     assert (Path(project['path'])/'owner-draft').read_text() == 'retain'
     with db.transaction() as conn:
         conn.execute("UPDATE projects SET status='paused' WHERE id=?", (project['id'],))
@@ -126,7 +134,7 @@ def test_dependency_and_dedup_do_not_upgrade_existing_permission(repo):
     a = tasks.claim(2)
     dependent = tasks.add(project['id'], 'depends', execution_policy=p(['other'], True, dependencies=[a['id']]))
     assert tasks.claim(2) is None
-    assert 'dependency' in tasks.get(dependent['id'])['blocker']
+    assert 'sequential' in tasks.get(dependent['id'])['blocker']
     done(db, a, 'one')
     assert tasks.claim(2)['id'] == dependent['id']
 
@@ -167,21 +175,20 @@ async def test_native_concurrency_pause_cancel_resume_workspace_thread_identity(
     a = tasks.add(project['id'], 'first', execution_policy=p(['partial.txt']))
     a = tasks.claim(2)
     b = tasks.add(project['id'], 'second', execution_policy=p(['second.txt'], True))
-    b = tasks.claim(2)
+    assert tasks.claim(2) is None
     faults = Controls()
     faults.outcomes = ['hold', 'hold']
     workers = Workers(db, registry, settings, lambda s,native: ControlledServer(s,faults,native))
     # Controlled fixture writes a partial file and leaves native turns running.
     try:
         workers.launch(a)
-        workers.launch(b)
         for _ in range(100):
-            if all(db.one('SELECT status FROM executions WHERE id=?', (t['lease_owner'],))['status'] == 'running' for t in (a,b)):
+            if db.one('SELECT status FROM executions WHERE id=?', (a['lease_owner'],))['status'] == 'running':
                 break
             await asyncio.sleep(.01)
         prior = tasks.get(a['id'])
-        assert len(workers.jobs) == 2
-        assert tasks.get(b['id'])['native_thread'] != prior['native_thread']
+        assert len(workers.jobs) == 1
+        assert tasks.get(b['id'])['native_thread'] is None
         await workers.control(a['id'], 'pause', prior['revision'])
         await workers.control(b['id'], 'cancel', tasks.get(b['id'])['revision'])
         await settled(workers)
@@ -250,7 +257,7 @@ def test_integration_reservation_and_preparation_hold_survive_restart(repo):
     queued = tasks.add(project['id'], 'next', execution_policy=p(['other'], True))
     claimed = tasks.claim(2)
     assert claimed['id'] == task['id'] and tasks.claim(2) is None
-    assert 'integration' in tasks.get(queued['id'])['blocker']
+    assert 'sequential' in tasks.get(queued['id'])['blocker']
     with db.transaction() as conn:
         import os
 
@@ -282,38 +289,37 @@ async def test_manager_transport_refinement_stays_on_same_assignment(repo):
 
 
 @pytest.mark.asyncio
-async def test_restart_recovers_parallel_assignments_in_exact_threads_workspaces(repo):
+async def test_restart_keeps_thread_and_next_assignment_sequential(repo):
     from test_recovery import Faults, eligible, settle
     db, registry, _, settings, project = repo
     tasks = Tasks(db)
     tasks.add(project['id'], 'first', execution_policy=p(['one']))
     a = tasks.claim(2)
-    tasks.add(project['id'], 'second', execution_policy=p(['two'], True))
-    b = tasks.claim(2)
-    faults = Faults(['hold','hold','success','success'])
+    second = tasks.add(project['id'], 'second', execution_policy=p(['two'], True))
+    assert tasks.claim(2) is None
+    faults = Faults(['hold', 'success', 'success'])
     workers = Workers(db, registry, settings, faults.factory)
     workers.launch(a)
-    workers.launch(b)
     for _ in range(100):
-        if len(faults.calls) == 2:
+        if faults.calls:
             break
         await asyncio.sleep(.01)
-    saved = {t['id']: tasks.get(t['id']) for t in (a,b)}
+    saved = tasks.get(a['id'])
     await workers.close()
     eligible(db)
     restored = Workers(Database(db.path), registry, settings, faults.factory)
     await restored.recover()
     await settle(restored)
-    for original in (a,b):
-        retained = tasks.get(original['id'])
-        assert retained['workspace'] == original['workspace']
-        assert retained['native_thread'] == saved[original['id']]['native_thread']
-        assert retained['status'] == 'completed'
-        execution = db.one('SELECT * FROM executions WHERE id=?', (original['lease_owner'],))
-        assert execution['worktree'] == original['workspace']
+    retained = tasks.get(a['id'])
+    assert retained['workspace'] == a['workspace'] and retained['native_thread'] == saved['native_thread']
+    assert retained['status'] == 'completed'
+    b = tasks.claim(2)
+    assert b['id'] == second['id'] and tasks.claim(2) is None
+    restored.launch(b)
+    await settle(restored)
+    assert tasks.get(b['id'])['status'] == 'completed'
     assert len(db.all('SELECT id FROM executions WHERE task_id IS NOT NULL')) == 2
-    assert len(faults.calls) == 4
-    assert set(faults.resumed) == {t['native_thread'] for t in saved.values()}
+    assert len(faults.calls) == 3 and faults.resumed == [saved['native_thread']]
 
 
 def test_actual_merge_conflict_keeps_sources_and_sequential_resolution(repo):
@@ -322,7 +328,7 @@ def test_actual_merge_conflict_keeps_sources_and_sequential_resolution(repo):
     tasks.add(project['id'], 'one', execution_policy=p(['one']))
     a = tasks.claim(2)
     tasks.add(project['id'], 'two', execution_policy=p(['two'],True))
-    b = tasks.claim(2)
+    b = historical_claim(tasks)
     # Simulate an unexpected actual conflict despite declared disjoint scopes.
     done(db,a,'base.txt','source A\n')
     done(db,b,'base.txt','source B\n')
@@ -533,26 +539,31 @@ async def test_parallel_assignments_keep_pinned_provider_after_owner_switch(repo
     set_active(db,'claude')
     second=tasks.add(project['id'],'Claude independent source',execution_policy=p(['two'],True),
                      model_route=delegation(db,catalog,{'model':'claude-sonnet-5-5','effort':'medium'}))
-    b=tasks.claim(2)
+    assert tasks.claim(2) is None
     workers=Workers(db,registry,settings,BothNative)
     BothNative.release=asyncio.Event()
     try:
         workers.launch(a)
-        workers.launch(b)
         for _ in range(100):
-            if all(tasks.get(t['id'])['native_thread'] for t in (a,b)):
+            if tasks.get(first['id'])['native_thread']:
                 break
             await asyncio.sleep(.01)
-        assert len(workers.jobs)==2
+        assert len(workers.jobs)==1
         assert tasks.get(first['id'])['native_thread'].startswith('codex-')
-        assert tasks.get(second['id'])['native_thread'].startswith('claude-')
-        assert tasks.get(first['id'])['workspace']!=tasks.get(second['id'])['workspace']
-        set_active(db,'codex')
+        assert tasks.claim(2) is None
         BothNative.release.set()
         await settled(workers)
+        b=tasks.claim(2)
+        assert b['id']==second['id']
+        set_active(db,'codex')
+        workers.launch(b)
+        await settled(workers)
+        assert tasks.get(second['id'])['native_thread'].startswith('claude-')
+        assert tasks.get(first['id'])['workspace']!=tasks.get(second['id'])['workspace']
         assert db.one('SELECT model FROM executions WHERE id=?',(a['lease_owner'],))['model']=='test-model'
         assert db.one('SELECT model FROM executions WHERE id=?',(b['lease_owner'],))['model']=='claude-sonnet-5-5'
         assert tasks.get(first['id'])['status']==tasks.get(second['id'])['status']=='completed'
+
     finally:
         BothNative.release.set()
         BothNative.release=None

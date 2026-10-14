@@ -34,20 +34,12 @@ def prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=No
 
 
 def checks(python, policy=None):
-    """Existing gate with deterministic tier/scope selection, no extra validation stage."""
+    """Existing gate: one full backend execution for every exact release candidate."""
     from ai_manager.verification import BROWSERS
     policy = policy or {'full_backend': True, 'browsers': BROWSERS, 'changed_files': []}
     paths = policy.get('existing_files', policy['changed_files'])
     commands = [[str(python), '-m', 'pytest', '-q', '-m', 'smoke']]
-    if policy['full_backend']:
-        commands.append([str(python), '-m', 'pytest', '-q'])
-    else:
-        # Small may change one test file. Runtime UI behavior is covered by selected
-        # existing browsers below; documentation needs no invented targeted test.
-        tests = policy.get('target_tests', [p for p in paths if p.endswith('.py')
-                                          and (Path(p).name.startswith('test_') or Path(p).stem.endswith('_test'))])
-        if tests:
-            commands.append([str(python), '-m', 'pytest', '-q', *tests])
+    commands.append([str(python), '-m', 'pytest', '-q'])
     lint = [p for p in paths if p.endswith('.py') and not p.startswith('.data/')]
     if lint:
         commands.append([str(python), '-m', 'ruff', 'check', *lint])
@@ -59,36 +51,10 @@ def checks(python, policy=None):
 
 
 def selected_policy(repo, base, commit, data, task_ids):
-    import json
-
     from ai_manager.verification import release_policy
     paths = run(['git', 'diff', '--name-only', base, commit], repo).splitlines()
-    records = []
-    with sqlite3.connect(f'file:{data / "manager.sqlite3"}?mode=ro', uri=True) as conn:
-        for task_id in task_ids:
-            row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_policy:' + task_id,)).fetchone()
-            policy = json.loads(row[0]) if row else {}
-            # Unknown/pre-tier included work keeps the old conservative floor.
-            records.append({'tier': 'risky'} if policy.get('integration') else
-                           policy.get('verification') or {'tier': 'risky'})
-    result = release_policy(paths, records)
+    result = release_policy(paths)
     result['existing_files'] = [p for p in paths if (repo / p).is_file()]
-    if not result['full_backend']:
-        import re
-        from pathlib import PurePosixPath
-
-        from ai_manager.verification import kind
-        tests = {p for p in result['existing_files'] if p.endswith('.py')
-                 and (Path(p).name.startswith('test_') or Path(p).stem.endswith('_test'))}
-        helpers = [Path(p).stem for p in paths if kind(PurePosixPath(p)) == 'test'
-                   and p.endswith('.py') and p not in tests]
-        # Shared test helpers have no collected tests themselves. Select existing
-        # importing tests rather than passing the helper to pytest (exit code 5).
-        for candidate in sorted((repo / 'tests').glob('test_*.py')):
-            content = candidate.read_text()
-            if any(re.search(r'\b(?:from|import)\s+' + re.escape(name) + r'\b', content) for name in helpers):
-                tests.add(candidate.relative_to(repo).as_posix())
-        result['target_tests'] = sorted(tests)
     return result
 
 
@@ -122,7 +88,7 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
             conn.row_factory = sqlite3.Row
             task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_ids[0],)).fetchone()
             if not task or verified(conn, task, auto_execution, commit):
-                raise ValueError('Auto-deploy candidate has not passed required tier verification')
+                raise ValueError('Auto-deploy candidate has not passed exact task verification')
             scope = assignment_evidence(conn, task)
     rehearsal, venv = None, target / 'rehearsal-venv'
     try:

@@ -24,7 +24,7 @@ from .recovery import (
     with_reset,
 )
 from .tasks import Tasks
-from .verification import DIFF_LIMIT, REVIEW_INSTRUCTIONS, changes, floor, plan, rank, review_reasons
+from .verification import DIFF_LIMIT, REVIEW_INSTRUCTIONS, changes, plan
 
 REVIEW_SECONDS = 300
 
@@ -40,6 +40,9 @@ When workspace_ownership.branch is present, edit/commit only that assignment wor
 Do not edit, switch, reset, stash or merge in shared_checkout or another assignment worktree.
 Do not write shared runtime databases, restart shared services, deploy or push from isolated coding turns.
 Use disposable per-workspace runtime data, ports and outputs for tests; report required shared operations to manager.
+Run targeted tests and smoke, then one self-check in this turn; no separate review/escalation loop.
+Fix failures at most three rounds total across retries; the prompt records the remaining durable budget.
+Never start parallel tasks. Destructive data/project deletion or force-push needs owner confirmation.
 Commit completed source changes in your retained branch; never delete another assignment branch/worktree.
 Respect declared change_paths. If work needs another assignment's scope, report dependency and pause for sequential review.
 Integration turns explicitly grant serialized integration in THIS same retained workspace only. Merge listed
@@ -162,8 +165,11 @@ class Workers:
                     "shared_checkout": project["path"], "integration": policy.get("integration", False)},
                 "execution_policy": {k: v for k, v in policy.items() if k != "verification"},
             }
-            if policy.get("verification"):  # Pre-tier assignments keep their original prompt.
-                prompt["verification"] = plan(policy["verification"], policy.get("integration"))
+            prompt["verification"] = plan(policy.get("verification"), policy.get("integration"))
+            from .assignment_workflow import REPAIR_LIMIT
+            repairs = self.db.setting("assignment_workflow:" + task["id"], {}).get("repair_rounds", 0)
+            prompt["verification"]["repair_rounds_used"] = repairs
+            prompt["verification"]["repair_rounds_remaining"] = max(0, REPAIR_LIMIT - repairs)
             selected = self.db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task["id"],))
             if selected:
                 prompt["task_context"] = json.loads(selected["payload"])
@@ -347,7 +353,7 @@ class Workers:
                 )
 
     async def verify(self, task, execution_id, root, route):
-        """Classify the actual branch diff; sensitive actual changes get one cheap read-only diff review.
+        """Bind actual changed files and exact clean commit without another AI review.
 
         Evidence is recorded internally and never blocks or changes completion; the manager decides follow-up.
         """
@@ -362,21 +368,18 @@ class Workers:
 
     async def _verify(self, task, execution_id, root, route):
         policy = self.db.setting("assignment_policy:" + task["id"], {})
-        if not policy.get("verification"):
-            return
-        assigned = plan(policy["verification"], policy.get("integration"))["tier"]
-        record, paths, diff, truncated = {"assigned": assigned, "actual": "unknown", "effective": assigned}, [], "", False
+        assigned = "normal"
+        record, paths = {"version": 3, "assigned": assigned, "actual": "normal", "effective": assigned}, []
         try:
             if not task.get("workspace_base"):
                 raise ValueError("No assignment base; actual diff unavailable")
-            paths, diff, truncated = changes(root, task["workspace_base"])
+            paths, _, _ = changes(root, task["workspace_base"])
             from .parallel import git
             if not git(root, 'status', '--porcelain'):
                 record['commit'] = git(root, 'rev-parse', 'HEAD')
-            actual, reasons = floor(paths) if paths else ("small", ["no file changes"])
             declared = policy.get("change_paths", [])
-            undeclared = [p for p in paths if not any(p == d or p.startswith(d.rstrip("/") + "/") for d in declared)]
-            record.update(actual=actual, effective=max(assigned, actual, key=rank), reasons=reasons[:12],
+            undeclared = [p for p in paths if declared and not any(p == d or p.startswith(d.rstrip("/") + "/") for d in declared)]
+            record.update(
                           changed_files=paths[:100], changed_count=len(paths), undeclared=undeclared[:20])
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             record["actual_error"] = str(error)[:300]
@@ -384,12 +387,10 @@ class Workers:
         with self.db.connect() as conn:
             current = conn.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone()
             record['scope'] = assignment_evidence(conn, current)
-        record["escalated"] = rank(record["effective"]) > rank(assigned)
-        record["review_reasons"] = review_reasons(paths, (task["description"] or "") + "\n" + (task["acceptance"] or ""), diff)
-        record["review_required"] = bool(record["review_reasons"])
-        if record["review_required"]:
-            record["review"] = await self.review(task, root, route, paths, diff, truncated) if paths else {
-                "status": "unavailable", "reason": "No actual changes to review"}
+        record["escalated"] = False
+        record["review_required"] = False
+        record["review_reasons"] = []
+        record["review"] = {"status": "skipped", "reason": "Owner removed independent review"}
         with self.db.transaction() as conn:
             self.db.event(conn, "task.verification", record, task["project_id"], task["id"], execution_id)
 
@@ -463,7 +464,8 @@ class Workers:
             from .assignment_workflow import get, update
             workflow = get(conn, execution['task_id'])
             if workflow and workflow['state'] in {'actionable', 'review'} and not execution['stop_requested']:
-                update(self.db, conn, execution['task_id'], 'review', 'Worker finished; result review and authorized follow-up remain', execution_id)
+                update(self.db, conn, execution['task_id'], 'complete' if status == 'completed' else 'actionable',
+                       'Worker completed; normal automatic handoff' if status == 'completed' else 'Worker failed; bounded repair remains', execution_id, automatic=status == 'completed')
             release_gate(conn, execution_id, status == "completed")
             self.db.event(
                 conn,
@@ -604,7 +606,7 @@ class Workers:
                         from .parallel import active_workers
                         with self.db.transaction() as conn:
                             active = active_workers(conn, excluding=execution_id)
-                        if active >= self.settings.max_workers:
+                        if active >= min(self.settings.max_workers, 1):
                             with self.db.transaction() as conn:
                                 conn.execute(
                                     "UPDATE executions SET retry_at=? WHERE id=?", (time.time() + 5, execution_id)

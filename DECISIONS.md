@@ -1,3 +1,14 @@
+# Current verification decision — 2026-10-15
+
+Owner-approved simplification supersedes earlier tier and independent-review requirements: targeted tests,
+smoke/startup/health and relevant build/lint for tasks; one full backend execution at exact combined release
+preparation. No separate review/escalation loop. Three repair continuations maximum on the same assignment,
+durable across retries/restarts; one global sequential coding worker. Automatic ON deployment needs no repeated
+consent and retains integrity, scope, idle/drain, backups, health/rollback and OFF/holds. Destructive project/data
+delete or force-push needs confirmation; ordinary edits proceed. Authorized prompts may contain secrets.
+Memory updates are tied to meaningful facts, not a compulsory per-task stage. Current contract: docs/VERIFICATION_TIERS.md.
+Historical decisions below retain their original scope and are superseded where incompatible.
+
 # Architecture decisions
 
 Use the underlying Codex agent for investigation, implementation, validation and Git. The manager owns conversation, complete-objective delegation, persisted execution state and automatic result delivery. Keep sequential-default project admission and one global capacity limit. The 2026-10-14 owner approval supersedes unconditional exclusivity with explicit per-request, isolated parallel admission; docs/PARALLEL_EXECUTION.md defines dependency/conflict and serialized integration guards.
