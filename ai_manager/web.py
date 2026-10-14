@@ -48,6 +48,10 @@ class ProjectBody(BaseModel):
     name: str | None = Field(default=None, max_length=200)
 
 
+class ProjectVisibility(BaseModel):
+    visible: bool = Field(strict=True)
+
+
 class ProjectUpdate(BaseModel):
     revision: int
     display_name: str | None = Field(default=None, max_length=80)
@@ -70,6 +74,7 @@ class MessageBody(BaseModel):
     content: str = Field(default='', max_length=64000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     todos: list[TodoSelection] = Field(default_factory=list, max_length=200)
+    parallel: bool = False
     conversation_id: str | None = None
     mode: Literal["conversation", "auto", "execute"] = "auto"
 
@@ -134,6 +139,10 @@ class DeploymentCancel(BaseModel):
     nonce: str = Field(pattern=r"^[0-9a-f]{32}$")
 
 
+class DeploymentIntentCancel(BaseModel):
+    intent_id: str = Field(pattern=r"^[0-9a-f]{32}$")
+
+
 class TaskControl(BaseModel):
     revision: int
     action: str
@@ -185,7 +194,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             await chat.close()
             lock_file.close()
 
-    app = FastAPI(title="Linko Manager", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Linko Bot Boss", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
     app.state.workers, app.state.scheduler = workers, scheduler
     app.state.audio = audio
@@ -209,7 +218,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
                     return JSONResponse({"detail": "CSRF token required"}, status_code=403)
         mutation = request.method not in {'GET', 'HEAD', 'OPTIONS'}
-        drain = request.url.path in {'/api/login', '/api/deployment/cancel'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
+        drain = request.url.path in {'/api/login', '/api/deployment/cancel', '/api/deployment/intents/revoke'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
         if request.method == 'PATCH' and request.url.path.startswith('/api/tasks/'):
             body = await request.json()
             drain = body.get('action') in {'stop', 'pause', 'cancel'}
@@ -261,7 +270,20 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get('/api/deployment', dependencies=[Depends(require_owner)])
     def deployment_status():
-        return scheduler.deployment.status()
+        return {**scheduler.deployment.status(), 'intents': scheduler.intents.list()}
+
+    @app.post('/api/deployment/intents/revoke', dependencies=[Depends(require_owner)])
+    def revoke_deployment_intent(body: DeploymentIntentCancel):
+        from .deployment_intent import revoke, rows
+        with db.transaction() as conn:
+            value = next((v for v in rows(conn) if v['id'] == body.intent_id), None)
+            if not value or value['status'] == 'dispatched':
+                raise HTTPException(409, 'Use the exact pending deployment cancellation for a dispatched intent')
+            try:
+                revoke(db, conn, 'Owner cancelled deployment intent in Settings', intent_id=body.intent_id)
+            except ValueError as error:
+                raise HTTPException(409, str(error)) from error
+        return {'status': 'revoked'}
 
     @app.post('/api/deployment/cancel', dependencies=[Depends(require_owner)])
     def cancel_deployment(body: DeploymentCancel):
@@ -511,6 +533,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def update_project(project_id: str, body: ProjectUpdate):
         return registry.update(project_id, body.revision, body.model_dump(exclude={"revision"}, exclude_none=True))
 
+    @app.put("/api/projects/{project_id}/visibility", dependencies=[Depends(require_owner)])
+    def project_visibility(project_id: str, body: ProjectVisibility):
+        return registry.set_visibility(project_id, body.visible)
+
     @app.get("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
     def detail(project_id: str):
         return {
@@ -553,7 +579,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def submit(body: MessageBody):
         return await chat.submit(
             body.project_id, body.content, body.conversation_id, mode=body.mode, request_id=body.request_id,
-            attachment_ids=body.attachment_ids, todos=[entry.model_dump() for entry in body.todos]
+            attachment_ids=body.attachment_ids, todos=[entry.model_dump() for entry in body.todos], parallel=body.parallel
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])

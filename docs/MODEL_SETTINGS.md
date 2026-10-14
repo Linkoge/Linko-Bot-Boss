@@ -1,4 +1,8 @@
-# Codex / Claude provider switch — 2026-10-14, not deployed
+# Codex / Claude provider switch — succeeded live, 2026-10-14
+
+Live receipt `deployment-helper/results/5ad868944ca0bfef14d430c5eb04566d.json` establishes
+provider activation at `b0f0c8d`; the current integrated parallel/composer candidate preserves
+these settings and behavior. [Current preparation/status](../STATE.md).
 
 The settings dialog has a Codex | Claude toggle on top; the gear button shows the active provider's
 logo (OpenAI or Anthropic). The active provider (`model_provider` setting) applies to **new** manager

@@ -1,3 +1,13 @@
+# Parallel recovery ownership — 2026-10-14
+
+The [parallel execution contract](PARALLEL_EXECUTION.md) extends retained task/thread identity with
+exact workspace/branch/base. Recovery never switches to the shared checkout or creates a replacement
+worktree for a missing/changed owned workspace. Existing native outcome/launch identity inspection,
+process cleanup, unanswered questions, owner/project holds, account gates and capacity remain enforced.
+Integration reservations survive restart and stop new project writers until confirmed cleanup;
+explicit resumed integration retains pinned source commits. No additional recurring AI call is added.
+Current actual live versus prepared state: [STATE.md](../STATE.md); older headings below are historical.
+
 # Integrated activation status — 2026-10-13
 
 Current integrated activation target: `integrated-recovery-append-popup-v1-20261013`; see [STATE.md](../STATE.md).
@@ -54,8 +64,10 @@ Manager Stop atomically holds open assignments in its origin and records `chat.s
 result delivery remains held until an explicit owner follow-up/continuation. Task pause/cancel/continue and
 manager wait update workflow in their existing control transaction. Pending native owner questions also block
 worker restart inference until answered. Paused/waiting/cancelled completion reports use Conversation mode;
-internal result/recovery tools cannot resume a held target or project or request deployment. Ordinary owner
-Auto/Execute retains explicit continuation/deployment behavior. Worker results are not permission grants.
+internal result/recovery tools cannot resume a held target/project or create deployment permission.
+The scoped deployment-intent candidate allows only consumption of previously recorded owner intent after
+exact evidence review; see [deployment contract](DEPLOYMENT_HELPER.md) for activation limitations.
+Ordinary owner Auto/Execute retains explicit continuation behavior. Worker results are not permission grants.
 
 Internal wake notices have no user/worker chat message row, no owner Send/recency event, no bulk worker
 output/objective/history transport, and a compact task/state/evidence reference in the normal manager prompt.

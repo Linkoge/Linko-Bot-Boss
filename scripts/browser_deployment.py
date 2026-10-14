@@ -9,6 +9,7 @@ from pathlib import Path
 import httpx
 from playwright.sync_api import sync_playwright
 
+from ai_manager.db import Database
 from ai_manager.deployment import Handoff, atomic
 
 
@@ -72,9 +73,25 @@ uvicorn.run(app,host='127.0.0.1',port=PORT,log_level='error')
                     page.wait_for_function("()=>document.querySelector('#deployment-status').textContent.includes('cancelled')")
                     assert not page.locator('#deployment-cancel').is_visible()
                     assert not handoff.gated()
+                    # Disposable durable unused intent; backend source/routing is
+                    # exercised by test_deployment_intent, this covers owner UI.
+                    db = Database(root/'data/manager.sqlite3')
+                    identifier = str(width).zfill(32)
+                    db.set_setting('deployment_intent:'+identifier, {
+                        'id': identifier, 'project_id': 'ui-fixture', 'conversation_id': 'ui-fixture',
+                        'source_message_id': 'ui-fixture', 'checked_owner_message': 'ui-fixture',
+                        'scope': {'release_id': release}, 'candidate': {'release_id': release},
+                        'task_ids': [], 'status': 'recorded'})
+                    page.locator('#deployment-check').click()
+                    page.locator('#deployment-intents button').wait_for()
+                    assert 'recorded' in page.locator('#deployment-intents').inner_text()
+                    page.locator('#deployment-intents button').click()
+                    page.wait_for_function("()=>document.querySelector('#deployment-intents').children.length===0")
+                    assert db.setting('deployment_intent:'+identifier)['status'] == 'revoked'
+                    assert not handoff.gated()
                     page.close()
                 browser.close()
-            print('Deployment browser checks passed: desktop/mobile status, admission and cancellation')
+            print('Deployment browser checks passed: desktop/mobile status, admission, pending-request and unused-intent cancellation')
         finally:
             process.terminate()
             process.wait(timeout=10)

@@ -15,12 +15,13 @@ function renderAudio(){
   else $('microphone').replaceChildren(microphoneIcon.cloneNode(true));
   $('microphone').setAttribute('aria-label',recording?'Stop recording and transcribe':phase==='error'?'Retry recording transcription':'Record microphone');
   $('microphone').title=audioSupported()?'Record microphone':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
-  $('microphone').disabled=audioState.loading||busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));
+  $('microphone').disabled=visibilityPending.size>0||audioState.loading||busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));
   $('audio-upload').hidden=!recording;$('audio-upload').disabled=!recording;
   $('send').type=session?'button':'submit';
   $('send').disabled=session?!recording||session.project!==state.project||state.pending.has(state.project)||submissions.has(state.project):state.pending.has(state.project);
   if(typeof attachmentState!=='undefined'&&attachmentState.uploads.has(state.project))$('send').disabled=true;
   if(typeof updateComposer==='function')updateComposer();
+  renderProjectAvailability();
   for(const id of ['archive-chat','clear-chat','restore-trash','empty-trash'])if(session&&session.project===state.project)$(id).disabled=true;
   if(!session&&state.history)updateChatTrashAvailability();
 }
@@ -85,9 +86,9 @@ function interruptAudio(session,message){
   if(audioState.session!==session||session.phase!=='recording')return;
   session.interrupted=true;session.message=message;session.send=false;finishAudio(false);
 }
-function finishAudio(send){
+function finishAudio(send,parallel=false){
   const session=audioState.session;if(session?.phase!=='recording')return;
-  session.send=send&&!session.changed;session.phase='stopping';if(!session.interrupted)session.message='';clearInterval(session.timer);renderAudio();
+  session.send=send&&!session.changed;session.parallel=parallel&&session.send;session.phase='stopping';if(!session.interrupted)session.message='';clearInterval(session.timer);renderAudio();
   if(session.recorder.state!=='inactive')session.recorder.stop();releaseMicrophone(session);
 }
 function appendTranscript(session,text){
@@ -123,7 +124,7 @@ async function transcribeAudio(session){
     audioState.session=null;clearAudioCheckpoint();renderAudio();
     if(send){
       submitting=true;
-      await sendSubmission({project_id:session.project,conversation_id:session.conversation,mode:session.mode,content});
+      await sendSubmission({project_id:session.project,conversation_id:session.conversation,mode:session.mode,content,parallel:!!session.parallel});
     }else if(state.project===session.project){$('message-input').focus();}
     else notice(`Transcript added to ${session.label}'s draft.`);
   }catch(error){

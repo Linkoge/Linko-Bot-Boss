@@ -1,4 +1,4 @@
-# Installable Linko Bot Manager
+# Installable Linko Bot Boss
 
 Live release: `pwa-standalone-v1-20261013`. Deployment succeeded; receipt
 `/home/codex/.local/share/linko-bot-manager/deployment-helper/results/09f882af21fb28ab5870da74fee1c3b6.json`,

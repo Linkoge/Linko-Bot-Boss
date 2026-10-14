@@ -1,3 +1,146 @@
+# Current-base compatibility and provider history — 2026-10-14
+
+The original v3 failed before activation because its base was 6c42d5b while the provider
+release had succeeded at b0f0c8d. Exact evidence and fresh v4 target: [STATE.md](../STATE.md).
+The helper base/ancestry gates remain intact; old receipts/manifests are not rewritten.
+Reviewed helper v2 includes the original pinned schema12/index migration and workspace
+backups, and now separates Claude UUIDs from Codex rollout references. Claude application
+history and required native session JSONL are copied privately and verified. Default native
+root is ~/.claude; a configured `claude_native` path can be reviewed in helper config when
+needed. Missing/ambiguous sessions fail closed, rather than claiming resumability. Original
+provider selection and both providers' model settings join the protected cutover values.
+Installed v1 is unchanged; v2 upgrade is a concrete future manager/operator activation
+prerequisite. No deployment, settings changes, helper upgrade or restart on this task.
+
+# Reviewed schema12/helper v2 bundle — 2026-10-14
+
+Candidate `parallel-composer-integrated-v3-20261014` includes the rename/stash/owner-intent fixes and
+all succeeded To-Do/chat/PWA functionality. Preparation uses actual succeeded live base 6c42d5b,
+receipt `deployment-helper/results/2bf6554aecb9fd66c9ab49554bfb95ac.json`. Older PWA-only and waiting-idle
+observations below are historical. The owner explicitly says do not deploy or push this new bundle.
+
+The installed independent helper remains v1, unchanged. It refuses any db.py diff. Reviewed v2 permits
+ONLY the pinned schema11→12 db.py byte hashes in `ai_manager/deployment.py`: three nullable assignment
+workspace columns and the shared/isolated unique index contract. Unknown schema/dependency changes
+still reject. The manifest records exact schema contract and packaged `helper-v2.py` SHA256; snapshot
+verification compares all original columns/rows, requires new workspace columns NULL on cutover,
+checks exact indices and allows only marker12. Immediate fenced rollback preserves additive columns,
+original rows and old code; no old database snapshot overwrites later data. A later rollback after
+isolated tasks exist requires separate ownership-aware review, not this immediate cutover fallback.
+
+Release preparation is serialized by its private file lock and receipt-bound SQLite reservation;
+manager integration cannot acquire its global reservation during preparation. Fixed tests/browser
+checks validate the exact combined commit before immutable bundle/manifest creation. Installed v1
+cannot activate this release until reviewed helper v2 is separately installed. The packaged helper
+is installed only by an explicit future operation using `scripts/install_deployment_helper_v2.py`
+with exact release ID and existing --data. It verifies artifact hash/config/unit, rejects pending
+handoffs/lock contention, preserves the old helper/unit receipt and restarts only the independent
+helper service. This task does NOT invoke that installer, a deploy request, service restart or push.
+Then normal owner-authorized exact release deployment retains all idle/drain/backup/auth/data/asset
+checks. Only durable matching succeeded evidence establishes activation. Current facts/report:
+[STATE.md](../STATE.md). Old blanket no-schema capability wording below describes installed v1.
+
+# Scoped owner deployment handoff — candidate, 2026-10-14
+
+Exact integrated candidate: `owner-deploy-intent-stash-v1-20261014`, isolated checkout
+`/home/codex/checkouts/linko-deployment-intent-20261014`, descended from completed
+stash commit `751ac9374f0c41ee40ffcf6737d11a7170092888`. It preserves rename, To-Do/chat,
+recording/Agents and all prior PWA changes. Deployment remains pending; readiness requires
+its immutable manifest. Full report and exact verification receipts:
+`/home/codex/.local/share/linko-bot-manager/deployments/deployment-intent-20261014/REPORT.md`.
+Historical live/pending claims below are evidence for their original date; current live is
+PWA commit `3bb554b7efa26d8fae695c5340e8a12366d75339`, succeeded nonce
+`09f882af21fb28ab5870da74fee1c3b6`. The separate older To-Do/chat request nonce
+`2bf6554aecb9fd66c9ab49554bfb95ac` is waiting_idle, not success for this candidate.
+
+## Owner source and scope contract
+
+The manager must record intent in the actual Auto/Execute owner turn before asynchronous
+assignment work. `record_deployment_intent(project_id, owner_deployment_quote, release_id)`
+freezes one existing prepared release and its manifest/commit/base/bundle/validation evidence.
+For existing preparation assignments, use fixed `task_ids` instead of release_id. For a NEW
+prepare-and-deploy assignment, `delegate(owner_deployment_quote, ...)` records its owner
+source and deterministic assignment request before transport startup/worker scheduling.
+An existing exact-release intent automatically links a same-owner delegation as its audit;
+passing `intent_id` explicitly also documents this relationship. No intent is inferred from
+worker output, old docs, internal notifications or owner requests that merely implement features.
+
+Records use existing transactional SQLite settings/events, with owner ID, exact message,
+message digest, source execution/conversation/project, fixed scope, status and review evidence.
+The manager interprets the natural-language owner's deployment instruction within the existing
+trusted manager-tool boundary; source provenance and scope are enforced by code. There is no
+regex permission guessing, historical approval migration, new AI reviewer or separate service.
+Workers remain trusted same-user preparation agents, not isolated security principals.
+
+For assignment intent, trusted preparation includes repeatable `--task-id <exact-ID>` flags.
+The manifest binds only those assignment IDs and hashes of their project/objective/acceptance/
+request/context evidence. Manager review requires matching captured assignment hashes and
+completed, inactive, unheld preparation with a completed execution. Failure or later changed
+assignment scope cannot authorize deployment. No CLI flag creates owner intent.
+
+Retrieve full results/coverage evidence, then call
+`review_deployment_intent(project_id,intent_id,release_id,reason)` to freeze/accept the exact
+prepared candidate. Call `deploy_release(project_id,intent_id,release_id)` afterward. A worker
+result/recovery turn can review/consume the existing matching owner intent; it cannot create
+or preserve one, authorize a different release/project/conversation, or resume a project.
+An exact-release intent never expands to a new integrated release. Choose fixed authorized
+assignment scope before preparation when a new candidate is necessary.
+
+Every newer accepted owner request in that project, original conversation or All Projects,
+including queued/unprocessed requests, holds dispatch until reviewed. The latest actual owner
+turn may `revise_deployment_intent(decision=preserve,reason=...)` only when its correction
+retains the original scope. Cancel/wait/pause/changed scope means revoke; changed scope needs
+a new explicit owner deployment request. Preserve does not reset a revoked/failed/consumed
+intent. Editing/removing original source also blocks consumption. Task pause/cancel/wait,
+owner_wait/deferred follow-up, project pause/archive/remove and owner Stop reply revoke their
+unused associated intents. Unrelated tasks/projects are unaffected; visibility is unaffected.
+
+Settings shows unused intents and an authenticated CSRF-protected cancellation button.
+After dispatch, use the existing exact pending nonce cancellation; it remains available only
+before acknowledgement. Cancellation reconciles a request-file/SQL crash gap before claiming
+an unused intent revoked. An acknowledged cutover cannot be silently cancelled or resumed.
+
+Consumption is serialized in SQLite and retains the existing fixed-operation helper protocol.
+Nonce receipts/origin include intent/source/candidate. Restart recovery and duplicate calls
+return the retained exact receipt, even after active.json moves to another request. Failed,
+rolled-back, rollback_failed, cancelled and succeeded receipts never cause another activation.
+Dispatch errors retain dispatch_failed and require a new explicit owner instruction/prepared
+receipt rather than automatic retries. A protocol request written before SQL consumption is
+recovered from durable origin; cancellation also closes that crash gap. Existing idle/admission,
+backup, base/schema/dependency, concurrency, rollback, auth and held-work guards remain.
+
+Native manager compatibility hashes instructions plus tool schema. Activation rotates future
+manager threads to this contract through the existing path; running turns are not rewritten.
+Intent summaries appear only when relevant, preserving the lean ordinary prompt.
+
+## Safe activation while the new code is not live
+
+This worker performs no activation, restart, push, pending-request cancellation or permission
+backfill. The original owner message `a1ee54202d4841b7a00db31a1fb9e9df` authorized releases
+pending at that time. It did not authorize later rename/stash/this fix. Renewed message
+`bab671e918f44f35935ea52f0f0884a9` already produced the exact older To-Do/chat request above;
+that request remains unchanged. Let its existing helper idle path settle after actual jobs,
+queues/questions/deliveries end, or have the owner cancel its exact pending nonce in Settings
+if they choose to replace the target. Never cancel held work or manufacture idleness.
+
+The current live manager lacks these intent tools and rejects deployment from internal result
+turns. To activate THIS integrated candidate before the fix is live, the owner must issue a
+fresh Auto/Execute deployment instruction naming `owner-deploy-intent-stash-v1-20261014`
+after any existing request has settled or been owner-cancelled. That OWNER turn reviews the
+already prepared evidence and immediately uses the EXISTING legacy
+`deploy_release(release_id="owner-deploy-intent-stash-v1-20261014")`, with the manager project
+selected; do not delegate another audit and then attempt this legacy call from a result turn.
+The controlled helper still waits for real idleness, backs up, verifies and rolls back as usual.
+No shell/bootstrap/manual runtime bypass is needed. A pending request is not deployment success.
+If actual live HEAD advances (including the older pending request succeeding), reprepare the
+same reviewed source against that actual base under a fresh immutable release ID, then obtain
+owner instruction for that exact ID; never overwrite a manifest or bypass base checks.
+
+Only after a durable matching succeeded receipt activates the new candidate can new owner
+turns use its durable intent contract. No older message can be retroactively turned into an
+intent from an internal turn. Future helper installation changes remain separately reviewed;
+the independent helper executable is not changed by this application release.
+
 # Controlled deployment helper — 2026-10-12
 
 Implementation is prepared in `/home/codex/checkouts/linko-deploy-helper-20261012`.

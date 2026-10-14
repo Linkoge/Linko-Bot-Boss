@@ -282,11 +282,18 @@ class Chat:
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         source = self.db.one("SELECT e.*,t.lifecycle AS task_status,t.blocker FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery_execution=?", (execution_id,))
         prompt = {"mode": mode, "message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
+        prompt['request_execution'] = {'parallel_permission': self.db.setting('execution_parallel:' + execution_id, {}),
+                                       'scope': 'this owner request only; refinements stay on existing assignment'}
+        from .deployment_intent import Intents
+        intents = [v for v in Intents(self.db).list(conversation['project_id'])
+                   if v['conversation_id'] == conversation['id'] and v['status'] in {'recorded', 'reviewed', 'dispatch_failed'}]
+        if intents:
+            prompt['deployment_intents'] = intents
         if source:
             prompt["worker_result"] = self.result_notice(source)
         recovery_task = self.db.setting('execution_recovery:' + execution_id)
         if recovery_task:
-            prompt['message'] = 'Internal unfinished-work review; inspect this existing assignment and result only. Preserve owner holds. No deployment authorization.'
+            prompt['message'] = 'Internal unfinished-work review; inspect this existing assignment and result only. Preserve owner holds. No new deployment authorization; only a matching recorded owner intent may be reviewed/consumed.'
             prompt['assignment_followup'] = {'task_id': recovery_task, 'state': self.db.setting('assignment_workflow:' + recovery_task),
                                              'evidence_actions': ['read_task', 'read_result']}
 
@@ -341,13 +348,17 @@ class Chat:
             return json.loads(row["receipt"])
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto", request_id=None,
-                     attachment_ids=None, recovery_task=None, todos=None):
+                     attachment_ids=None, recovery_task=None, todos=None, parallel=False):
         from .deployment import Handoff
         handoff = Handoff(self.db.path.parent)
         if handoff.ready_to_stop() or (handoff.gated() and not (delivery or recovery_task)):
             raise ValueError('Deployment pending; wait before submitting new work')
+        if parallel and (type(parallel) is not bool or mode == 'conversation' or delivery or recovery_task or not project_id):
+            raise ValueError('Parallel Send requires an owner Auto/Execute request in one project')
         display_content = content
         payload = [project_id, conversation_id, content, mode]
+        if parallel:
+            payload.append({'parallel': True})
         if attachment_ids:
             payload.append(attachment_ids)
         if todos:
@@ -422,6 +433,10 @@ class Chat:
                 "INSERT INTO messages VALUES(?,?,?,?,?,?,?)",
                 (response_id, conversation["id"], "assistant", "", "queued", execution_id, now + 0.0001),
             )
+            if parallel:
+                conn.execute('INSERT INTO settings VALUES(?,?)', ('execution_parallel:' + execution_id,
+                             json.dumps({'source': 'ui', 'execution_id': execution_id, 'project_id': project_id})))
+                self.db.event(conn, 'chat.parallel_permission', {'source': 'ui', 'request_id': request_id}, project_id, execution_id=execution_id)
             if items:
                 conn.execute('INSERT INTO settings VALUES(?,?)',
                              ('execution_attachments:' + execution_id, json.dumps(references)))
@@ -723,6 +738,8 @@ class Chat:
             self.db.event(conn, 'chat.stop_requested', {'source': 'authenticated_owner_interrupt_endpoint'}, row['project_id'], execution_id=execution_id)
             from .assignment_workflow import hold_conversation
             hold_conversation(self.db, conn, row['conversation_id'], execution_id)
+            from .deployment_intent import revoke
+            revoke(self.db, conn, 'Owner stopped manager reply', conversation_id=row['conversation_id'])
         if row["status"] == "recovering" and execution_id not in self.jobs:
             if row["turn_id"] and owns_pid(self.server, row["pid"]):
                 try:

@@ -60,13 +60,14 @@ function action(fn){return async event=>{const button=event?.currentTarget;if(bu
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
 function showAuth(){$('agent-list').replaceChildren();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
-async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
+async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
 let refreshVersion=0;
 async function refresh(loadChat=true){
   const version=++refreshVersion,selection=state.selection,project=state.project;
   const portfolio=await api('/api/portfolio'+(project?'?project_id='+encodeURIComponent(project):''));
   if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return false;
   preserveChatPosition(()=>{state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();});
+  if(state.project&&portfolio.projects.find(p=>p.id===state.project)?.visible===false&&!projectSwitchLocked()){await selectProject(null);return false;}
   if(portfolio.queue_error)notice(portfolio.queue_error);
   if(state.view==='todo')await loadTodos(selection);
   if(loadChat&&!state.source&&!state.pending.has(project))await loadHistory(selection);
@@ -88,7 +89,7 @@ function projectLabel(p){
 function renderProjects(){
   const scroll=$('project-tabs').scrollLeft,focused=document.activeElement.closest('#projects button')?.dataset.project,globalButton=$('all-projects');
   $('projects').replaceChildren();
-  for(const p of [null,...state.portfolio.projects].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))){
+  for(const p of [null,...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))){
     const id=p?.id||null,b=p?element('button',projectLabel(p),'project-button'):globalButton;
     b.classList.toggle('selected',state.project===id);b.title=p?p.path:'Global manager conversation and portfolio';
     b.dataset.project=id||'';b.setAttribute('aria-pressed',String(state.project===id));
@@ -98,25 +99,66 @@ function renderProjects(){
   $('project-tabs').scrollLeft=scroll;
   $('all-projects').classList.toggle('selected',!state.project);$('all-projects').setAttribute('aria-pressed',String(!state.project));
   if(!$('project-menu').hidden)renderProjectMenu();
+  renderProjectAvailability();
 }
 function closeProjectMenu(focus=false){$('project-menu').closest('.navigation').classList.remove('project-menu-open');$('project-menu').hidden=true;$('project-menu-button').setAttribute('aria-expanded','false');if(focus)$('project-menu-button').focus();}
-function renderProjectMenu(){
-  const menu=$('project-menu'),focused=menu.contains(document.activeElement)?document.activeElement.dataset.project:undefined;menu.replaceChildren();
-  for(const p of [null,...state.portfolio.projects].sort(compareContexts)){
-    const selected=state.project===(p?.id||null),button=element('button',p?projectLabel(p):'◈ All Projects · global context',selected?'selected':'');
-    button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(selected));button.dataset.project=p?.id||'';
-    button.onclick=action(async()=>{closeProjectMenu(true);await selectProject(p?.id||null);});menu.append(button);
-  }
-  if(state.project){const rename=element('button','Rename selected project…');rename.setAttribute('role','menuitem');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};menu.append(rename);}
-  if(focused!==undefined)menu.querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
+let stashedProjectsOpen=false,renderingProjectMenu=false;
+const visibilityPending=new Set();
+function projectSwitchLocked(){return typeof audioState!=='undefined'&&!!audioState.session&&['starting','recording','stopping'].includes(audioState.session.phase);}
+function renderProjectAvailability(){
+  const locked=projectSwitchLocked();
+  for(const b of $('projects').querySelectorAll('button'))b.disabled=locked&&b.dataset.project!==(state.project||'');
+  for(const b of $('project-menu').querySelectorAll('button[data-project]'))b.disabled=locked&&b.dataset.project!==(state.project||'')&&b.dataset.project!=='rename';
+  for(const c of $('project-menu').querySelectorAll('input'))c.disabled=locked||visibilityPending.has(c.dataset.visibility);
 }
-$('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu').closest('.navigation').classList.add('project-menu-open');$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-checked="true"]').focus();};
+async function setProjectVisibility(p,visible){
+  if(projectSwitchLocked()){notice('Stop recording before switching or stashing projects.');renderProjectMenu();return;}
+  const restoreFocus=$('project-menu').contains(document.activeElement);
+  visibilityPending.add(p.id);renderProjectAvailability();renderAudio();
+  try{
+    const updated=await api(`/api/projects/${p.id}/visibility`,{method:'PUT',body:JSON.stringify({visible})});
+    ++refreshVersion;
+    const current=state.portfolio.projects.find(p=>p.id===updated.id);if(current)current.visible=updated.visible;
+    if(!visible&&state.project===p.id)await selectProject(null);
+    else renderProjects();
+  }finally{visibilityPending.delete(p.id);renderProjectMenu();renderAudio();
+    if(restoreFocus&&!$('project-menu').hidden&&document.activeElement===document.body){const target=$('project-menu').querySelector(`[data-visibility="${p.id}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target||$('project-menu-button')).focus({preventScroll:true});}
+  }
+}
+function renderProjectMenu(){
+  const menu=$('project-menu'),active=menu.contains(document.activeElement)?document.activeElement:null;
+  const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;menu.replaceChildren();
+  const global=element('button','◈ All Projects · global context',!state.project?'selected':'');
+  global.dataset.project='';global.setAttribute('aria-pressed',String(!state.project));
+  global.onclick=action(async()=>{if(projectSwitchLocked()){notice('Stop recording before switching projects.');return;}closeProjectMenu(true);await selectProject(null);});
+  const addRow=(p,parent,stashed)=>{
+    const row=element('div',undefined,'project-menu-row'),checkbox=element('input');checkbox.type='checkbox';checkbox.checked=!stashed;
+    checkbox.dataset.visibility=p.id;checkbox.setAttribute('aria-label',`Show ${projectLabel(p)} in navigation`);
+    checkbox.onchange=action(()=>setProjectVisibility(p,checkbox.checked));row.append(checkbox);
+    if(stashed)row.append(element('span',projectLabel(p)));
+    else{const button=element('button',projectLabel(p),state.project===p.id?'selected':'');button.dataset.project=p.id;button.setAttribute('aria-pressed',String(state.project===p.id));
+      button.onclick=action(async()=>{if(projectSwitchLocked()){notice('Stop recording before switching projects.');return;}closeProjectMenu(true);await selectProject(p.id);});row.append(button);}
+    parent.append(row);
+  };
+  const sorted=[...state.portfolio.projects].sort(compareContexts);
+  for(const p of [null,...sorted.filter(p=>p.visible!==false)].sort(compareContexts)){if(p)addRow(p,menu,false);else menu.append(global);}
+  const stashed=sorted.filter(p=>p.visible===false);
+  if(stashed.length){const details=element('details'),summary=element('summary',`Stashed projects (${stashed.length})`);details.open=stashedProjectsOpen;
+    details.ontoggle=()=>{stashedProjectsOpen=details.open;};details.append(summary);for(const p of stashed)addRow(p,details,true);menu.append(details);}
+  if(state.project){const rename=element('button','Rename selected project…');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};menu.append(rename);}
+  renderProjectAvailability();
+  if(focusKey!==undefined){const target=menu.querySelector(`[data-visibility="${focusKey}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target)?.focus({preventScroll:true});}
+  else if(focused!==undefined)menu.querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
+  else if(summaryFocused)menu.querySelector('summary')?.focus({preventScroll:true});
+  menu.scrollTop=scroll;renderingProjectMenu=false;
+}
+$('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu').closest('.navigation').classList.add('project-menu-open');$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-pressed="true"]')?.focus();};
 $('project-menu').onkeydown=event=>{
-  const buttons=[...$('project-menu').querySelectorAll('button')],index=buttons.indexOf(document.activeElement);
+  const controls=[...$('project-menu').querySelectorAll('button:not(:disabled),input:not(:disabled),summary')].filter(e=>e.getClientRects().length),index=controls.indexOf(document.activeElement);
   if(event.key==='Escape'){event.preventDefault();closeProjectMenu(true);}
-  if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();buttons[event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowDown'?1:-1)+buttons.length)%buttons.length].focus();}
-  if(event.key==='Tab')closeProjectMenu();
+  if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();controls[event.key==='Home'?0:event.key==='End'?controls.length-1:(index+(event.key==='ArrowDown'?1:-1)+controls.length)%controls.length]?.focus();}
 };
+$('project-menu').addEventListener('focusout',event=>{if(!renderingProjectMenu&&event.relatedTarget&&!$('project-menu').contains(event.relatedTarget)&&event.relatedTarget!==$('project-menu-button'))closeProjectMenu();});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#project-menu')&&!event.target.closest('#project-menu-button'))closeProjectMenu();});
 function closeChatMenu(focus=false){$('chat-menu').closest('.navigation').classList.remove('chat-menu-open');$('chat-menu').hidden=true;$('chat-menu-button').setAttribute('aria-expanded','false');if(focus)$('chat-menu-button').focus({preventScroll:true});}
 function renderChatModes(){
@@ -124,7 +166,7 @@ function renderChatModes(){
   for(const option of $('chat-mode').options){
     const selected=option.selected,button=element('button',option.text,selected?'selected':'');
     button.type='button';button.dataset.mode=option.value;button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(selected));
-    button.onclick=()=>{$('chat-mode').value=option.value;renderChatModes();closeChatMenu(true);};choices.append(button);
+    button.onclick=()=>{$('chat-mode').value=option.value;renderChatModes();closeChatMenu(true);updateComposer();};choices.append(button);
   }
   $('chat-menu-button').setAttribute('aria-label',`Chat controls, mode ${$('chat-mode').selectedOptions[0].text}`);
 }
@@ -140,18 +182,20 @@ $('chat-menu').onkeydown=event=>{
 };
 $('chat-menu').addEventListener('focusout',event=>{if(!$('chat-menu').contains(event.relatedTarget)&&event.relatedTarget!==$('chat-menu-button'))closeChatMenu();});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#chat-menu')&&!event.target.closest('#chat-menu-button'))closeChatMenu();});
-$('chat-mode').onchange=renderChatModes;
+$('chat-mode').onchange=()=>{renderChatModes();updateComposer();};
 renderChatModes();
 async function selectProject(id){
+  if(id!==state.project&&projectSwitchLocked()){notice('Stop recording before switching projects.');return;}
+  if(id&&state.portfolio?.projects.find(p=>p.id===id)?.visible===false)id=null;
   closeChatMenu();
   if(id!==state.project)audioChanged();
   $('agent-list').replaceChildren();
-  state.drafts.set(state.project,$('message-input').value);saveDrafts();
+  if(state.draftContextReady){state.drafts.set(state.project,$('message-input').value);saveDrafts();}
   const selection=++state.selection;
   state.todoSelection=new Map();state.todos=[];renderTodos(true);
   state.project=id;state.detail=null;state.brief=null;clearTimeout(state.memoryTimer);renderMemory();renderMemoryReview();state.source?.close();state.source=null;
   state.execution=null;state.history=null;$('messages').replaceChildren();updateChatActions();
-  $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';
+  $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';state.draftContextReady=true;
   $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderAttachments();renderAudio();
   state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],active_agents:0};
   renderProjects();renderTasks();renderAgents();renderQuestions();
@@ -201,6 +245,7 @@ function renderTasks(){
     const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});
     controls.append(records);row.append(controls);$('task-list').append(row);
   }
+  updateComposer();
 }
 function renderAgents(){
   const count=state.portfolio.active_agents||0,badge=$('agent-count'),scope=projectName(state.project);badge.textContent=count;badge.hidden=count===0;badge.title=`${count} working · ${scope}`;
@@ -274,7 +319,7 @@ async function loadHistory(selection=state.selection){
   updateChatActions();
 }
 function messageText(m){if(m.attachments?.length&&!m.content)return '';return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Queued':'Thinking…');}
-function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Bot result':'AI Manager';}
+function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Bot result':'Bot Boss';}
 function chatHasSelection(node=$('messages')){const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&selection.containsNode(node,true);}
 function updateMessageContent(node,text,role='assistant'){
   const markdown=role==='assistant'||role==='worker';
@@ -438,12 +483,12 @@ function editor(title,fields,onSave,reloadContext=true){
 }
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:['active','paused','archived','removed'].map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
-async function sendSubmission(bound=null){
+async function sendSubmission(bound=null,parallel=false){
   if(audioState.session||attachmentState.uploads.has(bound?bound.project_id:state.project))return;
   const project=bound?bound.project_id:state.project,selection=state.selection;
   if(state.pending.has(project))return;
   let submission=submissions.get(project);
-  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id)};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
+  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id),parallel:bound?!!bound.parallel:parallel};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
   state.pending.add(project);$('send').disabled=true;renderAttachments();
   let accepted=false;
   try{
@@ -460,6 +505,7 @@ async function sendSubmission(bound=null){
   }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=state.pending.has(project);updateChatActions();renderAttachments();}}
 }
 $('chat-form').onsubmit=action(async event=>{event.preventDefault();if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length&&!submissions.has(state.project))return;await sendSubmission();});
+$('parallel-send').onclick=async event=>{await action(async()=>{if(audioState.session?.phase==='recording'){finishAudio(true,true);return;}if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length&&!submissions.has(state.project))return;await sendSubmission(null,true);})(event);renderAudio();};
 $('message-input').addEventListener('input',()=>{state.drafts.set(state.project,$('message-input').value);saveDrafts();});
 // Cancel only pointer press focus transfer. Click/keyboard activation remains native;
 // in particular file-picker activation must stay synchronous inside its trusted click.
@@ -531,11 +577,18 @@ function updateComposer(){
   const form=$('chat-form'),input=$('message-input');
   const focused=document.activeElement===input,scroll=input.scrollTop;
   const mobile=mobileComposer();
-  const recording=typeof audioState!=='undefined'&&audioState.session?.project===state.project&&['starting','recording','stopping','transcribing'].includes(audioState.session.phase);
-  const active=recording||(composerKeyboard.active&&form.contains(document.activeElement)&&(!mobile||!composerKeyboard.closed));
+  const recording=typeof audioState!=='undefined'&&audioState.session?.project===state.project;
+  const files=typeof attachmentState!=='undefined'&&(attachmentDraft(state.project).length||attachmentState.uploads.has(state.project));
+  const active=!!input.value.length||!!files||recording||(composerKeyboard.active&&form.contains(document.activeElement)&&(!mobile||!composerKeyboard.closed));
   form.classList.toggle('composer-active',active);
+  form.classList.toggle('composer-recording',recording&&audioState.session?.phase==='recording');
   form.classList.toggle('composer-caret',focused&&!document.hidden&&(!mobile||(composerKeyboard.seen&&!composerKeyboard.closed)));
   $('send').hidden=!active;
+  const relevant=state.project&&(state.portfolio?.tasks||[]).some(task=>task.project_id===state.project&&(['queued','running','waiting','paused','pause_requested','cancel_requested'].includes(task.status)||(task.job_followup&&['actionable','review'].includes(task.job_followup.state))));
+  const parallel=active&&!!relevant&&$('chat-mode').value!=='conversation';
+  $('parallel-send').hidden=!parallel;
+  $('parallel-send').disabled=$('send').disabled||submissions.has(state.project);
+  form.classList.toggle('composer-parallel',parallel);
   // Measure at the initial active size, independent of the previous overflow size.
   form.style.setProperty('--composer-height',(active?140:92)+'px');
   form.classList.toggle('composer-overflow',false);
@@ -650,6 +703,6 @@ $('todo-delete').onclick=action(async()=>{
 });
 
 let deploymentNonce=null;
-async function deploymentStatus(){const result=await api('/api/deployment');deploymentNonce=result.nonce;$('deployment-status').textContent=result.phase==='idle'?'No pending deployment.':`${result.release_id}: ${result.phase.replaceAll('_',' ')}`;$('deployment-cancel').hidden=result.phase!=='waiting_idle';}
+async function deploymentStatus(){const result=await api('/api/deployment');deploymentNonce=result.nonce;$('deployment-status').textContent=result.phase==='idle'?'No pending deployment.':`${result.release_id}: ${result.phase.replaceAll('_',' ')}`;$('deployment-cancel').hidden=result.phase!=='waiting_idle';const container=$('deployment-intents');container.replaceChildren();for(const intent of result.intents||[]){if(['dispatched','revoked'].includes(intent.status))continue;const row=element('p',`${intent.candidate?.release_id||'Preparing release'} · ${intent.needs_owner_review?'Waiting for latest request review':intent.status}`);const cancel=element('button','Cancel deployment intent');cancel.onclick=action(async()=>{await api('/api/deployment/intents/revoke',{method:'POST',body:JSON.stringify({intent_id:intent.id})});await deploymentStatus();});row.append(document.createTextNode(' '),cancel);container.append(row);}}
 $('deployment-check').onclick=action(deploymentStatus);
 $('deployment-cancel').onclick=action(async()=>{await api('/api/deployment/cancel',{method:'POST',body:JSON.stringify({nonce:deploymentNonce})});await deploymentStatus();});

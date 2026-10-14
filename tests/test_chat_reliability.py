@@ -203,7 +203,7 @@ def test_schema10_additive_migration_preserves_all_existing_rows(system):
     before = {table: db.all(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
     migrated = Database(settings.db_path)
     assert before == {table: migrated.all(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
-    assert migrated.one("SELECT max(version) AS version FROM schema_version")["version"] == 11
+    assert migrated.one("SELECT max(version) AS version FROM schema_version")["version"] == 12
     assert migrated.one("PRAGMA integrity_check")["integrity_check"] == "ok"
     assert not migrated.all("PRAGMA foreign_key_check")
 

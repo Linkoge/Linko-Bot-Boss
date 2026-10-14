@@ -12,6 +12,7 @@ import secrets
 import shutil
 import sqlite3
 import subprocess
+import tarfile
 import time
 import urllib.error
 import urllib.request
@@ -21,6 +22,27 @@ from pathlib import Path
 TERMINAL = {'succeeded', 'failed', 'rolled_back', 'cancelled'}
 ID = re.compile(r'^[a-z0-9][a-z0-9-]{0,63}$')
 CRITICAL = ('owner', 'sessions', 'chat_requests', 'todos', 'conversations', 'messages', 'executions', 'tasks')
+
+# Helper v2 permits only this reviewed additive workspace/index migration. The
+# installed v1 remains unchanged and rejects it until separately upgraded.
+PARALLEL_DB_BEFORE = '6bd2534dac72ba60934f0531750eeed250fb6492abdf80af39f4d9d8decd434e'
+PARALLEL_DB_AFTER = 'ba5444f9986e9f7028e77eeed9fb1add0c3a4815c98142c013705f3b18d17223'
+PARALLEL_SCHEMA = {'migration': 'parallel-workspaces-v12', 'from': 11, 'to': 12,
+                   'db_sha256': PARALLEL_DB_AFTER, 'helper': 'v2'}
+
+
+def schema_change(repo, base, commit):
+    for name in ('pyproject.toml', 'uv.lock'):
+        if run(['git', 'diff', base, commit, '--', name], repo):
+            raise ValueError('Dependency changes require separate deployment review')
+    if not run(['git', 'diff', base, commit, '--', 'ai_manager/db.py'], repo):
+        return None
+    def digest(ref):
+        return hashlib.sha256(subprocess.run(['git', 'show', ref + ':ai_manager/db.py'],
+                              cwd=repo, capture_output=True, check=True).stdout).hexdigest()
+    if digest(base) != PARALLEL_DB_BEFORE or digest(commit) != PARALLEL_DB_AFTER:
+        raise ValueError('Schema changes require separate deployment review')
+    return PARALLEL_SCHEMA.copy()
 
 
 def atomic(path, value):
@@ -157,6 +179,43 @@ class Handoff:
         return self.status()['phase'] in {'acknowledged', 'backing_up', 'activating', 'verifying', 'rolling_back', 'rollback_failed'}
 
 
+def backup_workspaces(data, database, directory):
+    """Quiet retained workspace bytes and all source refs; schema11 is compatible."""
+    with sqlite3.connect(f'file:{database}?mode=ro', uri=True) as conn:
+        conn.row_factory = sqlite3.Row
+        if 'workspace' not in {row[1] for row in conn.execute('PRAGMA table_info(tasks)')}:
+            return {}
+        tasks = conn.execute('SELECT t.*,p.path AS project_path FROM tasks t JOIN projects p ON p.id=t.project_id WHERE workspace IS NOT NULL').fetchall()
+    result = {}
+    repositories = {}
+    for task in tasks:
+        if task['lease_owner']:
+            raise ValueError('Retained workspace backup needs confirmed writer cleanup')
+        if not re.fullmatch('[0-9a-f]{32}', task['id']):
+            raise ValueError('Workspace backup identity differs')
+        path = Path(task['workspace'])
+        if path != data / 'assignment-workspaces' / task['id'] or path.is_symlink() or not path.is_dir():
+            raise ValueError('Retained workspace missing/changed during backup')
+        archive = directory / ('workspace-' + task['id'] + '.tar')
+        with tarfile.open(archive, 'w', dereference=False) as target:
+            target.add(path, arcname=task['id'])
+        receipt_path = path.with_suffix('.json')
+        if not receipt_path.is_file():
+            raise ValueError('Retained workspace receipt missing')
+        saved_receipt = directory / ('workspace-' + task['id'] + '.json')
+        shutil.copyfile(receipt_path, saved_receipt)
+        result[task['id']] = {'workspace': str(path), 'branch': task['workspace_branch'],
+                             'archive_sha256': sha(archive), 'receipt_sha256': sha(saved_receipt)}
+        repositories[task['project_id']] = task['project_path']
+    for project_id, path in repositories.items():
+        if not re.fullmatch('[0-9a-f]{32}', project_id):
+            raise ValueError('Project backup identity differs')
+        bundle = directory / ('workspace-source-' + project_id + '.bundle')
+        run(['git', 'bundle', 'create', str(bundle), '--all'], path)
+        result['repository:' + project_id] = {'path': path, 'bundle_sha256': sha(bundle)}
+    return result
+
+
 class Helper:
     def __init__(self, config):
         self.config = config
@@ -193,14 +252,14 @@ class Helper:
             raise ValueError('Live release changed; reprepare')
         run(['git', 'fetch', str(release / 'release.bundle'), manifest['commit']], self.repo)
         run(['git', 'merge-base', '--is-ancestor', manifest['base'], manifest['commit']], self.repo)
-        # No dependency/schema migrations in this capability. Those need separate review.
-        for name in ('pyproject.toml', 'uv.lock', 'ai_manager/db.py'):
-            if run(['git', 'diff', manifest['base'], manifest['commit'], '--', name], self.repo):
-                raise ValueError('Dependency/schema changes require separate deployment review')
+        expected_schema = schema_change(self.repo, manifest['base'], manifest['commit'])
+        if manifest.get('schema') != expected_schema:
+            raise ValueError('Pinned reviewed schema contract mismatch')
 
     def snapshot(self, directory):
         directory.mkdir(parents=True, mode=0o700)
         receipt = {'manager': backup(self.data / 'manager.sqlite3', directory / 'manager.sqlite3')}
+        receipt['workspaces'] = backup_workspaces(self.data, directory / 'manager.sqlite3', directory)
         run(['git', 'bundle', 'create', str(directory / 'source.bundle'), 'HEAD'], self.repo)
         receipt['source'] = sha(directory / 'source.bundle')
         native = Path(self.config['native'])
@@ -209,9 +268,47 @@ class Helper:
                 receipt[name] = backup(native / name, directory / name)
         with sqlite3.connect(directory / 'manager.sqlite3') as conn:
             threads = {r[0] for r in conn.execute('SELECT thread_id FROM executions UNION SELECT thread_id FROM conversations UNION SELECT native_thread FROM tasks') if r[0]}
-        with sqlite3.connect(f'file:{native / "state_5.sqlite"}?mode=ro', uri=True) as conn:
-            files = [r[0] for thread in threads for r in conn.execute('SELECT rollout_path FROM threads WHERE id=?', (thread,))]
-        if len(files) != len(threads):
+        # Claude provider sessions have application history plus CLI resume JSONL;
+        # do not misclassify their UUIDs as missing Codex rollout references.
+        claude_root = self.data / 'claude-threads'
+        claude_native = Path(self.config.get('claude_native', Path.home() / '.claude'))
+        codex_threads = set(threads)
+        receipt['claude_threads'], receipt['claude_sessions'] = {}, {}
+        for thread in sorted(threads):
+            if not re.fullmatch(r'[A-Za-z0-9_-]+', thread):
+                raise ValueError('Native thread identity is not a safe backup filename')
+            path = claude_root / (thread + '.json')
+            if not path.exists():
+                continue
+            if path.is_symlink() or not path.resolve().is_relative_to(claude_root.resolve()):
+                raise ValueError('Claude history path changed')
+            saved = read(path)
+            if saved.get('id') != thread:
+                raise ValueError('Claude history identity changed')
+            codex_threads.remove(thread)
+            target = directory / 'claude-threads' / path.name
+            target.parent.mkdir(mode=0o700, exist_ok=True)
+            shutil.copyfile(path, target)
+            if target.read_bytes() != path.read_bytes():
+                raise ValueError('Claude history changed during backup')
+            receipt['claude_threads'][str(path)] = sha(target)
+            if saved.get('session'):
+                matches = list((claude_native / 'projects').rglob(thread + '.jsonl'))
+                if len(matches) != 1 or matches[0].is_symlink() or not matches[0].resolve().is_relative_to(claude_native.resolve()):
+                    raise ValueError('Claude resume session missing/ambiguous; review configured claude_native root')
+                source = matches[0]
+                target = directory / 'claude-sessions' / source.name
+                target.parent.mkdir(mode=0o700, exist_ok=True)
+                shutil.copyfile(source, target)
+                with source.open('rb') as original:
+                    if original.read(target.stat().st_size) != target.read_bytes():
+                        raise ValueError('Claude resume session changed during backup')
+                receipt['claude_sessions'][str(source)] = sha(target)
+        files = []
+        if codex_threads:
+            with sqlite3.connect(f'file:{native / "state_5.sqlite"}?mode=ro', uri=True) as conn:
+                files = [r[0] for thread in codex_threads for r in conn.execute('SELECT rollout_path FROM threads WHERE id=?', (thread,))]
+        if len(files) != len(codex_threads):
             raise ValueError('Native thread backup has missing references')
         receipt['rollouts'] = {}
         for index, filename in enumerate(files):
@@ -232,7 +329,7 @@ class Helper:
             if path.exists():
                 shutil.copyfile(path, directory / f'config-{index}')
                 receipt[str(path)] = sha(directory / f'config-{index}')
-        for path in directory.iterdir():
+        for path in directory.rglob('*'):
             if path.is_file():
                 with path.open('rb') as stream:
                     os.fsync(stream.fileno())
@@ -267,19 +364,34 @@ class Helper:
             if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or conn.execute('PRAGMA foreign_key_check').fetchall():
                 raise ValueError('Production integrity failed')
             for table in CRITICAL:
-                before = set(old.execute('SELECT * FROM ' + table).fetchall())
-                after = set(conn.execute('SELECT * FROM ' + table).fetchall())
+                columns = [row[1] for row in old.execute('PRAGMA table_info(' + table + ')')]
+                current_columns = [row[1] for row in conn.execute('PRAGMA table_info(' + table + ')')]
+                if current_columns != columns:
+                    if table != 'tasks' or manifest.get('schema') != PARALLEL_SCHEMA or current_columns != columns + ['workspace', 'workspace_branch', 'workspace_base']:
+                        raise ValueError('Unexpected preserved table schema: ' + table)
+                    if conn.execute('SELECT 1 FROM tasks WHERE workspace IS NOT NULL OR workspace_branch IS NOT NULL OR workspace_base IS NOT NULL').fetchone():
+                        raise ValueError('Existing workspace identity changed during migration')
+                projection = ','.join('"' + column + '"' for column in columns)
+                before = set(old.execute('SELECT ' + projection + ' FROM ' + table).fetchall())
+                after = set(conn.execute('SELECT ' + projection + ' FROM ' + table).fetchall())
                 if not before <= after:
                     raise ValueError('Preserved data changed: ' + table)
-            for key in ('global_instructions', 'model_routes', 'max_workers', 'archived_tasks', 'global_last_used_at'):
+            for key in ('global_instructions', 'model_routes', 'model_settings', 'model_settings:claude', 'model_provider',
+                        'max_workers', 'archived_tasks', 'global_last_used_at'):
                 query = 'SELECT value FROM settings WHERE key=?'
                 if old.execute(query, (key,)).fetchone() != conn.execute(query, (key,)).fetchone():
                     raise ValueError('Protected setting changed: ' + key)
             query = 'SELECT id,name,path,repository,agent_id,display_name,last_used_at FROM projects'
             if not set(old.execute(query).fetchall()) <= set(conn.execute(query).fetchall()):
                 raise ValueError('Project identity/recency changed')
-            if old.execute('SELECT * FROM schema_version ORDER BY version').fetchall() != conn.execute('SELECT * FROM schema_version ORDER BY version').fetchall():
+            old_versions = set(old.execute('SELECT * FROM schema_version').fetchall())
+            versions = set(conn.execute('SELECT * FROM schema_version').fetchall())
+            if versions != old_versions and not (manifest.get('schema') == PARALLEL_SCHEMA and versions == old_versions | {(12,)}):
                 raise ValueError('Unexpected schema migration')
+            if manifest.get('schema') == PARALLEL_SCHEMA:
+                indices = dict(conn.execute("SELECT name,sql FROM sqlite_master WHERE type='index' AND name IN ('project_worker','workspace_worker')"))
+                if indices.get('project_worker') != "CREATE UNIQUE INDEX project_worker ON tasks(project_id) WHERE lifecycle='running' AND workspace IS NULL" or indices.get('workspace_worker') != 'CREATE UNIQUE INDEX workspace_worker ON tasks(workspace) WHERE lease_owner IS NOT NULL AND workspace IS NOT NULL':
+                    raise ValueError('Workspace claim index contract mismatch')
             token = secrets.token_urlsafe(32)
             digest = hashlib.sha256(token.encode()).hexdigest()
             conn.execute('INSERT INTO sessions VALUES(?,?,?)', (digest, secrets.token_hex(16), time.time()+60))

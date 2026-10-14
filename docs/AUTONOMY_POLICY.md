@@ -8,4 +8,4 @@ No planner, independent reviewer, verification-command registration, permission 
 
 Conversation mode is read-only; Auto delegates requested work; Execute treats the message as a work objective through the same manager path. Worker results automatically resume their original conversation.
 
-The superseded supervised-runner policy is retained in [Git history](https://github.com/Linkoge/Linko-Bot-Manager/blob/20f008f/docs/AUTONOMY_POLICY.md).
+The superseded supervised-runner policy is retained in [Git history](https://github.com/Linkoge/Linko-Bot-Boss/blob/20f008f/docs/AUTONOMY_POLICY.md).

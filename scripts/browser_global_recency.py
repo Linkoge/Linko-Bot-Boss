@@ -82,9 +82,11 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.evaluate('refresh()')
                 assert snapshot == page.evaluate('JSON.stringify([state.portfolio.global_last_used_at,state.portfolio.projects])')
                 page.locator('#project-menu-button').click()
-                menu_ids = page.locator('#project-menu [role=menuitemradio]').evaluate_all('(buttons)=>buttons.map(b=>b.dataset.project)')
+                menu_ids = page.locator('#project-menu button[aria-pressed]').evaluate_all('(buttons)=>buttons.map(b=>b.dataset.project)')
                 assert menu_ids[:4] == [ids['Aardvark'], '', ids['Alpha'], ids['Beta']]
                 page.keyboard.press('Home')
+                assert page.evaluate('document.activeElement.dataset.visibility') == ids['Aardvark']
+                page.keyboard.press('ArrowDown')
                 assert page.evaluate('document.activeElement.dataset.project') == ids['Aardvark']
                 page.keyboard.press('ArrowDown')
                 assert page.evaluate('document.activeElement.dataset.project') == ''

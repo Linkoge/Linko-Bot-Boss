@@ -53,6 +53,12 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 assert not manifest['errors'], manifest
                 data = json.loads(manifest['data'])
                 assert data['display'] == 'standalone'
+                assert data['name'] == 'Linko Bot Boss' and data['short_name'] == 'Bot Boss'
+                assert data['id'] == data['scope'] == data['start_url'] == '/'
+                assert page.title() == 'Linko Bot Boss'
+                assert page.locator('meta[name=application-name]').get_attribute('content') == 'Linko Bot Boss'
+                assert page.locator('meta[name=apple-mobile-web-app-title]').get_attribute('content') == 'Bot Boss'
+                assert page.locator('#message-input').get_attribute('aria-label') == 'Message Bot Boss'
                 installability = cdp.send('Page.getInstallabilityErrors')
                 assert not installability['installabilityErrors'], installability
                 assert page.evaluate('isSecureContext')

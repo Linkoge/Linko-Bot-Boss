@@ -9,7 +9,7 @@ from .registry import Registry
 
 
 def main():
-    parser = argparse.ArgumentParser(description="AI Manager local administration")
+    parser = argparse.ArgumentParser(description="Linko Bot Boss local administration")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("discover")
     commands.add_parser("overview")

@@ -1,3 +1,131 @@
+# Reprepared provider/parallel/composer integration — 2026-10-14
+
+Current exact candidate: `parallel-composer-integrated-v4-20261014` in
+`/home/codex/checkouts/linko-parallel-provider-20261014`. It merges actual live provider
+commit `b0f0c8dafa45e8fba848e134a4dc06e2ad0f2f8b` and reviewed parallel/composer commit
+`b57d0c29e3699d1ec39e6388885e5be9b168b2ca`. All original feature acceptance remains;
+rename/stash/owner-deployment-intent and prior live/pending functionality stay included.
+Provider routing/catalog/policies/settings, logos, usage, and 320px toggle are retained.
+Current live has succeeded receipt `5ad868944ca0bfef14d430c5eb04566d.json`; all 20 served
+aliases matched. Current settings fingerprints are retained for before/after comparison.
+
+Actual stale-base failure: old v3 manifest pinned `6c42d5b`, before provider activation
+advanced live to `b0f0c8d`. Request `ea456988593696a7ccc6601712b004bc` passed the idle
+gate then failed with `Live release changed; reprepare`, BEFORE backup/stop/checkout/
+restart/rollback. Read-only execution of installed helper validate reproduced exactly
+that error without Git fetch or service commands. The old manifest/results remain immutable.
+Changing its base would invalidate source/base-asset/validation evidence; this candidate
+is a real merge and fresh exact preparation against actual live. Earlier live/prepared
+claims below are historical and superseded for activation; v3 is not currently deployable.
+
+Installed helper v1 still rejects schema changes. The reviewed v2 artifact is retained and
+extended to preserve Claude application and native resume history alongside Codex rollouts,
+and to verify both providers' saved settings. Missing/ambiguous required native history fails
+closed. A separately authorized helper v2 upgrade remains a concrete activation prerequisite;
+this task does not install it or deploy/push/restart anything. Preparation is established only
+by `deployment-helper/releases/parallel-composer-integrated-v4-20261014/manifest.json`.
+
+Authoritative feature contracts remain docs/PARALLEL_EXECUTION.md, docs/chat-history.md,
+docs/AUDIO.md and docs/MODEL_SETTINGS.md. Full durable report, stale-base reproduction,
+settings/asset fingerprints and routine manager facts stay in the existing authoritative
+`/home/codex/.local/share/linko-bot-manager/deployments/parallel-composer-20261014/REPORT.md`
+and sibling manager-summary.json. Deployment remains manager-controlled and pending;
+physical devices and live Codex/Claude concurrency/paid STT remain unverified. Do not
+infer authorization from this report or resume this prepare-only task to deploy.
+
+# Owner-approved parallel/composer integrated candidate — 2026-10-14
+
+Exact release ID: `parallel-composer-integrated-v3-20261014`. Candidate:
+`/home/codex/checkouts/linko-parallel-composer-20261014`, descended from latest prepared
+`owner-deploy-intent-stash-v1-20261014` commit `51bb67f5e61f4528566804ecc8a5a8c3e6815e91`.
+Preserves completed rename/stash/owner-deployment-intent fixes and every earlier integrated feature.
+The immutable `deployment-helper/releases/parallel-composer-integrated-v3-20261014/manifest.json`
+establishes exact preparation/validation; source changes alone do not establish readiness.
+
+Actual live is now succeeded `todo-handoff-chat-trash-recording-agents-v1-20261013`, commit
+`6c42d5b368731cb8615f4726e25bc29b085c16c6`; durable receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/2bf6554aecb9fd66c9ab49554bfb95ac.json`.
+Read-only auth-status and all 20 served aliases matched that receipt. Older PWA-only/waiting-idle
+statements below are historical and superseded. This new bundle is NOT deployed or pushed.
+
+Implements durable per-request owner UI/chat parallel consent, manager assessment/controls,
+transactional isolated worktree/branch/native-thread ownership, dependency/conflict/capacity/hold
+checks, reasoned sequential queueing, serialized existing-worker integration/combined validation,
+source retention/candidate ancestry checks and quiet worktree/ref backup. Schema12 adds three
+nullable workspace fields and shared/isolated ownership indices; old rows/threads/claims remain.
+Composer preserves any nonempty blurred/keyboard-hidden draft and Send, recording/attachment controls,
+approved +/Record/Send right stack, recording timer–Upload–Discard bottom-left and ⇈/Send bottom-right.
+No persistent toggle, new router/planner, recurring AI call, deployment, production migration or restart.
+
+Authoritative [parallel contract](docs/PARALLEL_EXECUTION.md), [composer](docs/chat-history.md),
+[audio](docs/AUDIO.md), [deployment helper](docs/DEPLOYMENT_HELPER.md) describe boundaries.
+Installed helper v1 is unchanged and refuses the schema diff; the release packages reviewed hash-pinned
+helper v2 plus an explicit future upgrade installer. Neither helper upgrade nor app activation is performed.
+Physical mobile keyboard/native-picker/PWA-install and paid provider/native-model concurrency acceptance
+are not claimed. Chromium and disposable Git/process/native-history fixtures establish tested behavior.
+
+Full durable report, validation/evidence and manager routine brief/recent-delivery facts:
+`/home/codex/.local/share/linko-bot-manager/deployments/parallel-composer-20261014/REPORT.md`
+and sibling `manager-summary.json`. Record one related delivery ID and distinguish implemented,
+verified, prepared and deployed. Keep deployment/helper upgrade/device acceptance pending; no full
+memory reconciliation. Current source assignment: `65e5086b085547419703d1c4c6e08930`.
+
+# Owner deployment authorization handoff — integrated candidate, 2026-10-14
+
+Candidate `owner-deploy-intent-stash-v1-20261014` fixes lost authorization across owner → audit →
+internal result handoff, using source-bound fixed intent and exact prepared evidence/nonce receipts.
+It descends from completed stash release `stash-rename-todo-chat-v1-20261014` commit
+`751ac9374f0c41ee40ffcf6737d11a7170092888`; rename/To-Do/chat/recording/Agents/PWA remain included.
+The exact immutable helper manifest establishes preparation; no deployment is performed or authorized
+by this fix task. Full evidence and manager routine delivery facts:
+`/home/codex/.local/share/linko-bot-manager/deployments/deployment-intent-20261014/REPORT.md` and
+sibling `manager-summary.json`. [Deployment contract and safe legacy activation](docs/DEPLOYMENT_HELPER.md).
+
+Latest verified live remains PWA commit `3bb554b7efa26d8fae695c5340e8a12366d75339`, succeeded
+receipt `deployment-helper/results/09f882af21fb28ab5870da74fee1c3b6.json`. Existing separate request
+`2bf6554aecb9fd66c9ab49554bfb95ac` targets older `todo-handoff-chat-trash-recording-agents-v1-20261013`
+and is waiting_idle. It excludes rename/stash/this fix and is unchanged. Prior owner approval is not
+backfilled to this broader candidate. Activation requires an exact new owner instruction and real
+helper success evidence; if live advances, reprepare against actual HEAD with a fresh immutable ID.
+Older candidate headings below remain historical for their scopes. No unrelated task pause/resume,
+production permission recording, filesystem cleanup, service restart or remote push in this task.
+
+# Stashed projects candidate — 2026-10-14
+
+Latest integrated candidate: `stash-rename-todo-chat-v1-20261014`, based on exact
+rename/To-Do/chat commit `d7ba7bd0f9e80ac6e07ef98b56ffe222ccff9407` in
+`/home/codex/checkouts/linko-project-stash-20261013`. Application visibility is separate
+from project execution/archive status; dropdown checkboxes stash/restore navigation,
+with an expandable Stashed projects section. Existing data and worker delivery remain.
+See [operations contract](docs/operations.md) and full private evidence:
+`/home/codex/.local/share/linko-bot-manager/deployments/project-stash-20261013/REPORT.md`.
+Exact preparation requires its immutable helper manifest; UI activation remains pending.
+No worker deployment, restart or GitHub push is authorized on this assignment.
+
+Immediate authorized cleanup is separate: both narrowly specified test paths are now
+absent and existing registry IDs are lifecycle `removed`. Recency-review was already
+absent when checked (this worker does not claim deleting it); acceptance fixture was
+deleted after active-use checks. No tasks/conversations/executions were attached; its
+five memory rows and all scoped history were retained. Cleanup evidence is `cleanup.json`
+in the private report directory, with the deleted acceptance fixture retained as a scoped
+archive outside project discovery roots. Main application and other repositories remain.
+
+A pre-existing manager request targets older `todo-handoff-chat-trash-recording-agents-v1-20261013`,
+nonce `2bf6554aecb9fd66c9ab49554bfb95ac`, observed `waiting_idle`; it omits rename/stash.
+This worker did not modify/cancel/fulfil that request. Manager must reconcile it before
+future activation. Require an exact durable succeeded receipt; if live base advances,
+reprepare under a fresh immutable ID rather than bypass helper base/idle gates.
+
+# Repository rename — candidate, 2026-10-13
+
+Live Git origin and existing project registry now point to `git@github.com:Linkoge/Linko-Bot-Boss.git`; registry name is `Linko-Bot-Boss`, revision 5, with owner display name **Bot Boss** and original ID/path retained. This is an immediate metadata change. No push, restart or deployment is authorized by this rename assignment.
+
+Application naming and active GitHub links are updated in the isolated candidate `/home/codex/checkouts/linko-bot-boss-rename-20261013`, descended from exact pending To-Do/chat commit `6c42d5b368731cb8615f4726e25bc29b085c16c6`. The original immutable release `todo-handoff-chat-trash-recording-agents-v1-20261013` is preserved. This integrated candidate is intended for exact preparation as `repo-rename-todo-chat-v1-20261013`; only its immutable manifest establishes preparation.
+
+Actual live code remains succeeded PWA commit `3bb554b7efa26d8fae695c5340e8a12366d75339`, receipt `deployment-helper/results/09f882af21fb28ab5870da74fee1c3b6.json`. The earlier audit's deployment authorization did not establish activation; its manager deploy call from an internal-result turn was rejected. Rename work must not deploy. Older status/authorization statements below remain historical.
+
+Full evidence, verification outcomes and manager routine brief/recent-delivery facts: `/home/codex/.local/share/linko-bot-manager/deployments/repo-rename-20261013/REPORT.md` and sibling `manager-summary.json`. Compatibility names are documented in PROJECT.md. Application/PWA title changes and the preserved To-Do/chat bundle remain pending a separate successful controlled deployment receipt.
+
 # Bundled To-Do / current-chat release — implementation candidate, 2026-10-13
 
 Actual live base is succeeded `pwa-standalone-v1-20261013`, commit

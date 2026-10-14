@@ -92,6 +92,9 @@ class Database:
                 ("request_key", "TEXT"),
                 ("native_thread", "TEXT"),
                 ("legacy", "INTEGER NOT NULL DEFAULT 1"),
+                ("workspace", "TEXT"),
+                ("workspace_branch", "TEXT"),
+                ("workspace_base", "TEXT"),
             ):
                 if name not in task_columns:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
@@ -128,9 +131,12 @@ class Database:
                     "UPDATE executions SET delivery='pending' WHERE delivery='waiting' AND finished_at IS NOT NULL"
                 )
                 conn.execute("INSERT INTO schema_version VALUES(8)")
-            conn.execute(
-                "CREATE UNIQUE INDEX IF NOT EXISTS project_worker ON tasks(project_id) WHERE lifecycle='running'"
-            )
+            # Existing shared-checkout assignments keep their exclusive slot. Isolated
+            # claims use one durable workspace per assignment; admission is transactional.
+            conn.execute("DROP INDEX IF EXISTS project_worker")
+            conn.execute("CREATE UNIQUE INDEX project_worker ON tasks(project_id) WHERE lifecycle='running' AND workspace IS NULL")
+            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS workspace_worker ON tasks(workspace) WHERE lease_owner IS NOT NULL AND workspace IS NOT NULL")
+            conn.execute("INSERT OR IGNORE INTO schema_version VALUES(12)")
             if not conn.execute("SELECT 1 FROM schema_version WHERE version=9").fetchone():
                 conn.execute("""UPDATE executions SET
                     mode=COALESCE((SELECT json_extract(payload,'$.prompt.mode') FROM events
