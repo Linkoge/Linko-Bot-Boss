@@ -161,6 +161,7 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .provider-row{grid-template-columns:repeat(2,minmax(0,1fr));margin:0 44px 14px 0}
 .model-choice-row button.provider-choice{display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;font-size:14px}
 .provider-choice svg{width:18px;height:18px;flex:none}
+@media(max-width:380px){.provider-row{margin-bottom:6px}.model-choice-row button.provider-choice{min-height:34px}}
 #model-error:empty{display:none}
 @media(max-width:380px){#model-dialog{padding:12px;width:calc(100% - 16px)}.model-choice-row{gap:4px}.model-choice-row button{font-size:12px}.policy-cell{gap:2px}}
 

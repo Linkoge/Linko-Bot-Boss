@@ -94,7 +94,7 @@ def main():
                 choice('policy-Astra-model-Allow')
                 choice('policy-Astra-medium-Deny')
                 choice('policy-Astra-high-Deny')
-                settings = page.evaluate('()=>modelPanel.settings')
+                settings = page.evaluate('()=>modelPanel.providers[modelPanel.provider].settings')
                 assert settings['bot']['policy']['gpt-6-luna']['levels'] == {'low': False, 'medium': False, 'high': True}
                 assert settings['bot']['policy']['gpt-6-astra']['levels'] == {'low': True, 'medium': False, 'high': False}
                 page.screenshot(path=str(evidence / 'desktop-automatic.png'))
