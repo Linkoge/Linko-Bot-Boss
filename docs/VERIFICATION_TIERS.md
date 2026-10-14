@@ -32,7 +32,8 @@ recovery feature or usage-blocking implementation. The backend counts repair exe
 
 Successful worker completion closes the workflow for normal automatic handoff; ordinary result delivery still
 reports established facts. This implicit completion permits a bounded correction on the same assignment; an
-explicit completion/owner hold remains closed. Internal results cannot delegate a replacement task to reset the budget. Failed work has bounded actionable follow-up on its existing assignment; at most three
+explicit completion/owner hold remains closed. Unfinished/failed results cannot delegate a replacement task to reset the budget. Healthy completed steps may
+continue an already owner-authorized sequential chain through the existing manager path; holds remain authoritative. Failed work has bounded actionable follow-up on its existing assignment; at most three
 idle manager wakes are counted separately in durable `followup_rounds`, preventing response-only loops. Old retry
 backoff counts are not interpreted as new repair usage. No independent reviewer or escalation loop runs.
 One global coding worker is admitted even with historical opt-in permissions or higher capacity settings.
@@ -72,12 +73,16 @@ microphone/file uploads, parallel/composer layout, and verification/handoff rele
 simplification is implemented separately and is **not deployed**. Full receipt IDs, hashes and historical commit
 coverage are in the retained `.data/verification-reductions/REPORT.md` and evidence inventory.
 
-Current preparation dependency remains external `d629701957337357b4915e6ca8607d053cdb799a`, from VSCode thread
-`01a13bb6-ec9d-7852-869c-07437c84c71a`, without an eligible isolated source task/integration grant. Latest controlled
-succeeded base is `addfcd092e7a4c34205264156feb8f0f06d2dba7`. Manager needs external writer/source ownership handoff
-and an explicitly granted serialized reconciliation pinning both sources, then combined validation and supported
-preparation with `--task-id e684e6b33ca14b778ef7769dfc92a0fc`. No ancestry bypass, fabricated receipt or shared mutation.
-Cancelled `703f113e1b134a9d8a008307f8c4a3aa` remains cancelled; unrelated recovery work is deferred.
+Latest owner resume explicitly grants serialized reconciliation of external historical main
+`d629701957337357b4915e6ca8607d053cdb799a` with retained `113507d` in this assignment workspace.
+The completed source provenance remains retained; dynamic read-only checks found shared HEAD clean at d629701,
+unchanged completed source thread and no active source writer. The candidate must include actual d629701 ancestry,
+not a fabricated succeeded receipt for it. Latest controlled succeeded receipt still names addfcd09.
+All branches remain; conflicts retain both simplified policy and usage-restriction removal. Normal preparation
+uses actual live base and `--task-id e684e6b33ca14b778ef7769dfc92a0fc`, with immutable validation/package/index
+hashes. Prepared/deployed status and exact candidate/checks are established only by the retained report and real
+artifacts. Existing post-completion auto evidence and helper bootstrap guards still apply; worker never activates.
+Cancelled `703f113e1b134a9d8a008307f8c4a3aa` remains cancelled; unrelated recovery implementation is deferred.
 
 ## Historical evidence before the approved reductions
 

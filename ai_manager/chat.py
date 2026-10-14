@@ -16,12 +16,8 @@ from .recovery import (
     launching,
     owned_alive,
     reap_orphan,
-    release_gate,
-    reserve,
     turn_error,
     turn_output,
-    wait_for_gate,
-    with_reset,
 )
 from .registry import Registry
 
@@ -509,9 +505,6 @@ class Chat:
             if recovery_task and not ready_to_run(self.db, recovery_task):
                 self._finish(execution_id, response_id, 'interrupted', 'Follow-up held or resolved before dispatch', output)
                 return
-            if not reserve(self.db, execution_id):
-                wait_for_gate(self.db, execution_id)
-                return
             await self.server.start()
             from .model_families import resolve
             execution = self.db.one('SELECT thread_id,launch_key FROM executions WHERE id=?', (execution_id,))
@@ -639,7 +632,7 @@ class Chat:
                         defer(
                             self.db,
                             execution_id,
-                            await with_reset(self.server, failure),
+                            failure,
                             error.get("message", ""),
                             output,
                         )
@@ -662,7 +655,7 @@ class Chat:
                             "UPDATE executions SET turn_id=NULL,launch_key='not-started',launch_input=NULL WHERE id=?",
                             (execution_id,),
                         )
-                defer(self.db, execution_id, await with_reset(self.server, failure), str(error), output)
+                defer(self.db, execution_id, failure, str(error), output)
             else:
                 self._finish(execution_id, response_id, "failed", str(error)[:2000], output)
         finally:
@@ -684,7 +677,6 @@ class Chat:
                 "UPDATE executions SET delivery=? WHERE delivery_execution=?",
                 ("delivered" if status == "completed" else "blocked", execution_id),
             )
-            release_gate(conn, execution_id, status == "completed")
             from .assignment_workflow import finish_wake
             finish_wake(self.db, conn, execution_id)
             self.db.event(conn, "chat.finished", {"status": status, "error": error}, execution_id=execution_id)
@@ -800,8 +792,6 @@ class Chat:
             if row["stop_requested"]:
                 self._finish(row["id"], response_id, "interrupted", "Stopped by user", row["output"])
                 continue
-            if not reserve(self.db, row["id"]):
-                continue
             try:
                 turn = await inspect(self.server, row)
                 if turn and not row["turn_id"]:
@@ -825,7 +815,7 @@ class Chat:
                         )
                         continue
                     if not row["retry_count"]:
-                        defer(self.db, row["id"], await with_reset(self.server, failure), error.get("message", ""))
+                        defer(self.db, row["id"], failure, error.get("message", ""))
                         continue
                 conversation = self.db.one(
                     "SELECT * FROM conversations WHERE id=?",
@@ -857,7 +847,7 @@ class Chat:
             except Exception as error:
                 failure = classify(error)
                 if failure:
-                    defer(self.db, row["id"], await with_reset(self.server, failure), str(error))
+                    defer(self.db, row["id"], failure, str(error))
                 else:
                     self._finish(row["id"], response_id, "failed", str(error)[:2000], row["output"])
 

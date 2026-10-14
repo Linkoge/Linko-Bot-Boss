@@ -16,9 +16,11 @@ from ai_manager.chat import Chat
 from ai_manager.codex import AppServer, CodexError, process_start
 from ai_manager.db import Database
 from ai_manager.orchestration import Scheduler
-from ai_manager.recovery import GATE, Failure, classify, defer, delay, reserve
+from ai_manager.recovery import classify, defer, delay
 from ai_manager.tasks import Tasks
 from ai_manager.workers import Workers
+
+GATE = "recovery_account_gate"  # Legacy persisted key only.
 
 system = system_fixture
 
@@ -109,11 +111,6 @@ def eligible(db):
     # Advance persisted eligibility, never actual account/network conditions.
     with db.transaction() as conn:
         conn.execute("UPDATE executions SET retry_at=0 WHERE status='recovering'")
-        row = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
-        if row:
-            gate = json.loads(row["value"])
-            gate["retry_at"] = 0
-            conn.execute("UPDATE settings SET value=? WHERE key=?", (json.dumps(gate), GATE))
 
 
 def task_in(system, objective="Work", project_index=0):
@@ -163,71 +160,55 @@ async def test_network_recovery_same_task_thread_history_no_waiting_inference(sy
 
 
 @pytest.mark.asyncio
-async def test_usage_reset_persisted_shared_gate_one_probe_and_manager_wait(system):
+async def test_usage_error_does_not_block_other_projects_or_manager(system):
     db, registry, chat, settings = system
     first, _, _ = task_in(system)
-    faults = Faults(["usage", "hold"])
+    faults = Faults(["usage"])
     faults.reset = time.time() + 3600
     workers = Workers(db, registry, settings, faults.factory)
     workers.launch(Tasks(db).claim(2))
     await settle(workers)
     row = db.one("SELECT * FROM executions WHERE task_id=?", (first["id"],))
-    assert row["retry_at"] == faults.reset
+    assert row["status"] == "failed" and row["finished_at"] is not None
+    assert row["retry_at"] is None and db.setting(GATE) is None
+    assert "account/rateLimits/read" not in faults.metadata
     second, other, _ = task_in(system, "Other project", 1)
-    assert Tasks(db).claim(2) is None
-    response = await chat.submit(other["id"], "Authorized request while limited", mode="execute")
-    await settle(chat)
-    assert not chat.server.prompts
-    for _ in range(5):
-        await workers.recover()
-        await chat.recover()
-        assert Tasks(db).claim(2) is None
-    assert len(faults.calls) == 1
-    reopened = Database(db.path)
-    assert reopened.setting(GATE)["retry_at"] == faults.reset
-    eligible(db)
-    await workers.recover()
-    await asyncio.sleep(0.01)
-    await chat.recover()
-    assert len(faults.calls) == 2 and not chat.jobs and Tasks(db).claim(2) is None
-    assert not chat.server.prompts  # The single probe is still active.
-    # Complete the probe without an additional inference request.
-    server = next(iter(workers.servers.values()))
-    saved = faults.turns[row["thread_id"]][-1]
-    saved["status"] = "completed"
-    server.queues[row["thread_id"]].put_nowait({"method": "turn/completed", "params": {"turn": saved}})
-    await settle(workers)
-    assert db.setting(GATE) is None
-    eligible(db)
-    await chat.recover()
-    await settle(chat)
-    assert db.one("SELECT * FROM executions WHERE id=?", (response["execution_id"],))["status"] == "completed"
-    assert db.one("SELECT * FROM executions WHERE id=?", (response["execution_id"],))["mode"] == "execute"
     assert Tasks(db).claim(2)["id"] == second["id"]
+    response = await chat.submit(other["id"], "Request after quota reset", mode="execute")
+    await settle(chat)
+    assert db.one("SELECT status FROM executions WHERE id=?", (response["execution_id"],))["status"] == "completed"
+    assert len(chat.server.prompts) == 1
+    for _ in range(3):
+        await workers.recover()
+    assert len(faults.calls) == 1  # A real provider rejection does not start a retry loop.
 
 
 @pytest.mark.asyncio
-async def test_usage_without_reset_increases_bounded_delay_without_claiming_reset(system):
-    db, registry, chat, settings = system
-    task, _, _ = task_in(system)
-    faults = Faults(["usage", "usage", "success"])
-    workers = Workers(db, registry, settings, faults.factory)
-    workers.launch(Tasks(db).claim(2))
-    await settle(workers)
-    first = db.one("SELECT * FROM executions WHERE task_id=?", (task["id"],))
-    assert 230 < first["retry_at"] - time.time() <= 300
-    assert db.setting(GATE)["known_reset"] is None
-    eligible(db)
-    await workers.recover()
-    await settle(workers)
-    second = db.one("SELECT * FROM executions WHERE task_id=?", (task["id"],))
-    assert second["retry_count"] > first["retry_count"]
-    assert second["retry_at"] - time.time() > 450
-    eligible(db)
-    await workers.recover()
-    await settle(workers)
-    assert Tasks(db).get(task["id"])["status"] == "completed"
-    assert db.setting(GATE) is None
+async def test_legacy_usage_lock_is_ignored_and_saved_wait_is_released_on_reopen(system):
+    db, registry, chat, _ = system
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO settings VALUES(?,?)", (GATE, json.dumps({"retry_at": time.time() + 86400,
+                                                                          "probe": "old", "count": 20})))
+    # Even an old/stale row cannot gate admission before startup cleanup.
+    task, project, _ = task_in(system)
+    assert Tasks(db).claim(2)["id"] == task["id"]
+    response = await chat.submit(project["id"], "New message despite stale lock")
+    await settle(chat)
+    assert db.one("SELECT status FROM executions WHERE id=?", (response["execution_id"],))["status"] == "completed"
+    # Simulate an old manager reply blocked before its first native turn.
+    with db.transaction() as conn:
+        conn.execute("""UPDATE executions SET status='recovering',finished_at=NULL,retry_at=?,
+            recovery_reason='usage',turn_id=NULL,thread_id=NULL,launch_key='not-started'
+            WHERE id=?""", (time.time() + 86400, response["execution_id"]))
+        conn.execute("UPDATE messages SET status='waiting' WHERE execution_id=? AND role='assistant'",
+                     (response["execution_id"],))
+    reopened = Database(db.path)
+    assert reopened.setting(GATE) is None
+    assert reopened.one("SELECT retry_at FROM executions WHERE id=?", (response["execution_id"],))["retry_at"] == 0
+    await chat.recover()
+    await settle(chat)
+    assert db.one("SELECT status FROM executions WHERE id=?", (response["execution_id"],))["status"] == "completed"
+    assert len(chat.server.prompts) == 2
 
 
 @pytest.mark.smoke
@@ -450,8 +431,10 @@ async def test_waiting_project_does_not_consume_capacity_or_allow_second_writer(
 @pytest.mark.parametrize(
     "error,kind",
     [
-        ({"codexErrorInfo": "usageLimitExceeded"}, "usage"),
-        ({"codexErrorInfo": "rateLimitExceeded"}, "usage"),
+        ({"codexErrorInfo": "usageLimitExceeded"}, None),
+        ({"codexErrorInfo": "rateLimitExceeded"}, None),
+        ({"status": 429, "retryAfter": 86400}, None),
+        ({"message": "You have reached your usage limit; resets tomorrow"}, None),
         ({"codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 503}}}, "connection"),
         ({"codexErrorInfo": {"httpConnectionFailed": {"httpStatusCode": 401}}}, None),
         ({"codexErrorInfo": "badRequest", "message": "rate limit is not valid"}, None),
@@ -460,7 +443,7 @@ async def test_waiting_project_does_not_consume_capacity_or_allow_second_writer(
         ({"code": -32602}, None),
         (ValueError("Bad objective"), None),
         (TimeoutError(), "connection"),
-        (CodexError("RPC quota", {"code": -32000, "data": {"codexErrorInfo": "usageLimitExceeded"}}), "usage"),
+        (CodexError("RPC quota", {"code": -32000, "data": {"codexErrorInfo": "usageLimitExceeded"}}), None),
     ],
 )
 @pytest.mark.smoke
@@ -472,16 +455,15 @@ def test_structured_classification(error, kind):
 def test_backoff_bounds_and_authoritative_retry_after(system):
     assert 4 <= delay(1, "connection") <= 5
     assert 240 <= delay(99, "connection") <= 300
-    assert 17280 <= delay(99, "usage") <= 21600
     before = time.time()
-    failure = classify({"codexErrorInfo": "rateLimitExceeded", "retryAfter": 7200})
-    assert before + 7200 <= failure.retry_at <= time.time() + 7200
+    failure = classify({"codexErrorInfo": "httpConnectionFailed", "retryAfter": 30})
+    assert before + 30 <= failure.retry_at <= time.time() + 30
     db, _, _, _ = system
     task, _, _ = task_in(system)
     claim = Tasks(db).claim(2)
-    defer(db, claim["lease_owner"], Failure("usage", before + 30))
-    assert Tasks(db).get(task["id"])["retry_at"] == before + 30  # Authoritative short reset wins over fallback.
-    assert not reserve(db, "another-execution")
+    defer(db, claim["lease_owner"], failure)
+    assert Tasks(db).get(task["id"])["retry_at"] == failure.retry_at
+    assert db.setting(GATE) is None
 
 
 @pytest.mark.asyncio
@@ -749,7 +731,7 @@ async def test_transport_preserves_rpc_details_and_account_notifications(system)
     with pytest.raises(CodexError) as error:
         await future
     assert error.value.details == details
-    assert classify(error.value).kind == "usage"
+    assert classify(error.value) is None
     assert server.rate_limits["rateLimits"]["primary"]["usedPercent"] == 100
     assert (await server.queues["native"].get())["method"] == "transport/lost"
 
@@ -835,7 +817,7 @@ async def test_delayed_completion_from_previous_native_turn_cannot_finish_retry(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["worker", "manager"])
-async def test_notification_only_usage_error_recovers_after_restart(system, role):
+async def test_notification_only_usage_error_is_reported_without_blocking_after_restart(system, role):
     db, registry, chat, settings = system
     faults = Faults(["usage", "success"])
 
@@ -873,8 +855,8 @@ async def test_notification_only_usage_error_recovers_after_restart(system, role
         await chat.submit(registry.list()[0]["id"], "Preserve original request")
     await settle(component)
     row = db.one("SELECT * FROM executions WHERE agent_id=?", ("execution" if role == "worker" else "manager",))
-    assert row["status"] == "recovering" and row["recovery_reason"] == "usage"
-    assert db.setting(GATE)
+    assert row["status"] == "failed" and row["finished_at"] is not None
+    assert db.setting(GATE) is None
     eligible(db)
     component = (
         Workers(Database(db.path), registry, settings, factory)
@@ -883,8 +865,8 @@ async def test_notification_only_usage_error_recovers_after_restart(system, role
     )
     await component.recover()
     await settle(component)
-    assert db.one("SELECT status FROM executions WHERE id=?", (row["id"],))["status"] == "completed"
-    assert len(faults.calls) == 2 and db.setting(GATE) is None
+    assert db.one("SELECT status FROM executions WHERE id=?", (row["id"],))["status"] == "failed"
+    assert len(faults.calls) == 1 and db.setting(GATE) is None
 
 
 @pytest.mark.asyncio

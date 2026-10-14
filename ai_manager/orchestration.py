@@ -148,7 +148,9 @@ class Scheduler:
         if args.get("todos") and (internal or action not in {"delegate", "continue"}):
             raise ValueError("To-Do handoff requires explicit owner scheduling")
         if internal and action == 'delegate':
-            raise ValueError('Repair the existing assignment; internal results cannot create a replacement task')
+            source_task = self.db.one('SELECT lifecycle,lease_owner FROM tasks WHERE id=?', (params.get('internal_task'),))
+            if not source_task or source_task['lifecycle'] != 'completed' or source_task['lease_owner']:
+                raise ValueError('Repair the existing assignment; unfinished/failed results cannot create a replacement task')
         if internal and action in {'continue', 'delegate'}:
             from .assignment_workflow import get
             target_id = args.get('task_id') if action == 'continue' else params.get('internal_task')

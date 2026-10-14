@@ -7,11 +7,12 @@ are superseded by this approved scope change; their source/evidence remains reta
 have succeeded receipts; the former pending-backlog claim was stale. Current durable report/check/hash binding:
 `.data/verification-reductions/REPORT.md` and manager-summary.json in this same workspace.
 
-Preparation remains blocked by external d629701 source ownership and absent serialized integration grant;
-latest controlled succeeded base is addfcd09. No shared checkout/runtime operation, external merge, prepared
-artifact or deployment is claimed. Manager must obtain source handoff and supported serialized reconciliation,
-then validate/prepare the combined candidate with this task ID for standing ON auto handoff. Cancelled703f
-remains cancelled; unrelated recovery implementation stays deferred. Historical sections below describe older candidates.
+Latest owner resume grants serialized reconciliation of historical `d629701` and `113507d` in this same
+retained workspace. Shared main is clean at pinned d629701; no active source writer was found. The combined
+candidate includes both source ancestries and preserves restriction removal and simplified verification.
+Required combined checks and exact task-bound preparation are recorded in the retained report only when
+actually completed. No shared checkout/runtime operation or direct worker activation. Cancelled703f remains
+cancelled; unrelated recovery implementation stays deferred. Earlier dependency statements below are historical.
 
 # Authorization predicate finding reconciled — 2026-10-14
 
@@ -76,6 +77,20 @@ handoff facts are retained in this workspace's `.data/verification-reductions/RE
 still needs normal completed-job handoff and a new durable succeeded receipt. This isolated worker does not
 write shared runtime data, publish, push, install a helper, deploy or restart services. Older state below is
 historical; it does not establish deployment of this candidate.
+# Usage blocker removed — 2026-10-14
+
+Removed the account-wide usage gate from manager/worker dispatch and assignment admission.
+Actual provider usage/429 errors finish the affected attempt, preserving the error; new
+requests remain eligible. Startup removes legacy gate settings and releases saved usage
+waiting timestamps before normal native reconciliation. Account usage display stays informational.
+Network/process recovery, owner stops, native history and assignment ownership remain.
+
+Validation: full suite had 415 passing checks and one obsolete Claude usage-classification
+expectation. That expectation now checks the preserved native error and absence of application
+retry; the affected provider/recovery suites then passed all 49 checks, including two additional
+quota/429 cases. Browser smoke, Ruff and JavaScript syntax checks passed. A private pre-activation
+SQLite backup passed integrity checking in `.data/usage-blocker-removal/`. Service activation
+and runtime cleanup are verified separately after this implementation commit.
 
 # Automatic deployment readiness corrections — 2026-10-14
 

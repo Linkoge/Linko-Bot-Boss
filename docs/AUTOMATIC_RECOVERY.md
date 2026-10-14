@@ -1,3 +1,15 @@
+# Usage blocker removed — 2026-10-14
+
+The account-wide usage gate, reset-time inference scheduling and usage backoff have been removed.
+Provider quota/HTTP 429 errors finish the affected attempt and preserve the provider error.
+New messages and unrelated assignments remain eligible immediately. Account usage readings remain
+informational. Startup deletes legacy `recovery_account_gate` settings, releases unfinished usage
+waiting timestamps and clears their task waiting labels before normal native outcome reconciliation.
+Queued requests that never reached the provider can run; genuine failed native turns are reported
+as failed and can be explicitly retried. Ownership, stop/pause and connection recovery still apply.
+`tests/test_recovery.py` covers cross-project/chat availability, legacy persisted cleanup and
+notification-only provider errors across restart. Earlier account-gate descriptions below are historical.
+
 # Parallel recovery ownership — 2026-10-14
 
 The [parallel execution contract](PARALLEL_EXECUTION.md) extends retained task/thread identity with

@@ -16,10 +16,8 @@ from pathlib import Path
 from .codex import CodexError, process_start
 from .db import new_id
 
-GATE = "recovery_account_gate"
 REASONS = {
     "connection": "Waiting for connection",
-    "usage": "Waiting for usage limit",
     "interrupted": "Recovering interrupted execution",
 }
 
@@ -80,7 +78,7 @@ def classify(error):
         }
         or status == 429
     ):
-        return Failure("usage", reset_time({**data, **details}))
+        return None
     if info in {
         "transportLost",
         "httpConnectionFailed",
@@ -97,7 +95,7 @@ def classify(error):
     message = str(details.get("message", str(error))).lower()
     if not info or info in {"other", -32000}:
         if any(s in message for s in ("usage limit", "rate limit", "quota exceeded")):
-            return Failure("usage")
+            return None
         if any(
             s in message
             for s in (
@@ -145,81 +143,8 @@ def reset_time(details):
     return None
 
 
-async def with_reset(server, failure):
-    if not failure or failure.kind != "usage" or failure.retry_at:
-        return failure
-    # One metadata request after an actual limit, never a speculative model request.
-    try:
-        limits = await server.request("account/rateLimits/read", {"excludeResetCreditDetails": True}, timeout=5)
-    except Exception:
-        limits = server.rate_limits
-    snapshot = limits.get("rateLimits") or {}
-    resets = [
-        w["resetsAt"]
-        for w in (snapshot.get("primary"), snapshot.get("secondary"))
-        if isinstance(w, dict)
-        and w.get("usedPercent", 0) >= 100
-        and isinstance(w.get("resetsAt"), (int, float))
-        and w["resetsAt"] > time.time()
-    ]
-    if resets:
-        failure.retry_at = max(resets)
-    return failure
-
-
 def delay(count, kind):
-    base, cap = (300, 21600) if kind == "usage" else (5, 300)
-    return min(cap, base * 2 ** min(count - 1, 16)) * random.uniform(0.8, 1.0)
-
-
-def gate_available(conn, execution_id=None, reserve=False):
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
-    if not row:
-        return True
-    gate = json.loads(row["value"])
-    if gate["retry_at"] > time.time():
-        return False
-    probe = gate.get("probe")
-    if probe and probe != execution_id:
-        active = conn.execute(
-            "SELECT 1 FROM executions WHERE id=? AND finished_at IS NULL AND status!='recovering'", (probe,)
-        ).fetchone()
-        if active:
-            return False
-    if reserve:
-        gate["probe"] = execution_id
-        conn.execute("UPDATE settings SET value=? WHERE key=?", (json.dumps(gate), GATE))
-    return True
-
-
-def reserve(db, execution_id):
-    with db.transaction() as conn:
-        return gate_available(conn, execution_id, True)
-
-
-def wait_for_gate(db, execution_id):
-    with db.transaction() as conn:
-        gate = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
-        retry_at = max(time.time() + 5, json.loads(gate["value"])["retry_at"] if gate else 0)
-        conn.execute(
-            "UPDATE executions SET status='recovering',retry_at=?,recovery_reason='usage' WHERE id=? AND finished_at IS NULL",
-            (retry_at, execution_id),
-        )
-        conn.execute("UPDATE messages SET status='waiting' WHERE execution_id=? AND role='assistant'", (execution_id,))
-        conn.execute(
-            "UPDATE tasks SET lifecycle='waiting',blocker=? WHERE lease_owner=?", (REASONS["usage"], execution_id)
-        )
-
-
-def release_gate(conn, execution_id, success=False):
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
-    if row and json.loads(row["value"]).get("probe") == execution_id:
-        if success:
-            conn.execute("DELETE FROM settings WHERE key=?", (GATE,))
-        else:
-            gate = json.loads(row["value"])
-            gate["probe"] = None
-            conn.execute("UPDATE settings SET value=? WHERE key=?", (json.dumps(gate), GATE))
+    return min(300, 5 * 2 ** min(count - 1, 16)) * random.uniform(0.8, 1.0)
 
 
 def defer(db, execution_id, failure, error="", output=None):
@@ -228,10 +153,6 @@ def defer(db, execution_id, failure, error="", output=None):
         if not row or row["finished_at"] is not None:
             return
         count = row["retry_count"] + 1
-        gate_row = conn.execute("SELECT value FROM settings WHERE key=?", (GATE,)).fetchone()
-        gate = json.loads(gate_row["value"]) if gate_row else {}
-        if failure.kind == "usage":
-            count = max(count, gate.get("count", 0) + 1)
         retry_at = (
             max(time.time() + 1, failure.retry_at) if failure.retry_at else time.time() + delay(count, failure.kind)
         )
@@ -249,19 +170,6 @@ def defer(db, execution_id, failure, error="", output=None):
             conn.execute(
                 "UPDATE messages SET status='waiting' WHERE execution_id=? AND role='assistant'", (execution_id,)
             )
-        if failure.kind == "usage":
-            gate = {
-                "retry_at": max(retry_at, gate.get("retry_at", 0)),
-                "count": count,
-                "probe": None,
-                "known_reset": failure.retry_at,
-            }
-            conn.execute(
-                "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (GATE, json.dumps(gate)),
-            )
-        else:
-            release_gate(conn, execution_id)
         db.event(
             conn,
             "recovery.scheduled",

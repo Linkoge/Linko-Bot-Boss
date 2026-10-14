@@ -210,7 +210,7 @@ async function selectProject(id){
 function projectName(id){const p=state.portfolio?.projects.find(p=>p.id===id);return p?displayName(p):'All Projects';}
 async function loadMemory(selection=state.selection){if(!state.project){renderMemory();renderMemoryReview();return;}const project=state.project;const [detail,brief]=await Promise.all([api(`/api/projects/${project}`),api(`/api/projects/${project}/brief`)]);if(selection!==state.selection||project!==state.project)return;state.detail=detail;state.brief=brief;renderMemory();renderMemoryReview();}
 function renderMemory(){$('memory-list').replaceChildren();if(!state.detail){$('memory-list').append(element('p','Select a project to read historical owner notes.'));return;}for(const m of state.detail.memory){const d=element('details');d.append(element('summary',m.name),element('pre',m.content));$('memory-list').append(d);}if(!state.detail.memory.length)$('memory-list').append(element('p','Project context comes from its repository and instructions.'));}
-function recoveryLabel(record){const reasons={connection:'Waiting for connection',usage:'Waiting for usage limit',interrupted:'Recovering interrupted execution'};return (reasons[record.recovery_reason]||'Waiting')+(record.retry_at?' · Next attempt '+new Date(record.retry_at*1000).toLocaleString():'');}
+function recoveryLabel(record){const reasons={connection:'Waiting for connection',interrupted:'Recovering interrupted execution'};return (reasons[record.recovery_reason]||'Waiting')+(record.retry_at?' · Next attempt '+new Date(record.retry_at*1000).toLocaleString():'');}
 function taskControlButton(task,label,command){
   const selection=state.selection,button=element('button',label);
   button.onclick=action(async()=>{
