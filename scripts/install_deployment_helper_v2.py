@@ -1,4 +1,7 @@
-"""Explicit future helper upgrade from an exact prepared artifact; no manager restart."""
+"""Explicit future helper upgrade from an exact prepared artifact; no manager restart.
+
+The same guarded procedure installs v3 (scripts/install_deployment_helper_v3.py) over v2.
+"""
 import argparse
 import os
 from pathlib import Path
@@ -6,25 +9,26 @@ from pathlib import Path
 from ai_manager.deployment import ID, Handoff, atomic, lock, read, run, sha
 
 
-def install(data, release_id):
+def install(data, release_id, version='v2'):
+    previous = 'v' + str(int(version[1:]) - 1)
     handoff = Handoff(data)
     if not ID.fullmatch(release_id):
         raise ValueError('Use an exact prepared release ID')
     manifest = read(handoff.root / 'releases' / release_id / 'manifest.json')
     if not manifest or manifest.get('id') != release_id:
         raise ValueError('Release is not prepared')
-    source = handoff.root / 'releases' / release_id / 'helper-v2.py'
-    if manifest.get('required_helper_version') != 'v2' or not source.is_file() or sha(source) != manifest.get('required_helper_sha256'):
-        raise ValueError('Prepared artifact does not pin this helper v2')
+    source = handoff.root / 'releases' / release_id / ('helper-' + version + '.py')
+    if manifest.get('required_helper_version') != version or not source.is_file() or sha(source) != manifest.get('required_helper_sha256'):
+        raise ValueError('Prepared artifact does not pin this helper ' + version)
     if handoff.gated():
         raise ValueError('Resolve the existing pending handoff before helper upgrade')
     config = read(handoff.root / 'config.json')
     if not config or config['data'] != str(data.resolve()):
         raise ValueError('Existing helper configuration is missing or differs')
-    destination = handoff.root / 'helper-v2.py'
+    destination = handoff.root / ('helper-' + version + '.py')
     unit = Path.home() / '.config/systemd/user/linko-deployment-helper.service'
     current = unit.read_text()
-    old_path = str(handoff.root / 'helper-v1.py')
+    old_path = str(handoff.root / ('helper-' + previous + '.py'))
     new_path = str(destination)
     if current.count(old_path) != 1 or new_path in current:
         raise ValueError('Existing helper unit differs; inspect separately')
@@ -32,12 +36,12 @@ def install(data, release_id):
         if handoff.gated():
             raise ValueError('A deployment handoff arrived before helper upgrade')
         if destination.exists() and sha(destination) != sha(source):
-            raise ValueError('Existing v2 helper differs')
-        receipt = handoff.root / 'helper-v2-upgrade.json'
+            raise ValueError('Existing ' + version + ' helper differs')
+        receipt = handoff.root / ('helper-' + version + '-upgrade.json')
         if receipt.exists():
             raise ValueError('A prior helper upgrade receipt exists; inspect it')
         atomic(receipt, {'phase':'prepared','release_id':release_id,'helper_sha256':sha(source),
-                         'old_helper_sha256':sha(handoff.root/'helper-v1.py'),'old_unit':current})
+                         'old_helper_sha256':sha(Path(old_path)),'old_unit':current})
         destination.write_bytes(source.read_bytes())
         destination.chmod(0o600)
         unit.write_text(current.replace(old_path,new_path))
@@ -45,7 +49,7 @@ def install(data, release_id):
         run(['systemctl','--user','restart','linko-deployment-helper.service'])
         run(['systemctl','--user','is-active','linko-deployment-helper.service'])
         atomic(receipt, {**read(receipt),'phase':'succeeded','unit_sha256':sha(unit)})
-    print('Helper v2 upgraded; manager has not been restarted or deployed')
+    print('Helper ' + version + ' upgraded; manager has not been restarted or deployed')
 
 
 if __name__ == '__main__':

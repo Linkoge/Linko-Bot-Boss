@@ -1,12 +1,13 @@
 """Trusted local preparation only. Conversation receives an ID, never a path/argv."""
 import argparse
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
 from pathlib import Path
 
-from ai_manager.deployment import ID, Handoff, atomic, lock, run, schema_change, sha
+from ai_manager.deployment import ID, REHEARSED, Handoff, atomic, lock, rehearse, run, schema_change, sha
 
 
 def prepare(repo, live, data, release_id, python, task_ids=()):
@@ -32,6 +33,35 @@ def prepare(repo, live, data, release_id, python, task_ids=()):
                 conn.execute("DELETE FROM settings WHERE key='release_preparation'")
 
 
+def checks(python):
+    """Fixed full backend + browser gate, run exactly once per release."""
+    return [[str(python), '-m', 'pytest', '-q'], [str(python), '-m', 'ruff', 'check', '.'],
+            ['node', '--check', 'ai_manager/static/app.js'],
+            ['node', '--check', 'ai_manager/static/usage.js'],
+            ['node', '--check', 'ai_manager/static/model-settings.js'],
+            ['node', '--check', 'ai_manager/static/memory.js'],
+            ['node', '--check', 'ai_manager/static/audio.js'],
+            ['node', '--check', 'ai_manager/static/attachments.js'],
+            [str(python), 'scripts/browser_model_scroll.py'],
+            [str(python), 'scripts/browser_composer.py'],
+            [str(python), 'scripts/browser_parallel_composer.py'],
+            [str(python), 'scripts/browser_worker_delivery.py'],
+            [str(python), 'scripts/browser_audio.py'],
+            [str(python), 'scripts/browser_chat_reliability.py'],
+            [str(python), 'scripts/browser_project_ui.py'],
+            [str(python), 'scripts/browser_project_stash.py'],
+            [str(python), 'scripts/browser_global_recency.py'],
+            [str(python), 'scripts/browser_agent_controls.py'],
+            [str(python), 'scripts/browser_todos.py'],
+            [str(python), 'scripts/browser_todo_chat.py'],
+            [str(python), 'scripts/browser_project_memory.py'],
+            [str(python), 'scripts/browser_fetch_recovery.py'],
+            [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_markdown.py'], [str(python), 'scripts/browser_deployment.py'],
+            [str(python), 'scripts/browser_account_usage.py'],
+            [str(python), 'scripts/browser_auto_deploy.py'],
+            ['xvfb-run', '-a', str(python), 'scripts/browser_pwa.py']]
+
+
 def _prepare(repo, live, data, release_id, python, task_ids=()):
     if not ID.fullmatch(release_id):
         raise ValueError('Invalid release ID')
@@ -43,35 +73,28 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
     schema = schema_change(repo, base, commit)
     target = Handoff(data).root / 'releases' / release_id
     target.mkdir(parents=True, mode=0o700)  # Never overwrite a prepared receipt.
-    checks = [[str(python), '-m', 'pytest', '-q'], [str(python), '-m', 'ruff', 'check', '.'],
-              ['node', '--check', 'ai_manager/static/app.js'],
-              ['node', '--check', 'ai_manager/static/usage.js'],
-              ['node', '--check', 'ai_manager/static/model-settings.js'],
-              ['node', '--check', 'ai_manager/static/memory.js'],
-              ['node', '--check', 'ai_manager/static/audio.js'],
-              ['node', '--check', 'ai_manager/static/attachments.js'],
-              [str(python), 'scripts/browser_model_scroll.py'],
-              [str(python), 'scripts/browser_composer.py'],
-              [str(python), 'scripts/browser_parallel_composer.py'],
-              [str(python), 'scripts/browser_worker_delivery.py'],
-              [str(python), 'scripts/browser_audio.py'],
-              [str(python), 'scripts/browser_chat_reliability.py'],
-              [str(python), 'scripts/browser_project_ui.py'],
-              [str(python), 'scripts/browser_project_stash.py'],
-              [str(python), 'scripts/browser_global_recency.py'],
-              [str(python), 'scripts/browser_agent_controls.py'],
-              [str(python), 'scripts/browser_todos.py'],
-              [str(python), 'scripts/browser_todo_chat.py'],
-              [str(python), 'scripts/browser_project_memory.py'],
-              [str(python), 'scripts/browser_fetch_recovery.py'],
-              [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_markdown.py'], [str(python), 'scripts/browser_deployment.py'],
-              [str(python), 'scripts/browser_account_usage.py'],
-              ['xvfb-run', '-a', str(python), 'scripts/browser_pwa.py']]
-    with (target / 'validation.log').open('w') as log:
-        for argv in checks:
-            result = subprocess.run(argv, cwd=repo, stdout=log, stderr=log, timeout=180)
-            if result.returncode:
-                raise ValueError('Release validation failed; see private validation.log')
+    # Candidate code and tests must import the candidate, never the running manager's modules.
+    env = {**os.environ, 'PYTHONPATH': str(repo)}
+    rehearsal, venv = None, target / 'rehearsal-venv'
+    try:
+        with (target / 'validation.log').open('w') as log:
+            if schema and schema['dependencies']:
+                # Dependency rehearsal: the exact candidate lock in a throwaway environment runs every check.
+                uv = shutil.which('uv') or str(Path.home() / '.local/bin/uv')
+                if subprocess.run([uv, 'sync', '--frozen'], cwd=repo, stdout=log, stderr=log, timeout=600,
+                                  env={**env, 'UV_PROJECT_ENVIRONMENT': str(venv)}).returncode:
+                    raise ValueError('Dependency rehearsal failed; see private validation.log')
+                python = venv / 'bin/python'
+            if schema and schema['migration'] == REHEARSED:
+                rehearsal = rehearse(data / 'manager.sqlite3', repo, python, target / 'rehearsal', base, commit)
+                log.write('Migration rehearsal passed on a private database copy\n')
+                log.flush()
+            for argv in checks(python):
+                result = subprocess.run(argv, cwd=repo, stdout=log, stderr=log, timeout=180, env=env)
+                if result.returncode:
+                    raise ValueError('Release validation failed; see private validation.log')
+    finally:
+        shutil.rmtree(venv, ignore_errors=True)
     if run(['git', 'status', '--porcelain'], repo) or run(['git', 'rev-parse', 'HEAD'], repo) != commit:
         raise ValueError('Candidate changed during validation; reprepare exact reviewed commit')
     if run(['git', 'rev-parse', 'HEAD'], live) != base:
@@ -88,11 +111,13 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
                 'bundle_sha256': sha(target / 'release.bundle'), 'validation_sha256': sha(target / 'validation.log')}
     if schema:
         manifest['schema'] = schema
-        helper = target / 'helper-v2.py'
+        helper = target / ('helper-' + schema['helper'] + '.py')
         helper.write_bytes((repo / 'ai_manager/deployment.py').read_bytes())
         helper.chmod(0o600)
-        manifest['required_helper_version'] = 'v2'
+        manifest['required_helper_version'] = schema['helper']
         manifest['required_helper_sha256'] = sha(helper)
+    if rehearsal:
+        manifest['rehearsal'] = rehearsal
     if task_ids:
 
         from ai_manager.deployment_intent import assignment_evidence
@@ -120,8 +145,9 @@ if __name__ == '__main__':
     parser.add_argument('--live', type=Path, required=True)
     parser.add_argument('--data', type=Path, required=True)
     parser.add_argument('--task-id', action='append', default=[])
+    parser.add_argument('--candidate', type=Path, help='Clean candidate checkout (default: this checkout)')
     args = parser.parse_args()
     os.umask(0o077)
-    prepare(Path(__file__).resolve().parents[1], args.live.resolve(), args.data.resolve(), args.release_id,
-            Path(sys.executable), args.task_id)
+    prepare((args.candidate or Path(__file__).parents[1]).resolve(), args.live.resolve(), args.data.resolve(),
+            args.release_id, Path(sys.executable), args.task_id)
     print('Prepared release ' + args.release_id)

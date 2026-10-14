@@ -1,7 +1,9 @@
 """Owner-sourced, one-release deployment intent. No permission is read from worker prose.
 
 Existing SQLite settings/events provide transactional durability without a migration.
-The independent helper protocol remains the only activation path.
+The independent helper protocol remains the only activation path. Auto intents (kind='auto',
+docs/AUTO_DEPLOY.md) bind one owner work request to its assignment's exact verified release and
+are consumed only by the backend auto-deploy pipeline, never by manager tool calls.
 """
 import hashlib
 import json
@@ -10,6 +12,14 @@ import time
 from .deployment import ID, Handoff, read, sha
 
 PREFIX = 'deployment_intent:'
+
+
+class Held(ValueError):
+    """A newer owner turn must review the unused intent, or the project is paused."""
+
+
+class Superseded(ValueError):
+    """The assignment changed after verification; its prepared release is never used."""
 
 
 def rows(conn):
@@ -39,7 +49,7 @@ def save(db, conn, value, event):
 
 def revoke(db, conn, reason, project_id=None, conversation_id=None, task_id=None, intent_id=None):
     for value in rows(conn):
-        if value['status'] in {'revoked', 'dispatched'}:
+        if value['status'] in {'revoked', 'dispatched', 'failed'}:
             continue
         if intent_id and value['id'] != intent_id:
             continue
@@ -150,6 +160,68 @@ class Intents:
                 value['review_task_ids'] = [task_id]
             return save(self.db, conn, value, 'assignment_linked')
 
+    def record_auto(self, conn, project_id, params, task_id):
+        """The current owner work request is the deployment intent for this assignment's exact release only."""
+        source = self.owner(conn, params)
+        if not conn.execute('SELECT 1 FROM tasks WHERE id=? AND project_id=?', (task_id, project_id)).fetchone():
+            raise ValueError('Assignment belongs to another project or is missing')
+        digest = hashlib.sha256(source['content'].encode()).hexdigest()
+        existing = next((v for v in rows(conn) if v.get('kind') == 'auto' and v['task_ids'] == [task_id]
+                         and v['status'] == 'recorded'), None)
+        if existing:
+            # The same owner extended or batched into this assignment: still unused, reaffirmed by the latest turn.
+            if existing['checked_owner_message'] != source['id']:
+                existing.update(checked_owner_message=source['id'], checked_owner_sha256=digest,
+                                reason='Owner request extended this assignment')
+                save(self.db, conn, existing, 'owner_reviewed')
+            return existing
+        value = {'id': hashlib.sha256((source['id'] + project_id + task_id).encode()).hexdigest()[:32],
+                 'kind': 'auto', 'owner_id': 1, 'source_message_id': source['id'],
+                 'source_execution_id': source['execution_id'], 'source_sha256': digest,
+                 'conversation_id': source['conversation_id'], 'project_id': project_id,
+                 'quote': source['content'][:2000],
+                 'scope': {'release_id': None, 'task_ids': [task_id], 'task_request': None, 'auto': True},
+                 'task_ids': [task_id], 'task_request': None, 'candidate': None, 'status': 'recorded',
+                 'created_at': time.time(), 'assignment_hashes': {}, 'auto': {'state': 'waiting_result'},
+                 'checked_owner_message': source['id'], 'checked_owner_sha256': digest}
+        return save(self.db, conn, value, 'recorded')
+
+    def consume_auto(self, intent_id, release_id, commit, execution_id):
+        """Pipeline-only: dispatch exactly the release prepared from this assignment's verified commit."""
+        with self.db.transaction() as conn:
+            value = next((v for v in rows(conn) if v['id'] == intent_id), None)
+            if not value or value.get('kind') != 'auto' or value['status'] != 'recorded':
+                raise ValueError('Auto-deploy intent is no longer unused')
+            try:
+                self.current(conn, value)
+            except ValueError as error:
+                raise Held(str(error)) from error
+            candidate, manifest = self.candidate(release_id)
+            task_id = value['task_ids'][0]
+            task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+            if candidate['commit'] != commit or candidate['base'] != task['workspace_base']:
+                raise ValueError('Prepared release is not the exact verified assignment commit')
+            source = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_source:' + task_id,)).fetchone()
+            latest = conn.execute('SELECT id FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1',
+                                  (task_id,)).fetchone()
+            try:
+                self.tasks(conn, value)
+            except ValueError as error:
+                raise Superseded(str(error)) from error
+            if (not source or json.loads(source[0]).get('commit') != commit or not latest or latest['id'] != execution_id
+                    or manifest.get('assignments') != {task_id: assignment_evidence(conn, task)}):
+                raise Superseded('Assignment changed after verification')
+            origin = {'project_id': value['project_id'], 'conversation_id': value['conversation_id'],
+                      'execution_id': execution_id, 'task_id': task_id, 'intent_id': intent_id, 'auto': True,
+                      'owner_message_id': value['source_message_id'], 'candidate': candidate}
+            receipt = self.handoff.request(release_id, origin)
+            if (receipt.get('origin') or {}).get('intent_id') != intent_id:
+                raise ValueError('Existing release request has a different authorization source; inspect status')
+            value.update(candidate=candidate, status='dispatched', nonce=receipt['nonce'],
+                         auto={**value['auto'], 'state': 'dispatched', 'updated_at': time.time()})
+            save(self.db, conn, value, 'consumed')
+            return receipt
+
     def get(self, conn, intent_id, project_id, params, owner_revision=False):
         value = next((v for v in rows(conn) if v['id'] == intent_id), None)
         if not value or value['project_id'] != project_id or (not owner_revision and value['conversation_id'] != params['conversation_id']):
@@ -208,6 +280,8 @@ class Intents:
     def review(self, project_id, params, intent_id, release_id, reason):
         with self.db.transaction() as conn:
             value = self.get(conn, intent_id, project_id, params)
+            if value.get('kind') == 'auto':
+                raise ValueError('Auto-deploy intents are consumed only by the verified auto-deploy pipeline')
             self.current(conn, value)
             candidate, manifest = self.candidate(release_id)
             if value['candidate'] and candidate != value['candidate']:
@@ -247,6 +321,8 @@ class Intents:
                         value.update(status='dispatched', nonce=receipt['nonce'])
                         save(self.db, conn, value, 'consumed')
                     return receipt
+            if value.get('kind') == 'auto':
+                raise ValueError('Auto-deploy intents are consumed only by the verified auto-deploy pipeline')
             self.current(conn, value)
             if value['status'] != 'reviewed' or not value['candidate']:
                 raise ValueError('Recorded owner intent and exact prepared evidence review are required')
@@ -278,6 +354,8 @@ class Intents:
                 latest = self.latest(conn, value)
                 summary = {k: value[k] for k in ('id', 'project_id', 'conversation_id', 'source_message_id',
                            'scope', 'candidate', 'status')}
+                if value.get('kind') == 'auto':
+                    summary.update(kind='auto', task_ids=value['task_ids'], auto=value['auto'])
                 summary['needs_owner_review'] = bool(latest and (latest['id'] != value['checked_owner_message'] or
                     hashlib.sha256(latest['content'].encode()).hexdigest() != value.get('checked_owner_sha256')))
                 if value.get('nonce'):

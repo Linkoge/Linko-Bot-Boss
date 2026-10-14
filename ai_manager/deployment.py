@@ -16,7 +16,7 @@ import tarfile
 import time
 import urllib.error
 import urllib.request
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from pathlib import Path
 
 TERMINAL = {'succeeded', 'failed', 'rolled_back', 'cancelled'}
@@ -31,18 +31,114 @@ PARALLEL_SCHEMA = {'migration': 'parallel-workspaces-v12', 'from': 11, 'to': 12,
                    'db_sha256': PARALLEL_DB_AFTER, 'helper': 'v2'}
 
 
+# Helper v3: any other schema/dependency release is allowed only with a passing migration rehearsal on a
+# private copy of the live database, a stopped pre-activation backup, and data (plus venv) restore on rollback.
+REHEARSED = 'rehearsed-v3'
+DEPENDENCIES = ('pyproject.toml', 'uv.lock')
+MIGRATE = 'import sys; sys.path.insert(0, sys.argv[1]); from ai_manager.db import Database; Database(sys.argv[2])'
+
+
+def blob(repo, ref, name):
+    result = subprocess.run(['git', 'show', ref + ':' + name], cwd=repo, capture_output=True)
+    return hashlib.sha256(result.stdout).hexdigest() if result.returncode == 0 else None
+
+
 def schema_change(repo, base, commit):
-    for name in ('pyproject.toml', 'uv.lock'):
-        if run(['git', 'diff', base, commit, '--', name], repo):
-            raise ValueError('Dependency changes require separate deployment review')
-    if not run(['git', 'diff', base, commit, '--', 'ai_manager/db.py'], repo):
+    """None for code-only releases, the pinned v2 workspace migration, or the rehearsed v3 contract."""
+    dependencies = {name: blob(repo, commit, name) for name in DEPENDENCIES
+                    if run(['git', 'diff', base, commit, '--', name], repo)}
+    if not dependencies and not run(['git', 'diff', base, commit, '--', 'ai_manager/db.py'], repo):
         return None
-    def digest(ref):
-        return hashlib.sha256(subprocess.run(['git', 'show', ref + ':ai_manager/db.py'],
-                              cwd=repo, capture_output=True, check=True).stdout).hexdigest()
-    if digest(base) != PARALLEL_DB_BEFORE or digest(commit) != PARALLEL_DB_AFTER:
-        raise ValueError('Schema changes require separate deployment review')
-    return PARALLEL_SCHEMA.copy()
+    after = blob(repo, commit, 'ai_manager/db.py')
+    if not dependencies and blob(repo, base, 'ai_manager/db.py') == PARALLEL_DB_BEFORE and after == PARALLEL_DB_AFTER:
+        return PARALLEL_SCHEMA.copy()
+    return {'migration': REHEARSED, 'db_sha256': after, 'dependencies': dependencies, 'helper': 'v3',
+            'restore_database': True}
+
+
+def rehearsed(manifest):
+    return (manifest.get('schema') or {}).get('migration') == REHEARSED
+
+
+def schema_digest(conn, schema='main'):
+    rows = conn.execute(f"SELECT type,name,tbl_name,COALESCE(sql,'') FROM {schema}.sqlite_master "
+                        "WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name").fetchall()
+    return hashlib.sha256(json.dumps([list(r) for r in rows]).encode()).hexdigest()
+
+
+def table_columns(conn, schema='main'):
+    names = [r[0] for r in conn.execute(f"SELECT name FROM {schema}.sqlite_master WHERE type='table' "
+                                        "AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    return {name: [r[1] for r in conn.execute(f'PRAGMA {schema}.table_info("{name}")')] for name in names}
+
+
+def rehearse(database, repo, python, directory, base, commit):
+    """Run the candidate's own migration on a private online copy of the live database.
+
+    Passes only for additive migrations: every original table, column and row survives, schema versions only
+    grow, and integrity/foreign keys hold. The copies are removed afterwards; the live database is only read.
+    """
+    directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+    original, copy = directory / 'before.sqlite3', directory / 'rehearsal.sqlite3'
+    try:
+        backup(database, original)
+        shutil.copyfile(original, copy)
+        result = subprocess.run([str(python), '-I', '-c', MIGRATE, str(repo), str(copy)], cwd=repo,
+                                capture_output=True, text=True, timeout=180)
+        if result.returncode:
+            raise ValueError('Candidate migration failed on the database copy: ' + result.stderr.strip()[-500:])
+        with closing(sqlite3.connect(copy)) as conn:
+            if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok' or conn.execute('PRAGMA foreign_key_check').fetchall():
+                raise ValueError('Migrated copy failed integrity/foreign-key validation')
+            conn.execute('ATTACH DATABASE ? AS old', (str(original),))
+            old, new = table_columns(conn, 'old'), table_columns(conn)
+            tables = {}
+            for name, columns in old.items():
+                if name not in new or not set(columns) <= set(new[name]):
+                    raise ValueError('Migration removes or renames existing data: ' + name)
+                projection = ','.join('"' + c + '"' for c in columns)
+                before = conn.execute(f'SELECT count(*) FROM old."{name}"').fetchone()[0]
+                after = conn.execute(f'SELECT count(*) FROM main."{name}"').fetchone()[0]
+                if after < before or conn.execute(f'SELECT count(*) FROM (SELECT {projection} FROM old."{name}" '
+                                                  f'EXCEPT SELECT {projection} FROM main."{name}")').fetchone()[0]:
+                    raise ValueError('Migration changes existing rows: ' + name)
+                tables[name] = {'rows': before, 'added_columns': [c for c in new[name] if c not in columns]}
+            versions = {key: sorted(r[0] for r in conn.execute(f'SELECT version FROM {key}.schema_version'))
+                        for key in ('old', 'main')}
+            if not set(versions['old']) <= set(versions['main']):
+                raise ValueError('Migration removes schema versions')
+            return {'passed': True, 'base': base, 'commit': commit, 'schema_before': schema_digest(conn, 'old'),
+                    'schema_after': schema_digest(conn), 'versions_before': versions['old'],
+                    'versions_after': versions['main'], 'tables': tables,
+                    'new_tables': sorted(set(new) - set(old)), 'at': time.time()}
+    finally:
+        for path in (original, copy):
+            for suffix in ('', '-wal', '-shm', '-journal'):
+                Path(str(path) + suffix).unlink(missing_ok=True)
+
+
+def restore(snapshot, target):
+    """Replace the STOPPED live database with the verified pre-activation snapshot (rehearsed releases only)."""
+    expected = sha(snapshot)
+    temporary = target.with_name(target.name + '.restore')
+    shutil.copyfile(snapshot, temporary)
+    os.chmod(temporary, 0o600)
+    with temporary.open('rb') as stream:
+        os.fsync(stream.fileno())
+    for suffix in ('-wal', '-shm'):  # Uncheckpointed pages belong to the failed candidate.
+        Path(str(target) + suffix).unlink(missing_ok=True)
+    os.replace(temporary, target)
+    fd = os.open(target.parent, os.O_DIRECTORY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    if sha(target) != expected:
+        raise ValueError('Restored database differs from the pre-activation backup')
+    with closing(sqlite3.connect(target)) as conn:
+        if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+            raise ValueError('Restored database failed integrity validation')
+    return expected
 
 
 def atomic(path, value):
@@ -171,12 +267,30 @@ class Handoff:
                          origin.get('execution_id'))
             if conn.execute('SELECT 1 FROM conversations WHERE id=?', (origin.get('conversation_id'),)).fetchone():
                 text = 'Deployment complete.' if value['phase'] == 'succeeded' else 'Deployment '+value['phase']+'. Activation needs attention.'
+                if origin.get('auto'):
+                    text = auto_report(value)
                 conn.execute("INSERT INTO messages(id,conversation_id,role,content,status,created_at) VALUES(?,?,'assistant',?,'completed',?)",
                              ('deploy-'+value['nonce'], origin['conversation_id'], text, time.time()))
             conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(payload)))
 
     def ready_to_stop(self):
         return self.status()['phase'] in {'acknowledged', 'backing_up', 'activating', 'verifying', 'rolling_back', 'rollback_failed'}
+
+
+def auto_report(value):
+    release, error = value['release_id'], (value.get('error') or '')[:300]
+    restored = ' Code' + (', database' if (value.get('restored') or {}).get('database') else '') + (
+        ' and dependencies' if (value.get('restored') or {}).get('venv') else '') + ' were restored.'
+    return {
+        'succeeded': f'Auto-deploy complete: {release} is live and passed post-deploy health checks.',
+        'rolled_back': f'Auto-deploy of {release} failed the post-deploy health check ({error}) and was rolled back '
+                       f'automatically to the previous release.{restored} It will not be retried automatically.',
+        'failed': f'Auto-deploy of {release} stopped before activation ({error}). Nothing changed; it will not be '
+                  'retried automatically.',
+        'cancelled': f'Auto-deploy of {release} was cancelled before activation.',
+        'rollback_failed': f'Auto-deploy of {release} could not roll back automatically ({error}). Admission stays '
+                           'fenced; external inspection is required.',
+    }[value['phase']]
 
 
 def backup_workspaces(data, database, directory):
@@ -255,10 +369,38 @@ class Helper:
         expected_schema = schema_change(self.repo, manifest['base'], manifest['commit'])
         if manifest.get('schema') != expected_schema:
             raise ValueError('Pinned reviewed schema contract mismatch')
+        if rehearsed(manifest):
+            rehearsal = manifest.get('rehearsal') or {}
+            if (not rehearsal.get('passed') or rehearsal.get('commit') != manifest['commit']
+                    or rehearsal.get('base') != manifest['base']):
+                raise ValueError('Schema/dependency release needs a passing migration rehearsal on a database copy')
+            with closing(sqlite3.connect(f'file:{self.data / "manager.sqlite3"}?mode=ro', uri=True)) as conn:
+                if schema_digest(conn) != rehearsal['schema_before']:
+                    raise ValueError('Live database schema differs from the rehearsed copy; reprepare')
+            if expected_schema['dependencies'] and not Path(self.uv()).is_file():
+                raise ValueError('Dependency release needs uv for the reviewed dependency sync')
 
-    def snapshot(self, directory):
+    def uv(self):
+        return self.config.get('uv') or shutil.which('uv') or str(Path.home() / '.local/bin/uv')
+
+    def venv(self):
+        return Path(self.config.get('venv') or self.repo / '.venv')
+
+    def sync_dependencies(self):
+        """Install the activated commit's exact locked dependencies into the service environment."""
+        subprocess.run([self.uv(), 'sync', '--frozen'], cwd=self.repo, check=True, capture_output=True, text=True,
+                       timeout=600, env={**os.environ, 'UV_PROJECT_ENVIRONMENT': str(self.venv())})
+
+    def restore_venv(self, directory):
+        shutil.rmtree(self.venv(), ignore_errors=True)
+        shutil.copytree(directory / 'venv', self.venv(), symlinks=True)
+
+    def snapshot(self, directory, manifest=None):
         directory.mkdir(parents=True, mode=0o700)
         receipt = {'manager': backup(self.data / 'manager.sqlite3', directory / 'manager.sqlite3')}
+        if manifest and rehearsed(manifest) and manifest['schema']['dependencies']:
+            shutil.copytree(self.venv(), directory / 'venv', symlinks=True)  # Exact rollback environment.
+            receipt['venv'] = str(self.venv())
         receipt['workspaces'] = backup_workspaces(self.data, directory / 'manager.sqlite3', directory)
         run(['git', 'bundle', 'create', str(directory / 'source.bundle'), 'HEAD'], self.repo)
         receipt['source'] = sha(directory / 'source.bundle')
@@ -366,7 +508,7 @@ class Helper:
             for table in CRITICAL:
                 columns = [row[1] for row in old.execute('PRAGMA table_info(' + table + ')')]
                 current_columns = [row[1] for row in conn.execute('PRAGMA table_info(' + table + ')')]
-                if current_columns != columns:
+                if current_columns != columns and not (rehearsed(manifest) and set(columns) <= set(current_columns)):
                     if table != 'tasks' or manifest.get('schema') != PARALLEL_SCHEMA or current_columns != columns + ['workspace', 'workspace_branch', 'workspace_base']:
                         raise ValueError('Unexpected preserved table schema: ' + table)
                     if conn.execute('SELECT 1 FROM tasks WHERE workspace IS NOT NULL OR workspace_branch IS NOT NULL OR workspace_base IS NOT NULL').fetchone():
@@ -386,7 +528,13 @@ class Helper:
                 raise ValueError('Project identity/recency changed')
             old_versions = set(old.execute('SELECT * FROM schema_version').fetchall())
             versions = set(conn.execute('SELECT * FROM schema_version').fetchall())
-            if versions != old_versions and not (manifest.get('schema') == PARALLEL_SCHEMA and versions == old_versions | {(12,)}):
+            if rehearsed(manifest):
+                # Activation must reach exactly the rehearsed schema; a restoring rollback the original one.
+                stage = 'before' if manifest.get('rollback') else 'after'
+                if (schema_digest(conn) != manifest['rehearsal']['schema_' + stage]
+                        or {v[0] for v in versions} != set(manifest['rehearsal']['versions_' + stage])):
+                    raise ValueError('Live schema differs from the rehearsed migration')
+            elif versions != old_versions and not (manifest.get('schema') == PARALLEL_SCHEMA and versions == old_versions | {(12,)}):
                 raise ValueError('Unexpected schema migration')
             if manifest.get('schema') == PARALLEL_SCHEMA:
                 indices = dict(conn.execute("SELECT name,sql FROM sqlite_master WHERE type='index' AND name IN ('project_worker','workspace_worker')"))
@@ -426,7 +574,7 @@ class Helper:
                         raise ValueError('Idle acknowledgement no longer valid')
                 directory = self.root / 'backups' / value['nonce']
                 self.state(value, 'backing_up')
-                self.snapshot(directory)
+                self.snapshot(directory, manifest)
                 # Recheck acknowledgement and persistent idle immediately before stopping.
                 if self.handoff.status().get('nonce') != value['nonce']:
                     raise ValueError('Handoff changed')
@@ -443,6 +591,8 @@ class Helper:
                 self.state(value, 'activating', backup=str(directory))
                 changed = True
                 run(['git', 'merge', '--ff-only', manifest['commit']], self.repo)
+                if rehearsed(manifest) and manifest['schema']['dependencies']:
+                    self.sync_dependencies()
                 self.service('start')
                 self.state(value, 'verifying')
                 health = self.wait_health(manifest, directory / 'final.sqlite3')
@@ -450,16 +600,23 @@ class Helper:
             except Exception as error:
                 if stopped:
                     self.state(value, 'rolling_back', error=str(error))
+                    restored = {}
                     try:
                         self.service('stop')
                         if changed:
                             # Checkout refuses dirty changes and preserves the forward main branch.
                             run(['git', 'checkout', '--detach', manifest['base']], self.repo)
+                            if rehearsed(manifest):
+                                # The stopped final snapshot predates every candidate write; admission was fenced.
+                                restored['database'] = restore(directory / 'final.sqlite3', self.data / 'manager.sqlite3')
+                                if manifest['schema']['dependencies']:
+                                    self.restore_venv(directory)
+                                    restored['venv'] = str(self.venv())
                         self.service('start')
-                        old = {**manifest, 'commit': manifest['base'], 'assets': manifest['base_assets']}
+                        old = {**manifest, 'commit': manifest['base'], 'assets': manifest['base_assets'], 'rollback': True}
                         self.wait_health(old, directory / 'final.sqlite3' if (directory / 'final.sqlite3').exists()
                                          else directory / 'manager.sqlite3')
-                        return self.state(value, 'rolled_back', error=str(error))
+                        return self.state(value, 'rolled_back', error=str(error), **({'restored': restored} if restored else {}))
                     except Exception as rollback_error:
                         return self.state(value, 'rollback_failed', error=str(error), rollback_error=str(rollback_error))
                 return self.state(value, 'failed', error=str(error))
