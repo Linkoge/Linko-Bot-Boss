@@ -40,7 +40,10 @@ concurrency/recovery. Ordinary manager/backend/provider/chat filenames alone no 
 credential operations, migration identifiers and SQL DDL, deployment/rollback commands, and worker locking,
 scheduling, leases and recovery operations. Authorization role/permission keys in indexing/getter access, principal role assignments and conditional comparisons
 retain a security signal even when their names/values are quoted; removed `user["role"] != "admin"` guards count.
-Display dictionaries/labels, comments and provider message-role metadata remain excluded. Snake/camel identifiers are normalized; removed guards and changed
+Python authorization predicates are also read structurally: admin/staff/owner flags and permission/role methods,
+flag mutations and principal identity comparisons against ownership/other identity operands retain review.
+Unrelated ID comparisons and plain author metadata do not become broad keyword triggers. Display dictionaries/labels,
+comments and provider message-role metadata remain excluded. Snake/camel identifiers are normalized; removed guards and changed
 boolean/status decisions in guard context count too. Bare async/await, usage-token counters, display literals,
 comments and unrelated hunks do not select review. New untracked code is included before review-input bounding.
 Sensitive path/request floors remain conservative; broad backend filenames alone still do not select review. Docs/tests alone do not select a path review. The existing cheapest

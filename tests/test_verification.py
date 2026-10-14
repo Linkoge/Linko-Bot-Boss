@@ -395,14 +395,16 @@ async def test_review_uses_final_message_without_losing_raw_commentary(system, v
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('sensitive', [True, False, 'role'])
+@pytest.mark.parametrize('sensitive', [True, False, 'role', 'identity', 'admin_method'])
 async def test_post_check_reviews_sensitive_code_in_ordinary_manager_filename(system, sensitive):
     db, registry, server, chat, workers, scheduler = system
     project = registry.list()[0]['id']
     automatic(db, server)
     def edit(cwd):
-        code = ('if user["role"] != "admin":\n    deny()\n' if sensitive == 'role' else
-                'asyncio.create_task(run_worker(task))\n' if sensitive else 'label = "Done"\n')
+        code = {True: 'asyncio.create_task(run_worker(task))\n', False: 'label = "Done"\n',
+                'role': 'if user["role"] != "admin":\n    deny()\n',
+                'identity': 'if user.id == owner_id:\n    grant()\n',
+                'admin_method': 'if current_user.is_admin():\n    grant()\n'}[sensitive]
         (cwd / 'manager.py').write_text(code)
         git(cwd, 'add', '.')
         git(cwd, 'commit', '-m', 'Tidy output')

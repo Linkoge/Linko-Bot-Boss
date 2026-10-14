@@ -1,3 +1,15 @@
+# Authorization predicate finding reconciled — 2026-10-14
+
+The provenance-attempt finding on `55190be0cc5d4c32a15c787c1d062d09` was checked against actual `bac2dc6`
+before editing. Removed current_user.is_admin was already detected (stale finding component); user.id == owner_id
+was not. The correction reads Python access predicates structurally for attribute/method admin/permission/role
+flags, mutations and principal identity/ownership comparisons, including removals and changed enclosing decisions.
+The positive/negative matrix retains display/comments/author/usage exclusions and approved reduced verification.
+Current exact candidate/checks/finding disposition are in the existing .data/verification-reductions report/evidence.
+Historical full/browser evidence keeps its tested commits; no current full-suite or prepared release claim is made.
+The established external d629701 source ownership/integration dependency is retained without repeating provenance.
+Cancelled 703f113 remains cancelled, recovery is deferred, and no shared operations or external merge occur here.
+
 # Role guard review correction — retained assignment, 2026-10-14
 
 The correction for automatic review execution `20fe77cf78a344c4b5a760c580d351b6` preserves authorization

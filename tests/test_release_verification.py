@@ -285,3 +285,70 @@ def test_literal_only_role_comparison_uses_bound_context_without_display_guard_l
     diff = (f'diff --git a/{path} b/{path}\n@@ -1,5 +1,5 @@ def endpoint():\n'
             f' require_owner(request)\n {context}\n-    "admin"\n+    "viewer"\n )\n')
     assert bool(review_reasons([path], 'Tidy output', diff)) is sensitive
+
+
+@pytest.mark.parametrize('before,after', [
+    ('if current_user.is_admin:', 'if False:'),
+    ('if current_user.is_admin():', 'if False:'),
+    ('if principal.isAdmin():', 'if True:'),
+    ('if account.is_staff:', 'if False:'),
+    ('if actor.is_superuser:', 'if False:'),
+    ('if user.has_permission("write"):', 'if False:'),
+    ('if principal.has_perm("edit"):', 'if True:'),
+    ('if user.has_role("admin"):', 'if True:'),
+    ('if row["role"] != "user":', 'if False:'),
+    ('if user.hasAnyRole("admin", "owner"):', 'if False:'),
+    ('if user.has_all_permissions(requested):', 'if True:'),
+    ('if user.is_owner_of(resource):', 'if False:'),
+    ('if user.owns(resource):', 'if False:'),
+    ('if account.can_manage(resource):', 'if False:'),
+    ('if user.id == owner_id:', 'if True:'),
+    ('if current_user.id != record.owner_id:', 'if False:'),
+    ('if document.owner_id == request.user.id:', 'if document.owner_id != request.user.id:'),
+    ('if resource.owner == principal:', 'if True:'),
+    ('if actor_id == creator_id:', 'if False:'),
+    ('if user.id in resource.members:', 'if False:'),
+    ('if principal.id == requested_id:', 'if True:'),
+    ('if user["id"] == row["owner_id"]:', 'if False:'),
+    ('if account.get("id") == item.get("account_id"):', 'if True:'),
+    ('allowed = user.id == owner_id', 'allowed = True'),
+    ('user.is_staff = False', 'user.is_staff = True'),
+    ('current_user.metadata.is_staff = False', 'current_user.metadata.is_staff = True'),
+    ('is_admin = False', 'is_admin = True'),
+    ('allowed = user.can_manage(resource)', 'allowed = True'),
+    ('return user.id == owner_id', 'return True'),
+])
+def test_authorization_predicate_and_ownership_matrix_in_ordinary_file(before, after):
+    path = 'ai_manager/routes.py'
+    diff = f'diff --git a/{path} b/{path}\n@@ -1 +1 @@ def endpoint():\n-{before}\n+{after}\n'
+    assert 'sensitive auth/security diff ' + path in review_reasons([path], 'Tidy output', diff)
+
+
+@pytest.mark.parametrize('changed', [
+    '+author = record.author', '+author_id = record.author_id',
+    '+owner_label = "Owner"', '+label = "is_admin"',
+    '+if row.id == selected_id:', '+if item.author == filter_author:',
+    '+if labels["is_admin"]:', '+if usage["role"] == "assistant":',
+    '+message.role = "assistant"', '+usage.permission = "display"',
+    '+if message["role"] == "user":',
+    '+# if user.id == owner_id:', '+count = 1 # if current_user.is_admin:',
+])
+def test_authorization_matrix_retains_ordinary_metadata_and_unrelated_id_negatives(changed):
+    path = 'ai_manager/routes.py'
+    diff = f'diff --git a/{path} b/{path}\n@@ -1 +1 @@ def render():\n{changed}\n'
+    assert not review_reasons([path], 'Tidy output', diff)
+
+
+def test_ownership_guard_context_change_keeps_security_review():
+    path = 'ai_manager/routes.py'
+    diff = (f'diff --git a/{path} b/{path}\n@@ -1,3 +1,3 @@ def endpoint():\n'
+            ' if user.id == owner_id:\n-    return True\n+    return False\n')
+    assert review_reasons([path], 'Tidy output', diff)
+
+
+
+def test_multiline_ownership_decision_context_is_structurally_recognized():
+    path = 'ai_manager/routes.py'
+    diff = (f'diff --git a/{path} b/{path}\n@@ -1,5 +1,5 @@ def endpoint():\n'
+            ' if (\n     user.id == resource.owner_id\n ):\n-    return True\n+    return False\n')
+    assert review_reasons([path], 'Tidy output', diff)

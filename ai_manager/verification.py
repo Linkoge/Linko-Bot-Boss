@@ -201,8 +201,104 @@ QUOTED = re.compile(r"'(?:(?:\\.)|[^'\\])*'|\"(?:(?:\\.)|[^\"\\])*\"")
 
 ROLE_KEYS = {'role', 'roles', 'permission', 'permissions', 'scope', 'scopes', 'privilege', 'privileges',
              'is_admin', 'is_owner', 'is_superuser'}
-CHAT_ROLES = {'assistant', 'system', 'developer', 'tool', 'function'}
+CHAT_ROLES = {'user', 'assistant', 'system', 'developer', 'tool', 'function'}
 
+
+
+PRINCIPAL_NAMES = {'user', 'principal', 'actor', 'account', 'identity', 'subject', 'requester'}
+OWNERSHIP_NAMES = {'owner', 'author', 'creator', 'created_by', 'owned_by', 'user', 'account',
+                   'tenant', 'organization', 'org', 'group'}
+AUTH_STATE = {'admin', 'administrator', 'staff', 'superuser', 'owner', 'authenticated', 'authorized',
+              'permission', 'permissions', 'perm', 'perms', 'role', 'roles', 'privilege', 'privileges',
+              'scope', 'scopes', 'access'}
+AUTH_ACTIONS = {'access', 'read', 'write', 'edit', 'delete', 'manage', 'view', 'create', 'share', 'execute'}
+DISPLAY_OBJECTS = {'label', 'labels', 'display', 'usage', 'metadata', 'message'}
+
+
+def authorization_flag(name):
+    words = name.split('_')
+    return (name in AUTH_STATE - {'owner', 'access'} or name in {'owns', 'owned_by'}
+            or words[0] in {'is', 'has', 'check', 'require', 'verify', 'get'} and bool(set(words[1:]) & AUTH_STATE)
+            or words[0] in {'can', 'may', 'allows', 'permits'} and bool(set(words[1:]) & AUTH_ACTIONS))
+
+
+def identifier_name(value):
+    return re.sub(r'([a-z0-9])([A-Z])', r'\1_\2', value).lower()
+
+
+def expression_names(node):
+    """Member/key names carry identity semantics; arbitrary string values do not."""
+    names = set()
+    for part in ast.walk(node):
+        if isinstance(part, ast.Name):
+            names.add(identifier_name(part.id))
+        elif isinstance(part, ast.Attribute):
+            names.add(identifier_name(part.attr))
+        elif isinstance(part, ast.Subscript) and isinstance(part.slice, ast.Constant) and isinstance(part.slice.value, str):
+            names.add(identifier_name(part.slice.value))
+        elif isinstance(part, ast.Call) and isinstance(part.func, ast.Attribute) and part.func.attr == 'get':
+            if part.args and isinstance(part.args[0], ast.Constant) and isinstance(part.args[0].value, str):
+                names.add(identifier_name(part.args[0].value))
+    return names
+
+
+
+
+def principal_reference(names):
+    return any(name in PRINCIPAL_NAMES or name.removesuffix('_id') in PRINCIPAL_NAMES
+               or name.startswith('current_') and name[8:] in PRINCIPAL_NAMES for name in names)
+
+def authorization_predicate(line):
+    """Recognize access decisions/flag mutations by AST structure, not ordinary metadata words."""
+    source = line.strip()
+    if source.startswith(('elif ', 'while ')):
+        source = 'if ' + source.split(' ', 1)[1]
+    if source.startswith('if ') and source.endswith(':'):
+        source += '\n pass'
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return False  # Partial/non-Python hunks still use the existing literal/operation rules.
+    decisions, writes = [], []
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.If, ast.While, ast.Assert)):
+            decisions.append(node.test)
+        elif isinstance(node, ast.Return) and node.value is not None:
+            decisions.append(node.value)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            writes.extend(targets)
+            # e.g. allowed = user.id == resource.owner_id also changes an access decision.
+            if isinstance(node.value, (ast.Compare, ast.BoolOp, ast.UnaryOp, ast.Call, ast.Attribute)):
+                decisions.append(node.value)
+        elif isinstance(node, ast.Expr) and isinstance(node.value, (ast.Compare, ast.BoolOp, ast.Call)):
+            decisions.append(node.value)
+    for target in writes:
+        if isinstance(target, (ast.Attribute, ast.Subscript)) or (isinstance(target, ast.Name)
+                and identifier_name(target.id).startswith(('is_', 'has_', 'can_', 'may_'))):
+            names = expression_names(target)
+            if any(authorization_flag(name) for name in names):
+                # Rendering/provider metadata objects are not authorization state.
+                if not names & DISPLAY_OBJECTS or principal_reference(names):
+                    return True
+    for decision in decisions:
+        names = expression_names(decision)
+        if names & DISPLAY_OBJECTS and not principal_reference(names):
+            continue
+        if any(authorization_flag(name) for name in names):
+            return True
+        for comparison in (n for n in ast.walk(decision) if isinstance(n, ast.Compare)):
+            # Both operands/relations must participate: merely reading an author,
+            # rendering owner labels or comparing unrelated IDs is not an access guard.
+            relation = expression_names(comparison)
+            principal = principal_reference(relation)
+            ownership = any(name in {'owned_by', 'created_by'} or name.endswith('_id')
+                            and name[:-3] in OWNERSHIP_NAMES for name in relation)
+            ownership |= bool(relation & {'owner', 'creator'} and principal)
+            identity = bool(relation & {'id', 'pk', 'uuid'} or any(name.endswith('_id') for name in relation))
+            if (principal and identity) or ownership and (principal or identity):
+                return True
+    return False
 
 def authorization_literals(line):
     """Keep authorization keys in access/control expressions, not arbitrary display strings."""
@@ -217,16 +313,21 @@ def authorization_literals(line):
     stripped = QUOTED.sub(' ', line)
     principal = bool(re.search(r'\b(user|principal|account|identity|claims|current_user)\b', stripped))
     # Provider message role metadata is distinct from a principal's access role.
-    chat_metadata = not principal and any(value in CHAT_ROLES for value in values)
+    chat_metadata = (not principal and bool(re.search(r'\b(message|messages|chat|provider_message)\b', stripped))
+                     and any(value in CHAT_ROLES for value in values))
     guard = bool(re.search(r'\b(if|elif|assert|while|return)\b|(?:==|!=|\bnot in\b|\bin\b)', stripped))
     role_identifier = bool(re.search(r'\b(role|roles|is_admin|is_owner|is_superuser)\b', stripped))
-    sensitive = (guard or principal) and role_identifier and not chat_metadata
+    sensitive = ((guard or principal) and role_identifier and not chat_metadata) or authorization_predicate(line)
     for match, value in zip(quoted, values, strict=True):
         prefix = line[:match.start()]
         access = re.search(r'(?:\[\s*|\.get\(\s*|getattr\([^,]+,\s*)$', prefix)
-        display = not guard and re.search(r'\b(labels?|display|usage|metadata)\s*(?:\[|\.get\()\s*$', prefix)
+        display = not principal and re.search(r'\b(labels?|display|usage|metadata)\s*(?:\[|\.get\()\s*$', prefix)
         if not display and value in ROLE_KEYS and access and (value not in {'role', 'roles'} or not chat_metadata):
             sensitive = True
+    # Metadata permission/role properties do not turn display-only writes into access decisions.
+    if not principal:
+        stripped = re.sub(r'\b(label|labels|display|usage|metadata|message)\.(role|roles|permissions?|privileges?|scopes?)\b(?!\s*\()',
+                          r'\1.display_value', stripped)
     # Preserve a signal rather than injecting all quoted contents into identifier rules.
     return stripped + (' permission' if sensitive else '')
 
