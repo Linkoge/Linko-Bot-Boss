@@ -16,9 +16,16 @@ def rows(conn):
     return [json.loads(r[0]) for r in conn.execute('SELECT value FROM settings WHERE key LIKE ?', (PREFIX+'%',))]
 
 
-def assignment_evidence(conn, task):
+def assignment_evidence(conn, task, version=2):
     value = {k: task[k] for k in ('id', 'project_id', 'description', 'acceptance', 'request_key')}
-    value['context'] = [r[0] for r in conn.execute("SELECT payload FROM events WHERE task_id=? AND kind IN ('task.context','manager.continued') ORDER BY seq", (task['id'],))]
+    if version == 1:
+        value['context'] = [r[0] for r in conn.execute("SELECT payload FROM events WHERE task_id=? AND kind IN ('task.context','manager.continued') ORDER BY seq", (task['id'],))]
+    elif version == 2:
+        # Scope changes invalidate evidence; resume receipts and repeated snapshots do not.
+        row = conn.execute("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task['id'],)).fetchone()
+        value['context'] = json.loads(row[0]) if row else {}
+    else:
+        raise ValueError('Unsupported assignment evidence version')
     return hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()
 
 
@@ -89,8 +96,13 @@ class Intents:
                 raise ValueError('Prepared candidate evidence changed or is incomplete')
         if not manifest.get('commit') or not manifest.get('base'):
             raise ValueError('Prepared candidate evidence is incomplete')
-        return {'release_id': release_id, 'manifest_sha256': sha(root / 'manifest.json'),
-                'commit': manifest['commit'], 'base': manifest['base']}, manifest
+        candidate = {'release_id': release_id, 'manifest_sha256': sha(root / 'manifest.json'),
+                     'commit': manifest['commit'], 'base': manifest['base']}
+        if (root / 'evidence-index.json').exists():
+            from .release_publication import inventory
+            candidate['index_sha256'] = sha(root / 'evidence-index.json')
+            inventory(root, candidate['manifest_sha256'], candidate['index_sha256'])
+        return candidate, manifest
 
     def record(self, project_id, params, quote, release_id=None, task_ids=None, task_request=None):
         # Manager interpretation of explicit deployment language is the same trust
@@ -118,7 +130,8 @@ class Intents:
                      'conversation_id': source['conversation_id'], 'project_id': project_id, 'quote': quote,
                      'scope': scope, 'task_ids': scope['task_ids'], 'task_request': task_request,
                      'candidate': candidate, 'status': 'recorded', 'created_at': time.time(),
-                     'assignment_hashes': {t: assignment_evidence(conn, conn.execute('SELECT * FROM tasks WHERE id=?', (t,)).fetchone()) for t in scope['task_ids']},
+                     'evidence_version': 2,
+                     'assignment_hashes': {t: assignment_evidence(conn, conn.execute('SELECT * FROM tasks WHERE id=?', (t,)).fetchone(), 2) for t in scope['task_ids']},
                      'checked_owner_message': source['id'],
                      'checked_owner_sha256': hashlib.sha256(source['content'].encode()).hexdigest()}
             revoke(self.db, conn, 'Superseded by a new scoped owner deployment intent', project_id=project_id)
@@ -132,7 +145,7 @@ class Intents:
             if value['source_message_id'] != source['id'] or not task or task['request_key'] != source['execution_id']+':'+project_id:
                 raise ValueError('Deployment audit/preparation must belong to the recorded owner assignment')
             if value.get('task_request'):
-                value['assignment_hashes'] = {task_id: assignment_evidence(conn, task)}
+                value['assignment_hashes'] = {task_id: assignment_evidence(conn, task, value.get('evidence_version', 1))}
             else:
                 value['review_task_ids'] = [task_id]
             return save(self.db, conn, value, 'assignment_linked')
@@ -188,7 +201,7 @@ class Intents:
             if (not task or task['project_id'] != value['project_id'] or task['lifecycle'] != 'completed'
                     or task['lease_owner'] or (workflow and json.loads(workflow[0]).get('state') in {'owner_wait', 'deferred'})):
                 raise ValueError('Scoped preparation is incomplete, failed or held by the owner')
-            if task['id'] in value['assignment_hashes'] and assignment_evidence(conn, task) != value['assignment_hashes'][task['id']]:
+            if task['id'] in value['assignment_hashes'] and assignment_evidence(conn, task, value.get('evidence_version', 1)) != value['assignment_hashes'][task['id']]:
                 raise ValueError('Assignment scope changed after owner authorization')
         return tasks
 
@@ -201,7 +214,10 @@ class Intents:
                 raise ValueError('Different release or immutable candidate evidence')
             tasks = self.tasks(conn, value)
             if tasks and not value['scope']['release_id']:
-                expected = {t['id']: assignment_evidence(conn, t) for t in tasks}
+                version = value.get('evidence_version', 1)
+                if manifest.get('assignment_evidence_version', 1) != version:
+                    raise ValueError('Prepared release does not match the fixed assignment evidence version; legacy evidence is not migrated')
+                expected = {t['id']: assignment_evidence(conn, t, version) for t in tasks}
                 if expected != value['assignment_hashes']:
                     raise ValueError('Assignment scope has not been sealed')
                 if manifest.get('assignments') != expected:

@@ -37,6 +37,7 @@ Implementation uses existing FastAPI, SQLite, plain JavaScript and Codex App Ser
 Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
 
 - Related Small requests may be batched into one queued, unstarted Small assignment (`delegate batch=true`) only while the combined scope stays Small. Post-deploy health failure automatically rolls back to the exact old commit without restoring old data; a throwaway rehearsal is in tests/test_rollback_rehearsal.py.
+- Validated local releases have a supported serialized immutable publication/import operation after worker cleanup, with pinned complete inventory, task/branch ownership, current-base and non-overwrite checks. Publication does not continue tasks, create intent or activate code. New V2 assignment bindings hash semantic scope and latest selected context, keeping unchanged lifecycle resumes stable; legacy V1 bindings are unchanged.
 - Owner deployment intent must be recorded before asynchronous preparation/audit, survive result/restart handoff, and consume only one reviewed exact prepared release. Later owner corrections/holds revoke or suspend unused intent; internal messages grant no new permission. Contract: docs/DEPLOYMENT_HELPER.md.
 
 - Outstanding job follow-up persists on existing assignments independently of worker completion; SQLite-only idle/grace checks queue one deduplicated internal manager review with durable backoff. Preserve all owner holds, read-only mode and authorization boundaries. Contract: docs/AUTOMATIC_RECOVERY.md.

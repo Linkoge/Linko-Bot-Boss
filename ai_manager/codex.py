@@ -395,7 +395,9 @@ text; optional verification_tier may only raise it. Small is UI/text work; DB/au
 Batch related small requests into one objective, or pass batch=true to append to this conversation's queued, unstarted
 small assignment (applied only while it stays small). If worker_result.verification.escalated or its review lists
 findings, continue the same assignment for the missing checks/fixes before job completion.
-Deployment: deployment_status reads durable handoff/results. Only when the owner requests deployment,
+Publication: publish_release imports exact validated artifacts from a completed task workspace using pinned
+manifest/index hashes. Run after worker cleanup; never continue the task merely to publish. Publication creates no
+intent and performs no activation. Deployment: deployment_status reads durable handoff/results. Only when the owner requests deployment,
 record_deployment_intent BEFORE delegating an audit/preparation, with the actual owner_deployment_quote,
 explicit project_id and ONE exact prepared release_id or fixed existing task_ids. For a new prepare-and-deploy
 assignment use delegate with owner_deployment_quote; this records intent before starting asynchronous work.

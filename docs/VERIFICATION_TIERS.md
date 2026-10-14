@@ -148,3 +148,12 @@ The wrapper is corrected outside repository source. Fresh v3 preparation reuses 
 source/log hashes and reruns only the remaining browser checks. Relative to the v2 tested candidate, only
 STATE/verification documentation changes; all application, test, build and browser-source bytes match.
 The failed v2 release log remains immutable; full backend validation is not repeated.
+
+## Close lifecycle correction
+
+The owner authorized deploy/manager source correction after v3 publication/binding blockers. The supported
+import command and V2 binding strategy are documented in DEPLOYMENT_HELPER.md. No v3 evidence or old intent
+is rewritten. New corrected release target: option-b-lifecycle-v4-20261014. Its combined evidence reuses only
+unchanged baseline checks and adds affected-path regressions, smoke, relevant browser checks and one scoped
+read-only diff review. Current exact results/commit/hashes and post-cleanup publication command are in the
+retained report; no blind full-suite repetition or worker activation.

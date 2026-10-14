@@ -21,7 +21,7 @@ def prepared(handoff, release='candidate-1', assignments=None):
     (root / 'validation.log').write_text('validated '+release)
     atomic(root / 'manifest.json', {'id': release, 'commit': 'a'*40, 'base': 'b'*40,
            'bundle_sha256': sha(root/'release.bundle'), 'validation_sha256': sha(root/'validation.log'),
-           **({'assignments': assignments} if assignments is not None else {})})
+           **({'assignments': assignments, 'assignment_evidence_version': 2} if assignments is not None else {})})
 
 
 async def owner(chat, project, text='deploy pending candidate after recheck', mode='auto'):
@@ -451,3 +451,33 @@ async def test_editing_preserved_latest_correction_holds_dispatch(flow):
     with pytest.raises(ValueError, match='edited correction'):
         await call(scheduler, project, latest, 'deploy_release', intent_id=intent['id'], release_id='candidate-1')
     assert scheduler.deployment.status()['phase'] == 'idle'
+
+
+@pytest.mark.asyncio
+async def test_unchanged_resume_keeps_v2_owner_scope_and_prepared_binding(flow):
+    db, _, chat, _, workers, scheduler, project = flow
+    params = await owner(chat, project, 'implement this and deploy after validation')
+    task = await call(scheduler, project, params, 'delegate', objective='Implement scoped update',
+                      owner_deployment_quote='deploy after validation')
+    intent_id = task['deployment_intent_id']
+    claim = scheduler.tasks.claim(2)
+    workers.finish(claim['lease_owner'], 'completed', 'initial validation', '')
+    with db.transaction() as conn:
+        conn.execute('UPDATE tasks SET lease_owner=NULL WHERE id=?', (task['id'],))
+    with db.connect() as conn:
+        bound = assignment_evidence(conn, conn.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone())
+    prepared(scheduler.deployment, 'stable-release', {task['id']: bound})
+    finish_owner(db, params)
+    resume = await owner(chat, project, 'Resume unchanged work and preserve existing deployment scope')
+    await call(scheduler, project, resume, 'continue', task_id=task['id'])
+    await call(scheduler, project, resume, 'revise_deployment_intent', intent_id=intent_id,
+               decision='preserve', reason='Same requirements, lifecycle-only continuation')
+    claim = scheduler.tasks.claim(2)
+    workers.finish(claim['lease_owner'], 'completed', 'same candidate evidence', '')
+    with db.transaction() as conn:
+        conn.execute('UPDATE tasks SET lease_owner=NULL WHERE id=?', (task['id'],))
+    result = await call(scheduler, project, resume, 'review_deployment_intent', intent_id=intent_id,
+                        release_id='stable-release', reason='Stable scope and candidate checked')
+    assert result['status'] == 'reviewed'
+    assert result['assignment_hashes'] == {task['id']: bound}
+    assert scheduler.deployment.status()['phase'] == 'idle'  # Review is not activation.

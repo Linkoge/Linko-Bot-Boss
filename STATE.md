@@ -1,3 +1,35 @@
+# Option B lifecycle repair — implemented; no activation — 2026-10-14
+
+The owner authorized a close publication/binding correction in the retained Option B workspace.
+New release target: `option-b-lifecycle-v4-20261014`. `publish_release` manager action and
+`scripts/publish_release.py` register immutable validated artifacts after normal worker cleanup,
+without tests, task continuation, source edits, intent creation or deployment. They respect
+preparation/protocol locks, SQLite serialization, reservations, leases, owner holds, current-base,
+workspace/branch, bundle/assets/schema and complete pinned index/binding checks. Private fsynced
+staging and non-overwrite registration provide atomic visibility and exact retry behavior.
+
+New V2 task bindings cover semantic scope and latest selected context, excluding lifecycle receipts
+and duplicate context snapshots. Unchanged resume/publication cannot strand a validated release;
+real objective/acceptance/context changes still reject. Legacy V1 hashes and old revoked intent
+remain untouched. Old v3 is preserved with its original mismatched binding and is not silently fixed.
+No paused auto-deploy feature changes are included. Contracts: docs/DEPLOYMENT_HELPER.md and
+MASTER_SPEC.md. Full current results and exact candidate/artifact/index hashes are in this retained
+workspace's `.data/option-b-integration/REPORT.md` and `manager-summary.json`.
+
+Existing successful baseline: 356 backend cases, 19 browser scripts and real-clock rollback on v2/v3
+sources; only unchanged code uses that evidence. Changed deploy/manager paths receive targeted
+publication/intent/continuation/parallel/worker/model regressions, smoke and relevant browser checks.
+The exact local immutable manifest establishes corrected preparation; no repeated blind full suite.
+After this worker finishes and releases integration, manager/operator runs the supported CLI from
+this candidate to publish the exact package in the standard release store. The report supplies
+literal arguments and hashes. No manual copy or reservation deletion is needed.
+
+Old intent `c92b72ed0955ee84482c37422ef677eb` is revoked; no new owner intent is created here.
+No live checkout edit, shared runtime DB mutation, activation, push or shared service restart.
+Publishing after cleanup is a separate required operation; future deployment needs actual new owner
+source, exact prepared review and a durable succeeded helper receipt. Historical sections below
+are superseded for current handoff/readiness; they remain evidence of prior failed/valid attempts.
+
 # Option B scoped candidate — correction complete, not deployed — 2026-10-14
 
 Serialized integration remains in assignment `c3aebb4c76db45de81ccd8567c2ac259` on its

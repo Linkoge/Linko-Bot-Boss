@@ -104,9 +104,13 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
                                     (task_id, str(live))).fetchone()
                 if not task:
                     raise ValueError('Preparation assignment belongs to another project or is missing')
-                assignments[task_id] = assignment_evidence(conn, task)
+                assignments[task_id] = assignment_evidence(conn, task, 2)
             manifest['assignments'] = assignments
+            manifest['assignment_evidence_version'] = 2
     atomic(target / 'manifest.json', manifest)
+    atomic(target / 'evidence-index.json', {'release_id': release_id, 'candidate': commit, 'base': base,
+           'files': {p.relative_to(target).as_posix(): sha(p) for p in target.rglob('*')
+                     if p.is_file() and p.name != 'evidence-index.json'}})
     return manifest
 
 

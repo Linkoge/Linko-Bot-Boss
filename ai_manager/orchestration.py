@@ -26,6 +26,7 @@ MANAGER_TOOL = {
                 "type": "string",
                 "enum": [
                     "deploy_release",
+                    "publish_release",
                     "record_deployment_intent",
                     "review_deployment_intent",
                     "revise_deployment_intent",
@@ -78,6 +79,8 @@ MANAGER_TOOL = {
                 "type": "object", "properties": {"id": {"type": "string"}, "revision": {"type": "integer"}},
                 "required": ["id", "revision"], "additionalProperties": False}},
             "release_id": {"type": "string"},
+            "manifest_sha256": {"type": "string"},
+            "index_sha256": {"type": "string"},
             "intent_id": {"type": "string"},
             "owner_deployment_quote": {"type": "string"},
             "owner_parallel_quote": {"type": "string"},
@@ -151,6 +154,20 @@ class Scheduler:
                 if held and (held['lifecycle'] in {'paused', 'waiting', 'cancelled', 'pause_requested', 'cancel_requested'} or
                              (workflow or {}).get('state') in {'owner_wait', 'deferred', 'complete'}):
                     raise ValueError('Owner pauses/waits are retained; explicit owner continuation is required')
+        if action == 'publish_release':
+            if params.get('mode') == 'conversation':
+                raise ValueError('Conversation mode is read-only; use Auto or Execute for publication')
+            from .release_publication import publish
+            task = self.tasks.get(args['task_id'])
+            project_id = args.get('project_id') or selected_project
+            if task['project_id'] != project_id or (selected_project and project_id != selected_project):
+                raise ValueError('Publication task belongs to another project')
+            # Fixed-operation import; no continuation, scope mutation or new intent.
+            from .release_publication import inventory
+            manifest, _ = inventory(args['path'], args['manifest_sha256'], args['index_sha256'])
+            if manifest['id'] != args['release_id']:
+                raise ValueError('Publication release ID mismatch')
+            return publish(self.db, args['path'], args['manifest_sha256'], args['index_sha256'], task['id'])
         if action == 'deployment_status':
             return {**self.deployment.status(), 'intents': self.intents.list(selected_project)}
         if action in {'deploy_release', 'record_deployment_intent', 'review_deployment_intent', 'revise_deployment_intent'}:

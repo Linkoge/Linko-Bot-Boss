@@ -1,3 +1,53 @@
+# Supported immutable publication and stable scope binding — 2026-10-14
+
+`ai_manager/release_publication.py` and `scripts/publish_release.py` import already validated
+artifacts; they do not run tests, initialize/migrate runtime, create intent or activate code.
+Use this after the preparation worker finishes normally. Its existing cleanup clears the lease,
+retains source and releases its owned integration reservation. **Do not continue the assignment
+merely to publish**: manager `publish_release` is a separate fixed operation with task_id,
+release_id, path, manifest_sha256 and index_sha256. It supports an internal result turn in
+Auto/Execute and retains Conversation read-only behavior. The publication action changes no
+objective, acceptance, context or task lifecycle. A worker can produce local artifacts while it
+owns integration; registration is deliberately deferred until the cleanup boundary.
+
+For a manager whose live code predates this action, the supported trusted CLI from the retained
+candidate provides the same operation after cleanup (use the exact paths/hashes in its report):
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/publish_release.py \
+  --data /path/to/registered-runtime --source /path/to/owned-workspace/release \
+  --task-id EXACT_TASK --manifest-sha256 EXACT_HASH --index-sha256 EXACT_HASH
+```
+
+The publisher takes the existing preparation file lock, SQLite BEGIN IMMEDIATE and protocol
+lock. It rejects integration/preparation reservations, project worker leases, held/incomplete
+bound tasks and pending deployment. It checks registered project/config, owned workspace/branch,
+clean exact candidate/current live base, ancestry, bundle HEAD, schema/dependency contract,
+Git asset hashes and all task bindings. The pinned index covers every release file except itself;
+symlinks, special files, traversal and omitted/changed files reject. Copy goes to a private staging
+directory, verifies hashes again, fsyncs files/directories and atomically renames to an absent
+release ID. It never overwrites a registration; exact retries return it after validation. A
+`release.published` event and the standard manifest are durable registration evidence. The
+SQLite transaction blocks competing lease/integration admission during publication. This does
+not grant deployment permission or remove a reservation. Failures leave no visible partial release.
+
+Preparation now emits an evidence-index automatically. New assignment-scoped manifests/intents
+have `assignment_evidence_version` / `evidence_version` 2. V2 hashes the task ID, project, request
+identity, objective, acceptance and canonical latest selected context. It excludes lifecycle
+receipts (`manager.continued`) and repeated context snapshots. An unchanged resume keeps binding;
+new objective/acceptance/selected context invalidates it. Owner source/newer-message review and
+pause/cancel/hold guards remain. Publication performs no resealing or mutable evidence rewriting.
+Unversioned manifests/intents still use the original V1 hash over all historical receipts; old
+revoked intents remain revoked. There is no silent migration, revived authorization or reinterpretation
+of historical mismatches. Release review additionally verifies/pins the complete index when present;
+already registered legacy manifests without an index keep their existing review behavior.
+
+Current lifecycle repair has a new candidate/release, not a mutation of v3. Existing Option B baseline
+checks remain evidence for unchanged code; affected deploy/manager regression and browser checks are
+rerun. The old task-bound intent is revoked. Publication of the repaired candidate after cleanup is
+permitted; deployment requires separate actual owner authorization and a succeeded helper receipt.
+Exact candidate, supported command, evidence and activation status: STATE.md and retained report.
+
 # Reviewed helper v2 installed; application activation pending — 2026-10-14
 
 The owner's subsequent explicit “install and deploy” instruction authorizes the scoped
