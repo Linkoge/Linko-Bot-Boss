@@ -4,7 +4,6 @@ import json
 import time
 
 from .db import new_id
-from .recovery import gate_available
 
 
 class Tasks:
@@ -230,8 +229,6 @@ class Tasks:
 
     def claim(self, max_workers):
         with self.db.transaction() as conn:
-            if not gate_available(conn):
-                return None
             from .parallel import active_workers, admission, prepare_workspace
             if active_workers(conn) >= max_workers:
                 return None
@@ -258,8 +255,6 @@ class Tasks:
             if row is None:
                 return None
             execution_id = new_id()
-            if not gate_available(conn, execution_id, True):
-                return None
             conn.execute(
                 "UPDATE tasks SET lifecycle='running',blocker='',lease_owner=?,revision=revision+1,updated_at=? WHERE id=?",
                 (execution_id, time.time(), row["id"]),

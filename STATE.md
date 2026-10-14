@@ -1,3 +1,18 @@
+# Usage blocker removed — 2026-10-14
+
+Removed the account-wide usage gate from manager/worker dispatch and assignment admission.
+Actual provider usage/429 errors finish the affected attempt, preserving the error; new
+requests remain eligible. Startup removes legacy gate settings and releases saved usage
+waiting timestamps before normal native reconciliation. Account usage display stays informational.
+Network/process recovery, owner stops, native history and assignment ownership remain.
+
+Validation: full suite had 415 passing checks and one obsolete Claude usage-classification
+expectation. That expectation now checks the preserved native error and absence of application
+retry; the affected provider/recovery suites then passed all 49 checks, including two additional
+quota/429 cases. Browser smoke, Ruff and JavaScript syntax checks passed. A private pre-activation
+SQLite backup passed integrity checking in `.data/usage-blocker-removal/`. Service activation
+and runtime cleanup are verified separately after this implementation commit.
+
 # Automatic deployment readiness corrections — 2026-10-14
 
 The retained auto-deploy source assignment `44097fd1a52c4f9096fcd901bd04d344` implements the

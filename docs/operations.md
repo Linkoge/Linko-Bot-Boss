@@ -72,7 +72,7 @@ name/ID tie ordering as navigation; viewing, reloading, polling and To-Do edits 
 
 ## Restart and recovery
 
-Temporary network/process failures and account usage limits now recover automatically through the existing scheduler. Tasks keep their original assignment/thread and project claim while waiting; manager responses and pending results remain in the exact original conversation. Persisted backoff and an account-wide single-probe gate prevent repeated model calls while unavailable. Stop and deliberate pauses remain deliberate; permanent errors are reported without an endless retry loop.
+Temporary network/process failures recover automatically through the existing scheduler. Usage-limit errors finish the affected attempt with the provider error; they never gate new chat or worker dispatch. Startup removes legacy account locks and releases persisted usage waiting timestamps. Tasks keep their original assignment/thread and project claim while waiting; manager responses and pending results remain in the exact original conversation. Persisted per-execution backoff prevents repeated calls during connection failures. Stop and deliberate pauses remain deliberate; permanent errors are reported without an endless retry loop.
 
 Startup reconciles native outcomes before resuming coding. Surviving proven owned App Server groups are stopped before another writer starts; uncertain unprovable ownership remains exclusive. See [automatic recovery](AUTOMATIC_RECOVERY.md) for error handling, schema 9, backoff, tests, limits and deployment evidence.
 

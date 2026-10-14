@@ -199,7 +199,8 @@ async def test_claude_host_translates_turns_resume_interrupt_and_limits(tmp_path
 
         _, events = await run_turn(server, thread, 'LIMIT')
         error = events[-1]['params']['turn']['error']
-        assert events[-1]['params']['turn']['status'] == 'failed' and classify(error).kind == 'usage'
+        assert events[-1]['params']['turn']['status'] == 'failed'
+        assert error['codexErrorInfo'] == 'usageLimitExceeded' and classify(error) is None
 
         queue = asyncio.Queue()
         server.queues[thread] = queue

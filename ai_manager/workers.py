@@ -16,12 +16,8 @@ from .recovery import (
     inspect,
     launching,
     reap_orphan,
-    release_gate,
-    reserve,
     turn_error,
     turn_output,
-    wait_for_gate,
-    with_reset,
 )
 from .tasks import Tasks
 from .verification import REVIEW_INSTRUCTIONS, changes, floor, plan, rank
@@ -120,9 +116,6 @@ class Workers:
             with self.db.transaction() as conn:
                 from .parallel import worker_admission
                 worker_admission(conn, task)
-            if not reserve(self.db, execution_id):
-                wait_for_gate(self.db, execution_id)
-                return
             with self.db.transaction() as conn:
                 conn.execute(
                     "UPDATE tasks SET lifecycle='running',blocker='' WHERE id=? AND lease_owner=?",
@@ -285,7 +278,7 @@ class Workers:
                         failure = Failure("interrupted")
                     if failure:
                         defer(
-                            self.db, execution_id, await with_reset(server, failure), error.get("message", ""), output
+                            self.db, execution_id, failure, error.get("message", ""), output
                         )
                     else:
                         if state == "completed":
@@ -315,7 +308,7 @@ class Workers:
                             "UPDATE executions SET status='queued',turn_id=NULL,launch_key='not-started',launch_input=NULL WHERE id=?",
                             (execution_id,),
                         )
-                defer(self.db, execution_id, await with_reset(server, failure), str(error), output)
+                defer(self.db, execution_id, failure, str(error), output)
             else:
                 self.finish(execution_id, "failed", output, str(error)[:2000], started)
         finally:
@@ -462,7 +455,6 @@ class Workers:
             workflow = get(conn, execution['task_id'])
             if workflow and workflow['state'] in {'actionable', 'review'} and not execution['stop_requested']:
                 update(self.db, conn, execution['task_id'], 'review', 'Worker finished; result review and authorized follow-up remain', execution_id)
-            release_gate(conn, execution_id, status == "completed")
             self.db.event(
                 conn,
                 "worker.finished",
@@ -568,8 +560,6 @@ class Workers:
                 )
             elif self.db.one("SELECT 1 FROM questions WHERE execution_id=? AND status='pending'", (execution_id,)):
                 continue  # Restart/disconnect must not bypass an unanswered owner question.
-            elif not reserve(self.db, execution_id):
-                continue
             else:
                 server = self.factory(self.settings, native=True)
                 try:
@@ -589,7 +579,7 @@ class Workers:
                         )
                     elif turn and turn["status"] == "failed" and not row["retry_count"]:
                         defer(
-                            self.db, execution_id, await with_reset(server, classify(error)), error.get("message", "")
+                            self.db, execution_id, classify(error), error.get("message", "")
                         )
                     else:
                         if self.registry.get(task["project_id"])["status"] != "active":
@@ -597,7 +587,6 @@ class Workers:
                                 conn.execute(
                                     "UPDATE executions SET retry_at=? WHERE id=?", (time.time() + 30, execution_id)
                                 )
-                                release_gate(conn, execution_id)
                             continue
                         from .parallel import active_workers
                         with self.db.transaction() as conn:
@@ -607,7 +596,6 @@ class Workers:
                                 conn.execute(
                                     "UPDATE executions SET retry_at=? WHERE id=?", (time.time() + 5, execution_id)
                                 )
-                                release_gate(conn, execution_id)
                             continue
                         with self.db.transaction() as conn:
                             conn.execute(
@@ -631,7 +619,7 @@ class Workers:
                 except Exception as error:
                     failure = classify(error)
                     if failure:
-                        defer(self.db, execution_id, await with_reset(server, failure), str(error))
+                        defer(self.db, execution_id, failure, str(error))
                     else:
                         state = (
                             "waiting"

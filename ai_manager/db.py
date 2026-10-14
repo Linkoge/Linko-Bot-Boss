@@ -150,6 +150,14 @@ class Database:
                 from .todos import migrate_deferred
                 migrate_deferred(conn)
                 conn.execute("INSERT INTO schema_version VALUES(11)")
+            # Retire the application usage lock, including already persisted waits.
+            # Keep native outcomes, ownership, user stops and history for reconciliation.
+            conn.execute("DELETE FROM settings WHERE key='recovery_account_gate'")
+            conn.execute("""UPDATE executions SET retry_at=0
+                WHERE finished_at IS NULL AND status='recovering' AND recovery_reason='usage'""")
+            conn.execute("""UPDATE tasks SET blocker='' WHERE lease_owner IN
+                (SELECT id FROM executions WHERE finished_at IS NULL AND recovery_reason='usage')
+                AND blocker='Waiting for usage limit'""")
             conn.commit()
         self.path.chmod(0o600)
 
