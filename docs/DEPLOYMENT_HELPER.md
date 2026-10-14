@@ -334,3 +334,42 @@ no external stop/restart. Subsequent preparation remains a worker's local fixed-
 archiving, reboot acceptance and unrelated services/listeners/credentials are outside this delivery.
 
 Full technical evidence: `/home/codex/.local/share/linko-bot-manager/deployments/deployment-helper-20261012/REPORT.md`.
+
+## Auto-deploy assignment resume audit — 2026-10-14
+
+Assignment `44097fd1a52c4f9096fcd901bd04d344` is incomplete and awaiting a scope correction
+for sequential manager review. Retained branch: `linko/assignment-44097fd1a52c4f9096fcd901bd04d344`;
+source base `642511a0878e9df7a6937bb6af4dfdd65adacd80` already includes Option B
+(`e04548b`, final evidence `642511a`). No integration merge is needed to obtain that dependency.
+
+The declared change paths are `app/`, `tests/`, `docs/`, and `MASTER_SPEC.md`, but this repository
+has no `app/` directory. Its implementation and Settings assets are in `ai_manager/`; preparation
+and helper installation are in `scripts/`. Completing this assignment requires adding those two
+directories to its scope before further implementation. The assignment policy requires pausing
+for sequential review when work exceeds its declared paths. Prior worker output is evidence,
+not a permission grant to expand that scope.
+
+Retained partial work, preserved without edits or committing it during this resume:
+
+- Modified `ai_manager/deployment.py`: draft rehearsal contract, backup/restore and auto-result reporting.
+- Modified `ai_manager/deployment_intent.py`: draft assignment-specific automatic intent support.
+- Modified `scripts/prepare_deployment.py`: draft full-check/rehearsal preparation changes.
+- Modified `scripts/install_deployment_helper_v2.py`: draft generalized helper installation.
+- Untracked `ai_manager/auto_deploy.py`: draft project setting and automatic preparation pipeline.
+- Untracked `scripts/install_deployment_helper_v3.py`: draft v3 helper installer.
+
+Native prior execution `efc7f4b21b5f486a81fb86f375c0e834` is paused after restart cleanup.
+Its recorded output reports a baseline of 355 backend tests passing before implementation.
+That baseline does not verify the retained changes. Resume inspection used Git history/status,
+the retained source diff, workspace metadata and task-specific execution records via read-only
+SQLite access. `git diff --check` passed; backend/browser suites and throwaway end-to-end
+acceptance have not been run on the retained candidate in this resume.
+
+Pending: scheduler/owner-request wiring, authenticated Settings API/UI, verification evidence
+binding, exact release intent consumption, isolated migration/dependency and code+DB rollback
+tests, setting-off compatibility tests, full backend/browser checks and final contract/spec update.
+The owner-requested Linko-Bot-Boss ON default is only draft code; it has not been applied to
+runtime settings. There is no prepared release or deployment receipt for this assignment.
+No live deployment, service restart, shared database write, push or shared checkout edit was
+performed during this resume. Manager next action: correct the assignment scope and resume
+this same retained workspace serially; do not treat this audit as a completed feature delivery.
