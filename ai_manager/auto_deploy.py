@@ -12,19 +12,19 @@ import json
 import logging
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from .deployment import read
-from .deployment_intent import revoke, rows, save
+from .deployment_intent import Held, Superseded, assignment_evidence, revoke, rows, save
 
 SETTING = 'auto_deploy:'
 SEED = 'auto_deploy_seed'
 ROOT = Path(__file__).resolve().parents[1]
 PREPARE_SECONDS = 3600
-WAITING = {'waiting_result', 'held', 'not_verified'}
 
 
 def enabled(conn, project_id):
@@ -44,22 +44,31 @@ def git(root, *args):
     return result.stdout.strip()
 
 
-def verified(conn, task, execution_id):
+def verified(conn, task, execution_id, commit=None):
     """'' when the completed attempt passed its required Option B tier checks, else the reason it did not."""
     row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_policy:' + task['id'],)).fetchone()
-    if not row or not json.loads(row[0]).get('verification'):
+    policy = json.loads(row[0]) if row else {}
+    if not policy.get('verification'):
         return 'assignment predates risk-tiered verification'
     row = conn.execute("SELECT payload FROM events WHERE execution_id=? AND kind='task.verification' ORDER BY seq DESC LIMIT 1",
                        (execution_id,)).fetchone()
     if not row:
         return 'no verification record for the completed attempt'
     record = json.loads(row[0])
+    from .verification import plan
+    required = plan(policy['verification'], policy.get('integration'))['tier']
+    if record.get('assigned') != required or record.get('effective') != required:
+        return 'verification does not cover the required current tier'
     if record.get('error') or record.get('actual_error'):
         return 'verification post-check failed: ' + (record.get('error') or record['actual_error'])[:300]
     if record.get('escalated'):
         return 'actual changes need the higher ' + record['effective'] + ' tier checks'
     if not record.get('changed_count'):
         return 'no file changes to deploy'
+    if record.get('scope') != assignment_evidence(conn, task):
+        return 'assignment scope changed after verification'
+    if commit and record.get('commit') != commit:
+        return 'verification is not bound to the exact clean commit'
     review = record.get('review') or {}
     if record['effective'] == 'risky' and (review.get('status') != 'completed'
                                            or not review.get('findings', '').strip().startswith('No blocking findings')):
@@ -87,6 +96,8 @@ class AutoDeploy:
                      'deployable': self.deployable(p['path'])} for p in self.registry.list()]
 
     def set(self, project_id, value, source='Settings'):
+        if not isinstance(project_id, str):
+            raise ValueError('Choose a project')
         if not isinstance(value, bool):
             raise ValueError('Auto-deploy setting must be a boolean')
         with self.db.transaction() as conn:
@@ -128,7 +139,8 @@ class AutoDeploy:
                     put(conn, project['id'], setting)
                     self.db.event(conn, 'auto_deploy.setting', setting, project['id'])
                     seeded.append(project['id'])
-            conn.execute('INSERT INTO settings VALUES(?,?)', (SEED, json.dumps({'at': time.time(), 'projects': seeded})))
+            if seeded:
+                conn.execute('INSERT INTO settings VALUES(?,?)', (SEED, json.dumps({'at': time.time(), 'projects': seeded})))
 
     def owner_request(self, project_id, params, task_id):
         """Record the owner's Auto/Execute request as this assignment's auto intent when the setting is on."""
@@ -146,8 +158,15 @@ class AutoDeploy:
         if self.busy():
             return
         with self.db.transaction() as conn:
+            active = self.handoff.status()
             for value in rows(conn):
-                if value.get('kind') == 'auto' and value['status'] == 'recorded' and value['auto']['state'] == 'preparing':
+                if value.get('kind') != 'auto' or value['status'] != 'recorded':
+                    continue
+                if (active.get('origin') or {}).get('intent_id') == value['id']:
+                    # Request bytes can survive a crash before SQL commits consumption. Never redispatch them.
+                    value.update(status='dispatched', nonce=active['nonce'], candidate=active['origin']['candidate'])
+                    self.mark(conn, value, 'dispatched', reason='Recovered durable helper request')
+                elif value['auto']['state'] == 'preparing':
                     self.fail(conn, value, 'Preparation was interrupted by a restart')
 
     def mark(self, conn, value, state, notice=None, **extra):
@@ -179,31 +198,37 @@ class AutoDeploy:
         execution = conn.execute('SELECT * FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1',
                                  (task_id,)).fetchone()
         # Wait for the manager to review the delivered result and finish follow-up (continue/hold/complete).
-        if not execution or execution['status'] != 'completed' or execution['delivery'] != 'delivered':
+        if not execution or execution['status'] != 'completed' or execution['stop_requested'] or execution['delivery'] != 'delivered':
             return None
         workflow = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_workflow:' + task_id,)).fetchone()
         if workflow and json.loads(workflow[0]).get('state') != 'complete':
             return None
+        if auto.get('state') == 'prepared' and (auto.get('commit') != self.db.setting('assignment_source:' + task_id, {}).get('commit')
+                or auto.get('execution_id') != execution['id'] or auto.get('scope') != assignment_evidence(conn, task)):
+            self.mark(conn, value, 'waiting_result', reason='Scope/candidate changed; old prepared release withdrawn')
+            auto = value['auto']
         if auto.get('execution_id') == execution['id'] and auto['state'] == 'not_verified':
             return None  # Already reported; a later completed attempt is evaluated afresh.
-        reason = verified(conn, task, execution['id'])
         source = json.loads((conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_source:' + task_id,)).fetchone()
                              or ['{}'])[0])
         commit = source.get('commit')
+        reason = verified(conn, task, execution['id'], commit)
         if not reason and (not task['workspace'] or not commit or source.get('dirty') or 'dirty' in source):
             reason = 'assignment source is not one clean committed workspace branch'
         if not reason:
             try:
                 live = git(project['path'], 'rev-parse', 'HEAD')
-                if git(task['workspace'], 'rev-parse', 'HEAD') != commit:
+                if git(task['workspace'], 'status', '--porcelain'):
+                    reason = 'assignment workspace has uncommitted changes'
+                elif git(task['workspace'], 'rev-parse', 'HEAD') != commit:
                     reason = 'assignment branch moved after completion'
-                elif live != task['workspace_base']:
-                    reason = 'the release would include other undeployed or newer live changes (base differs from live)'
+                else:
+                    git(task['workspace'], 'merge-base', '--is-ancestor', live, commit)
             except (ValueError, OSError, subprocess.SubprocessError) as error:
-                reason = str(error)[:300]
+                reason = 'candidate needs serialized reconciliation with current live source: ' + str(error)[:200]
         if reason:
             self.mark(conn, value, 'not_verified', f'Auto-deploy skipped for assignment {task_id[:8]}: {reason}. '
-                      'Nothing was deployed; ask for deployment explicitly if you still want it.',
+                      'Nothing was deployed; this assignment needs corrected verification.',
                       execution_id=execution['id'], reason=reason)
             return None
         try:
@@ -214,8 +239,8 @@ class AutoDeploy:
             return None
         if conn.execute("SELECT 1 FROM settings WHERE key IN ('release_preparation','assignment_integration')").fetchone():
             return None
-        return {'task': dict(task), 'execution_id': execution['id'], 'commit': commit,
-                'release_id': f'auto-{task_id[:12]}-{commit[:12]}', 'project_path': project['path']}
+        return {'task': dict(task), 'scope': assignment_evidence(conn, task), 'execution_id': execution['id'], 'commit': commit,
+                'release_id': f'auto-{task_id[:8]}-{commit[:12]}-{execution["id"][:8]}', 'project_path': project['path']}
 
     def step(self):
         """One scheduler tick: start at most one preparation. Waiting is never a retry."""
@@ -230,12 +255,15 @@ class AutoDeploy:
                     continue
                 candidate = self.evaluate(conn, value)
                 if candidate:
+                    if value['auto'].get('state') == 'prepared':
+                        self.dispatch(conn, value, candidate)
+                        return
                     self.mark(conn, value, 'preparing',
                               f"Auto-deploy: assignment {candidate['task']['id'][:8]} passed its tier checks; preparing "
                               f"release {candidate['release_id']} (full backend+browser suite"
-                              + (', migration rehearsal' if True else '') + ').',
+                              + '; migration rehearsal when needed).',
                               execution_id=candidate['execution_id'], release_id=candidate['release_id'],
-                              commit=candidate['commit'])
+                              commit=candidate['commit'], scope=candidate['scope'])
                     self.job = asyncio.create_task(self.run(value['id'], candidate))
                     return
 
@@ -247,14 +275,14 @@ class AutoDeploy:
             checkout.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
             await asyncio.to_thread(git, candidate['project_path'], 'clone', '--quiet', '--no-checkout',
                                     candidate['project_path'], str(checkout))
+            await asyncio.to_thread(git, checkout, 'fetch', '--quiet', task['workspace'], candidate['commit'])
             await asyncio.to_thread(git, checkout, 'checkout', '--quiet', '--detach', candidate['commit'])
             await self.prepare(checkout, Path(candidate['project_path']), self.db.path.parent, release_id, task['id'])
-            receipt = await asyncio.to_thread(self.intents.consume_auto, intent_id, release_id, candidate['commit'],
-                                              candidate['execution_id'])
-            if receipt.get('phase') == 'dispatch_failed':
-                with self.db.transaction() as conn:
-                    value = next(v for v in rows(conn) if v['id'] == intent_id)
-                    self.fail(conn, value, 'Deployment request failed: ' + receipt['error'])
+            with self.db.transaction() as conn:
+                value = next(v for v in rows(conn) if v['id'] == intent_id)
+                if value['status'] == 'recorded':
+                    self.mark(conn, value, 'prepared')
+            # Dispatch on the next tick; explicit holds or a scope change during preparation are honored.
         except asyncio.CancelledError:
             raise  # Service stop: recover() fails the interrupted preparation on restart.
         except Exception as error:
@@ -266,19 +294,51 @@ class AutoDeploy:
         finally:
             shutil.rmtree(checkout, ignore_errors=True)
 
+    def dispatch(self, conn, value, candidate):
+        manifest = read(self.handoff.root / 'releases' / value['auto']['release_id'] / 'manifest.json') or {}
+        helper = self.handoff.root / 'helper-v3.py'
+        upgrade = read(self.handoff.root / 'helper-v3-upgrade.json') or {}
+        from .deployment import sha
+        if (upgrade.get('phase') != 'succeeded' or not helper.is_file()
+                or sha(helper) != manifest.get('required_helper_sha256')):
+            if value['auto'].get('reason') != 'helper v3 bootstrap required':
+                self.mark(conn, value, 'prepared', 'Auto-deploy is prepared and waiting for the external helper v3 upgrade. '
+                          'No additional owner deployment approval is needed.', reason='helper v3 bootstrap required')
+            return
+        # consume_auto owns a separate transaction; release the caller transaction before consuming on a job.
+        self.job = asyncio.create_task(self.consume(value['id'], candidate))
+
+    async def consume(self, intent_id, candidate):
+        try:
+            self.intents.consume_auto(intent_id, candidate['release_id'], candidate['commit'], candidate['execution_id'])
+        except Held:
+            pass  # Explicit hold: keep the immutable prepared release, without rerunning validation.
+        except Superseded:
+            with self.db.transaction() as conn:
+                value = next(v for v in rows(conn) if v['id'] == intent_id)
+                self.mark(conn, value, 'waiting_result', reason='Assignment scope changed; release withdrawn')
+        except Exception as error:
+            with self.db.transaction() as conn:
+                value = next(v for v in rows(conn) if v['id'] == intent_id)
+                if value['status'] == 'recorded':
+                    self.fail(conn, value, 'Deployment request failed: ' + str(error)[:400])
+
     async def prepare_release(self, checkout, live, data, release_id, task_id):
         """Run the RUNNING manager's fixed preparation gate against the candidate clone."""
         log = data / 'auto-deploy' / (release_id + '.log')
         argv = [sys.executable, str(ROOT / 'scripts/prepare_deployment.py'), release_id, '--live', str(live),
-                '--data', str(data), '--task-id', task_id, '--candidate', str(checkout)]
+                '--data', str(data), '--task-id', task_id, '--auto-execution', self.db.one('SELECT id FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1', (task_id,))['id'], '--candidate', str(checkout)]
         with log.open('w') as stream:
             os.chmod(log, 0o600)
             process = await asyncio.create_subprocess_exec(*argv, cwd=ROOT, stdout=stream, stderr=stream,
-                                                           env={**os.environ, 'PYTHONPATH': str(ROOT)})
+                                                           start_new_session=True, env={**os.environ, 'PYTHONPATH': str(ROOT)})
             try:
                 code = await asyncio.wait_for(process.wait(), PREPARE_SECONDS)
             except BaseException:
-                process.kill()
+                try:
+                    os.killpg(process.pid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
                 await process.wait()
                 raise
         if code:

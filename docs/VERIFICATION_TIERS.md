@@ -157,3 +157,12 @@ is rewritten. New corrected release target: option-b-lifecycle-v5-20261014. Its 
 unchanged baseline checks and adds affected-path regressions, smoke, relevant browser checks and one scoped
 read-only diff review. Current exact results/commit/hashes and post-cleanup publication command are in the
 retained report; no blind full-suite repetition or worker activation.
+
+## Optional automatic deployment
+
+With per-project Auto-deploy verified work ON, the worker post-check also records its clean
+commit. The deterministic pipeline requires the current tier and, for Risky, the completed
+nonblocking cheap review before release checks. Missing, failed or escalated evidence does not
+auto-deploy. A smoke gate plus the one fixed full backend/browser release gate binds the exact
+candidate before preparation. Explicit holds/OFF and changed scope are retained; unrelated chat
+needs no renewed approval. See [AUTO_DEPLOY.md](AUTO_DEPLOY.md).

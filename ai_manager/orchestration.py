@@ -118,6 +118,8 @@ class Scheduler:
         self.followup_check_at = 0.0
         self.deployment = Handoff(settings.data_dir)
         self.intents = Intents(db)
+        from .auto_deploy import AutoDeploy
+        self.auto_deploy = AutoDeploy(db, registry, self.deployment, self.intents)
         self.deployment_busy = lambda: False
 
     async def manager_action(self, selected_project, params):
@@ -290,7 +292,7 @@ class Scheduler:
                     from .deployment_intent import rows
                     intent_id = next((v['id'] for v in rows(conn) if v['project_id'] == project_id
                                       and v['source_execution_id'] == params['manager_execution_id']
-                                      and v['status'] == 'recorded'), None)
+                                      and v['status'] == 'recorded' and v.get('kind') != 'auto'), None)
             if args.get('owner_deployment_quote'):
                 config = read(self.deployment.root / 'config.json')
                 if not config or project['path'] != config['repo']:
@@ -317,6 +319,8 @@ class Scheduler:
             )
             if intent_id:
                 self.intents.attach(project_id, params, intent_id, task['id'])
+            if not intent_id:
+                self.auto_deploy.owner_request(project_id, params, task['id'])
             return {**self.tasks.context(task), **({'deployment_intent_id': intent_id} if intent_id else {}),
                     **({'batched': True} if task.get('batched') else {})}
         if action == 'job_followup':
@@ -423,6 +427,7 @@ class Scheduler:
                     conn, "manager.continued", {"call_id": params["callId"], "added_instructions": additions, "added_acceptance": extra},
                     project_id, task["id"], params["manager_execution_id"],
                 )
+            self.auto_deploy.owner_request(project_id, params, task['id'])
             return self.tasks.context(self.tasks.get(task["id"]))
         if action in {"pause_project", "resume_project"}:
             updated = self.registry.update(
@@ -499,6 +504,8 @@ class Scheduler:
 
     async def tick(self):
         async with self.lock:
+            self.auto_deploy.seed()
+            self.auto_deploy.recover()
             self.deployment.report(self.db)
             if self.deployment.ready_to_stop():
                 return
@@ -522,7 +529,8 @@ class Scheduler:
                                                task['origin_conversation'], recovery_task=task['id'])
                     except ValueError:
                         pass  # A competing checker/owner transition won the transaction.
-            self.deployment.acknowledge(self.db, bool(self.chat.jobs or self.workers.jobs or self.deployment_busy()))
+            self.auto_deploy.step()
+            self.deployment.acknowledge(self.db, bool(self.chat.jobs or self.workers.jobs or self.deployment_busy() or self.auto_deploy.busy()))
 
     async def run(self):
         while True:
@@ -538,6 +546,9 @@ class Scheduler:
         self.job = asyncio.create_task(self.run())
 
     async def close(self):
+        if self.auto_deploy.busy():
+            self.auto_deploy.job.cancel()
+            await asyncio.gather(self.auto_deploy.job, return_exceptions=True)
         if self.job:
             self.job.cancel()
             await asyncio.gather(self.job, return_exceptions=True)

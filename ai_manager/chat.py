@@ -274,6 +274,9 @@ class Chat:
         context = self.context(conversation["project_id"])
         from .deployment import Handoff
         deployment = Handoff(self.db.path.parent).status()
+        from .auto_deploy import enabled
+        with self.db.connect() as conn:
+            context['auto_deploy_verified_work'] = enabled(conn, conversation['project_id']) if conversation['project_id'] else False
         context['deployment'] = {k: deployment[k] for k in ('phase', 'release_id') if k in deployment}
         if conversation['project_id']:
             from .project_memory import encode

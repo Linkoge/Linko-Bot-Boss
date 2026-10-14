@@ -69,7 +69,7 @@ class Simulated(Helper):
         if self.reject:
             raise ValueError('dirty live source')
 
-    def snapshot(self, directory):
+    def snapshot(self, directory, manifest=None):
         directory.mkdir(parents=True, mode=0o700)
         backup(self.data / 'manager.sqlite3', directory / 'manager.sqlite3')
 

@@ -370,6 +370,9 @@ class Workers:
             if not task.get("workspace_base"):
                 raise ValueError("No assignment base; actual diff unavailable")
             paths, diff, truncated = changes(root, task["workspace_base"])
+            from .parallel import git
+            if not git(root, 'status', '--porcelain'):
+                record['commit'] = git(root, 'rev-parse', 'HEAD')
             actual, reasons = floor(paths) if paths else ("small", ["no file changes"])
             declared = policy.get("change_paths", [])
             undeclared = [p for p in paths if not any(p == d or p.startswith(d.rstrip("/") + "/") for d in declared)]
@@ -377,6 +380,10 @@ class Workers:
                           changed_files=paths[:100], changed_count=len(paths), undeclared=undeclared[:20])
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             record["actual_error"] = str(error)[:300]
+        from .deployment_intent import assignment_evidence
+        with self.db.connect() as conn:
+            current = conn.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone()
+            record['scope'] = assignment_evidence(conn, current)
         record["escalated"] = rank(record["effective"]) > rank(assigned)
         if record["effective"] == "risky":
             record["review"] = await self.review(task, root, route, paths, diff, truncated) if paths else {

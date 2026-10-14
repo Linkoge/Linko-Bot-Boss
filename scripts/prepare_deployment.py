@@ -10,7 +10,7 @@ from pathlib import Path
 from ai_manager.deployment import ID, REHEARSED, Handoff, atomic, lock, rehearse, run, schema_change, sha
 
 
-def prepare(repo, live, data, release_id, python, task_ids=()):
+def prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=None):
     # One global preparation, serialized with durable integration reservations.
     from ai_manager.codex import process_start
     with lock(Handoff(data).root / 'preparation.lock'):
@@ -27,7 +27,7 @@ def prepare(repo, live, data, release_id, python, task_ids=()):
             conn.execute("INSERT INTO settings VALUES('release_preparation',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                          (json.dumps({'pid': os.getpid(), 'process_start': process_start(os.getpid()), 'release_id': release_id}),))
         try:
-            return _prepare(repo, live, data, release_id, python, task_ids)
+            return _prepare(repo, live, data, release_id, python, task_ids, auto_execution)
         finally:
             with sqlite3.connect(path) as conn:
                 conn.execute("DELETE FROM settings WHERE key='release_preparation'")
@@ -62,7 +62,7 @@ def checks(python):
             ['xvfb-run', '-a', str(python), 'scripts/browser_pwa.py']]
 
 
-def _prepare(repo, live, data, release_id, python, task_ids=()):
+def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=None):
     if not ID.fullmatch(release_id):
         raise ValueError('Invalid release ID')
     if run(['git', 'status', '--porcelain'], repo):
@@ -75,10 +75,28 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
     target.mkdir(parents=True, mode=0o700)  # Never overwrite a prepared receipt.
     # Candidate code and tests must import the candidate, never the running manager's modules.
     env = {**os.environ, 'PYTHONPATH': str(repo)}
+    for name in ('LINKO_EVIDENCE_DIR', 'LINKO_AGENT_EVIDENCE', 'LINKO_PWA_EVIDENCE', 'LINKO_USAGE_EVIDENCE',
+                 'LINKO_PROJECT_EVIDENCE', 'LINKO_STASH_EVIDENCE', 'LINKO_MODEL_EVIDENCE', 'LINKO_MEMORY_EVIDENCE',
+                 'LINKO_AUDIO_EVIDENCE', 'LINKO_BUNDLE_EVIDENCE', 'LINKO_CHAT_EVIDENCE', 'LINKO_MARKDOWN_EVIDENCE'):
+        evidence = target / 'browser-evidence' / name.lower()
+        evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
+        env[name] = str(evidence)
+    scope = None
+    if auto_execution:
+        if len(task_ids) != 1:
+            raise ValueError('Auto-deploy requires exactly one owner assignment')
+        from ai_manager.auto_deploy import verified
+        from ai_manager.deployment_intent import assignment_evidence
+        with sqlite3.connect(f'file:{data / "manager.sqlite3"}?mode=ro', uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_ids[0],)).fetchone()
+            if not task or verified(conn, task, auto_execution, commit):
+                raise ValueError('Auto-deploy candidate has not passed required tier verification')
+            scope = assignment_evidence(conn, task)
     rehearsal, venv = None, target / 'rehearsal-venv'
     try:
         with (target / 'validation.log').open('w') as log:
-            if schema and schema['dependencies']:
+            if schema and schema.get('dependencies'):
                 # Dependency rehearsal: the exact candidate lock in a throwaway environment runs every check.
                 uv = shutil.which('uv') or str(Path.home() / '.local/bin/uv')
                 if subprocess.run([uv, 'sync', '--frozen'], cwd=repo, stdout=log, stderr=log, timeout=600,
@@ -89,6 +107,11 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
                 rehearsal = rehearse(data / 'manager.sqlite3', repo, python, target / 'rehearsal', base, commit)
                 log.write('Migration rehearsal passed on a private database copy\n')
                 log.flush()
+            if auto_execution:
+                result = subprocess.run([str(python), '-m', 'pytest', '-q', '-m', 'smoke'], cwd=repo,
+                                        stdout=log, stderr=log, timeout=30, env=env)
+                if result.returncode:
+                    raise ValueError('Required tier smoke verification failed')
             for argv in checks(python):
                 result = subprocess.run(argv, cwd=repo, stdout=log, stderr=log, timeout=180, env=env)
                 if result.returncode:
@@ -111,10 +134,13 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
                 'bundle_sha256': sha(target / 'release.bundle'), 'validation_sha256': sha(target / 'validation.log')}
     if schema:
         manifest['schema'] = schema
-        helper = target / ('helper-' + schema['helper'] + '.py')
+    # This second-stage release bootstraps helper v3 even for a code-only diff.
+    helper_version = 'v3'
+    if helper_version:
+        helper = target / ('helper-' + helper_version + '.py')
         helper.write_bytes((repo / 'ai_manager/deployment.py').read_bytes())
         helper.chmod(0o600)
-        manifest['required_helper_version'] = schema['helper']
+        manifest['required_helper_version'] = helper_version
         manifest['required_helper_sha256'] = sha(helper)
     if rehearsal:
         manifest['rehearsal'] = rehearsal
@@ -132,6 +158,12 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
                 assignments[task_id] = assignment_evidence(conn, task, 2)
             manifest['assignments'] = assignments
             manifest['assignment_evidence_version'] = 2
+            if auto_execution:
+                if assignments != {task_ids[0]: scope}:
+                    raise ValueError('Assignment scope changed during release checks')
+                manifest['auto_deploy'] = {'execution_id': auto_execution, 'commit': commit,
+                                          'tier_checks': 'passed', 'full_suite': 'passed'}
+                manifest['restore_database'] = True
     atomic(target / 'manifest.json', manifest)
     atomic(target / 'evidence-index.json', {'release_id': release_id, 'candidate': commit, 'base': base,
            'files': {p.relative_to(target).as_posix(): sha(p) for p in target.rglob('*')
@@ -145,9 +177,10 @@ if __name__ == '__main__':
     parser.add_argument('--live', type=Path, required=True)
     parser.add_argument('--data', type=Path, required=True)
     parser.add_argument('--task-id', action='append', default=[])
+    parser.add_argument('--auto-execution')
     parser.add_argument('--candidate', type=Path, help='Clean candidate checkout (default: this checkout)')
     args = parser.parse_args()
     os.umask(0o077)
     prepare((args.candidate or Path(__file__).parents[1]).resolve(), args.live.resolve(), args.data.resolve(),
-            args.release_id, Path(sys.executable), args.task_id)
+            args.release_id, Path(sys.executable), args.task_id, args.auto_execution)
     print('Prepared release ' + args.release_id)

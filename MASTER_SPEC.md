@@ -85,3 +85,17 @@ Existing explicit Add/manual/startup discovery, including empty repositories, re
 for pending release status and verification evidence.
 
 - Current live Codex/Claude provider switch is included in the merged parallel/composer release. New work uses active provider and its independent saved policy; existing tasks retain exact provider/model/thread/workspace. No provider/model setting is reset by integration or preparation. Contract: docs/MODEL_SETTINGS.md; current base/failure/evidence: STATE.md.
+
+## Verified-work automatic deployment — second stage (2026-10-14)
+
+Per-project **Auto-deploy verified work** is persisted in Settings; the configured Linko-Bot-Boss
+project is seeded ON once at activation, preserving explicit later OFF values. ON treats the original
+owner work request as standing recorded intent for its assignment's exact verified release, without
+a second approval or unrelated-message consent churn. OFF retains manual deployment behavior.
+Option B tier evidence bound to a clean commit, completed job follow-up and one full release gate
+remain mandatory. Explicit owner holds/OFF and changed scope are checked before activation.
+Schema/dependency releases require a copied-database migration rehearsal and stopped pre-activation
+backup; health failure rolls back code plus data, and changed dependencies. Failure never retries
+automatically. The independent helper v3 must first be installed externally; this implementation
+is publication-ready only after the fixed validation gate and is not a live deployment claim.
+Contract and evidence: [automatic deployment](docs/AUTO_DEPLOY.md).

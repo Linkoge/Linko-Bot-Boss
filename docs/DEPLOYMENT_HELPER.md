@@ -337,7 +337,8 @@ Full technical evidence: `/home/codex/.local/share/linko-bot-manager/deployments
 
 ## Auto-deploy assignment resume audit — 2026-10-14
 
-Assignment `44097fd1a52c4f9096fcd901bd04d344` is incomplete and awaiting a scope correction
+Historical resume audit (superseded by the owner scope correction and second-stage implementation):
+assignment `44097fd1a52c4f9096fcd901bd04d344` was incomplete and awaiting a scope correction
 for sequential manager review. Retained branch: `linko/assignment-44097fd1a52c4f9096fcd901bd04d344`;
 source base `642511a0878e9df7a6937bb6af4dfdd65adacd80` already includes Option B
 (`e04548b`, final evidence `642511a`). No integration merge is needed to obtain that dependency.
@@ -373,3 +374,12 @@ runtime settings. There is no prepared release or deployment receipt for this as
 No live deployment, service restart, shared database write, push or shared checkout edit was
 performed during this resume. Manager next action: correct the assignment scope and resume
 this same retained workspace serially; do not treat this audit as a completed feature delivery.
+
+## Second-stage automatic deployment
+
+The owner corrected this assignment's scope to `ai_manager/`, `scripts/`, tests/docs/spec and
+authorized its continuation against live Option B `bee8b088fa0eb2c20d963b95f109cbf3a87caaeb`.
+The retained assignment branch was rebased onto that source without shared checkout changes.
+The audit above is historical; it does not describe the final candidate. The contract for standing
+per-project intent, exact verification, v3 migration/data restoration and bootstrap is now
+[AUTO_DEPLOY.md](AUTO_DEPLOY.md). This worker performs no live activation or helper installation.

@@ -44,14 +44,12 @@ def blob(repo, ref, name):
 
 
 def schema_change(repo, base, commit):
-    """None for code-only releases, the pinned v2 workspace migration, or the rehearsed v3 contract."""
+    """None for code-only releases; all newly prepared schema/dependency changes require rehearsal."""
     dependencies = {name: blob(repo, commit, name) for name in DEPENDENCIES
                     if run(['git', 'diff', base, commit, '--', name], repo)}
     if not dependencies and not run(['git', 'diff', base, commit, '--', 'ai_manager/db.py'], repo):
         return None
     after = blob(repo, commit, 'ai_manager/db.py')
-    if not dependencies and blob(repo, base, 'ai_manager/db.py') == PARALLEL_DB_BEFORE and after == PARALLEL_DB_AFTER:
-        return PARALLEL_SCHEMA.copy()
     return {'migration': REHEARSED, 'db_sha256': after, 'dependencies': dependencies, 'helper': 'v3',
             'restore_database': True}
 
@@ -139,6 +137,45 @@ def restore(snapshot, target):
         if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
             raise ValueError('Restored database failed integrity validation')
     return expected
+
+
+def auto_guard(conn, origin, manifest, release):
+    """Independent activation guard: standing policy, explicit holds and the pinned verified candidate.
+
+    Kept in the standalone helper so a mutable running app cannot swap the approved release at cutover.
+    """
+    if not origin or not origin.get('auto'):
+        return
+    candidate = origin.get('candidate') or {}
+    if (sha(release / 'manifest.json') != candidate.get('manifest_sha256')
+            or manifest['commit'] != candidate.get('commit') or manifest['base'] != candidate.get('base')):
+        raise ValueError('Auto-deploy exact candidate changed')
+    row = conn.execute('SELECT value FROM settings WHERE key=?', ('auto_deploy:' + origin['project_id'],)).fetchone()
+    project = conn.execute('SELECT status FROM projects WHERE id=?', (origin['project_id'],)).fetchone()
+    if not row or not json.loads(row[0]).get('enabled') or not project or project[0] != 'active':
+        raise ValueError('Auto-deploy disabled or project held')
+    conn.row_factory = sqlite3.Row
+    task = conn.execute('SELECT * FROM tasks WHERE id=?', (origin['task_id'],)).fetchone()
+    workflow = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_workflow:' + origin['task_id'],)).fetchone()
+    if (not task or task['lease_owner'] or task['lifecycle'] != 'completed'
+            or (workflow and json.loads(workflow[0]).get('state') != 'complete')):
+        raise ValueError('Auto-deploy assignment is incomplete or explicitly held')
+    execution = conn.execute('SELECT * FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1', (task['id'],)).fetchone()
+    if (not execution or execution['id'] != origin['execution_id'] or execution['status'] != 'completed'
+            or execution['stop_requested'] or execution['delivery'] != 'delivered'):
+        raise ValueError('Auto-deploy verified execution changed')
+    fields = {k: task[k] for k in ('id', 'project_id', 'description', 'acceptance', 'request_key')}
+    context = conn.execute("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task['id'],)).fetchone()
+    fields['context'] = json.loads(context[0]) if context else {}
+    digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
+    attestation = manifest.get('auto_deploy') or {}
+    if (manifest.get('assignment_evidence_version') != 2 or manifest.get('assignments') != {task['id']: digest}
+            or attestation != {'execution_id': execution['id'], 'commit': manifest['commit'],
+                               'tier_checks': 'passed', 'full_suite': 'passed'} or not manifest.get('restore_database')):
+        raise ValueError('Auto-deploy scope or full-suite evidence changed')
+    intent = conn.execute('SELECT value FROM settings WHERE key=?', ('deployment_intent:' + origin['intent_id'],)).fetchone()
+    if not intent or json.loads(intent[0]).get('status') != 'dispatched':
+        raise ValueError('Auto-deploy intent cancelled or not consumed')
 
 
 def atomic(path, value):
@@ -245,6 +282,15 @@ class Handoff:
                 return
             with db.connect() as conn:
                 counts = idle(conn)
+                if (value.get('origin') or {}).get('auto'):
+                    release = self.root / 'releases' / value['release_id']
+                    try:
+                        auto_guard(conn, value['origin'], read(release / 'manifest.json'), release)
+                    except ValueError as error:
+                        value.update(phase='cancelled', error=str(error), updated_at=time.time())
+                        atomic(self.root / 'results' / (value['nonce'] + '.json'), value)
+                        atomic(self.root / 'active.json', value)
+                        return
             if any(counts.values()):
                 return
             value.update(phase='acknowledged', acknowledged_at=time.time(), idle=counts)
@@ -570,6 +616,7 @@ class Helper:
             try:
                 self.validate(manifest)
                 with sqlite3.connect(f'file:{self.data / "manager.sqlite3"}?mode=ro', uri=True) as conn:
+                    auto_guard(conn, value.get('origin'), manifest, self.root / 'releases' / manifest['id'])
                     if any(idle(conn).values()):
                         raise ValueError('Idle acknowledgement no longer valid')
                 directory = self.root / 'backups' / value['nonce']
@@ -579,11 +626,13 @@ class Helper:
                 if self.handoff.status().get('nonce') != value['nonce']:
                     raise ValueError('Handoff changed')
                 with sqlite3.connect(self.data / 'manager.sqlite3') as conn:
+                    auto_guard(conn, value.get('origin'), manifest, self.root / 'releases' / manifest['id'])
                     if any(idle(conn).values()):
                         raise ValueError('Work appeared before stop')
                 stopped = True
                 self.service('stop')
                 with sqlite3.connect(self.data / 'manager.sqlite3') as conn:
+                    auto_guard(conn, value.get('origin'), manifest, self.root / 'releases' / manifest['id'])
                     if any(idle(conn).values()):
                         raise ValueError('Work appeared at cutover')
                 self.validate(manifest)
@@ -606,10 +655,10 @@ class Helper:
                         if changed:
                             # Checkout refuses dirty changes and preserves the forward main branch.
                             run(['git', 'checkout', '--detach', manifest['base']], self.repo)
-                            if rehearsed(manifest):
+                            if rehearsed(manifest) or manifest.get('restore_database'):
                                 # The stopped final snapshot predates every candidate write; admission was fenced.
                                 restored['database'] = restore(directory / 'final.sqlite3', self.data / 'manager.sqlite3')
-                                if manifest['schema']['dependencies']:
+                                if (manifest.get('schema') or {}).get('dependencies'):
                                     self.restore_venv(directory)
                                     restored['venv'] = str(self.venv())
                         self.service('start')

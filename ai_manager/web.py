@@ -218,7 +218,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
                     return JSONResponse({"detail": "CSRF token required"}, status_code=403)
         mutation = request.method not in {'GET', 'HEAD', 'OPTIONS'}
-        drain = request.url.path in {'/api/login', '/api/deployment/cancel', '/api/deployment/intents/revoke'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
+        drain = request.url.path in {'/api/login', '/api/deployment/cancel', '/api/deployment/intents/revoke', '/api/settings/auto-deploy'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
         if request.method == 'PATCH' and request.url.path.startswith('/api/tasks/'):
             body = await request.json()
             drain = body.get('action') in {'stop', 'pause', 'cancel'}
@@ -636,11 +636,18 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             db.event(conn, "question.answered", {"question_id": question_id}, execution_id=question["execution_id"])
         return {"result": "accepted"}
 
+    @app.put('/api/settings/auto-deploy', dependencies=[Depends(require_owner)])
+    def auto_deploy_setting(body: dict):
+        try:
+            return scheduler.auto_deploy.set(body.get('project_id'), body.get('enabled'))
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from error
+
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():
         from .model_settings import active
         return {"global_instructions": db.setting("global_instructions", ""), "max_workers": settings.max_workers,
-                "model_provider": active(db)}
+                "model_provider": active(db), "auto_deploy": scheduler.auto_deploy.settings()}
 
     static = Path(__file__).parent / "static"
     # Pin content and URLs to this process/release; never cache mutable aliases.

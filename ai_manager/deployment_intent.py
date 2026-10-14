@@ -49,7 +49,7 @@ def save(db, conn, value, event):
 
 def revoke(db, conn, reason, project_id=None, conversation_id=None, task_id=None, intent_id=None):
     for value in rows(conn):
-        if value['status'] in {'revoked', 'dispatched', 'failed'}:
+        if value['status'] in {'revoked', 'failed'} or (value['status'] == 'dispatched' and value.get('kind') != 'auto'):
             continue
         if intent_id and value['id'] != intent_id:
             continue
@@ -166,6 +166,10 @@ class Intents:
         if not conn.execute('SELECT 1 FROM tasks WHERE id=? AND project_id=?', (task_id, project_id)).fetchone():
             raise ValueError('Assignment belongs to another project or is missing')
         digest = hashlib.sha256(source['content'].encode()).hexdigest()
+        identifier = hashlib.sha256((source['id'] + project_id + task_id).encode()).hexdigest()[:32]
+        replay = next((v for v in rows(conn) if v['id'] == identifier), None)
+        if replay:
+            return replay
         existing = next((v for v in rows(conn) if v.get('kind') == 'auto' and v['task_ids'] == [task_id]
                          and v['status'] == 'recorded'), None)
         if existing:
@@ -175,14 +179,14 @@ class Intents:
                                 reason='Owner request extended this assignment')
                 save(self.db, conn, existing, 'owner_reviewed')
             return existing
-        value = {'id': hashlib.sha256((source['id'] + project_id + task_id).encode()).hexdigest()[:32],
+        value = {'id': identifier,
                  'kind': 'auto', 'owner_id': 1, 'source_message_id': source['id'],
                  'source_execution_id': source['execution_id'], 'source_sha256': digest,
                  'conversation_id': source['conversation_id'], 'project_id': project_id,
                  'quote': source['content'][:2000],
                  'scope': {'release_id': None, 'task_ids': [task_id], 'task_request': None, 'auto': True},
                  'task_ids': [task_id], 'task_request': None, 'candidate': None, 'status': 'recorded',
-                 'created_at': time.time(), 'assignment_hashes': {}, 'auto': {'state': 'waiting_result'},
+                 'created_at': time.time(), 'evidence_version': 2, 'assignment_hashes': {}, 'auto': {'state': 'waiting_result'},
                  'checked_owner_message': source['id'], 'checked_owner_sha256': digest}
         return save(self.db, conn, value, 'recorded')
 
@@ -196,10 +200,15 @@ class Intents:
                 self.current(conn, value)
             except ValueError as error:
                 raise Held(str(error)) from error
+            if (value['auto'].get('release_id') != release_id or value['auto'].get('commit') != commit
+                    or value['auto'].get('execution_id') != execution_id):
+                raise ValueError('Release differs from the pipeline verified candidate')
             candidate, manifest = self.candidate(release_id)
             task_id = value['task_ids'][0]
             task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
-            if candidate['commit'] != commit or candidate['base'] != task['workspace_base']:
+            from .auto_deploy import git
+            project = conn.execute('SELECT path FROM projects WHERE id=?', (value['project_id'],)).fetchone()
+            if candidate['commit'] != commit or candidate['base'] != git(project['path'], 'rev-parse', 'HEAD'):
                 raise ValueError('Prepared release is not the exact verified assignment commit')
             source = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_source:' + task_id,)).fetchone()
             latest = conn.execute('SELECT id FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1',
@@ -209,8 +218,18 @@ class Intents:
             except ValueError as error:
                 raise Superseded(str(error)) from error
             if (not source or json.loads(source[0]).get('commit') != commit or not latest or latest['id'] != execution_id
+                    or manifest.get('assignment_evidence_version') != 2
                     or manifest.get('assignments') != {task_id: assignment_evidence(conn, task)}):
                 raise Superseded('Assignment changed after verification')
+            from .auto_deploy import verified
+            if verified(conn, task, execution_id, commit):
+                raise ValueError('Assignment verification no longer passes')
+            if (manifest.get('auto_deploy') != {'execution_id': execution_id, 'commit': commit,
+                                               'tier_checks': 'passed', 'full_suite': 'passed'}
+                    or not manifest.get('restore_database')):
+                raise ValueError('Release lacks the exact full-suite auto-deploy attestation')
+            if git(task['workspace'], 'rev-parse', 'HEAD') != commit or git(task['workspace'], 'status', '--porcelain'):
+                raise Superseded('Assignment workspace changed after verification')
             origin = {'project_id': value['project_id'], 'conversation_id': value['conversation_id'],
                       'execution_id': execution_id, 'task_id': task_id, 'intent_id': intent_id, 'auto': True,
                       'owner_message_id': value['source_message_id'], 'candidate': candidate}
@@ -231,10 +250,14 @@ class Intents:
     def current(self, conn, value):
         source = conn.execute('SELECT content FROM messages WHERE id=? AND role=\'user\'',
                               (value['source_message_id'],)).fetchone()
-        if not source or hashlib.sha256(source[0].encode()).hexdigest() != value['source_sha256']:
+        if value.get('kind') != 'auto' and (not source or hashlib.sha256(source[0].encode()).hexdigest() != value['source_sha256']):
             raise ValueError('Original owner source is missing or changed')
         latest = self.latest(conn, value)
-        if (not latest or latest['id'] != value['checked_owner_message'] or
+        if value.get('kind') == 'auto':
+            from .auto_deploy import enabled
+            if not enabled(conn, value['project_id']):
+                raise ValueError('Auto-deploy is off')
+        elif (not latest or latest['id'] != value['checked_owner_message'] or
                 hashlib.sha256(latest['content'].encode()).hexdigest() != value['checked_owner_sha256']):
             raise ValueError('A newer owner request or edited correction needs review before deployment')
         project = conn.execute('SELECT status FROM projects WHERE id=?', (value['project_id'],)).fetchone()
@@ -356,7 +379,7 @@ class Intents:
                            'scope', 'candidate', 'status')}
                 if value.get('kind') == 'auto':
                     summary.update(kind='auto', task_ids=value['task_ids'], auto=value['auto'])
-                summary['needs_owner_review'] = bool(latest and (latest['id'] != value['checked_owner_message'] or
+                summary['needs_owner_review'] = bool(value.get('kind') != 'auto' and latest and (latest['id'] != value['checked_owner_message'] or
                     hashlib.sha256(latest['content'].encode()).hexdigest() != value.get('checked_owner_sha256')))
                 if value.get('nonce'):
                     path = self.handoff.root / 'results' / (value['nonce']+'.json')
