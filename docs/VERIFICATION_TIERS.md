@@ -75,7 +75,8 @@ completion are unchanged: no tier block, no post-check and no review. `WORKER_IN
 native worker → delivery, modes, restart/recovery, controls, parallel admission, deployment activation/rollback/idle,
 deployment intent, model routing, worker context, follow-up, To-Do handoff, provider routing and tier selection.
 `tests/conftest.py` registers the marker. Changing `pyproject.toml` would need dependency-level deployment review.
-It fails a smoke run that exceeds 20 s. Measured 2026-10-14: 3.0–3.6 s, versus 63.8 s for the 354-test backend suite.
+It fails a smoke run that exceeds 20 s. Measured 2026-10-14 on commit e04548b: 3.0–3.6 s, versus 64.6 s for the
+355-test backend suite. On that commit all 19 browser scripts (247 s, `PYTHONPATH=.`), Ruff and `node --check` also passed.
 `tests/test_verification.py` checks size (20–30) and core-area coverage.
 
 ## Rollback on post-deploy health failure
