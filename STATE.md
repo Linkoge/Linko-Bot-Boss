@@ -1,3 +1,17 @@
+# Role guard review correction — retained assignment, 2026-10-14
+
+The correction for automatic review execution `20fe77cf78a344c4b5a760c580d351b6` preserves authorization
+role/permission literals in actual indexing/getter/guard semantics, including removed user["role"] != "admin"
+checks in ordinary routes.py with innocuous requests. Display text, comments and provider/usage role metadata
+still skip review. Approved verification reductions and the existing reviewer/stages remain unchanged.
+Exact committed correction, affected-check results and historical evidence hashes are retained in the existing
+`.data/verification-reductions/REPORT.md` and manager-summary.json. Prior 467-case full-suite evidence remains
+bound to `1cac264`, not this correction. The external-source provenance investigation is complete and is not
+repeated: external d629701 has no eligible isolated source-task mapping/integration grant. Cancelled 703f113
+remains cancelled; recovery is deferred. No shared source/runtime edit, external merge, receipt fabrication,
+preparation-guard bypass or direct activation is performed. Preparation/normal ON handoff remains dependent on
+applicable external source ownership and serialized integration, as recorded in the report.
+
 # Sensitive review finding correction — retained assignment, 2026-10-14
 
 Continuation of `e684e6b33ca14b778ef7769dfc92a0fc` resolves the actual automatic review finding from

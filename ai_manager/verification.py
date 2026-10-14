@@ -4,6 +4,7 @@ No AI routing call: the backend derives a floor from declared change paths, requ
 assignment kind. The manager may raise the tier, never lower it. After a worker finishes, the
 actual branch diff is classified the same way, so mis-declared paths cannot keep risky work Small.
 """
+import ast
 import re
 import subprocess
 from pathlib import PurePosixPath
@@ -197,6 +198,38 @@ DIFF_CONCURRENCY = re.compile(
 QUOTED = re.compile(r"'(?:(?:\\.)|[^'\\])*'|\"(?:(?:\\.)|[^\"\\])*\"")
 
 
+
+ROLE_KEYS = {'role', 'roles', 'permission', 'permissions', 'scope', 'scopes', 'privilege', 'privileges',
+             'is_admin', 'is_owner', 'is_superuser'}
+CHAT_ROLES = {'assistant', 'system', 'developer', 'tool', 'function'}
+
+
+def authorization_literals(line):
+    """Keep authorization keys in access/control expressions, not arbitrary display strings."""
+    quoted = list(QUOTED.finditer(line))
+    values = []
+    for match in quoted:
+        try:
+            value = ast.literal_eval(match.group())
+        except (ValueError, SyntaxError):
+            value = ''
+        values.append(value.lower() if isinstance(value, str) else '')
+    stripped = QUOTED.sub(' ', line)
+    principal = bool(re.search(r'\b(user|principal|account|identity|claims|current_user)\b', stripped))
+    # Provider message role metadata is distinct from a principal's access role.
+    chat_metadata = not principal and any(value in CHAT_ROLES for value in values)
+    guard = bool(re.search(r'\b(if|elif|assert|while|return)\b|(?:==|!=|\bnot in\b|\bin\b)', stripped))
+    role_identifier = bool(re.search(r'\b(role|roles|is_admin|is_owner|is_superuser)\b', stripped))
+    sensitive = (guard or principal) and role_identifier and not chat_metadata
+    for match, value in zip(quoted, values, strict=True):
+        prefix = line[:match.start()]
+        access = re.search(r'(?:\[\s*|\.get\(\s*|getattr\([^,]+,\s*)$', prefix)
+        display = not guard and re.search(r'\b(labels?|display|usage|metadata)\s*(?:\[|\.get\()\s*$', prefix)
+        if not display and value in ROLE_KEYS and access and (value not in {'role', 'roles'} or not chat_metadata):
+            sensitive = True
+    # Preserve a signal rather than injecting all quoted contents into identifier rules.
+    return stripped + (' permission' if sensitive else '')
+
 def code_signals(lines):
     """Deterministic sensitive-operation categories for changed code / enclosing hunk scope."""
     code, literals = [], []
@@ -208,7 +241,7 @@ def code_signals(lines):
         if ends:
             line = line[:min(ends)]
         literals.extend(QUOTED.findall(line))
-        line = QUOTED.sub(' ', line)
+        line = authorization_literals(line)
         # Normalize snake_case and camelCase identifiers while retaining operation punctuation.
         line = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', line).replace('_', ' ')
         code.append(line)
@@ -257,6 +290,15 @@ def review_reasons(paths, text='', diff=''):
                                       for line in changed):
                 continue
             scope = [headers[index - 1]] if index else []
+            # A literal-only edit may be inside a continued role comparison.
+            # Bind it to the nearest context expression, not every nearby guard.
+            lines = hunk.splitlines()
+            for position, line in enumerate(lines):
+                if line.startswith(('+', '-')) and QUOTED.search(line[1:]) and not re.search(
+                        r'[a-zA-Z_]', QUOTED.sub(' ', line[1:])):
+                    previous = next((v[1:] for v in reversed(lines[:position]) if v.startswith(' ')), '')
+                    if previous.rstrip().endswith(('(', '[', '{')):
+                        scope.append(previous)
             # Context matters for changed boolean/status/control decisions in an
             # existing guard. Display literals do not inherit nearby guards.
             effects = QUOTED.sub(' ', '\n'.join(changed))

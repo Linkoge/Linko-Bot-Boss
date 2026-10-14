@@ -236,3 +236,52 @@ def test_sensitive_untracked_code_is_in_actual_diff_before_review_bounding(tmp_p
     paths, diff, truncated = changes(tmp_path, base)
     assert paths == ['routes.py'] and not truncated
     assert 'sensitive auth/security diff routes.py' in review_reasons(paths, 'Tidy output', diff)
+
+
+
+@pytest.mark.parametrize('before,after', [
+    ('if user["role"] != "admin":', 'if False:'),
+    ('if user["role"] != "admin":', 'if user["role"] != "member":'),
+    ("if user.get('role') not in ('admin', 'owner'):", 'if False:'),
+    ('if role != "admin":', 'if role != "reader":'),
+    ('if user.role != "admin":', 'if True:'),
+    ('user["role"] = "member"', 'user["role"] = "admin"'),
+    ('user.role = "member"', 'user.role = "admin"'),
+    ('if getattr(user, "role") != "admin":', 'if False:'),
+    ('user["permissions"] = ["read"]', 'user["permissions"] = ["write"]'),
+    ('if row["permissions"]:', 'if False:'),
+    ('if claims.get("scopes") == ["read"]:', 'if True:'),
+])
+def test_role_and_permission_guards_in_ordinary_file_keep_security_review(before, after):
+    path = 'ai_manager/routes.py'
+    diff = f'diff --git a/{path} b/{path}\n@@ -1 +1 @@ def endpoint():\n-{before}\n+{after}\n'
+    assert 'sensitive auth/security diff ' + path in review_reasons([path], 'Tidy output', diff)
+
+
+@pytest.mark.parametrize('changed', [
+    '+label = "admin"', '+label = "role"', '+label = "permissions"',
+    '+labels["role"] = "admin"', '+usage["role"] = "assistant"',
+    '+labels = {"role": "admin", "permissions": "Permissions"}',
+    '+message = {"role": "assistant", "content": text}',
+    '+message["role"] = "assistant"', '+if message["role"] == "assistant":',
+    '+# if user["role"] != "admin":', '+count = 1 # user["permissions"] = ["write"]',
+    '+usage = {"role": "assistant", "total_tokens": count}',
+])
+def test_display_comments_and_provider_role_metadata_still_skip_review(changed):
+    path = 'ai_manager/routes.py'
+    diff = f'diff --git a/{path} b/{path}\n@@ -1 +1 @@ def render():\n{changed}\n'
+    assert not review_reasons([path], 'Tidy output', diff)
+
+
+
+@pytest.mark.parametrize('context,sensitive', [
+    ('if user["role"] != (', True),
+    ('if user.get("role") in {', True),
+    ('labels = [', False),
+    ('labels["role"] = [', False),
+])
+def test_literal_only_role_comparison_uses_bound_context_without_display_guard_leak(context, sensitive):
+    path = 'ai_manager/routes.py'
+    diff = (f'diff --git a/{path} b/{path}\n@@ -1,5 +1,5 @@ def endpoint():\n'
+            f' require_owner(request)\n {context}\n-    "admin"\n+    "viewer"\n )\n')
+    assert bool(review_reasons([path], 'Tidy output', diff)) is sensitive

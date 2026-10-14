@@ -395,13 +395,14 @@ async def test_review_uses_final_message_without_losing_raw_commentary(system, v
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize('sensitive', [True, False])
+@pytest.mark.parametrize('sensitive', [True, False, 'role'])
 async def test_post_check_reviews_sensitive_code_in_ordinary_manager_filename(system, sensitive):
     db, registry, server, chat, workers, scheduler = system
     project = registry.list()[0]['id']
     automatic(db, server)
     def edit(cwd):
-        code = 'asyncio.create_task(run_worker(task))\n' if sensitive else 'label = "Done"\n'
+        code = ('if user["role"] != "admin":\n    deny()\n' if sensitive == 'role' else
+                'asyncio.create_task(run_worker(task))\n' if sensitive else 'label = "Done"\n')
         (cwd / 'manager.py').write_text(code)
         git(cwd, 'add', '.')
         git(cwd, 'commit', '-m', 'Tidy output')
@@ -411,5 +412,5 @@ async def test_post_check_reviews_sensitive_code_in_ordinary_manager_filename(sy
     task = Tasks(db).claim(2)
     await workers._run(task)
     record = json.loads(db.one("SELECT payload FROM events WHERE kind='task.verification'")['payload'])
-    assert record['effective'] == 'risky' and record['review_required'] is sensitive
-    assert len(TierServer.reviews) == int(sensitive)
+    assert record['effective'] == 'risky' and record['review_required'] is bool(sensitive)
+    assert len(TierServer.reviews) == int(bool(sensitive))
