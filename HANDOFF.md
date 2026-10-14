@@ -1,3 +1,22 @@
+# Helper installation and fresh manager handoff — 2026-10-14
+
+Reviewed helper v2 installation succeeded under the owner's latest “install and deploy”
+instruction. Durable proof: `DATA/deployment-helper/helper-v2-upgrade.json` plus
+`DATA/deployments/parallel-composer-20261014/helper-installation-verification.json`.
+Only the independent helper restarted; manager PID/live b0f0c8d/schema11/current settings
+are unchanged. No worker application deployment/request or push occurred.
+
+Use exact fresh target `parallel-composer-integrated-v6-20261014` after its immutable
+manifest exists. It retains all v5 application code and original acceptance, adding only
+current operational docs. V5 terminal failure `754930563516c485f611d02b3d1400ee` remains
+one-shot and immutable, so same-ID retry returns failure. Manager retains the actual
+current owner source, reviews the fresh exact manifest and uses its installed deployment
+capability after this worker/result turn. No protocol/approval/receipt resets or guard bypass.
+Full evidence, feature coverage, base compatibility, settings preservation and physical
+device/native model/STT limits remain in the existing REPORT.md/manager-summary.json.
+Application activation requires a separate matching durable succeeded deployment receipt.
+Earlier installed-v1/prepare-only statements below describe their historical scopes.
+
 # Reprepared provider/parallel/composer integration — 2026-10-14
 
 Current exact candidate: `parallel-composer-integrated-v5-20261014` in

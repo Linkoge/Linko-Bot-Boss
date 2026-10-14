@@ -1,3 +1,43 @@
+# Reviewed helper v2 installed; application activation pending — 2026-10-14
+
+The owner's subsequent explicit “install and deploy” instruction authorizes the scoped
+helper installation. The versioned installer was run against immutable
+`parallel-composer-integrated-v5-20261014`, pinning helper SHA256
+`e6d3c0c7200b749e32814f95ac5a8fc15552091b72bfb030f6c0345e084e60a3`.
+`DATA/deployment-helper/helper-v2-upgrade.json` records `phase=succeeded`, the old helper
+hash/unit and new helper/unit hashes. Only `linko-deployment-helper.service` was restarted.
+The original helper/config, manager PID/live checkout/schema11 and protected settings
+were verified unchanged; no application deployment was requested by the worker.
+
+Scoped review found no dependency changes. Rehearsal against a private online copy of the
+actual schema11 database preserved every original row/column across 25 tables, added only
+the nullable workspace fields and reviewed indices/marker12, and passed integrity/foreign
+key checks. V2 still rejects any unreviewed schema/dependency bytes and retains all
+idle, source, backup, native-history, auth, data, rollback and ownership guards.
+
+V5 request `754930563516c485f611d02b3d1400ee` failed under installed v1 with
+`Dependency/schema changes require separate deployment review`, before backup/stop/activation.
+Its failed receipt and the earlier v3 stale-base receipt remain immutable. Terminal receipts
+are one-shot: requesting the same v5 ID returns its failure, even after helper installation.
+Do not remove/reset receipts or relax idempotence. Fresh target
+`parallel-composer-integrated-v6-20261014` preserves v5 application code and adds only these
+operational documentation updates; the existing preparation CLI must finish its fixed gate
+and write the exact manifest before manager dispatch. Its base is the actual succeeded live
+`b0f0c8dafa45e8fba848e134a4dc06e2ad0f2f8b`.
+
+The manager retains the actual latest owner source and reviews/dispatches the fresh exact
+candidate through the installed manager capability after this worker/result turn ends.
+The live predecessor's legacy capability rejects internal-result deployment calls; use its
+actual owner Auto/Execute turn, not a worker-created approval or protocol file edit. A failed
+or consumed newer source-bound intent cannot be reset or expanded to another release; use
+the current explicit owner instruction within its original unchanged assignment scope.
+This report is evidence, not an authorization grant. Only an exact durable succeeded
+deployment receipt establishes application activation.
+
+Full review, installation verification, base/settings evidence and retained feature/device
+limits: `DATA/deployments/parallel-composer-20261014/REPORT.md` and sibling manager-summary.json.
+Earlier “installed v1”/prepare-only statements below describe their prior task scopes.
+
 # Current-base compatibility and provider history — 2026-10-14
 
 The original v3 failed before activation because its base was 6c42d5b while the provider

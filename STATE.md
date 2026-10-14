@@ -1,3 +1,33 @@
+# Helper installation succeeded; fresh manager deployment target — 2026-10-14
+
+Current target: `parallel-composer-integrated-v6-20261014`, checkout
+`/home/codex/checkouts/linko-parallel-helper-ready-20261014`, descended directly from v5
+commit `f1fa3286659382d6bb91cbc0e4359055bd881998`. All application code and original
+parallel/composer/provider/rename/stash/authorization acceptance remain unchanged.
+Only operational docs record the newly authorized helper installation and fresh receipt scope.
+Prepared status requires its exact immutable `deployment-helper/releases/<ID>/manifest.json`.
+
+Reviewed helper v2 is installed, SHA256
+`e6d3c0c7200b749e32814f95ac5a8fc15552091b72bfb030f6c0345e084e60a3`;
+`deployment-helper/helper-v2-upgrade.json` durably records installation success. The helper
+service alone restarted. Manager PID2155098, clean live `b0f0c8d`, schema11 and current
+protected settings remain unchanged. Owner's latest explicit “install and deploy” source
+is retained by the manager; the worker does not dispatch or activate the application.
+
+V5 failed nonce `754930563516c485f611d02b3d1400ee` reached the v1 schema guard before
+backup/stop/activation. That one-shot terminal receipt cannot be retried with the same ID;
+fresh v6 preparation retains the failed evidence without resetting any guard. V3's earlier
+stale-base failure and succeeded provider live receipt `5ad868944ca0bfef14d430c5eb04566d`
+remain as documented below. Scoped schema review on a private actual database copy
+preserved all existing rows/columns across 25 tables and passed integrity/foreign keys;
+dependencies are unchanged. Detailed evidence and manager facts remain in
+`/home/codex/.local/share/linko-bot-manager/deployments/parallel-composer-20261014/REPORT.md`
+and sibling manager-summary.json. [Deployment workflow](docs/DEPLOYMENT_HELPER.md).
+
+Application deployment stays pending and manager-controlled. Physical devices, live native
+Codex/Claude concurrency and paid STT retain the previously reported verification limits.
+Prior dated prepare-only/installed-v1 statements below are historical scopes.
+
 # Reprepared provider/parallel/composer integration — 2026-10-14
 
 Current exact candidate: `parallel-composer-integrated-v5-20261014` in
