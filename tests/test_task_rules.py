@@ -1,4 +1,4 @@
-"""Owner's replacement policy: bounded repair, one worker, exact release evidence."""
+"""Owner's task policy: bounded repair rounds, one worker, no review/escalation loop."""
 import json
 from pathlib import Path
 
@@ -7,9 +7,8 @@ from test_minimal_flow import system as system_fixture
 
 from ai_manager.assignment_workflow import REPAIR_LIMIT, allowed, consume_repair, finish_wake, get, put, update
 from ai_manager.db import Database
-from ai_manager.deployment import release_attested
 from ai_manager.tasks import Tasks
-from ai_manager.verification import plan, release_policy
+from ai_manager.verification import plan
 from ai_manager.workers import WORKER_INSTRUCTIONS
 
 system = system_fixture
@@ -61,33 +60,13 @@ def test_holds_and_transport_resume_do_not_charge_or_reset_repair_budget(system)
         {'state': value['state'], 'reason': value['reason']})
 
 
-def test_deploy_attestation_requires_full_backend_for_new_policy():
-    policy = release_policy(['docs/change.md'], [{'tier': 'small'}])
-    common = {'execution_id': 'e', 'commit': 'c', 'tier_checks': 'passed', 'release_checks': 'passed'}
-    manifest = {'commit': 'c', 'verification': policy, 'auto_deploy': common}
-    assert policy['tier'] == 'deploy' and policy['full_backend']
-    assert release_attested(manifest, 'e')
-    assert not release_attested(manifest, 'other')
-    policy['full_backend'] = False
-    assert not release_attested(manifest, 'e')
-    # A new v3 manifest cannot impersonate the immutable historical attestation shape.
-    manifest['auto_deploy'] = {'execution_id': 'e', 'commit': 'c', 'tier_checks': 'passed', 'full_suite': 'passed'}
-    assert not release_attested(manifest, 'e')
-    manifest['auto_deploy'] = common
-    policy['full_backend'] = True
-    manifest['auto_deploy']['commit'] = 'other'
-    assert not release_attested(manifest, 'e')
-
-
-def test_worker_contract_no_review_escalation_and_destructive_confirmation():
-    task_plan = plan({'tier': 'risky'}, integration=True)
-    assert task_plan['repair_limit'] == 3 and 'escalate' not in task_plan
-    assert 'no separate review/escalation loop' in WORKER_INSTRUCTIONS
+def test_worker_contract_one_check_pass_three_repairs_and_destructive_confirmation():
+    task_plan = plan()
+    assert task_plan['repair_limit'] == 3 and 'escalate' not in task_plan and 'tier' not in task_plan
+    assert 'at most three rounds' in WORKER_INSTRUCTIONS and 'RESULT: PASSED' in WORKER_INSTRUCTIONS
     assert 'Destructive data/project deletion or force-push needs owner confirmation' in WORKER_INSTRUCTIONS
-    # No regression to blanket backend review in the actual completion path.
     source = (Path(__file__).parents[1] / 'ai_manager/workers.py').read_text()
-    postcheck = source.split('async def _verify(', 1)[1].split('async def review(', 1)[0]
-    assert 'await self.review' not in postcheck and 'review_reasons(' not in postcheck
+    assert 'async def review(' not in source and 'REVIEW_INSTRUCTIONS' not in source
 
 
 def test_manager_wake_cap_cannot_block_third_repair_launch_or_success(system):

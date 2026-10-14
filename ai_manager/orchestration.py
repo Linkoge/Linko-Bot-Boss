@@ -6,30 +6,24 @@ import logging
 import time
 
 from .chat import internal_result
-from .deployment import Handoff, read
-from .deployment_intent import Intents
 from .parallel import policy, reserve_integration
+from .pipeline import Pipeline
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
 from .tasks import Tasks
 from .todos import Todos
-from .verification import select
 
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Record/update deferred ideas, delegate/control assignments and projects, or retrieve scoped evidence/history. Deployment: record_deployment_intent from the current owner quote BEFORE async audit/preparation, review_deployment_intent against exact prepared evidence, then deploy_release with intent_id and release_id. Internal results may consume matching prior intent only. Later owner corrections require revise_deployment_intent preserve/revoke from the latest owner turn. New prepare-and-deploy delegation uses owner_deployment_quote. Read actions support offset pagination.",
+    "description": "Record/update deferred ideas, delegate/control assignments and projects, or retrieve scoped evidence/history. Deploy only when the owner asks to deploy now (optionally with task_id of a finished assignment to merge first); Auto-deploy ON merges and deploys finished work by itself. Read actions support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
                 "enum": [
-                    "deploy_release",
-                    "publish_release",
-                    "record_deployment_intent",
-                    "review_deployment_intent",
-                    "revise_deployment_intent",
+                    "deploy",
                     "deployment_status",
                     "list_todos",
                     "save_todo",
@@ -78,20 +72,13 @@ MANAGER_TOOL = {
             "todos": {"type": "array", "minItems": 1, "maxItems": 200, "items": {
                 "type": "object", "properties": {"id": {"type": "string"}, "revision": {"type": "integer"}},
                 "required": ["id", "revision"], "additionalProperties": False}},
-            "release_id": {"type": "string"},
-            "manifest_sha256": {"type": "string"},
-            "index_sha256": {"type": "string"},
-            "intent_id": {"type": "string"},
-            "owner_deployment_quote": {"type": "string"},
             "owner_parallel_quote": {"type": "string"},
             "parallel_safe": {"type": "boolean"},
             "parallel_reason": {"type": "string"},
             "change_paths": {"type": "array", "items": {"type": "string"}},
-            "verification_tier": {"type": "string", "enum": ["small", "normal", "risky"]},
             "batch": {"type": "boolean"},
             "depends_on": {"type": "array", "items": {"type": "string"}},
             "task_ids": {"type": "array", "items": {"type": "string"}},
-            "decision": {"type": "string", "enum": ["preserve", "revoke"]},
             "title": {"type": "string"},
             "details": {"type": "string"},
             "revision": {"type": "integer", "minimum": 0},
@@ -116,11 +103,7 @@ class Scheduler:
         self.lock = asyncio.Lock()
         self.error = ""
         self.followup_check_at = 0.0
-        self.deployment = Handoff(settings.data_dir)
-        self.intents = Intents(db)
-        from .auto_deploy import AutoDeploy
-        self.auto_deploy = AutoDeploy(db, registry, self.deployment, self.intents)
-        self.deployment_busy = lambda: False
+        self.pipeline = Pipeline(db, registry)
 
     async def manager_action(self, selected_project, params):
         args = params["arguments"]
@@ -143,7 +126,7 @@ class Scheduler:
             sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
             if sources:
                 args = {**args, 'todos': sources}
-        if internal and (action == 'resume_project' or (action == 'deploy_release' and not args.get('intent_id'))):
+        if internal and action in {'resume_project', 'deploy'}:
             raise ValueError('Internal results/recovery are not owner authorization for deployment or project resume')
         if args.get("todos") and (internal or action not in {"delegate", "continue"}):
             raise ValueError("To-Do handoff requires explicit owner scheduling")
@@ -162,36 +145,21 @@ class Scheduler:
                               or ((workflow or {}).get('state') == 'complete'
                                   and not (workflow or {}).get('automatic_completion')))):
                     raise ValueError('Owner pauses/waits are retained; explicit owner continuation is required')
-        if action == 'publish_release':
-            if params.get('mode') == 'conversation':
-                raise ValueError('Conversation mode is read-only; use Auto or Execute for publication')
-            from .release_publication import publish
-            task = self.tasks.get(args['task_id'])
-            project_id = args.get('project_id') or selected_project
-            if task['project_id'] != project_id or (selected_project and project_id != selected_project):
-                raise ValueError('Publication task belongs to another project')
-            # Fixed-operation import; no continuation, scope mutation or new intent.
-            from .release_publication import inventory
-            manifest, _ = inventory(args['path'], args['manifest_sha256'], args['index_sha256'])
-            if manifest['id'] != args['release_id']:
-                raise ValueError('Publication release ID mismatch')
-            return publish(self.db, args['path'], args['manifest_sha256'], args['index_sha256'], task['id'])
         if action == 'deployment_status':
-            return {**self.deployment.status(), 'intents': self.intents.list(selected_project)}
-        if action in {'deploy_release', 'record_deployment_intent', 'review_deployment_intent', 'revise_deployment_intent'}:
+            return self.pipeline.status()
+        if action == 'deploy':
             if params.get('mode') == 'conversation':
                 raise ValueError('Use Auto or Execute to request deployment')
-            config = read(self.deployment.root / 'config.json')
             project_id = args.get('project_id') or selected_project
-            if not project_id or (selected_project and project_id != selected_project) or not config or self.registry.get(project_id)['path'] != config['repo']:
-                raise ValueError('Deployment is available only for this manager or All Projects')
-            if action == 'record_deployment_intent':
-                return self.intents.record(project_id, params, args.get('owner_deployment_quote'), args.get('release_id'), args.get('task_ids'))
-            if action == 'revise_deployment_intent':
-                return self.intents.revise(project_id, params, args['intent_id'], args['decision'], args.get('reason', ''))
-            if action == 'review_deployment_intent':
-                return self.intents.review(project_id, params, args['intent_id'], args['release_id'], args.get('reason', ''))
-            return self.intents.dispatch(project_id, params, args.get('intent_id'), args['release_id'])
+            if not project_id or (selected_project and project_id != selected_project):
+                raise ValueError('Select the manager project to deploy')
+            if args.get('task_id'):
+                task = self.tasks.get(args['task_id'])
+                if task['project_id'] != project_id:
+                    raise ValueError('Assignment belongs to another project')
+                await self.pipeline.merge_assignment(task['id'])
+            return self.pipeline.request(project_id, 'owner', args.get('task_id'), params['conversation_id'],
+                                         args.get('reason', 'owner requested deploy'))
         offset = args.get("offset", 0)
         if not isinstance(offset, int) or offset < 0:
             raise ValueError("Offset must be a nonnegative integer")
@@ -280,7 +248,7 @@ class Scheduler:
             return ProjectMemory(self.db, self.registry).update(project_id, args["revision"], args["brief"], retained=args.get("retained"), resolved=args.get("resolved"))
         if action == "record_delivery":
             return ProjectMemory(self.db, self.registry).delivery(project_id, args["revision"], args["entry"],
-                       args.get("established", []), args["evidence"], args.get("deployment_receipt"), args.get("release_id"))
+                       args.get("established", []), args["evidence"], args.get("deployment_receipt"))
         selected = {k: args[k] for k in ("constraints", "dependencies", "selected_context") if args.get(k)}
         if action in {'delegate', 'continue'}:
             attachments = self.db.setting('execution_attachments:' + params['manager_execution_id'], [])
@@ -292,51 +260,16 @@ class Scheduler:
             if args.get("task_id"):
                 raise ValueError("Use continue to bundle instructions into an existing assignment")
             from .model_settings import delegation
-            intent_id = args.get('intent_id')
-            if not intent_id:
-                with self.db.connect() as conn:
-                    from .deployment_intent import rows
-                    intent_id = next((v['id'] for v in rows(conn) if v['project_id'] == project_id
-                                      and v['source_execution_id'] == params['manager_execution_id']
-                                      and v['status'] == 'recorded' and v.get('kind') != 'auto'), None)
-            if args.get('owner_deployment_quote'):
-                config = read(self.deployment.root / 'config.json')
-                if not config or project['path'] != config['repo']:
-                    raise ValueError('Deployment intent is available only for this manager')
-                intent_id = self.intents.record(project_id, params, args['owner_deployment_quote'],
-                                               task_request=params['manager_execution_id']+':'+project_id)['id']
-            if intent_id:
-                with self.db.transaction() as conn:
-                    source = self.intents.owner(conn, params)
-                    value = self.intents.get(conn, intent_id, project_id, params)
-                    from .auto_deploy import enabled
-                    from .deployment_intent import rows
-                    automatic_retry = (value['status'] == 'superseded' and enabled(conn, project_id)
-                                       and value.get('task_request') == source['execution_id'] + ':' + project_id
-                                       and any(v['id'] == value.get('auto_intent_id') and v.get('kind') == 'auto'
-                                               and v.get('manual_intent_id') == value['id']
-                                               for v in rows(conn)))
-                    if value['source_message_id'] != source['id'] or (value['status'] != 'recorded' and not automatic_retry):
-                        raise ValueError('Delegate preparation/audit from the original recorded owner turn')
             execution_policy = policy(self.db, params, args, project_id)
-            execution_policy['verification'] = select(
-                execution_policy['change_paths'], args['objective'], args.get('acceptance', ''),
-                args.get('verification_tier'), deployment=bool(intent_id))
             await self.chat.server.start()
-            route = delegation(self.db, self.chat.server, args.get('worker_route'), execution_policy['verification']['tier'])
+            route = delegation(self.db, self.chat.server, args.get('worker_route'))
             task = self.tasks.add(
                 project_id, args["objective"], params["conversation_id"],
                 params["manager_execution_id"] + ":" + project_id,
                 acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
-                execution_policy=execution_policy, batch=args.get('batch') is True and not intent_id,
+                execution_policy=execution_policy, batch=args.get('batch') is True,
             )
-            if intent_id:
-                self.intents.attach(project_id, params, intent_id, task['id'])
-            automatic = self.auto_deploy.owner_request(project_id, params, task['id'], manual_intent_id=intent_id)
-            if automatic:
-                intent_id = automatic['id']
-            return {**self.tasks.context(task), **({'deployment_intent_id': intent_id} if intent_id else {}),
-                    **({'batched': True} if task.get('batched') else {})}
+            return {**self.tasks.context(task), **({'batched': True} if task.get('batched') else {})}
         if action == 'job_followup':
             task = self.tasks.get(args['task_id'])
             state, reason = args.get('followup_state'), args.get('reason', '').strip()
@@ -353,9 +286,6 @@ class Scheduler:
                 if internal and state == 'actionable' and previous and (previous['state'] in {'owner_wait', 'deferred'}
                         or (previous['state'] == 'complete' and not previous.get('automatic_completion'))):
                     raise ValueError('An internal result cannot reopen held or completed work')
-                if state in {'owner_wait', 'deferred'}:
-                    from .deployment_intent import revoke
-                    revoke(self.db, conn, reason, task_id=task['id'])
                 return update(self.db, conn, task['id'], state, reason, params['manager_execution_id'], reset_retry=not internal)
         if action == "wait":
             task = self.tasks.get(args["task_id"])
@@ -371,8 +301,6 @@ class Scheduler:
                     raise ValueError("Assignment changed while recording the wait")
                 from .assignment_workflow import update
                 update(self.db, conn, task["id"], "owner_wait", reason)
-                from .deployment_intent import revoke
-                revoke(self.db, conn, reason, task_id=task['id'])
                 self.db.event(conn, "task.waiting", {"reason": reason[:2000]}, project_id, task["id"])
             return self.tasks.context(self.tasks.get(task["id"]))
         if action in {"pause", "cancel"}:
@@ -432,7 +360,6 @@ class Scheduler:
                     Todos(self.db).consume(conn, args["todos"], project_id, task["id"])
                 from .parallel import load, save
                 p = load(conn, 'assignment_policy:' + task['id'], {})
-                p['verification'] = select(p.get('change_paths', []), objective, acceptance)
                 save(conn, 'assignment_policy:' + task['id'], p)
                 from .assignment_workflow import update
                 update(self.db, conn, task["id"], "actionable", "Explicit authorized continuation", reset_retry=True)
@@ -442,7 +369,6 @@ class Scheduler:
                     conn, "manager.continued", {"call_id": params["callId"], "added_instructions": additions, "added_acceptance": extra},
                     project_id, task["id"], params["manager_execution_id"],
                 )
-            self.auto_deploy.owner_request(project_id, params, task['id'])
             return self.tasks.context(self.tasks.get(task["id"]))
         if action in {"pause_project", "resume_project"}:
             updated = self.registry.update(
@@ -519,11 +445,8 @@ class Scheduler:
 
     async def tick(self):
         async with self.lock:
-            self.auto_deploy.seed()
-            self.auto_deploy.recover()
-            self.deployment.report(self.db)
-            if self.deployment.ready_to_stop():
-                return
+            self.pipeline.seed()
+            self.pipeline.report()
             await self.observer.observe(
                 {
                     **{key: self.chat.server for key in self.chat.jobs},
@@ -532,10 +455,11 @@ class Scheduler:
             )
             await self.workers.recover()
             await self.chat.recover()
-            while task := self.tasks.claim(self.settings.max_workers):
+            # A pending deploy waits for idle, so no new coding starts until it finishes.
+            while not self.pipeline.pending() and (task := self.tasks.claim(self.settings.max_workers)):
                 self.workers.launch(task)
             await self.chat.deliver_results()
-            if not self.deployment.gated() and time.monotonic() >= self.followup_check_at:
+            if time.monotonic() >= self.followup_check_at:
                 from .assignment_workflow import CHECK_INTERVAL, due
                 self.followup_check_at = time.monotonic() + CHECK_INTERVAL
                 for task in due(self.db):
@@ -544,8 +468,7 @@ class Scheduler:
                                                task['origin_conversation'], recovery_task=task['id'])
                     except ValueError:
                         pass  # A competing checker/owner transition won the transaction.
-            self.auto_deploy.step()
-            self.deployment.acknowledge(self.db, bool(self.chat.jobs or self.workers.jobs or self.deployment_busy() or self.auto_deploy.busy()))
+            self.pipeline.step()
 
     async def run(self):
         while True:
@@ -561,9 +484,9 @@ class Scheduler:
         self.job = asyncio.create_task(self.run())
 
     async def close(self):
-        if self.auto_deploy.busy():
-            self.auto_deploy.job.cancel()
-            await asyncio.gather(self.auto_deploy.job, return_exceptions=True)
+        if self.pipeline.busy():
+            self.pipeline.job.cancel()
+            await asyncio.gather(self.pipeline.job, return_exceptions=True)
         if self.job:
             self.job.cancel()
             await asyncio.gather(self.job, return_exceptions=True)

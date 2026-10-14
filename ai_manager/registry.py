@@ -148,9 +148,6 @@ class Registry:
             )
             if cursor.rowcount != 1:
                 raise ValueError("Project changed; refresh before editing")
-            if changes.get('status') in {'paused', 'archived', 'removed'}:
-                from .deployment_intent import revoke
-                revoke(self.db, conn, 'Project '+changes['status'], project_id=project_id)
             self.db.event(conn, "project.updated", changes, project_id)
         return self.get(project_id)
 

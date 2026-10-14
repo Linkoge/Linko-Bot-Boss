@@ -1,6 +1,7 @@
 import argparse
 import getpass
 import json
+import os
 from pathlib import Path
 
 from .config import Settings
@@ -65,7 +66,7 @@ def main():
         import uvicorn
 
         uvicorn.run(
-            "ai_manager.web:create_app", factory=True, host="127.0.0.1", port=8787, workers=1, proxy_headers=False
+            "ai_manager.web:create_app", factory=True, host="127.0.0.1", port=int(os.getenv("AI_MANAGER_PORT", "8787")), workers=1, proxy_headers=False
         )
 
 

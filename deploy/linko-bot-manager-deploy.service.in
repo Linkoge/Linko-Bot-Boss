@@ -1,0 +1,10 @@
+[Unit]
+Description=Linko Bot Boss deploy (idle wait, backup, restart, health check, automatic rollback)
+
+[Service]
+Type=oneshot
+WorkingDirectory=@REPO@
+ExecStart=@PYTHON@ @REPO@/scripts/deploy.py
+Environment=AI_MANAGER_DATA=@DATA@
+UMask=0077
+TimeoutStartSec=8h

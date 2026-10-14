@@ -6,6 +6,11 @@ import time
 from .db import new_id
 
 
+def small(paths):
+    """Concrete scope of at most three files; only such requests may be batched into one queued assignment."""
+    return 0 < len(paths) <= 3 and all('.' in p.rsplit('/', 1)[-1] for p in paths)
+
+
 class Tasks:
     def __init__(self, db):
         self.db = db
@@ -77,21 +82,19 @@ class Tasks:
         The merge keeps the target's route/thread identity and applies only if the combined scope stays Small.
         """
         from .parallel import load, save
-        from .verification import floor, select
-        if floor(policy.get('change_paths', []), description + '\n' + acceptance)[0] != 'small' or policy.get('permission') or policy.get('depends_on'):
+        if not small(policy.get('change_paths', [])) or policy.get('permission') or policy.get('depends_on'):
             return None
         target = conn.execute("""SELECT * FROM tasks t WHERE project_id=? AND origin_conversation=? AND lifecycle='queued'
             AND lease_owner IS NULL AND legacy=0 AND NOT EXISTS(SELECT 1 FROM executions e WHERE e.task_id=t.id)
             AND NOT EXISTS(SELECT 1 FROM settings s,json_each(s.value) a WHERE s.key='archived_tasks' AND a.key=t.id)
             ORDER BY created_at DESC,id DESC LIMIT 1""", (project_id, origin)).fetchone()
         p = load(conn, 'assignment_policy:' + target['id'], {}) if target else {}
-        if (not target or floor(p.get('change_paths', []), target['description'] + '\n' + target['acceptance'])[0] != 'small' or p.get('permission')
+        if (not target or not small(p.get('change_paths', [])) or p.get('permission')
                 or p.get('depends_on') or p.get('integration')):
             return None
         objective = target['description'] + '\n\nBatched related request (preserve prior requirements):\n' + description
         combined = target['acceptance'] + ('\n\n' if target['acceptance'] and acceptance else '') + acceptance
         paths = list(dict.fromkeys(p.get('change_paths', []) + policy.get('change_paths', [])))
-        verification = select(paths, objective, combined, previous=p['verification'])
         old = conn.execute("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1",
                            (target['id'],)).fetchone()
         context = json.loads(old['payload']) if old else {}
@@ -103,12 +106,12 @@ class Tasks:
                 if value not in merged:
                     merged.append(value)
             context[key] = merged
-        if (floor(paths, objective + '\n' + combined)[0] != 'small' or len(objective) > 24000 or len(combined) > 12000
+        if (not small(paths) or len(objective) > 24000 or len(combined) > 12000
                 or len(json.dumps(context)) > 12000):
             return None
         conn.execute("UPDATE tasks SET description=?,acceptance=?,revision=revision+1,updated_at=? WHERE id=?",
                      (objective, combined, time.time(), target['id']))
-        save(conn, 'assignment_policy:' + target['id'], {**p, 'change_paths': paths, 'verification': verification})
+        save(conn, 'assignment_policy:' + target['id'], {**p, 'change_paths': paths})
         if selected:
             self.db.event(conn, 'task.context', context, project_id, target['id'])
         self.db.event(conn, 'task.batched', {'objective': description, 'acceptance': acceptance}, project_id, target['id'])
@@ -193,9 +196,6 @@ class Tasks:
                 raise ValueError("Completed assignment has no unfinished work to stop")
             if action not in {"continue", "pause", "cancel"}:
                 raise ValueError("Unknown assignment action")
-            if action in {'pause', 'cancel'}:
-                from .deployment_intent import revoke
-                revoke(self.db, conn, 'Assignment '+action+' requested', task_id=task_id)
             if task["lease_owner"]:
                 if action == "continue":
                     raise ValueError("Wait for confirmed worker cleanup before resuming")

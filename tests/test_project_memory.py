@@ -12,8 +12,8 @@ from test_web import sign_in
 
 from ai_manager.chat import Chat
 from ai_manager.codex import safe_config
-from ai_manager.deployment import Handoff, atomic
 from ai_manager.orchestration import Scheduler
+from ai_manager.pipeline import atomic
 from ai_manager.project_memory import MAXIMUM, MemoryReviews, ProjectMemory, encode
 from ai_manager.tasks import Tasks
 from ai_manager.workers import Workers
@@ -154,17 +154,17 @@ def test_deployment_pending_failed_truth_and_durable_success_gate(system, status
     assert "Delivery release activation " + status in snapshot["brief"]["pending"]
     with pytest.raises(ValueError, match="durable succeeded"):
         memory.delivery(project, snapshot["revision"], entry("release", "deployed"), [], "claim only")
-    handoff = Handoff(memory.db.path.parent)
-    root = memory.registry.get(project)["path"]
-    atomic(handoff.root / "config.json", {"repo": root})
-    atomic(handoff.root / "results/receipt.json", {"phase": "failed"})
+    results = memory.db.path.parent / "deploy" / "results"
+    receipt = "0123456789abcdef"
+    atomic(results / (receipt + ".json"), {"status": "failed", "project_id": project})
     with pytest.raises(ValueError, match="not established"):
-        memory.delivery(project, snapshot["revision"], entry("release", "deployed"), [], "claim only", "receipt")
-    atomic(
-        handoff.root / "results/receipt.json", {"phase": "succeeded", "release_id": "release", "health": {"auth": True}}
-    )
+        memory.delivery(project, snapshot["revision"], entry("release", "deployed"), [], "claim only", receipt)
+    atomic(results / (receipt + ".json"), {"status": "success", "project_id": "other"})
+    with pytest.raises(ValueError, match="not established"):
+        memory.delivery(project, snapshot["revision"], entry("release", "deployed"), [], "other project", receipt)
+    atomic(results / (receipt + ".json"), {"status": "success", "project_id": project})
     applied = memory.delivery(
-        project, snapshot["revision"], entry("release", "deployed"), [], "actual receipt", "receipt"
+        project, snapshot["revision"], entry("release", "deployed"), [], "actual receipt", receipt
     )
     assert applied["brief"]["recent"][0]["deployment"] == "deployed"
     assert not any("Delivery release activation" in p for p in applied["brief"]["pending"])
@@ -468,16 +468,15 @@ def test_archive_metadata_and_envelope_exclude_bulk_deployment_receipt(system):
         snapshot = memory.delivery(project, snapshot["revision"], entry(i), [], str(i) + " detailed evidence")
         reports.append(snapshot["brief"]["recent"][0]["report"])
     assert reports[0] in memory.get(project, snapshot["active"])["delivery_archive"]
-    handoff = Handoff(memory.db.path.parent)
     atomic(
-        handoff.root / "active.json",
-        {"phase": "succeeded", "release_id": "release-one", "health": "historical bulk " * 10000},
+        memory.db.path.parent / "deploy" / "result.json",
+        {"id": "0123456789abcdef", "status": "success", "reason": "historical bulk " * 10000},
     )
     chat = system[2]
     prompt, _ = chat.prompt(chat.conversation(project), "hello", "auto", "execution", "new-thread", None)
     context = {k: v for k, v in prompt["context"].items() if k != "instructions"}
-    assert context["deployment"] == {"phase": "succeeded", "release_id": "release-one"}
-    assert "historical bulk" not in encode(context)
+    assert context["deployment"].startswith("success: historical bulk")
+    assert len(context["deployment"]) <= 200  # The long result is summarized, never embedded.
     assert len(encode(context).encode()) <= 2000
 
 
@@ -497,15 +496,6 @@ def test_exact_release_and_other_project_scoped_receipt(system):
                 "verification": {"health": "passed"},
             },
         )
-    with pytest.raises(ValueError, match="different release"):
-        memory.delivery(
-            project,
-            snapshot["revision"],
-            entry("new-release", "deployed"),
-            [],
-            "new feature evidence",
-            "memory:" + receipt,
-        )
     other = memory.registry.list()[1]["id"]
     other_snapshot = memory.snapshot(other)
     with pytest.raises(ValueError, match="Unknown project memory"):
@@ -524,6 +514,5 @@ def test_exact_release_and_other_project_scoped_receipt(system):
         [],
         "precise existing deployment evidence",
         "memory:" + receipt,
-        release_id="old-release",
     )
     assert applied["brief"]["recent"][0]["deployment"] == "deployed"

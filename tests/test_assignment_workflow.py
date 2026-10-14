@@ -235,7 +235,7 @@ async def test_internal_result_cannot_deploy_or_continue_paused_worker(system):
               'mode':'auto','internal':True,'arguments':{'action':'continue','task_id':task['id']}}
     with pytest.raises(ValueError,match='Owner pauses'):
         await scheduler.manager_action(task['project_id'],params)
-    params['arguments'] = {'action':'deploy_release','release_id':'irrelevant'}
+    params['arguments'] = {'action':'deploy'}
     with pytest.raises(ValueError,match='not owner authorization'):
         await scheduler.manager_action(task['project_id'],params)
     assert Tasks(db).get(task['id'])['status'] == 'paused'

@@ -141,14 +141,10 @@ apply to GET/PUT `/api/model-settings`; old role PUT uses the same validation an
 No dependency, schema, new AI role, service or routing framework is introduced.
 
 Before delegation the existing manager receives the current mode and allowed pairs. It supplies
-`worker_route` in its existing tool call according to the deterministic
-[verification tier](VERIFICATION_TIERS.md). Small uses Luna/Haiku or Sol/Sonnet Low, Normal uses
-Sol/Sonnet Medium, and Risky uses Sol/Sonnet High or Astra/Opus, always within policy. The backend
-checks the exact pair, rejecting absent, unsupported or denied automatic choices. In Automatic it
-also rejects a Risky pair weaker than workhorse High/strongest while such a pair is permitted.
-Manual mode always uses its saved pair, regardless of a suggested tool pair or tier. No extra
-inference call routes work. The automatic Risky diff review uses the cheapest policy-permitted pair
-of the worker's provider in a separate read-only process.
+`worker_route` in its existing tool call by task difficulty: simple work Luna/Haiku or Sol/Sonnet Low,
+ordinary work Sol/Sonnet Medium, hard work Sol/Sonnet High or Astra/Opus, always within policy. The backend
+checks the exact pair, rejecting absent, unsupported or denied automatic choices. Manual mode always uses its saved
+pair, regardless of a suggested tool pair. No extra inference call routes work and there is no automatic review.
 
 `task.model_selected` durably records pair, mode and settings revision in the same transaction
 as new assignment creation. Native thread start/resume and turn start use that pair; executions

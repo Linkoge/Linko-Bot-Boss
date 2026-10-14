@@ -228,18 +228,19 @@ class ProjectMemory:
             self.activate(conn, project_id, control, brief, reason, {"retained": retained, "resolved": resolved})
         return self.snapshot(project_id)
 
-    def delivery(self, project_id, revision, entry, established, evidence, deployment_receipt=None, release_id=None):
+    def delivery(self, project_id, revision, entry, established, evidence, deployment_receipt=None):
         """One delivery ID groups related fixes; evidence is immutable and never truncated."""
         self.seed(project_id)
         if not isinstance(evidence, str) or not evidence.strip():
             raise ValueError("Detailed evidence is required")
         if entry.get("deployment") == "deployed":
-            # Native helper status uses active/result; require an exact durable result file.
-            from .deployment import ID, Handoff, read
+            # Require the deploy script's durable success record (DATA/deploy/results/<id>.json).
+            import re
+
+            from .pipeline import read
 
             if not isinstance(deployment_receipt, str):
                 raise ValueError("Deployed requires a durable succeeded deployment receipt")
-            project = self.registry.get(project_id)
             if deployment_receipt.startswith("memory:"):
                 result = self.get(project_id, deployment_receipt.removeprefix("memory:"))
                 scoped = (
@@ -248,15 +249,12 @@ class ProjectMemory:
                     and bool(result.get("finished_at"))
                 )
             else:
-                if not ID.fullmatch(deployment_receipt):
+                if not re.fullmatch(r"[0-9a-f]{16}", deployment_receipt):
                     raise ValueError("Deployed requires a durable succeeded deployment receipt")
-                result = read(Handoff(self.db.path.parent).root / "results" / (deployment_receipt + ".json"))
-                config = read(Handoff(self.db.path.parent).root / "config.json")
-                scoped = bool(config and config.get("repo") == project["path"])
-            if not result or result.get("phase", result.get("status")) != "succeeded" or not scoped:
+                result = read(self.db.path.parent / "deploy" / "results" / (deployment_receipt + ".json"))
+                scoped = bool(result and result.get("project_id") == project_id)
+            if not result or result.get("status") not in {"success", "succeeded"} or not scoped:
                 raise ValueError("Deployment success is not established for this project")
-            if result.get("release_id") != (release_id or entry.get("id")):
-                raise ValueError("Deployment receipt belongs to a different release")
         with self.db.transaction() as conn:
             control = self.control(conn, project_id)
             if control["revision"] != revision:
@@ -300,7 +298,6 @@ class ProjectMemory:
                     "evidence": evidence,
                     "external_report": external_report,
                     "deployment_receipt": deployment_receipt,
-                    "release_id": release_id or entry.get("id"),
                     "established": established,
                     "created_at": time.time(),
                 },

@@ -135,14 +135,6 @@ class MemoryCancel(BaseModel):
     review: str
 
 
-class DeploymentCancel(BaseModel):
-    nonce: str = Field(pattern=r"^[0-9a-f]{32}$")
-
-
-class DeploymentIntentCancel(BaseModel):
-    intent_id: str = Field(pattern=r"^[0-9a-f]{32}$")
-
-
 class TaskControl(BaseModel):
     revision: int
     action: str
@@ -202,9 +194,6 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     app.state.memory, app.state.memory_reviews = memory, reviews
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
 
-    app.state.deployment_mutations = 0
-    scheduler.deployment_busy = lambda: app.state.deployment_mutations > 0 or bool(reviews.jobs)
-
     @app.middleware("http")
     async def browser_security(request: Request, call_next):
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
@@ -217,22 +206,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                     return JSONResponse({"detail": "Login required"}, status_code=401)
                 if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
                     return JSONResponse({"detail": "CSRF token required"}, status_code=403)
-        mutation = request.method not in {'GET', 'HEAD', 'OPTIONS'}
-        drain = request.url.path in {'/api/login', '/api/deployment/cancel', '/api/deployment/intents/revoke', '/api/settings/auto-deploy'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
-        if request.method == 'PATCH' and request.url.path.startswith('/api/tasks/'):
-            body = await request.json()
-            drain = body.get('action') in {'stop', 'pause', 'cancel'}
-        if mutation and scheduler.deployment.gated() and not drain:
-            return JSONResponse({'detail': 'Deployment pending; wait for activation'}, status_code=503)
-        if mutation and scheduler.deployment.ready_to_stop():
-            return JSONResponse({'detail': 'Deployment handoff acknowledged'}, status_code=503)
-        if mutation:
-            app.state.deployment_mutations += 1
-        try:
-            response = await call_next(request)
-        finally:
-            if mutation:
-                app.state.deployment_mutations -= 1
+        response = await call_next(request)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
@@ -270,24 +244,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get('/api/deployment', dependencies=[Depends(require_owner)])
     def deployment_status():
-        return {**scheduler.deployment.status(), 'intents': scheduler.intents.list()}
-
-    @app.post('/api/deployment/intents/revoke', dependencies=[Depends(require_owner)])
-    def revoke_deployment_intent(body: DeploymentIntentCancel):
-        from .deployment_intent import revoke, rows
-        with db.transaction() as conn:
-            value = next((v for v in rows(conn) if v['id'] == body.intent_id), None)
-            if not value or value['status'] == 'dispatched':
-                raise HTTPException(409, 'Use the exact pending deployment cancellation for a dispatched intent')
-            try:
-                revoke(db, conn, 'Owner cancelled deployment intent in Settings', intent_id=body.intent_id)
-            except ValueError as error:
-                raise HTTPException(409, str(error)) from error
-        return {'status': 'revoked'}
+        return scheduler.pipeline.status()
 
     @app.post('/api/deployment/cancel', dependencies=[Depends(require_owner)])
-    def cancel_deployment(body: DeploymentCancel):
-        return scheduler.deployment.cancel(body.nonce)
+    def cancel_deployment():
+        return {'cancelled': scheduler.pipeline.cancel()}
 
     @app.post("/api/setup")
     async def setup(body: SetupBody, request: Request):
@@ -639,7 +600,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.put('/api/settings/auto-deploy', dependencies=[Depends(require_owner)])
     def auto_deploy_setting(body: dict):
         try:
-            return scheduler.auto_deploy.set(body.get('project_id'), body.get('enabled'))
+            return scheduler.pipeline.set(body.get('project_id'), body.get('enabled'))
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
 
@@ -647,7 +608,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def get_settings():
         from .model_settings import active
         return {"global_instructions": db.setting("global_instructions", ""), "max_workers": settings.max_workers,
-                "model_provider": active(db), "auto_deploy": scheduler.auto_deploy.settings()}
+                "model_provider": active(db), "auto_deploy": scheduler.pipeline.settings()}
 
     static = Path(__file__).parent / "static"
     # Pin content and URLs to this process/release; never cache mutable aliases.

@@ -11,7 +11,7 @@ from test_minimal_flow import system as system_fixture
 from ai_manager.chat import Chat
 from ai_manager.db import Database
 from ai_manager.orchestration import Scheduler
-from ai_manager.parallel import INTEGRATION, git, policy, preparation_reason, reserve_integration, retain_source, save
+from ai_manager.parallel import INTEGRATION, git, policy, reserve_integration, retain_source
 from ai_manager.tasks import Tasks
 from ai_manager.workers import Workers
 
@@ -258,14 +258,6 @@ def test_integration_reservation_and_preparation_hold_survive_restart(repo):
     claimed = tasks.claim(2)
     assert claimed['id'] == task['id'] and tasks.claim(2) is None
     assert 'sequential' in tasks.get(queued['id'])['blocker']
-    with db.transaction() as conn:
-        import os
-
-        from ai_manager.codex import process_start
-        save(conn, 'release_preparation', {'pid':os.getpid(),'process_start':process_start(os.getpid())})
-        assert preparation_reason(conn)
-        with pytest.raises(ValueError, match='Release preparation'):
-            reserve_integration(db, conn, tasks.get(task['id']), [task['id']])
 
 
 @pytest.mark.asyncio
@@ -420,32 +412,6 @@ async def test_lost_integration_reservation_cannot_launch_a_native_turn(repo):
     assert Path(original['workspace']).is_dir()
 
 
-def test_quiet_backup_keeps_worktree_partial_files_receipts_and_branch_refs(repo,tmp_path):
-    import tarfile
-
-    from ai_manager.deployment import backup_workspaces
-    db, _, _, settings, project=repo
-    tasks=Tasks(db)
-    tasks.add(project['id'],'source',execution_policy=p(['one']))
-    task=tasks.claim(2)
-    output=tmp_path/'workspace-backup'
-    output.mkdir()
-    with pytest.raises(ValueError,match='writer cleanup'):
-        backup_workspaces(settings.data_dir,db.path,output)
-    done(db,task,'one')
-    root=Path(task['workspace'])
-    (root/'partial-work').write_text('retain uncommitted work')
-    (root/'external-link').symlink_to(tmp_path/'outside')
-    receipt=backup_workspaces(settings.data_dir,db.path,output)
-    assert receipt[task['id']]['branch']==task['workspace_branch']
-    with tarfile.open(output/('workspace-'+task['id']+'.tar')) as archive:
-        assert archive.extractfile(task['id']+'/partial-work').read()==b'retain uncommitted work'
-        assert archive.getmember(task['id']+'/external-link').issym()
-    refs=git(project['path'],'bundle','list-heads',str(output/('workspace-source-'+project['id']+'.bundle')))
-    assert task['workspace_branch'] in refs
-    assert (output/('workspace-'+task['id']+'.json')).exists()
-
-
 @pytest.mark.asyncio
 async def test_chat_permission_cannot_strip_owner_sentence_negation(repo):
     db, _, chat, _, project=repo
@@ -490,35 +456,6 @@ def test_live_recovering_process_keeps_global_capacity_until_confirmed_exit(repo
         if process.poll() is None:
             process.kill()
             process.wait(timeout=5)
-
-
-def test_integrated_helper_retains_claude_resume_history_and_requires_session(repo,tmp_path):
-    import json
-
-    from ai_manager.deployment import Helper
-    db, _, chat, settings, project=repo
-    thread='11111111-1111-4111-8111-111111111111'
-    conversation=chat.conversation(project['id'])
-    with db.transaction() as conn:
-        conn.execute('UPDATE conversations SET thread_id=? WHERE id=?',(thread,conversation['id']))
-    history=settings.data_dir/'claude-threads'
-    history.mkdir()
-    body={'id':thread,'session':True,'cwd':project['path'],'turns':[{'id':'retained-turn','status':'completed'}]}
-    (history/(thread+'.json')).write_text(json.dumps(body))
-    claude_native=tmp_path/'claude-native'
-    sessions=claude_native/'projects'/'fixture'
-    sessions.mkdir(parents=True)
-    session=sessions/(thread+'.jsonl')
-    session.write_text('{"retained":"native Claude resume"}\n')
-    helper=Helper({'data':str(settings.data_dir),'repo':project['path'],'native':str(tmp_path/'codex-native'),
-                   'claude_native':str(claude_native),'preserve_files':[]})
-    receipt=helper.snapshot(tmp_path/'snapshot')
-    assert receipt['claude_threads'][str(history/(thread+'.json'))]
-    assert receipt['claude_sessions'][str(session)]
-    assert (tmp_path/'snapshot/claude-sessions'/(thread+'.jsonl')).read_bytes()==session.read_bytes()
-    session.unlink()
-    with pytest.raises(ValueError,match='resume session missing'):
-        helper.snapshot(tmp_path/'blocked-snapshot')
 
 
 @pytest.mark.asyncio

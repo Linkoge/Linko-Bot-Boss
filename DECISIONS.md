@@ -1,13 +1,14 @@
-# Current verification decision — 2026-10-15
+# Delivery decision — 2026-10-15
 
-Owner-approved simplification supersedes earlier tier and independent-review requirements: targeted tests,
-smoke/startup/health and relevant build/lint for tasks; one full backend execution at exact combined release
-preparation. No separate review/escalation loop. Three repair continuations maximum on the same assignment,
-durable across retries/restarts; one global sequential coding worker. Automatic ON deployment needs no repeated
-consent and retains integrity, scope, idle/drain, backups, health/rollback and OFF/holds. Destructive project/data
-delete or force-push needs confirmation; ordinary edits proceed. Authorized prompts may contain secrets.
-Memory updates are tied to meaningful facts, not a compulsory per-task stage. Current contract: docs/VERIFICATION_TIERS.md.
-Historical decisions below retain their original scope and are superseded where incompatible.
+Owner (single user, private Tailscale) wants deployment simple and automatic. Replaced the heavyweight machinery
+(hash-pinned helper service, immutable release bundles/manifests/evidence, deployment intents/approvals, exact-commit
+binding, risk tiers, automatic AI security review) with: worker smoke + targeted tests once and at most three repair
+rounds; sequential merge of passed work to main; one deploy script (idle wait, SQLite backup, restart, health check,
+automatic code+database rollback, short persisted result). Auto-deploy ON means merge and deploy, OFF neither; explicit
+owner holds/pauses are honored; one global coding worker; usage-limit gate stays removed. Full backend runs once, in the
+deploy script. Destructive deletion/force-push needs confirmation; ordinary edits proceed. Authorized prompts may
+contain secrets. Memory updates follow meaningful facts, not a per-task stage. Contract: docs/AUTO_DEPLOY.md.
+Earlier dated decisions below are historical; those about tiers, helper, publication, intents and manifests are superseded.
 
 # Architecture decisions
 
@@ -17,9 +18,7 @@ Retain authentication, history, project settings, model/effort settings, explici
 
 Historical decisions and evidence remain in Git history; [docs/CODEBASE_CLEANUP.md](docs/CODEBASE_CLEANUP.md) records this cleanup.
 
-- 2026-10-14: Approved execution reductions: Small-only releases omit mandatory full suites; Normal/Risky workers defer full backend to one preparation run. Releases use the highest included/actual tier and relevant existing browser consumers. Independent AI review covers auth/security, migrations, deployment/rollback and worker concurrency/recovery only. Preserve substantive fixes/reruns, exact evidence, idle/backups/health/rollback and standing Auto-deploy; add no stage or approval.
 
-- 2026-10-14: Adopt Option B deterministic Small/Normal/Risky verification for new assignments. Paths, request text and assignment kind set a floor; manager requests and continuations may only raise it. Reclassify actual branch changes after completion. Every tier runs fast smoke; Small adds touched-file tests/build/lint, Normal keeps smoke/targeted/build/lint and defers the full backend to release preparation, Risky adds relevant acceptance and sensitive-change independent review. Review findings, unavailable reviews and escalations go to the manager for follow-up rather than certifying completion. Preserve pre-tier assignments and owner model policy. Batch only related queued, never-started Small requests from the same conversation that remain Small together. Keep worker replies short and full evidence internal. Retain the helper's existing automatic rollback on health failure, verified in a throwaway copy. Contract and validation evidence: [docs/VERIFICATION_TIERS.md](docs/VERIFICATION_TIERS.md). No deployment in this assignment.
 
 - 2026-10-12: Use a derived versioned project brief in existing private SQLite memory/settings, preserving authoritative docs/history. Bound default context conservatively with a UTF-8 byte token upper bound; reject overflow and retain explicit condensation/resolution provenance. Full reconciliation is exclusively owner-started with candidate comparison, explicit Apply and rollback; routine delivery updates remain separate. Do not copy the full brief/history or manager-only reply preference into workers. Details: docs/PROJECT_MEMORY.md.
 
@@ -35,18 +34,4 @@ Historical decisions and evidence remain in Git history; [docs/CODEBASE_CLEANUP.
   Any nonempty draft independently retains expanded composer/Send; timer and audio actions share the
   bottom-left row with conditional ⇈/Send at right. Contract: docs/PARALLEL_EXECUTION.md and docs/chat-history.md.
 
-- 2026-10-14: Close correction on the retained Option B assignment authorizes actual `ai_manager/` and `scripts/` scope. Deduplicate selected context by equality so dictionary attachment references retain metadata and first-seen order; preserve the regression and all original tier requirements. Prepare only the scoped candidate with its exact task binding. Latest owner explicitly revoked deployment intent; no automatic deployment or activation under the earlier intent. Exact validation/preparation evidence stays in the retained workspace and STATE.md.
-
-- 2026-10-14: Subsequent explicit owner resume supersedes the earlier Option B intent revocation with recorded assignment-bound intent `c92b72ed0955ee84482c37422ef677eb`. Reuse valid retained targeted/smoke checks, finish exact scoped preparation and return publishable artifacts for manager review/activation. Worker does not deploy or push; exclude all partial auto-deploy changes.
-
-- 2026-10-14: Owner-authorized close deployment lifecycle repair adds serialized immutable import after worker cleanup, exposed as a separate publish_release action/CLI rather than assignment continuation. V2 scope hashes exclude lifecycle receipts and duplicate snapshots while retaining objective/acceptance/selected-context changes; V1 remains strict and unmigrated. Pin full artifact inventory at publication and review. Preserve old v3 evidence and revoked intent; no mutable resealing, automatic intent or activation. Reuse unchanged baseline validation and test affected paths. Contract: docs/DEPLOYMENT_HELPER.md.
-
-- 2026-10-14: Owner-authorized close corrections to source assignment
-  `44097fd1a52c4f9096fcd901bd04d344` resolve audit `27b4bbb092704f739eb7b30b2bb4d308`.
-  Route ON new-work explicit intents through standing automatic policy with preserved provenance;
-  separate immutable source mappings from audit readiness dependencies. Preserve real-divergence
-  reconciliation, OFF/manual, strict legacy hashes, original package/intent and all data rollback
-  requirements. Prepare a new source-task-bound candidate under existing deployment intent
-  `ba8ce92a3d406a98cdfc9fa81851c251`; do not reseal old artifacts or manufacture consent.
-  Helper-only bootstrap requires an authorized external context; old live manager and changed
-  source-scope compatibility remain explicit operational dependencies. No worker live activation.
+- 2026-10-14..15: Tiered verification, immutable publication, deployment intents and the helper service were built and then retired by the decision above (see Git history).

@@ -702,19 +702,22 @@ $('todo-delete').onclick=action(async()=>{
   if(selection===state.selection){state.todoSelection.clear();await loadTodos(selection);}
 });
 
-let deploymentNonce=null;
-async function deploymentStatus(){const result=await api('/api/deployment');deploymentNonce=result.nonce;$('deployment-status').textContent=result.phase==='idle'?'No pending deployment.':`${result.release_id}: ${result.phase.replaceAll('_',' ')}`;$('deployment-cancel').hidden=result.phase!=='waiting_idle';const container=$('deployment-intents');container.replaceChildren();for(const intent of result.intents||[]){if(['dispatched','revoked','superseded'].includes(intent.status))continue;const row=element('p',`${intent.candidate?.release_id||'Preparing release'} · ${intent.needs_owner_review?'Waiting for latest request review':intent.status}`);const cancel=element('button','Cancel deployment intent');cancel.onclick=action(async()=>{await api('/api/deployment/intents/revoke',{method:'POST',body:JSON.stringify({intent_id:intent.id})});await deploymentStatus();});row.append(document.createTextNode(' '),cancel);container.append(row);}}
+function deploymentText(result){
+  if(result.request)return `Deploy requested: ${((result.state||{}).phase||'queued').replaceAll('_',' ')}`+(result.installed?'':' (waiting for the one-time install command; see README)');
+  const last=result.last_result;return last?`Last deploy ${last.status.replaceAll('_',' ')}: ${last.reason}`:'No deploy yet.';
+}
+async function deploymentStatus(){const result=await api('/api/deployment');$('deployment-status').textContent=deploymentText(result);$('deployment-cancel').hidden=!result.request;}
 $('deployment-check').onclick=action(deploymentStatus);
-$('deployment-cancel').onclick=action(async()=>{await api('/api/deployment/cancel',{method:'POST',body:JSON.stringify({nonce:deploymentNonce})});await deploymentStatus();});
+$('deployment-cancel').onclick=action(async()=>{await api('/api/deployment/cancel',{method:'POST',body:'{}'});await deploymentStatus();});
 
 async function loadAutoDeploySettings(){
   const result=await api('/api/settings');const container=$('auto-deploy-settings');container.replaceChildren();
   for(const project of result.auto_deploy||[]){
     const label=element('label');const input=document.createElement('input');input.type='checkbox';
     input.checked=project.enabled;input.dataset.projectId=project.project_id;
-    input.setAttribute('aria-label',`${project.name}: Auto-deploy verified work`);
+    input.setAttribute('aria-label',`${project.name}: Auto-merge and deploy finished work`);
     input.onchange=action(async()=>{input.disabled=true;try{await api('/api/settings/auto-deploy',{method:'PUT',body:JSON.stringify({project_id:project.project_id,enabled:input.checked})});}finally{await loadAutoDeploySettings();}});
-    label.append(input,document.createTextNode(`${project.name}: Auto-deploy verified work`));container.append(label);
-    if(!project.deployable)container.append(element('p','Automatic deployment requires a configured deployment helper for this project.'));
+    label.append(input,document.createTextNode(`${project.name}: Auto-merge and deploy finished work`));container.append(label);
+    if(!project.deployable)container.append(element('p','Only this manager project can be deployed; other projects are merged only.'));
   }
 }

@@ -176,5 +176,5 @@ async def test_active_history_tool_cannot_consume_future_queued_request(system):
     with pytest.raises(ValueError, match='Unknown message'):
         await scheduler.manager_action(None, params | {'arguments': {'action': 'read_history', 'message_id': future}})
     with pytest.raises(ValueError, match='Auto or Execute'):
-        await scheduler.manager_action(None, params | {'arguments': {'action': 'deploy_release', 'release_id': 'unrequested'}})
-    assert not scheduler.deployment.gated()
+        await scheduler.manager_action(None, params | {'arguments': {'action': 'deploy', 'project_id': None}})
+    assert not scheduler.pipeline.pending()

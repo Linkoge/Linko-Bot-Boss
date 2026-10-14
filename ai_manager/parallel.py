@@ -135,7 +135,7 @@ def prepare_workspace(db, conn, task):
             raise ValueError('Historical assignment remains sequential in its original workspace')
         return task
     root = Path(task['path'])
-    from .deployment import atomic, read
+    from .pipeline import atomic, read
     receipt_path = db.path.parent / 'assignment-workspaces' / (task['id'] + '.json')
     receipt = read(receipt_path)
     try:
@@ -185,9 +185,6 @@ def prepare_workspace(db, conn, task):
 
 
 def reserve_integration(db, conn, task, source_ids):
-    reason = preparation_reason(conn)
-    if reason:
-        raise ValueError(reason)
     if not task['workspace']:
         raise ValueError('Integration requires a retained isolated assignment workspace')
     held = load(conn, INTEGRATION)
@@ -233,7 +230,7 @@ def reconcile_integration(conn):
 
 def retain_source(db, conn, task_id):
     """Record actual committed source after cleanup; merge evidence is Git ancestry,
-    while validation evidence stays the worker report and exact release checks."""
+    while validation evidence stays the worker report."""
     task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
     if not task or task['lease_owner'] or task['lifecycle'] != 'completed' or not task['workspace']:
         return
@@ -259,7 +256,7 @@ def retain_source(db, conn, task_id):
         if candidate:
             git(task['workspace'], 'merge-base', '--is-ancestor', candidate['commit'], head)
         save(conn, 'project_candidate:' + task['project_id'], {'commit': head, 'task_id': task_id,
-             'workspace': task['workspace'], 'branch': task['workspace_branch'], 'validation': 'worker report; exact release validation still required'})
+             'workspace': task['workspace'], 'branch': task['workspace_branch'], 'validation': 'worker report'})
         for source_id in [task_id] + [v['task_id'] for v in p.get('sources', [])]:
             source = load(conn, 'assignment_source:' + source_id)
             if source:
@@ -268,18 +265,6 @@ def retain_source(db, conn, task_id):
                  {'commit': head, 'workspace': task['workspace'], 'source_task': task_id}, task['project_id'], task_id)
     except (ValueError, OSError, subprocess.TimeoutExpired) as error:
         db.event(conn, 'integration.source_retained', {'reason': str(error)[:1000]}, task['project_id'], task_id)
-
-
-def preparation_reason(conn):
-    held = load(conn, 'release_preparation')
-    if not held:
-        return ''
-    from .codex import process_start
-    if process_start(held['pid']) == held['process_start']:
-        return 'Release preparation currently owns serialized integration/preparation'
-    # The command is gone; its immutable failed preparation still remains on disk.
-    conn.execute("DELETE FROM settings WHERE key='release_preparation'")
-    return ''
 
 
 def worker_admission(conn, task):
@@ -291,7 +276,7 @@ def worker_admission(conn, task):
     others = conn.execute('SELECT * FROM tasks WHERE project_id=? AND id!=? AND lease_owner IS NOT NULL',
                           (task['project_id'],task['id'])).fetchall()
     if p.get('integration'):
-        if not held or held['task_id'] != task['id'] or others or preparation_reason(conn):
+        if not held or held['task_id'] != task['id'] or others:
             raise ValueError('Integration ownership changed; retained workspace requires sequential recovery')
     elif held and held['project_id'] == task['project_id']:
         raise ValueError('Serialized integration owns the project; coding recovery is held')

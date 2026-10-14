@@ -14,10 +14,7 @@ Existing historical verification, integration, approval and operation records re
 
 Database backups preserve structured state. Native Codex thread storage and actual project files/Git state must also be retained for complete recovery. Restoring a database cannot undo edits, commits or external effects.
 
-Deployment intent uses actual current owner-message provenance and fixed project/assignment/release scope,
-with exact immutable evidence and one-shot protocol receipts. Internal notices can consume prior reviewed
-intent only; they cannot grant deployment/project-resume permission. Newer queued owner corrections hold
-consumption, explicit holds revoke unused scope, and failed/rollback receipts are never automatically retried.
-The manager remains responsible for interpreting explicit owner language; quoted text/worker prose is not
-permission. The independent helper and existing auth/admission/idle/backup/rollback guards remain unchanged.
-Contract and pre-activation limitations: [deployment helper](DEPLOYMENT_HELPER.md).
+Deployment is automatic per project (Auto-deploy ON) or on an explicit owner `deploy` request; worker prose and internal
+notices never request it. Owner holds, pauses and OFF stop merges and deploys before anything changes. The deploy script
+backs up SQLite, health-checks the restarted service (auth boundary included) and rolls code and database back on failure;
+failed or rolled-back deploys are never retried automatically. Contract: [delivery pipeline](AUTO_DEPLOY.md).

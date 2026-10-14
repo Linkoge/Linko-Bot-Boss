@@ -11,9 +11,9 @@ A private conversational manager for software projects:
 
 Use Conversation for discussion, Auto to delegate requested work, or Execute to send a work objective through the same manager path. Discuss work naturally in a project context. The manager delegates a complete objective when requested. Codex investigates, edits, installs dependencies, runs commands, builds, tests, debugs and uses Git in its durably owned assignment workspace (or the retained original cwd for historical/non-Git sequential work). Results return automatically to the originating conversation.
 
-Verification follows [two check levels](docs/VERIFICATION_TIERS.md): tasks run targeted tests, smoke and relevant build/lint; automatic preparation runs full backend once against the exact combined candidate. No independent review or escalation loop. Up to three durable repair rounds; one global coding worker. Deployment preserves exact evidence, idle/drain, backup, health/rollback and explicit OFF/holds.
+Delivery is a short pipeline ([docs/AUTO_DEPLOY.md](docs/AUTO_DEPLOY.md)): each task runs smoke and targeted tests once with at most three repair rounds and no AI review; finished work merges into main one at a time; one deploy script waits for idle, backs up SQLite, restarts, health-checks and rolls back automatically, then records a short result. Per-project Auto-deploy ON means merge and deploy, OFF means neither. One global coding worker.
 
-Attachment batching preserves dictionary references, their metadata and first-seen order; the retained regression passes. Exact scoped preparation evidence and validation status are in [current state](STATE.md). The lifecycle repair adds a supported [immutable publication command](docs/DEPLOYMENT_HELPER.md) after worker cleanup and stable V2 task-scope binding. See dated state entries for historical intent/deployment status.
+Attachment batching preserves dictionary references, their metadata and first-seen order; the retained regression passes. Current status and limits: [STATE.md](STATE.md).
 
 Coding runs with one global sequential worker, retaining isolated workspace ownership. Historical chat/⇈ Send permission and capacity settings do not admit overlap. See [parallel execution](docs/PARALLEL_EXECUTION.md). Projects participate automatically. Tasks, conversations, native thread references, questions and execution history persist in SQLite. Temporary network, process and account usage interruptions recover automatically with persisted backoff. Restart handling inspects native outcomes before resuming the same assignment and conversation. See [automatic recovery](docs/AUTOMATIC_RECOVERY.md) and [Pause/Cancel and bundled updates](docs/AGENT_CONTROLS.md).
 
@@ -23,7 +23,7 @@ The private interface remains at **https://codex-server.tail5ebb9d.ts.net:8787/*
 uv run python -m ai_manager.cli setup-owner
 ```
 
-Configuration: `AI_MANAGER_DATA`, `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE` and `AI_MANAGER_CODEX`. Runtime data defaults to `~/.local/share/linko-bot-manager`. Manager and bot settings are global: manual Manager, manual Bot or manager-selected permitted automatic pair, validated against the installed Codex catalog (see [model settings](docs/MODEL_SETTINGS.md)); the selected Codex or Claude subscription supplies inference. Existing assignments retain their original provider/model/thread when the owner switches providers.
+Configuration: `AI_MANAGER_DATA`, `AI_MANAGER_PORT` (default 8787), `AI_MANAGER_REPO` (live checkout; tests only), `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE` and `AI_MANAGER_CODEX`. Runtime data defaults to `~/.local/share/linko-bot-manager`. Manager and bot settings are global: manual Manager, manual Bot or manager-selected permitted automatic pair, validated against the installed Codex catalog (see [model settings](docs/MODEL_SETTINGS.md)); the selected Codex or Claude subscription supplies inference. Existing assignments retain their original provider/model/thread when the owner switches providers.
 
 Native workers have broad same-user access. They preserve user work and request explicit confirmation before catastrophic broad destruction. This is an agent-recognized conversational boundary, not a deterministic classifier of arbitrary programs. Completion is reported by the worker, not independently certified. See [security boundaries](docs/security.md).
 
@@ -35,20 +35,24 @@ Rich red chat theme candidate and truthful activation/evidence: [UI theme](docs/
 
 ```bash
 uv sync --locked
-uv run pytest -q -m smoke
-uv run pytest -q
+uv run pytest -q -m smoke   # every task, once
+uv run pytest -q            # full suite: run by the deploy script, not per task
 uv run ruff check ai_manager scripts tests
 node --check ai_manager/static/app.js
 PYTHONPATH=. uv run python scripts/browser_smoke.py
 PYTHONPATH=. uv run python scripts/smoke_minimal.py
 ```
 
-The fast pytest smoke suite covers 28 core-path tests (44 cases) with a 20-second budget. Run it on every tiered task; the full suite is the final Normal/Risky check and the release preparation gate. The real Codex smoke script uses a disposable calculator repository and database, fixes code, runs tests, commits locally and checks automatic manager delivery. It invokes the existing subscription. Browser acceptance uses an isolated local HTTP fixture. Neither script uses the production database.
+The fast pytest smoke suite (20-second budget) runs once per task; the full suite runs once, in the deploy script. The real Codex smoke script uses a disposable calculator repository and database, fixes code, runs tests, commits locally and checks automatic manager delivery. It invokes the existing subscription. Browser acceptance uses an isolated local HTTP fixture. Neither script uses the production database.
 
 See [operations](docs/operations.md), [autonomy](docs/AUTONOMY_POLICY.md) and [cleanup/deployment evidence](docs/CODEBASE_CLEANUP.md). Historical reports link to their complete versions in Git.
 
-Automatic deployment contract and close readiness corrections: [AUTO_DEPLOY.md](docs/AUTO_DEPLOY.md).
-ON new owner work uses standing deployment policy even with an explicit new-work intent; source
-mappings remain separate from audit readiness dependencies. OFF retains manual behavior.
-Exact bootstrap and old-manager scope compatibility must be resolved externally before activation;
-implementation or publication is never a live deployment claim.
+## One-time deploy bootstrap
+
+After this pipeline is in main, run once on the server (no sudo; installs and enables the user units, then queues the first deploy):
+
+```bash
+cd /home/codex/projects/Linko-Bot-Manager && python3 scripts/install_deploy.py
+```
+
+Everything after that is automatic. Result of the last deploy: `~/.local/share/linko-bot-manager/deploy/last-deploy.txt`; manual deploy: `python3 scripts/deploy.py --now`.

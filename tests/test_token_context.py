@@ -169,7 +169,6 @@ async def test_worker_continuation_keeps_thread_and_only_updates_changed_context
     continued = json.loads(servers[-1].prompts[-1])
     assert set(continued) == {"objective", "verification"}
     assert continued["objective"] == "First objective"
-    assert continued["verification"]["tier"] == "normal"
     assert continued["verification"]["repair_rounds_used"] == 1
     assert continued["verification"]["repair_rounds_remaining"] == 2
     assert "project" not in continued  # Unchanged project context remains in the retained native thread.

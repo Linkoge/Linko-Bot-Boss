@@ -116,28 +116,10 @@ def permitted(config, server, provider=None):
 
 def guidelines(provider):
     small, work, strong = GUIDES[provider]
-    return ('Before delegate in Automatic choose worker_route from permitted_pairs by verification tier. '
-            f'Small: {small} or {work} Low. Normal: {work} Medium. Risky: {work} High or {strong}; '
-            'a weaker risky pair is rejected while a qualifying pair is permitted. '
+    return ('Before delegate in Automatic choose worker_route from permitted_pairs by difficulty. '
+            f'Simple: {small} or {work} Low. Ordinary: {work} Medium. Hard: {work} High or {strong}. '
             'Manual uses the saved pair; never override it. No extra routing call. '
             'Existing assignments retain their selected pair on continue.')
-
-
-def rank(pair, provider):
-    return PROVIDER_FAMILIES[provider].index(family(pair['model'])), LEVELS.index(pair['effort'])
-
-
-def risky_capable(pair, provider):
-    tier, effort = rank(pair, provider)
-    return tier == 2 or (tier == 1 and effort == 2)
-
-
-def cheapest(db, server, provider):
-    """Lowest-cost permitted pair for the automatic diff review; never outside the owner policy."""
-    pairs = permitted(current(db, server, provider), server, provider)
-    if not pairs:
-        raise ValueError('No permitted review model')
-    return min(pairs, key=lambda pair: rank(pair, provider))
 
 
 def save(db, server, value):
@@ -179,7 +161,7 @@ def save(db, server, value):
     return value
 
 
-def delegation(db, server, requested=None, tier=None):
+def delegation(db, server, requested=None):
     provider = active(db)
     if provider == 'codex' and not db.setting('model_settings'):
         pair = resolve(server, db.setting('model_routes', {}).get('execution', {'effort': 'medium'}))
@@ -192,9 +174,6 @@ def delegation(db, server, requested=None, tier=None):
         allowed = permitted(config, server, provider)
         if pair not in allowed:
             raise ValueError('Bot pair is denied; choose from permitted pairs: ' + json.dumps(allowed))
-        strong = [p for p in allowed if risky_capable(p, provider)]
-        if tier == 'risky' and strong and pair not in strong:
-            raise ValueError('Risky verification tier needs a stronger permitted pair: ' + json.dumps(strong))
     return {**pair, 'mode': config['bot']['mode'], 'settings_revision': config['revision']}
 
 

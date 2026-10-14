@@ -268,12 +268,10 @@ class Chat:
 
     def prompt(self, conversation, content, mode, execution_id, thread_id, prior):
         context = self.context(conversation["project_id"])
-        from .deployment import Handoff
-        deployment = Handoff(self.db.path.parent).status()
-        from .auto_deploy import enabled
+        from .pipeline import Pipeline, enabled
         with self.db.connect() as conn:
-            context['auto_deploy_verified_work'] = enabled(conn, conversation['project_id']) if conversation['project_id'] else False
-        context['deployment'] = {k: deployment[k] for k in ('phase', 'release_id') if k in deployment}
+            context['auto_deploy'] = enabled(conn, conversation['project_id']) if conversation['project_id'] else False
+        context['deployment'] = Pipeline(self.db, self.registry).summary()
         if conversation['project_id']:
             from .project_memory import encode
             if len(encode({k: v for k, v in context.items() if k != 'instructions'}).encode()) > 2000:
@@ -283,11 +281,6 @@ class Chat:
         prompt = {"mode": mode, "message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
         prompt['request_execution'] = {'parallel_permission': self.db.setting('execution_parallel:' + execution_id, {}),
                                        'scope': 'this owner request only; refinements stay on existing assignment'}
-        from .deployment_intent import Intents
-        intents = [v for v in Intents(self.db).list(conversation['project_id'])
-                   if v['conversation_id'] == conversation['id'] and v['status'] in {'recorded', 'reviewed', 'dispatch_failed'}]
-        if intents:
-            prompt['deployment_intents'] = intents
         if source:
             prompt["worker_result"] = self.result_notice(source)
             verification = self.verification_notice(source)
@@ -295,7 +288,7 @@ class Chat:
                 prompt["worker_result"]["verification"] = verification
         recovery_task = self.db.setting('execution_recovery:' + execution_id)
         if recovery_task:
-            prompt['message'] = 'Internal unfinished-work review; inspect this existing assignment and result only. Preserve owner holds. No new deployment authorization; only a matching recorded owner intent may be reviewed/consumed.'
+            prompt['message'] = 'Internal unfinished-work review; inspect this existing assignment and result only. Preserve owner holds.'
             prompt['assignment_followup'] = {'task_id': recovery_task, 'state': self.db.setting('assignment_workflow:' + recovery_task),
                                              'evidence_actions': ['read_task', 'read_result']}
 
@@ -351,10 +344,6 @@ class Chat:
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto", request_id=None,
                      attachment_ids=None, recovery_task=None, todos=None, parallel=False):
-        from .deployment import Handoff
-        handoff = Handoff(self.db.path.parent)
-        if handoff.ready_to_stop() or (handoff.gated() and not (delivery or recovery_task)):
-            raise ValueError('Deployment pending; wait before submitting new work')
         if parallel and (type(parallel) is not bool or mode == 'conversation' or delivery or recovery_task or not project_id):
             raise ValueError('Parallel Send requires an owner Auto/Execute request in one project')
         display_content = content
@@ -690,26 +679,21 @@ class Chat:
             "blocker": result["blocker"][:600], "blocker_truncated": len(result["blocker"]) > 600,
             "error": result["error"][:600], "error_truncated": len(result["error"]) > 600,
             "output_characters": len(result["output"]),
-            "evidence_action": "read_result", "deployment": "unverified; consult exact succeeded receipt",
+            "evidence_action": "read_result", "deployment": "unverified; consult deployment_status",
         }
 
     def verification_notice(self, result):
         """Compact exact-source outcome; full evidence stays in task.verification."""
-        tier = self.db.setting("assignment_policy:" + result["task_id"], {}).get("verification")
-        tier = tier or {"tier": "normal"}
         row = self.db.one("SELECT payload FROM events WHERE execution_id=? AND kind='task.verification' ORDER BY seq DESC LIMIT 1",
                           (result["id"],))
         if not row:
-            return {"tier": tier["tier"], "post_check": "not recorded for this attempt"}
+            return {"post_check": "not recorded for this attempt"}
         record = json.loads(row["payload"])
         if record.get("error") or record.get("actual_error"):
-            return {"tier": "normal", "post_check": "failed: " + (record.get("error") or record["actual_error"])[:300]}
-        notice = {k: record[k] for k in ("assigned", "actual", "effective", "escalated", "changed_count") if k in record}
+            return {"post_check": "failed: " + (record.get("error") or record["actual_error"])[:300]}
+        notice = {k: record[k] for k in ("changed_count",) if k in record}
         if record.get("undeclared"):
             notice["undeclared"] = record["undeclared"][:5]
-        if record.get("review"):
-            review = record["review"]
-            notice["review"] = {"status": review["status"], "findings": (review.get("findings") or review.get("reason", ""))[:600]}
         return notice
 
     async def deliver_results(self):
@@ -757,8 +741,6 @@ class Chat:
             self.db.event(conn, 'chat.stop_requested', {'source': 'authenticated_owner_interrupt_endpoint'}, row['project_id'], execution_id=execution_id)
             from .assignment_workflow import hold_conversation
             hold_conversation(self.db, conn, row['conversation_id'], execution_id)
-            from .deployment_intent import revoke
-            revoke(self.db, conn, 'Owner stopped manager reply', conversation_id=row['conversation_id'])
         if row["status"] == "recovering" and execution_id not in self.jobs:
             if row["turn_id"] and owns_pid(self.server, row["pid"]):
                 try:

@@ -1,6 +1,6 @@
 # Current sequential policy — 2026-10-15
 
-The owner-approved [simplification](VERIFICATION_TIERS.md) admits one global coding worker, including with
+The owner-approved [simplification](AUTO_DEPLOY.md) admits one global coding worker, including with
 historical opt-in grants or capacity greater than one. New parallel work is disabled. Existing controls/permissions,
 source branches, isolated workspace identities and serialized source-reconciliation guards remain for retained
 work; no automatic merging or grant inference. The earlier parallel contract below is historical where it permits
@@ -11,8 +11,7 @@ overlap or requires tier review. Source cleanup/ancestry/integration ownership r
 This supersedes unconditional one-worker-per-project requirements. Architecture remains
 User → Manager → native Codex workers → Manager → User. No planner/router, DAG,
 integration controller, recurring AI review or additional routing inference is introduced
-(the Risky-tier diff review in [verification tiers](VERIFICATION_TIERS.md) is the only reviewer;
-integration assignments are Risky). The existing manager assesses the request during its normal turn.
+(there is no reviewer). The existing manager assesses the request during its normal turn.
 
 Ordinary requests execute sequentially per project with FIFO admission. An explicit owner
 instruction in the current chat request or expanded composer **⇈ Send** grants permission
@@ -83,13 +82,8 @@ merge AI/controller is introduced. Actual clean Git state and ancestry of pinned
 before publishing `project_candidate:<project_id>` and marking sources integrated. Native completion
 alone does not prove a merge, combined validation, preparation or deployment.
 
-Release preparation holds a global file lock and a receipt-bound durable `release_preparation`
-reservation, mutually exclusive with integration reservations. An exited preparer's stale record is
-removed only after process-start identity inspection; failed immutable artifacts remain available.
-The deployment helper retains its complete global idle/drain/backup/auth/data/asset verification gates.
-The schema12 bundle requires the reviewed, hash-pinned helper v2 artifact; installed v1 refuses it.
-See [deployment contract](DEPLOYMENT_HELPER.md). Neither helper upgrade nor app deployment is performed
-by this implementation task. Exact candidate/readiness/status/evidence: [STATE.md](../STATE.md).
+Merging finished work to main and deploying are serialized by the pipeline ([AUTO_DEPLOY](AUTO_DEPLOY.md)):
+one merge at a time, none while a deploy request is pending, and no new coding starts while a deploy waits for idle.
 
 Current provider integration retains active-provider selection for new work and exact
 provider/model/thread/workspace pins for existing work. A provider switch does not grant

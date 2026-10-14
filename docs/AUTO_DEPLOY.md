@@ -1,208 +1,71 @@
-# Auto-deploy verified work
+# Delivery pipeline: checks, merge, deploy
 
-The owner requested this policy on 2026-10-14 for Linko-Bot-Boss. It removes the separate
-repeat deployment authorization stage; it does not change application login, sessions or CSRF.
+Owner-approved replacement (2026-10-15) for the earlier verification tiers, immutable release bundles, deployment
+intents/approvals, exact-commit evidence binding and the hash-pinned deployment helper service. All of that is
+removed; its history is in Git. Older dated sections elsewhere that mention manifests, receipts, helper versions or
+`deploy_release` are historical.
 
-Settings → Deployment shows **Auto-deploy verified work** for each project. The value is stored
-in `settings[auto_deploy:<project ID>]`. The configured manager project is seeded ON once, using
-its helper configuration's repository identity rather than its editable display name. Other
-projects default OFF. Explicit saved toggles survive restarts and are never reset by seeding.
-The existing controlled helper can deploy its configured repository only; Settings explains
-when another project has no configured deployment helper.
+## 1. Worker checks (once per task)
 
-## Standing intent and exact release
+Every task, every size: run the smoke suite (`python -m pytest -q -m smoke`) and the targeted tests for the changed
+behavior (plus build/lint when relevant) **once**. Fix failures for at most **three repair rounds** (durable counter in
+`assignment_workflow`, surviving retries/restarts). Then stop and report the concrete failure. The final reply ends
+with `RESULT: PASSED` or `RESULT: FAILED - <check>`. There is no independent AI review, no risk tier and no escalation.
+One coding worker runs at a time globally. The full backend suite is not run by workers.
 
-With ON, a real owner Auto/Execute `delegate` or `continue` records a durable automatic intent
-for that task. Its original owner message/execution IDs and digest remain audit provenance.
-There is no repeated owner quote, candidate approval screen or per-message consent refresh.
-Unrelated chat, chat cleanup and ordinary result delivery do not revoke that recorded intent.
-Internal follow-ups may finish the original assignment but cannot invent an owner request.
+## 2. Merge to main (sequential)
 
-The scheduler waits for worker cleanup, delivered results and completed job follow-up. Its
-checks require a clean exact committed source and `task.verification` with no diff error or unauthorized
-scope changes. No independent review or tier escalation is required. Retained/pre-tier work receives the same
-Normal prompt and exact post-check on its next execution; old evidence must still bind scope and clean commit.
-`assignment_source` and the actual workspace HEAD/cleanliness must agree. A candidate must
-include the current live commit; stacked sequential workspaces are supported without changing
-another assignment's branch. A diverging candidate needs serialized source reconciliation and
-is reported; it is never silently merged or activated under a different commit.
+Per-project setting **Auto-merge and deploy finished work** (Settings → Deployment; the manager's own project is seeded
+ON once). When ON, `ai_manager/pipeline.py` merges each finished assignment branch into the project's `main`, oldest
+first, one at a time, once the worker has completed, its result is delivered, the follow-up state is `complete` and the
+branch is committed and clean. It never forces anything:
 
-Automatic preparation keeps the execution selected by `evaluate`, rather than looking up a newer attempt later.
-The pinned clone's preparation script/module imports apply that candidate's approved verification policy; running
-older manager code does not impose its obsolete check list. Actual completed/delivered latest execution, cleaned-up
-assignment and unchanged scope/commit are checked before validation and again before sealing an automatic envelope.
+- `RESULT: FAILED`, an owner hold (`owner_wait`/`deferred`/pause/cancel), OFF, or a paused project: nothing merges.
+- Dirty checkout or merge conflict: the merge is aborted, the reason is posted in the originating chat and the
+  assignment stays for repair. The same commit is not retried automatically.
+- OFF means no merge and no deploy; work stays on its assignment branch. The manager `deploy` action (owner asks to
+  deploy now, optional `task_id` to merge first) works regardless.
 
-Within the existing preparation step, a complete published v3 Deploy release may supply unchanged validation only
-when commit, live base, task/scope binding, policy/check selection, schema, bundle and helper bytes match exactly.
-The full immutable inventory and hashes are verified before/after copying. A fresh release ID and hashed index bind
-the real completed execution with `restore_database: true` and reference the source manifest/index hashes in
-`reused_validation`; source artifacts/logs are never amended and their checks are not claimed as newly executed.
-Changed code/base/scope/policy takes the ordinary fresh gate; corruption of matching evidence fails closed.
-The existing helper still checks the exact automatic execution envelope and all activation guards.
-Helper dispatch requires both exact installed bytes and a succeeded upgrade receipt naming the required helper hash.
-A prior upgrade receipt for different bytes cannot authorize cutover. These are existing pipeline bindings, not new
-AI calls, validation stages or owner consent. No worker writes shared runtime or activates code.
+## 3. Deploy (one script)
 
-Preparation fetches that exact source commit into a disposable clone. The running manager's
-preparation script runs full backend once for every final combined candidate, smoke, relevant build/lint
-and relevant existing browser checks. Policy v3 Deploy/full-backend selection and coverage reasons stay in the
-manifest and hashed log. Exact attestation is `release_checks: passed`; immutable historical receipts remain
-supported. No manifest exists after a failed check. The
-manifest binds the execution, commit, stable v2 semantic assignment scope, live base, asset
-hashes, bundle and validation log. An evidence index inventories every release artifact.
+After a successful merge into the manager's own repository the pipeline writes `DATA/deploy/request.json`. systemd
+(`linko-bot-manager-deploy.path`) starts `linko-bot-manager-deploy.service`, which runs `scripts/deploy.py`:
 
-Preparation and dispatch are separate scheduler steps so a quiet-queue wait or the external
-helper bootstrap does not rerun validation. Scope/candidate changes withdraw the old prepared
-release; the updated assignment needs its own completed, verified attempt. The pipeline alone
-consumes automatic intents; manager manual review/dispatch actions cannot substitute a release.
-Dispatch rechecks verification, scope, clean source and current live base, then pins the immutable
-manifest/index identity in the helper origin. The standalone helper checks exact manifest,
-setting, project/task holds, scope, delivered execution and consumed intent at acknowledgement
-and again immediately before cutover. The existing persistent-idle/admission fence remains.
+1. Check out `main` in the live checkout (must have no uncommitted changes) and run the full backend suite **once**.
+2. Wait until nothing is active (no unfinished execution, worker lease, streaming message or running delivery).
+   While a request is pending the scheduler starts no new coding and merges nothing. Owner OFF, a paused project, or
+   cancelling the request (Settings → Cancel) stops the deploy here, before anything changes. Waiting is bounded (6 h).
+3. Back up the SQLite database (online, integrity-checked), stop the service, take a second consistent copy.
+4. Update code to `main` (`uv sync --locked` only if `pyproject.toml`/`uv.lock` changed), start the service.
+5. Health check (60 s): `/api/auth-status` answers 200 with `scheduler_running` and the new commit, an unauthenticated
+   `/api/portfolio` is 401, and a temporary session works (login path) and is removed.
+6. Any failure after the stop rolls back automatically: `main` is reset to the previously running commit (the failed
+   commits stay reachable under tag `linko-failed-<id>`), the database is restored from the stopped copy, dependencies
+   are re-synced if they changed, and the old version must pass the same health check.
 
-Explicit assignment stop/pause/cancel/wait, owner-wait/deferred follow-up and project pause
-are honored. OFF revokes unused automatic intents and cancels an automatic `waiting_idle`
-request. Once acknowledged, UI mutations are fenced; an interrupted cutover requires external
-inspection. OFF retains the previous manual owner-intent → exact evidence review → dispatch
-flow, including its existing source-review behavior. ON is not a grant to arbitrary worker
-prose, unverified work, another project or another release.
+The outcome is one short result in `DATA/deploy/last-deploy.txt` (also `result.json`, `results/<id>.json`): `success`,
+`failed` (nothing changed), `rolled_back` (with the reason), `rollback_failed` (needs attention) or `cancelled`. The
+pipeline posts it once to the originating chat and shows it in Settings and `deployment_status`. A failed or rolled-back
+deploy is never retried automatically; repair is a normal task. `success` is the only deployed claim.
 
-## Explicit intents and audit dependencies (readiness correction)
+Backups live in `DATA/deploy/backups/<id>/` (last 10 kept). Deploys do not touch attachments, workspaces or other data.
 
-ON also applies when new work is delegated with `owner_deployment_quote`, an explicit
-new-work `intent_id`, or a matching intent discovered from the same owner turn. The backend
-links that original manual provenance to a task-specific automatic intent and marks the unused
-manual stage superseded. It returns the automatic intent ID. No extra manual evidence-review
-or owner-message refresh stage is needed. Cancelling the original intent also cancels its linked
-automatic intent. A different new-work deployment request does not revoke another assignment's
-standing automatic intent. Replaying the same current owner's explicit new-work delegation returns
-the existing task/automatic intent without resealing the preserved manual mapping or retrying a
-failed/cancelled deployment. OFF retains the existing manual flow.
+## 4. One-time bootstrap (operator)
 
-A delegation explicitly auditing a fixed existing release or source assignment remains a
-readiness dependency of that fixed request. It cannot authorize deployment of the audit's own
-branch instead. Source tasks come only from fixed `task_ids` or the source `task_request`;
-`review_task_ids` require completed, unheld lifecycle and completed execution evidence, but
-are excluded from the expected immutable release-source mapping. Versions 1 and 2 retain
-their original hash algorithms and strict scope checks; no legacy record or artifact is resealed.
-Real divergence still requires serialized source reconciliation and exact renewed verification.
+The new script cannot install itself through the old helper. After the manager has merged this work into main of
+`/home/codex/projects/Linko-Bot-Manager`, run once on the server:
 
-## Migration, backup and rollback
+```bash
+cd /home/codex/projects/Linko-Bot-Manager && python3 scripts/install_deploy.py
+```
 
-New schema/dependency changes use helper v3's rehearsed contract. A candidate's `Database`
-initializer runs against a private SQLite online backup, never the live database. Preparation
-checks integrity, foreign keys, preservation of old tables/columns/rows, monotonic schema
-versions and records schema fingerprints. Destructive/failed migrations do not prepare a
-release. Dependency changes first install the candidate's frozen lock into a disposable venv;
-that environment runs rehearsal and all release checks. It is then removed.
+It needs no sudo. It writes `DATA/deploy/installed.json`, installs and enables the user units
+`linko-bot-manager-deploy.path/.service`, retires the old `linko-deployment-helper.service` if idle, and queues the first
+deploy so the running service picks up the new code (progress in `DATA/deploy/last-deploy.txt`). Safe to re-run.
+After that everything is automatic. Manual deploy at any time: `python3 scripts/deploy.py --now`.
 
-The helper refuses a database whose schema differs from the rehearsal. It backs up the
-manager/native histories, retained workspaces/source refs and private configuration, stops
-the service, checks idleness again, and takes a final database snapshot before activation.
-Dependency releases also snapshot the service venv before running `uv sync --frozen`.
-Post-start probes check both configured HTTP origins, release/scheduler, authentication,
-assets and preserved data/schema. Health failure restores the previous code and the final
-SQLite snapshot for all automatic releases (including code-only releases), and the old venv
-when dependencies changed. Manual rehearsed schema/dependency releases also restore data.
-Older manual code-only rollback continues to preserve its database as before.
+## Tests
 
-Results and restoration hashes are durable in `deployment-helper/results/<nonce>.json`.
-The owner receives one result message identifying success, failure or automatic rollback,
-including whether the database/dependencies were restored. Failures/interrupted preparations
-and failed deployments are not retried automatically. A helper crash while mutating leaves
-admission fenced, rather than claiming success or retrying. An explicit later owner request
-can start a new verified attempt; it cannot reuse a failed release receipt.
-
-## External bootstrap and this second release
-
-This worker does not activate production. The second release packages `helper-v3.py` and its
-pinned hash even for a code-only application diff. The currently installed helper is v2.
-After worker cleanup and exact artifact publication, the authorized external manager/operator
-must install v3 using the candidate's `scripts/install_deployment_helper_v3.py` with the registered
-release ID and runtime `--data` path. The guarded installer refuses manager/helper cgroups, pins the prepared helper, preserves
-the old unit/hash in its receipt, waits for no pending handoff, and upgrades only the independent
-helper service. It does not restart/deploy the application. This is a one-time bootstrap operation,
-not an additional owner deployment approval. It must run outside the helper/manager cgroup.
-
-Automatic dispatch waits for a succeeded v3 upgrade receipt and an installed helper whose hash
-matches the prepared artifact. A waiting release remains immutable and is not revalidated on
-each tick. Future changes to helper implementation require an explicit safe helper installation;
-a hash mismatch never downgrades the activation guard. See [deployment helper](DEPLOYMENT_HELPER.md)
-for external operations and [verification tiers](VERIFICATION_TIERS.md) for Option B.
-
-## Evidence
-
-`tests/test_auto_deploy.py` exercises owner queue/delegation, real isolated worktrees, backend
-commit verification, real smoke/full fixture checks, SQLite rehearsal/backups, pinned bundles,
-actual HTTP servers and helper health/rollback. The provider review and systemd commands are
-simulated; dependency resolution is a deterministic frozen-lock adapter so tests need no remote
-packages. The application release gate separately runs the full repository suites with its real
-dependencies. Negative cases include missing/wrong tier/commit/review evidence, dirty source,
-failed full checks/rehearsal, destructive migration, schema drift, explicit holds/OFF, changed
-scope/manifest, interrupted preparation, restart/chat cleanup and no automatic retry.
-`scripts/browser_auto_deploy.py` checks authenticated/CSRF-protected desktop/mobile toggle
-persistence, one-time ON seed, project independence and layout. Final validation/artifact hashes
-and the publication-ready manager handoff are retained in this assignment's detailed report.
-
-The completed readiness audit `27b4bbb092704f739eb7b30b2bb4d308` covers the original registered
-82-file package. Close source corrections require a new release ID and current source-task scope;
-old artifacts and intent `ba8ce92a3d406a98cdfc9fa81851c251` remain unchanged. Continuing this
-source task changes its scope fingerprint, so the old sealed fingerprint no longer authorizes the
-new manifest. The live old manager additionally still combines source and audit tasks in review.
-Publication is possible after cleanup with current source binding; activation is not established
-by publication or helper installation. The current old manager has no scope refresh in
-`revise_deployment_intent(preserve)` (it refreshes message provenance only). An authorized manager
-must resolve this supported-interface compatibility dependency serially; do not modify SQLite
-intent mappings, drop review dependencies, fabricate a new owner request or request activation
-through shell. This is a concrete bootstrap limitation, not a new owner deployment approval.
-Corrected exact artifacts, review and external commands are in the retained assignment's
-`.data/auto-deploy-corrections/REPORT.md` and `EXTERNAL_HANDOFF.md`.
-
-The corrective real reviewer also reproduced concatenated progress commentary before its final
-`No blocking findings.` verdict. The review collector now uses the completed final agent message
-for eligibility and retains the raw transcript as evidence. A progress message declaring no
-findings cannot mask a blocking final message. Providers without completed-message events keep
-the existing stream fallback. This avoids another approval/review cycle caused by commentary.
-
-Corrective validation exposed the generic 180-second command cap interrupting the growing
-backend suite on the managed worker. The fixed full backend command now has a bounded
-600-second timeout; browser commands retain 180 seconds, and smoke retains its short gate.
-No check is skipped or retried automatically. Use a private short temporary directory for
-verification: the Claude test host's Unix-socket path cannot fit a deeply nested TMPDIR.
-The failed preparation is retained without a manifest; a corrected attempt gets a fresh ID.
-
-## Historical registered release readiness audit — 2026-10-14
-
-The following records the original v1 audit, before the corrections above. Its helper installer
-and intent statements describe that audited revision; they do not override the corrected guards.
-
-`auto-deploy-standing-policy-v1-20261014` is registered (publication event 201759).
-The serialized audit verified all 82 registered files, pinned manifest/index, exact candidate
-`0223c3493a6edf9b54b280fa5993fb6404e2d8ca`, clean source and live base `bee8b088`.
-The existing 404-case backend, 20-browser and Ruff/JS gate remains valid and was reused.
-Missing separate risky review completed with findings; it is not a clean native post-check.
-The live manager also includes review tasks when comparing source-only intent/manifest hashes,
-which blocks exact intent review even after audit cleanup. Manager sequential review is required;
-this audit does not alter source, immutable release evidence or runtime intent records.
-
-Helper remains v2. This audit runs inside the manager cgroup and cannot safely install v3.
-The supported external installer delegates to v2 and has no installer cgroup check of its own;
-an authorized operator must enforce the documented outside-manager/helper precondition.
-No application activation or helper restart occurred. Full findings, identity assertions,
-coverage, precise external command and receipt requirements are retained in
-`assignment-workspaces/27b4bbb092704f739eb7b30b2bb4d308/.data/auto-deploy-bootstrap/REPORT.md`
-and `EXTERNAL_HANDOFF.md` under the manager data directory. Current recorded intent is
-`ba8ce92a3d406a98cdfc9fa81851c251`; this evidence does not create or expand authorization.
-
-## Serialized source integration — 2026-10-14
-
-The corrected source and the completed audit are reconciled in the original retained assignment
-workspace. The audit artifacts remain byte-for-byte historical evidence. Its source branch and
-the Option B branch are retained. The manager candidate previously contained the audit commit
-without the corrected source; pending-source admission therefore correctly blocked preparation.
-After successful combined validation and worker cleanup, the existing `retain_source` lifecycle
-checks every pinned ancestor and records the combined project candidate, then releases the
-integration reservation. Workers do not edit shared queue or intent records. Exact ancestry,
-combined checks and current publication/bootstrap limitations are recorded in this assignment’s
-`.data/auto-deploy-integration/REPORT.md`. The former intent was revoked by the manager after
-its scope check failed; integration does not restore it or authorize activation under stale scope.
+`tests/test_pipeline.py` (merge rules), `tests/test_deploy_script.py` (private disposable runtime: success, unhealthy
+release rollback of code and database, service that never starts, idle wait, holds/cancellation, failing tests,
+dirty checkout, installer) and `tests/test_task_rules.py` (repair budget, one worker).

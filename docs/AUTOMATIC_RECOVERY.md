@@ -69,7 +69,7 @@ tracked in `followup_rounds`. Old backoff `attempts` are retained without being 
 Repair continuations have a separate total cap of three in `repair_rounds`, charged by both manager and UI
 paths and never reset by retry flags/state changes/restart. Exhausted failed work becomes owner-wait and must
 be reported; no substitute assignment may evade the budget. Successful worker completion is complete for normal
-automatic handoff, without another review or escalation loop. See [current verification](VERIFICATION_TIERS.md).
+automatic handoff, without another review or escalation loop. See [current verification](AUTO_DEPLOY.md).
 Native transport retries resume the same execution; this is not a new recovery feature or usage-blocking change.
 
 Pause, cancel, project pause, owner-wait, To-Do and explicit manager Stop never authorize resumed work.
@@ -79,7 +79,7 @@ manager wait update workflow in their existing control transaction. Pending nati
 worker restart inference until answered. Paused/waiting/cancelled completion reports use Conversation mode;
 internal result/recovery tools cannot resume a held target/project or create deployment permission.
 The scoped deployment-intent candidate allows only consumption of previously recorded owner intent after
-exact evidence review; see [deployment contract](DEPLOYMENT_HELPER.md) for activation limitations.
+exact evidence review; see [deployment contract](AUTO_DEPLOY.md) for activation limitations.
 Ordinary owner Auto/Execute retains explicit continuation behavior. Worker results are not permission grants.
 
 Internal wake notices have no user/worker chat message row, no owner Send/recency event, no bulk worker

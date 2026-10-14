@@ -4,9 +4,8 @@
 Do not clean/prune assignment worktrees, receipts or source branches during pause/cancel/recovery.
 Complete recovery backups require registered Git repositories/refs, private assignment-workspaces,
 SQLite and native history. Coding uses per-workspace disposable runtime data/ports, not production writes.
-Integration, release preparation and deployment remain serialized. The prepared bundle requires a
-separate helper v2 upgrade for its exact schema12 contract; [deployment helper](DEPLOYMENT_HELPER.md)
-defines the reviewable artifact and pending activation. [STATE.md](../STATE.md) records current facts.
+Merging to main and deployment are serialized and automatic when Auto-deploy is ON;
+see [delivery pipeline](AUTO_DEPLOY.md). [STATE.md](../STATE.md) records current facts.
 
 # Operations
 
@@ -91,25 +90,15 @@ Restore only to a fresh destination. Stop manager execution before switching dat
 
 Keep global `AI_MANAGER_DATA`, `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE` and absolute `AI_MANAGER_CODEX`. Default worker capacity is two; persisted `max_workers` remains the global capacity setting. Two roles remain: manual Manager and manual/automatic Bot. Global role selections, independent per-model/per-level policy and safe pinned assignment continuation follow [model settings](MODEL_SETTINGS.md).
 
-Run `pytest`, Ruff and JavaScript syntax checks. `pytest -q -m smoke` is the fast core-path suite that every assignment runs; tier checks are in [verification tiers](VERIFICATION_TIERS.md). `scripts/browser_smoke.py` uses a temporary authenticated HTTP fixture. `scripts/smoke_minimal.py` uses disposable data/projects and real subscription inference. Read the implementation record for actual release validation and deployment evidence; older stage reports describe earlier architecture.
+Run `pytest`, Ruff and JavaScript syntax checks. `pytest -q -m smoke` is the fast core-path suite each task runs once; the full suite runs once in the deploy script ([pipeline](AUTO_DEPLOY.md)). `scripts/browser_smoke.py` uses a temporary authenticated HTTP fixture. `scripts/smoke_minimal.py` uses disposable data/projects and real subscription inference. Read the implementation record for actual release validation and deployment evidence; older stage reports describe earlier architecture.
 
 ## Deployment
 
-Installable PWA launch, update/cache policy and device acceptance are documented
-in [PWA contract](PWA.md). Current release/deployment evidence is at the top of
-STATE.md; older release claims in this document are historical. PWA preparation
-changes application cache responses only, retaining the same controlled helper,
-private HTTPS listener and service configuration.
-
-
-The controlled independent helper is documented in [deployment helper](DEPLOYMENT_HELPER.md).
-It has durable succeeded releases; current navigation/audio success is referenced in STATE.md.
-Owner has authorized `integrated-recovery-append-popup-v1-20261013`; the manager reviews and calls `deploy_release`.
-Use its exact preparation manifest and succeeded deployment receipt. The integration worker does not restart or deploy. The older manual procedure below is historical
-context for code-only releases and requires an external quiet operator window.
-
-Prepare and test a separate checkout. Create an online SQLite backup and rehearse startup against its copy. When no active execution needs interruption, stop only `linko-bot-manager.service`, fast-forward this repository to the tested commit, and start the same user service. Its existing `.venv`, environment, daily backup timer and Tailscale listener are retained. Check service PID/start time, loopback/private HTTPS, served asset hashes, SQLite integrity and preserved records. Do not run acceptance assignments against production data.
-
+Deployment is the single script `scripts/deploy.py`, started by systemd when the manager writes a request
+(see [delivery pipeline](AUTO_DEPLOY.md)). Installable PWA launch, update/cache policy and device acceptance are in the
+[PWA contract](PWA.md). The one-time operator install is `cd /home/codex/projects/Linko-Bot-Manager && python3 scripts/install_deploy.py`.
+The last result is `~/.local/share/linko-bot-manager/deploy/last-deploy.txt`; database backups taken by each deploy are in
+`deploy/backups/<id>/`. Do not run acceptance assignments against production data.
 
 ## Attachment storage and recording recovery (prepared composer V3)
 

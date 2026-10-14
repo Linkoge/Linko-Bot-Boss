@@ -6,9 +6,9 @@ Current architecture, superseding prior supervision requirements as authorized o
 
 - Conversation mode is read-only; Auto delegates requested work; Execute treats the message as an objective through the same manager path.
 - Natural conversational requests; the manager decides when requested work should be delegated.
-- One ordinary request becomes one complete objective, with necessary project/conversation context. Related Small requests may batch into a queued, never-started assignment while the combined scope remains Small, preserving selected attachment references, metadata and first-seen order.
+- One ordinary request becomes one complete objective, with necessary project/conversation context. Related small requests (at most three concrete files) may batch into a queued, never-started assignment, preserving selected attachment references, metadata and first-seen order.
 - Native Codex tools handle investigation, editing, commands, dependency installation, builds, testing, debugging and Git.
-- Validation has two levels: Normal tasks run targeted tests, smoke/startup/health and relevant build/lint; Deploy runs full backend once on the exact combined candidate at existing automatic preparation. One worker self-check, no independent reviewer or escalation loop. Same-assignment repairs are capped at three durably across retries/restarts; retain failure reporting and affected-check reruns. Contract: docs/VERIFICATION_TIERS.md.
+- Validation: every task runs smoke and targeted tests once, at most three durable same-assignment repair rounds, then reports the concrete failure; one worker self-check, no independent reviewer, risk tier or escalation. The full backend suite runs once, in the deploy script. Contract: docs/AUTO_DEPLOY.md.
 - No separate planner, task DAG, verification controller, registered verification commands, permission profiles, capability broker or integration controller or independent reviewer.
 - No routine owner approval. Preserve explicit confirmation for catastrophic broad destruction, using native interaction where available and conversational continuation otherwise.
 - Automatic durable worker-result delivery to the originating manager conversation, including when the browser disconnects or another project is selected.
@@ -36,9 +36,7 @@ Implementation uses existing FastAPI, SQLite, plain JavaScript and Codex App Ser
 
 Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
 
-- Related Small requests may be batched into one queued, unstarted Small assignment (`delegate batch=true`) only while the combined scope stays Small. Post-deploy health failure automatically rolls back to the exact old commit without restoring old data; a throwaway rehearsal is in tests/test_rollback_rehearsal.py.
-- Validated local releases have a supported serialized immutable publication/import operation after worker cleanup, with pinned complete inventory, task/branch ownership, current-base and non-overwrite checks. Publication does not continue tasks, create intent or activate code. New V2 assignment bindings hash semantic scope and latest selected context, keeping unchanged lifecycle resumes stable; legacy V1 bindings are unchanged.
-- Owner deployment intent must be recorded before asynchronous preparation/audit, survive result/restart handoff, and consume only one reviewed exact prepared release. Later owner corrections/holds revoke or suspend unused intent; internal messages grant no new permission. Contract: docs/DEPLOYMENT_HELPER.md.
+- Related small requests may be batched into one queued, unstarted assignment (`delegate batch=true`).
 
 - Successful worker completion proceeds to normal automatic handoff. Failed work retains transactional, bounded same-assignment follow-up; no separate review loop. Preserve owner holds, read-only mode and authorization boundaries. Contract: docs/AUTOMATIC_RECOVERY.md.
 - New work resolves the latest visible supported model within the owner's selected Luna/Sol/Astra family from the authenticated catalog; keep existing assignment/recovery routes exact and policy-compatible. Contract: docs/MODEL_SETTINGS.md.
@@ -63,7 +61,7 @@ Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
 
 ## Bundled owner-scheduled To-Do / current-chat candidate (2026-10-13)
 
-The prepared manifest (not code changes alone) establishes release readiness; this candidate is not deployed.
+This candidate predates the pipeline below; deployment status is the deploy result, not a manifest.
 To-Do CRUD remains nonexecuting. Explicit Start or owner manager scheduling consumes exact source revisions
 only with accepted task creation/reuse/continuation, atomically retaining original source and durable task links.
 Failure leaves entries active. Older done work is not automatically rescheduled. Contract: docs/STARTUP_TODO.md.
@@ -86,24 +84,12 @@ for pending release status and verification evidence.
 
 - Current live Codex/Claude provider switch is included in the merged parallel/composer release. New work uses active provider and its independent saved policy; existing tasks retain exact provider/model/thread/workspace. No provider/model setting is reset by integration or preparation. Contract: docs/MODEL_SETTINGS.md; current base/failure/evidence: STATE.md.
 
-## Verified-work automatic deployment — second stage (2026-10-14)
+## Delivery pipeline (2026-10-15)
 
-Per-project **Auto-deploy verified work** is persisted in Settings; the configured Linko-Bot-Boss
-project is seeded ON once at activation, preserving explicit later OFF values. ON treats the original
-owner work request as standing recorded intent for its assignment's exact verified release, without
-a second approval or unrelated-message consent churn. OFF retains manual deployment behavior.
-Option B tier evidence bound to a clean commit, completed job follow-up and one full release gate
-remain mandatory. Explicit owner holds/OFF and changed scope are checked before activation.
-Schema/dependency releases require a copied-database migration rehearsal and stopped pre-activation
-backup; health failure rolls back code plus data, and changed dependencies. Failure never retries
-automatically. The independent helper v3 must first be installed externally; this implementation
-is publication-ready only after the fixed validation gate and is not a live deployment claim.
-Contract and evidence: [automatic deployment](docs/AUTO_DEPLOY.md).
-
-Close readiness corrections: ON new work also uses automatic policy when its owner supplies an
-explicit new-work deployment intent or deployment quote; the original intent/provenance is linked
-and superseded without repeating approval. OFF/manual remains unchanged. Audits of an explicitly
-fixed existing source/release do not substitute their own branches. Review-task readiness/holds
-remain mandatory, but immutable release mappings contain only the owner's source tasks; V1/V2
-hash semantics remain strict. Helper installers refuse manager/helper cgroups. Corrected artifact
-preparation cannot refresh the old runtime's sealed scope or deploy the live application.
+Per-project **Auto-merge and deploy finished work** (the manager's own project is seeded ON once). ON: each finished
+`RESULT: PASSED` assignment branch merges into main one at a time, then one plain script (`scripts/deploy.py`) waits
+for idle, backs up SQLite, restarts the service from main, health-checks it and rolls code and database back
+automatically on failure; a short result (success/failed/rolled_back + reason) is persisted and reported. OFF: no merge
+or deploy. Owner pauses/holds are honored. Deployed means a `success` result only. No release bundles, manifests,
+deployment intents/approvals, risk tiers, helper service or per-task AI review. One-time operator bootstrap:
+`python3 scripts/install_deploy.py`. Contract: [docs/AUTO_DEPLOY.md](docs/AUTO_DEPLOY.md).
