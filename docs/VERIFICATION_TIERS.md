@@ -98,3 +98,29 @@ with this contract in the same retained assignment branch. The fresh command
 Starlette/httpx deprecation warning. Full backend/browser and real-clock rollback results above are retained
 implementation evidence; documentation edits do not repeat those expensive suites. No application code changed
 in this follow-up. Nothing was prepared, deployed, pushed or restarted; no production data was accessed.
+
+## Serialized release candidate — 2026-10-14
+
+Integration uses only the pinned source `52ee9e7a9e8f686b8ab0cf63cf4e49c01149bdbc` in its original
+assignment workspace/branch. That source is already HEAD; explicit `git merge --ff-only` reports up to date.
+Live commit `c36b163216cd6c43ae75f40d8dfa1a7e736bedcb` is an ancestor, confirmed by live health and
+succeeded receipt `02220171270ebe62d05f81f8fb71c0da.json`. Relative to that base there are no changes to
+dependencies, database schema, deployment helper or served static assets. Existing live functionality remains
+in the candidate; changes are confined to Option B worker/manager verification/batching, tests and docs.
+
+Release ID `option-b-scoped-v1-20261014` is prepared using the existing fixed gate in
+`scripts/prepare_deployment.py` on the final committed candidate, with workspace-local data/output.
+The local preparation database contains only this assignment's task/project identity and scoped context events,
+copied read-only from runtime to bind the manifest's assignment evidence; it is never used as runtime state.
+No production database, preparation reservation or intent is written by the worker. The manager's existing
+integration reservation serializes this turn. Full backend and all 19 browser scripts run once. Smoke runs
+separately; `LINKO_REAL_HEALTH_CLOCK=1` gives the throwaway rollback its real health deadline. Browser screenshot
+paths are redirected to workspace evidence storage; application assertions and preparation checks are unchanged.
+
+Durable report, command outputs, timings and manager delivery facts:
+`.data/option-b-integration/REPORT.md` and `manager-summary.json` in the retained assignment workspace.
+Immutable bundle, validation log and manifest:
+`.data/option-b-integration/runtime/deployment-helper/releases/option-b-scoped-v1-20261014/`.
+Preparation is established only if the manifest exists and its hashes match. After worker completion releases
+integration, manager/operator publication of those exact bytes to the shared helper store is required before
+intent review/activation. No deploy, push, shared checkout edits, live data writes or restarts occur here.
