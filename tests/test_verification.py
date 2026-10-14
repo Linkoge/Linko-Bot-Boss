@@ -231,6 +231,30 @@ async def test_batching_merges_only_unstarted_small_work_from_same_conversation(
     assert db.one("SELECT count(*) AS n FROM events WHERE kind='task.batched'")['n'] == 1
 
 
+@pytest.mark.asyncio
+async def test_batching_preserves_and_deduplicates_attachment_context(system):
+    db, registry, server, chat, workers, scheduler = system
+    project = registry.list()[0]['id']
+    first_image = {'id': 'first', 'path': '/fixture/first.png', 'native_image': True}
+    second_image = {'id': 'second', 'path': '/fixture/second.png', 'native_image': True}
+    with db.transaction() as conn:
+        for call, attachments in (('a', [first_image]), ('b', [dict(first_image), second_image])):
+            conn.execute('INSERT INTO settings VALUES(?,?)',
+                         ('execution_attachments:manager-' + call, json.dumps(attachments)))
+    first = await delegate(scheduler, chat, project, 'a', objective='Make Send red', change_paths=['style.css'],
+                           constraints=['Keep spacing'])
+    merged = await delegate(scheduler, chat, project, 'b', objective='Match the reference colors',
+                            change_paths=['style.css'], constraints=['Keep spacing', 'Keep contrast'], batch=True)
+    assert merged['id'] == first['id'] and merged['batched']
+    context = json.loads(db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.context' "
+                               'ORDER BY seq DESC LIMIT 1', (first['id'],))['payload'])
+    assert context['attachments'] == [first_image, second_image]
+    assert context['constraints'] == ['Keep spacing', 'Keep contrast']
+    assert (await delegate(scheduler, chat, project, 'b', objective='Match the reference colors',
+                           change_paths=['style.css'], batch=True))['id'] == first['id']
+    assert db.one("SELECT count(*) AS n FROM events WHERE kind='task.batched'")['n'] == 1
+
+
 def worker_prompt():
     return next(json.loads(t['input'][0]['text']) for t in reversed(CatalogServer.turns)
                 if 'workspace_ownership' in t['input'][0]['text'])

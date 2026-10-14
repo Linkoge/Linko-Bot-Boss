@@ -108,19 +108,24 @@ succeeded receipt `02220171270ebe62d05f81f8fb71c0da.json`. Relative to that base
 dependencies, database schema, deployment helper or served static assets. Existing live functionality remains
 in the candidate; changes are confined to Option B worker/manager verification/batching, tests and docs.
 
-Release ID `option-b-scoped-v1-20261014` is prepared using the existing fixed gate in
-`scripts/prepare_deployment.py` on the final committed candidate, with workspace-local data/output.
-The local preparation database contains only this assignment's task/project identity and scoped context events,
-copied read-only from runtime to bind the manifest's assignment evidence; it is never used as runtime state.
-No production database, preparation reservation or intent is written by the worker. The manager's existing
-integration reservation serializes this turn. Full backend and all 19 browser scripts run once. Smoke runs
-separately; `LINKO_REAL_HEALTH_CLOCK=1` gives the throwaway rollback its real health deadline. Browser screenshot
-paths are redirected to workspace evidence storage; application assertions and preparation checks are unchanged.
+Review found a blocking defect before the full validation gate: `Tasks.batch` uses `dict.fromkeys` on
+selected-context lists, but attachment references are dictionaries. The new regression
+`test_batching_preserves_and_deduplicates_attachment_context` fails with `TypeError: unhashable type: 'dict'`
+at `ai_manager/tasks.py:100`, proving related Small requests with attachments cannot currently batch safely.
+The fix requires `ai_manager/` scope; declared change paths say `app/`, which does not exist in this repository.
+Scope clarification is pending before the backend can be edited. No release was prepared and no full/backend/browser
+suite was rerun during this integration. Fresh smoke passes 44 cases (312 deselected) in 3.06 s; smoke does not
+cover this new non-smoke regression, and the prior full-suite evidence does not establish release readiness.
 
-Durable report, command outputs, timings and manager delivery facts:
+Proposed release ID: `option-b-scoped-v1-20261014`. After correction and final commit, the existing fixed
+preparation gate must validate the complete candidate once using workspace-local data/output. The local
+preparation database contains only this assignment's task/project identity and scoped context events, copied
+read-only from runtime; no production database, reservation or intent is written by the worker. The actual
+manager integration reservation serializes this turn. Planned full validation includes all 19 browser scripts
+and real-deadline throwaway rollback. No bundle or manifest exists yet.
+
+Durable report, regression output, smoke timing and manager delivery facts:
 `.data/option-b-integration/REPORT.md` and `manager-summary.json` in the retained assignment workspace.
-Immutable bundle, validation log and manifest:
-`.data/option-b-integration/runtime/deployment-helper/releases/option-b-scoped-v1-20261014/`.
-Preparation is established only if the manifest exists and its hashes match. After worker completion releases
-integration, manager/operator publication of those exact bytes to the shared helper store is required before
-intent review/activation. No deploy, push, shared checkout edits, live data writes or restarts occur here.
+Manager must resolve backend scope, resume this same assignment, then review the corrected candidate and exact
+prepared evidence under the existing matching intent. No deploy, push, shared checkout edits, live data writes
+or restarts occurred. Nothing is ready for activation from this turn.

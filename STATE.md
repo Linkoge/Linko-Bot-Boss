@@ -1,4 +1,4 @@
-# Option B serialized candidate — preparation handoff, not deployed — 2026-10-14
+# Option B serialized candidate — blocked before preparation, not deployed — 2026-10-14
 
 Serialized integration resumed in this same retained assignment workspace. The sole pinned
 source `52ee9e7a9e8f686b8ab0cf63cf4e49c01149bdbc` is already included; its explicit
@@ -7,16 +7,24 @@ live health and succeeded receipt `02220171270ebe62d05f81f8fb71c0da.json` establ
 commit `c36b163216cd6c43ae75f40d8dfa1a7e736bedcb`, the candidate's ancestor/base.
 The earlier helper/application-pending headings below are historical for that release.
 
-Exact Option B release ID: `option-b-scoped-v1-20261014`. Preparation artifacts and full
-report are retained under this workspace's `.data/option-b-integration/`, with the
-immutable release at `runtime/deployment-helper/releases/option-b-scoped-v1-20261014/`.
-Only a completed manifest with matching bundle/validation hashes establishes preparation.
-The final committed candidate is tested by the existing fixed preparation gate once,
-including all backend/browser checks and real-deadline throwaway rollback; smoke runs
-separately. The external report records actual outcomes without changing the tested commit.
+Proposed Option B release ID: `option-b-scoped-v1-20261014`. Review found a blocking
+attachment batching defect in `ai_manager/tasks.py:100`: dictionary attachment references
+cannot be deduplicated by `dict.fromkeys`. The new regression
+`test_batching_preserves_and_deduplicates_attachment_context` reproduces
+`TypeError: unhashable type: 'dict'`. This source is not a deployable candidate.
+Fresh smoke still passes: 44 cases, 312 deselected in 3.06 s. Earlier full/backend/browser
+passing results predate this regression and do not establish readiness for this integration.
+
+The declared backend scope is `app/`, but the repository has only `ai_manager/`.
+Backend-scope clarification is requested before editing the required fix. Integration is
+paused for that dependency; the full suite has not been rerun and no immutable manifest
+or bundle exists. Detailed reproduction, scope and manager facts are retained in this
+workspace's `.data/option-b-integration/REPORT.md` and `manager-summary.json`.
+After the fix is authorized and committed, the complete candidate must pass the existing
+fixed backend/browser preparation gate once, including real-deadline throwaway rollback.
 
 No shared runtime database writes, services, source branches or checkout are modified.
-After this integration reservation releases, manager/operator must publish the exact local
+After the fix and successful preparation, and once integration releases, manager/operator must publish the exact local
 release directory into the shared helper release store, verify its hashes and assignment
 binding, review the candidate under the existing matching intent and activate via the helper.
 This worker neither creates nor consumes intent. Reprepare under a fresh ID if live advances
