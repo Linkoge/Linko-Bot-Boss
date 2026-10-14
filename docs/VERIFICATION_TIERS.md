@@ -114,7 +114,7 @@ without hashing or changing metadata. First-seen order is retained across old/ne
 existing constraints deduplicate and replay remains idempotent. The retained regression, tier/batching
 and attachment checks pass together (15 cases in 2.99 s). No partial auto-deploy work is included.
 
-Release ID: `option-b-scoped-v2-20261014`. The final committed candidate is validated once through the
+Release ID: `option-b-scoped-v3-20261014`. The final committed candidate is validated once through the
 existing fixed preparation CLI with `--task-id c3aebb4c76db45de81ccd8567c2ac259`, workspace-local runtime
 and evidence. The scoped evidence database contains only this assignment's task/project/context rows
 copied read-only from runtime, providing the authoritative assignment hash. The actual manager integration
@@ -126,7 +126,7 @@ application assertions and the fixed CLI validation checks are unchanged. Smoke 
 Durable report, exact candidate, command outputs, timings, hashes and manager delivery facts:
 `.data/option-b-integration/REPORT.md` and `manager-summary.json` in the retained workspace.
 Immutable release path:
-`.data/option-b-integration/runtime/deployment-helper/releases/option-b-scoped-v2-20261014/`.
+`.data/option-b-integration/runtime/deployment-helper/releases/option-b-scoped-v3-20261014/`.
 Only a complete manifest with matching bundle/validation hashes establishes preparation. Manager/operator
 publication of those exact bytes into the shared release store is a separate step after integration ends.
 No production data writes, shared checkout edits, service restarts, push or deployment are performed.
@@ -141,3 +141,10 @@ A focused reproduction also failed with the long workspace TMPDIR (Claude host t
 test passed with a short private per-assignment temporary directory. The interrupted full run cannot
 establish complete-suite success, so one corrected full attempt is necessary. Completed targeted and smoke
 checks are reused; failed v1 evidence is retained. Candidate application code is unchanged by this correction.
+
+Attempt v2 passed all 356 backend cases, Ruff, six JS syntax checks and the model-settings browser script.
+Its screenshot wrapper then missed the scripts import path, causing composer import failure before assertions.
+The wrapper is corrected outside repository source. Fresh v3 preparation reuses those succeeded checks with
+source/log hashes and reruns only the remaining browser checks. Relative to the v2 tested candidate, only
+STATE/verification documentation changes; all application, test, build and browser-source bytes match.
+The failed v2 release log remains immutable; full backend validation is not repeated.
