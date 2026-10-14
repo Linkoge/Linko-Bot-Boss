@@ -1,3 +1,13 @@
+# Current parallel/workspace operations — 2026-10-14
+
+[Parallel execution](PARALLEL_EXECUTION.md) supersedes unconditional one-worker-per-project operation.
+Do not clean/prune assignment worktrees, receipts or source branches during pause/cancel/recovery.
+Complete recovery backups require registered Git repositories/refs, private assignment-workspaces,
+SQLite and native history. Coding uses per-workspace disposable runtime data/ports, not production writes.
+Integration, release preparation and deployment remain serialized. The prepared bundle requires a
+separate helper v2 upgrade for its exact schema12 contract; [deployment helper](DEPLOYMENT_HELPER.md)
+defines the reviewable artifact and pending activation. [STATE.md](../STATE.md) records current facts.
+
 # Operations
 
 The existing dedicated `linko-bot-manager.service` serves the repository using its Python environment, loopback port 8787 and existing private Tailscale HTTPS listener. Keep unrelated services and network listeners unchanged.

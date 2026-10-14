@@ -1,3 +1,15 @@
+# Approved recording row and parallel Send — 2026-10-14
+
+[Composer contract](chat-history.md) supersedes previous layout descriptions: + / Record / Send right
+stack; recording timer–Upload–Discard bottom-left; ⇈ immediately left of ordinary Send when relevant.
+All retained capture/transcription/error phases keep necessary controls visible independently of focus.
+Both sends finish/transcribe through the established whole-file flow; ⇈ adds one per-request permission
+only to the accepted original recording submission. Context/auth/history changes, visibility interruption,
+late discarded results, editing during transcription, replacement/picker recovery and pending retries retain
+existing safe behavior. A failed or interrupted transcription leaves a draft/recoverable recording, never
+persistent permission. Upload replacement remains edit-only and provider-decided arbitrary audio intake.
+Full evidence/status: [STATE.md](../STATE.md). Historical release headings below retain earlier scope.
+
 # Recording composer / direct Send — bundled candidate, 2026-10-13
 
 Release `todo-handoff-chat-trash-recording-agents-v1-20261013`; full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/todo-chat-20261013/REPORT.md`. Not deployed.

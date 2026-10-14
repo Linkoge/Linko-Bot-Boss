@@ -1,3 +1,30 @@
+# Composer visibility and approved bottom row — 2026-10-14
+
+Candidate `parallel-composer-integrated-v1-20261014`; exact preparation/status: [STATE.md](../STATE.md).
+Any nonempty draft (including whitespace), draft attachment/upload or retained recording keeps the
+composer expanded with Send visible regardless of blur, hidden keyboard or focus. Empty idle may
+collapse; empty focused activation retains the existing best-effort keyboard behavior. Keyboard signals
+control caret appearance, not visibility of a draft's Send. Preserve bounded draft scrolling and manual
+chat position. Minimum gaps are 4px (3px on narrow audio rows); controls remain at least 44px tall/wide.
+
+Expanded right stack is attachment + at top, Record/stop in middle, ordinary Send bottom far-right.
+The separate accessible ⇈ Send is immediately left of ordinary Send on the bottom row, only when the
+selected project has relevant unfinished coding work and Auto/Execute mode. It submits explicit
+one-request permission, never a toggle. Normal Send retains default behavior. Recording bottom-left
+places timer then audio Upload then Discard on one row; Download/Retry and phase/error controls retain
+appropriate lifecycle visibility. Removing a separate timer line leaves more height for draft text;
+all controls fit viewport/keyboard constraints without text overlap. The input reserves the ⇈ control's
+width while shown. Recording + ⇈ uses the existing finish/transcribe/submit safety flow once, with the
+same original mode, draft, attachments and receipt. Error/recovered recordings do not auto-send.
+[Permission/workspace contract](PARALLEL_EXECUTION.md); [audio contract](AUDIO.md).
+
+Chromium checks cover 1440/393/320px, reduced/synthetic keyboard viewports, blur and recording hit targets,
+whole-Blob fixture transcription, one opt-in submission and next-request default. Physical mobile
+keyboard/native picker/PWA installation and paid STT/provider acceptance are not claimed. Existing
+PWA/auth/red theme/manual scrolling/chat trash/Agents output/arbitrary safe attachments remain included.
+The succeeded live To-Do/chat receipt is now 2bf6554aecb9fd66c9ab49554bfb95ac at 6c42d5b; earlier pending
+statements below are historical. Old Send-above-Record and draft-collapse descriptions are superseded.
+
 # Single-slot chat trash and stable Agents output — bundled candidate, 2026-10-13
 
 Release `todo-handoff-chat-trash-recording-agents-v1-20261013`; full evidence: `/home/codex/.local/share/linko-bot-manager/deployments/todo-chat-20261013/REPORT.md`. Not deployed.

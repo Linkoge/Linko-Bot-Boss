@@ -12,7 +12,7 @@ Current architecture, superseding prior supervision requirements as authorized o
 - No separate planner, task DAG, reviewer, verification controller, registered verification commands, permission profiles, capability broker or integration controller.
 - No routine owner approval. Preserve explicit confirmation for catastrophic broad destruction, using native interaction where available and conversational continuation otherwise.
 - Automatic durable worker-result delivery to the originating manager conversation, including when the browser disconnects or another project is selected.
-- Existing and future registered projects participate automatically. One active coding worker per project, concurrent different projects, one global capacity limit.
+- Existing and future registered projects participate automatically. Sequential same-project coding by default; explicit per-request owner chat/⇈ Send permission may enable isolated concurrent assignments under dependency/conflict/global-capacity guards. Integration/preparation/deployment remain serialized. Contract: docs/PARALLEL_EXECUTION.md.
 - SQLite preserves conversations, assignments, execution history, question answers and result-delivery identity. Native Codex thread storage is also required for resumable model context.
 - Restart recovery inspects prior outcomes before continuation. Never launch a competing worker while a prior owned process remains unresolved. Do not blindly replay a turn with unknown launch identity.
 - Preserve deliberate pauses/cancellations, existing user edits, historical records and owner notes.
@@ -43,7 +43,8 @@ Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
 - Tasks and History remain within viewport width with complete long filenames/paths/unbroken text wrapping; local code scrolling stays contained. Family buttons have a subtle red gradient distinct from plain effort buttons, with accessible selected/disabled/focus states.
 
 - Compact chat composer follows [chat UI contract](docs/chat-history.md): two-control idle,
-  three-control active, one further square-control increment for overflow, bounded draft scrolling;
+  expanded +/Record/Send right stack, conditional per-request ⇈ Send beside ordinary Send, bounded draft scrolling;
+  any nonempty draft remains expanded with Send after blur/keyboard closure; recording timer–Upload–Discard occupies one bottom-left row;
   muted caret follows supported keyboard signals, gray composer focus border, blank empty chat.
   Send shares Upload appearance; selected workspace category text stays red without an underline.
 

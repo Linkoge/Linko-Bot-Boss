@@ -281,6 +281,8 @@ class Chat:
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         source = self.db.one("SELECT e.*,t.lifecycle AS task_status,t.blocker FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery_execution=?", (execution_id,))
         prompt = {"mode": mode, "message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
+        prompt['request_execution'] = {'parallel_permission': self.db.setting('execution_parallel:' + execution_id, {}),
+                                       'scope': 'this owner request only; refinements stay on existing assignment'}
         from .deployment_intent import Intents
         intents = [v for v in Intents(self.db).list(conversation['project_id'])
                    if v['conversation_id'] == conversation['id'] and v['status'] in {'recorded', 'reviewed', 'dispatch_failed'}]
@@ -345,13 +347,17 @@ class Chat:
             return json.loads(row["receipt"])
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto", request_id=None,
-                     attachment_ids=None, recovery_task=None, todos=None):
+                     attachment_ids=None, recovery_task=None, todos=None, parallel=False):
         from .deployment import Handoff
         handoff = Handoff(self.db.path.parent)
         if handoff.ready_to_stop() or (handoff.gated() and not (delivery or recovery_task)):
             raise ValueError('Deployment pending; wait before submitting new work')
+        if parallel and (type(parallel) is not bool or mode == 'conversation' or delivery or recovery_task or not project_id):
+            raise ValueError('Parallel Send requires an owner Auto/Execute request in one project')
         display_content = content
         payload = [project_id, conversation_id, content, mode]
+        if parallel:
+            payload.append({'parallel': True})
         if attachment_ids:
             payload.append(attachment_ids)
         if todos:
@@ -426,6 +432,10 @@ class Chat:
                 "INSERT INTO messages VALUES(?,?,?,?,?,?,?)",
                 (response_id, conversation["id"], "assistant", "", "queued", execution_id, now + 0.0001),
             )
+            if parallel:
+                conn.execute('INSERT INTO settings VALUES(?,?)', ('execution_parallel:' + execution_id,
+                             json.dumps({'source': 'ui', 'execution_id': execution_id, 'project_id': project_id})))
+                self.db.event(conn, 'chat.parallel_permission', {'source': 'ui', 'request_id': request_id}, project_id, execution_id=execution_id)
             if items:
                 conn.execute('INSERT INTO settings VALUES(?,?)',
                              ('execution_attachments:' + execution_id, json.dumps(references)))

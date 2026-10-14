@@ -190,3 +190,17 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #project-menu .project-menu-row span{min-width:0;overflow-wrap:anywhere;padding:8px;color:var(--muted)}
 #project-menu summary{min-height:44px;padding:12px 8px;box-sizing:border-box;cursor:pointer;color:var(--muted)}
 #project-menu details{border-top:1px solid var(--border);margin-top:4px}
+
+/* Approved right stack and one-request double Send; controls remain 44px tall. */
+.composer-footer :is(#attach,#microphone,#send,#parallel-send){width:44px;height:44px;min-height:44px;min-width:44px;padding:0;font-size:20px;line-height:1}
+#parallel-send{position:absolute;right:56px;bottom:6px}
+.composer.composer-parallel .composer-input{padding-right:48px}
+.composer textarea{padding-bottom:0}
+.audio-panel{display:flex;align-items:center;gap:4px;margin:0;min-height:44px;max-height:88px;overflow:auto;flex:0 0 auto}
+.audio-panel #audio-status{flex:1;min-width:0;line-height:1.2;font-size:11px;overflow-wrap:anywhere}
+.audio-actions{position:static;display:flex;flex-wrap:nowrap;gap:4px;align-items:center;justify-content:flex-start;background:transparent;flex:none}
+.audio-panel button{min-width:44px;min-height:44px;height:44px;padding:0 7px;font-size:12px}
+#stop-chat{top:6px;right:56px;max-width:calc(100% - 112px)}
+@media(max-width:340px){.audio-panel{gap:3px}.audio-actions{gap:3px}.audio-panel button{padding:0 5px;font-size:11px}}
+
+.composer-recording .audio-panel #audio-status{flex:0 1 auto;max-width:calc(100% - 116px)}

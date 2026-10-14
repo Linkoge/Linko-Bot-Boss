@@ -1,3 +1,13 @@
+# Parallel recovery ownership — 2026-10-14
+
+The [parallel execution contract](PARALLEL_EXECUTION.md) extends retained task/thread identity with
+exact workspace/branch/base. Recovery never switches to the shared checkout or creates a replacement
+worktree for a missing/changed owned workspace. Existing native outcome/launch identity inspection,
+process cleanup, unanswered questions, owner/project holds, account gates and capacity remain enforced.
+Integration reservations survive restart and stop new project writers until confirmed cleanup;
+explicit resumed integration retains pinned source commits. No additional recurring AI call is added.
+Current actual live versus prepared state: [STATE.md](../STATE.md); older headings below are historical.
+
 # Integrated activation status — 2026-10-13
 
 Current integrated activation target: `integrated-recovery-append-popup-v1-20261013`; see [STATE.md](../STATE.md).

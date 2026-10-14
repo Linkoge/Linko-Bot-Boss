@@ -1,3 +1,13 @@
+# Isolated assignment ownership — 2026-10-14
+
+The [parallel execution contract](PARALLEL_EXECUTION.md) supersedes unconditional project exclusivity.
+Every control still targets the exact assignment/revision and receipt-proven native process. Pause,
+cancel, resume, append and restart retain its worktree/branch/native thread. A held assignment is not
+implicitly resumed by another request or internal result. Integration is an explicitly reserved
+continuation of an existing assignment, reacquired with pinned source commits after pause/cleanup.
+Current candidate, actual live receipt and validation references: [STATE.md](../STATE.md).
+Earlier activation headings below are historical for their named releases.
+
 # Integrated activation status — 2026-10-13
 
 Current integrated activation target: `integrated-recovery-append-popup-v1-20261013`; see [STATE.md](../STATE.md).

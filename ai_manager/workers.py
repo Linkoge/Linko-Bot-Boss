@@ -32,6 +32,15 @@ At completion preserve a detailed durable report/evidence; update relevant autho
 Report current established facts, lasting effects, pending work, verification and deployment receipt references to
 manager for the routine brief/recent-delivery update. Distinguish proposed/implemented/verified/deployed.
 Never infer deployment success from implementation or a requested restart; require durable succeeded evidence.
+When workspace_ownership.branch is present, edit/commit only that assignment workspace and branch.
+Do not edit, switch, reset, stash or merge in shared_checkout or another assignment worktree.
+Do not write shared runtime databases, restart shared services, deploy or push from isolated coding turns.
+Use disposable per-workspace runtime data, ports and outputs for tests; report required shared operations to manager.
+Commit completed source changes in your retained branch; never delete another assignment branch/worktree.
+Respect declared change_paths. If work needs another assignment's scope, report dependency and pause for sequential review.
+Integration turns explicitly grant serialized integration in THIS same retained workspace only. Merge listed
+source branches there, retain every source branch on conflict, review conflicts sequentially and validate ALL combined changes.
+Prepare an exact integrated candidate only after combined validation. No competing integration or release preparation.
 """
 
 
@@ -104,6 +113,9 @@ class Workers:
         try:
             if self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))["stop_requested"]:
                 return
+            with self.db.transaction() as conn:
+                from .parallel import worker_admission
+                worker_admission(conn, task)
             if not reserve(self.db, execution_id):
                 wait_for_gate(self.db, execution_id)
                 return
@@ -115,6 +127,10 @@ class Workers:
                 conn.execute("UPDATE executions SET status='queued',retry_at=NULL WHERE id=?", (execution_id,))
             project = self.registry.get(task["project_id"])
             root = self.registry.allowed_path(project["path"])
+            if task.get("workspace"):
+                from .parallel import check_workspace
+                root = check_workspace(task)
+            policy = self.db.setting("assignment_policy:" + task["id"], {})
             from .model_settings import assignment_route
             await server.start()
             route = assignment_route(self.db, server, task)
@@ -137,6 +153,10 @@ class Workers:
                 "objective": task["description"],
                 "acceptance_criteria": task["acceptance"],
                 "project": {k: project[k] for k in ("name", "instructions")},
+                "workspace_ownership": {"task_id": task["id"], "path": str(root),
+                    "branch": task.get("workspace_branch"), "base": task.get("workspace_base"),
+                    "shared_checkout": project["path"], "integration": policy.get("integration", False)},
+                "execution_policy": policy,
             }
             selected = self.db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task["id"],))
             if selected:
@@ -311,6 +331,9 @@ class Workers:
                     "UPDATE tasks SET lease_owner=NULL WHERE id=? AND lease_owner=? AND EXISTS(SELECT 1 FROM executions WHERE id=? AND finished_at IS NOT NULL)",
                     (task["id"], execution_id, execution_id),
                 )
+                from .parallel import release_integration, retain_source
+                retain_source(self.db, conn, task["id"])
+                release_integration(conn, task["id"])
                 conn.execute(
                     "UPDATE questions SET status='expired' WHERE execution_id=? AND status='pending'", (execution_id,)
                 )
@@ -529,6 +552,11 @@ class Workers:
                         "UPDATE tasks SET lease_owner=NULL WHERE id=? AND lease_owner=?", (task["id"], execution_id)
                     )
         with self.db.transaction() as conn:
+            from .parallel import reconcile_integration, retain_source
+            for task in self.tasks.list():
+                if task["workspace"] and not task["lease_owner"] and task["status"] == "completed" and not self.db.setting("assignment_source:" + task["id"]):
+                    retain_source(self.db, conn, task["id"])
+            reconcile_integration(conn)
             conn.execute(
                 "UPDATE questions SET status='expired' WHERE status='pending' AND execution_id NOT IN (SELECT lease_owner FROM tasks WHERE lease_owner IS NOT NULL)"
             )

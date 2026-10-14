@@ -1,3 +1,31 @@
+# Reviewed schema12/helper v2 bundle — 2026-10-14
+
+Candidate `parallel-composer-integrated-v1-20261014` includes the rename/stash/owner-intent fixes and
+all succeeded To-Do/chat/PWA functionality. Preparation uses actual succeeded live base 6c42d5b,
+receipt `deployment-helper/results/2bf6554aecb9fd66c9ab49554bfb95ac.json`. Older PWA-only and waiting-idle
+observations below are historical. The owner explicitly says do not deploy or push this new bundle.
+
+The installed independent helper remains v1, unchanged. It refuses any db.py diff. Reviewed v2 permits
+ONLY the pinned schema11→12 db.py byte hashes in `ai_manager/deployment.py`: three nullable assignment
+workspace columns and the shared/isolated unique index contract. Unknown schema/dependency changes
+still reject. The manifest records exact schema contract and packaged `helper-v2.py` SHA256; snapshot
+verification compares all original columns/rows, requires new workspace columns NULL on cutover,
+checks exact indices and allows only marker12. Immediate fenced rollback preserves additive columns,
+original rows and old code; no old database snapshot overwrites later data. A later rollback after
+isolated tasks exist requires separate ownership-aware review, not this immediate cutover fallback.
+
+Release preparation is serialized by its private file lock and receipt-bound SQLite reservation;
+manager integration cannot acquire its global reservation during preparation. Fixed tests/browser
+checks validate the exact combined commit before immutable bundle/manifest creation. Installed v1
+cannot activate this release until reviewed helper v2 is separately installed. The packaged helper
+is installed only by an explicit future operation using `scripts/install_deployment_helper_v2.py`
+with exact release ID and existing --data. It verifies artifact hash/config/unit, rejects pending
+handoffs/lock contention, preserves the old helper/unit receipt and restarts only the independent
+helper service. This task does NOT invoke that installer, a deploy request, service restart or push.
+Then normal owner-authorized exact release deployment retains all idle/drain/backup/auth/data/asset
+checks. Only durable matching succeeded evidence establishes activation. Current facts/report:
+[STATE.md](../STATE.md). Old blanket no-schema capability wording below describes installed v1.
+
 # Scoped owner deployment handoff — candidate, 2026-10-14
 
 Exact integrated candidate: `owner-deploy-intent-stash-v1-20261014`, isolated checkout

@@ -86,9 +86,9 @@ function interruptAudio(session,message){
   if(audioState.session!==session||session.phase!=='recording')return;
   session.interrupted=true;session.message=message;session.send=false;finishAudio(false);
 }
-function finishAudio(send){
+function finishAudio(send,parallel=false){
   const session=audioState.session;if(session?.phase!=='recording')return;
-  session.send=send&&!session.changed;session.phase='stopping';if(!session.interrupted)session.message='';clearInterval(session.timer);renderAudio();
+  session.send=send&&!session.changed;session.parallel=parallel&&session.send;session.phase='stopping';if(!session.interrupted)session.message='';clearInterval(session.timer);renderAudio();
   if(session.recorder.state!=='inactive')session.recorder.stop();releaseMicrophone(session);
 }
 function appendTranscript(session,text){
@@ -124,7 +124,7 @@ async function transcribeAudio(session){
     audioState.session=null;clearAudioCheckpoint();renderAudio();
     if(send){
       submitting=true;
-      await sendSubmission({project_id:session.project,conversation_id:session.conversation,mode:session.mode,content});
+      await sendSubmission({project_id:session.project,conversation_id:session.conversation,mode:session.mode,content,parallel:!!session.parallel});
     }else if(state.project===session.project){$('message-input').focus();}
     else notice(`Transcript added to ${session.label}'s draft.`);
   }catch(error){

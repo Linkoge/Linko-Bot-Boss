@@ -1,3 +1,40 @@
+# Owner-approved parallel/composer integrated candidate — 2026-10-14
+
+Exact release ID: `parallel-composer-integrated-v1-20261014`. Candidate:
+`/home/codex/checkouts/linko-parallel-composer-20261014`, descended from latest prepared
+`owner-deploy-intent-stash-v1-20261014` commit `51bb67f5e61f4528566804ecc8a5a8c3e6815e91`.
+Preserves completed rename/stash/owner-deployment-intent fixes and every earlier integrated feature.
+The immutable `deployment-helper/releases/parallel-composer-integrated-v1-20261014/manifest.json`
+establishes exact preparation/validation; source changes alone do not establish readiness.
+
+Actual live is now succeeded `todo-handoff-chat-trash-recording-agents-v1-20261013`, commit
+`6c42d5b368731cb8615f4726e25bc29b085c16c6`; durable receipt
+`/home/codex/.local/share/linko-bot-manager/deployment-helper/results/2bf6554aecb9fd66c9ab49554bfb95ac.json`.
+Read-only auth-status and all 20 served aliases matched that receipt. Older PWA-only/waiting-idle
+statements below are historical and superseded. This new bundle is NOT deployed or pushed.
+
+Implements durable per-request owner UI/chat parallel consent, manager assessment/controls,
+transactional isolated worktree/branch/native-thread ownership, dependency/conflict/capacity/hold
+checks, reasoned sequential queueing, serialized existing-worker integration/combined validation,
+source retention/candidate ancestry checks and quiet worktree/ref backup. Schema12 adds three
+nullable workspace fields and shared/isolated ownership indices; old rows/threads/claims remain.
+Composer preserves any nonempty blurred/keyboard-hidden draft and Send, recording/attachment controls,
+approved +/Record/Send right stack, recording timer–Upload–Discard bottom-left and ⇈/Send bottom-right.
+No persistent toggle, new router/planner, recurring AI call, deployment, production migration or restart.
+
+Authoritative [parallel contract](docs/PARALLEL_EXECUTION.md), [composer](docs/chat-history.md),
+[audio](docs/AUDIO.md), [deployment helper](docs/DEPLOYMENT_HELPER.md) describe boundaries.
+Installed helper v1 is unchanged and refuses the schema diff; the release packages reviewed hash-pinned
+helper v2 plus an explicit future upgrade installer. Neither helper upgrade nor app activation is performed.
+Physical mobile keyboard/native-picker/PWA-install and paid provider/native-model concurrency acceptance
+are not claimed. Chromium and disposable Git/process/native-history fixtures establish tested behavior.
+
+Full durable report, validation/evidence and manager routine brief/recent-delivery facts:
+`/home/codex/.local/share/linko-bot-manager/deployments/parallel-composer-20261014/REPORT.md`
+and sibling `manager-summary.json`. Record one related delivery ID and distinguish implemented,
+verified, prepared and deployed. Keep deployment/helper upgrade/device acceptance pending; no full
+memory reconciliation. Current source assignment: `65e5086b085547419703d1c4c6e08930`.
+
 # Owner deployment authorization handoff — integrated candidate, 2026-10-14
 
 Candidate `owner-deploy-intent-stash-v1-20261014` fixes lost authorization across owner → audit →

@@ -71,7 +71,7 @@ def main():
                 page.evaluate("$('send').disabled=true;$('attach').disabled=true")
                 assert appearance('#send') == appearance('#attach')
                 page.evaluate("$('send').disabled=false;$('attach').disabled=false")
-                page.locator('#send').focus()
+                page.locator('#attach').focus()
                 page.keyboard.press('Tab')
                 assert page.locator('#microphone').evaluate('(n)=>n===document.activeElement')
                 assert page.locator('#microphone').evaluate('(n)=>getComputedStyle(n).outlineStyle') != 'none'
@@ -87,9 +87,9 @@ def main():
                 field.fill('short')
                 assert page.locator('.composer-input').bounding_box()['height'] == 140
                 page.locator('#chat-menu-button').focus()
-                page.wait_for_function("()=>$('send').hidden")
-                assert page.locator('#send').is_hidden()
-                assert page.locator('.composer-input').bounding_box()['height'] == 92
+                page.wait_for_function("()=>!$('send').hidden")
+                assert page.locator('#send').is_visible()
+                assert page.locator('.composer-input').bounding_box()['height'] == 140
                 field.fill('')
                 page.locator('#chat-menu-button').focus()
                 # Every workspace category shares text-only selection at desktop/mobile widths.
@@ -372,17 +372,19 @@ def main():
                     boxes = [page.locator('#'+id).bounding_box() for id in ('attach','send','microphone')]
                     assert all(box['width'] == box['height'] == 44 for box in boxes)
                     assert boxes[0]['x'] == boxes[1]['x'] == boxes[2]['x']
-                    assert boxes[0]['y'] < boxes[1]['y'] < boxes[2]['y']
+                    assert boxes[0]['y'] < boxes[2]['y'] < boxes[1]['y']
                     composer = page.locator('#chat-form').bounding_box()
                     assert composer['height'] <= 202 and composer['y']+composer['height'] <= height
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
                     assert page.locator('#audio-stop').count() == 0 and page.locator('#audio-cancel').is_visible()
                     assert page.locator('#microphone').get_attribute('aria-label') == 'Stop recording and transcribe'
-                    recording_controls=[page.locator('#'+id).bounding_box() for id in ('audio-cancel','audio-upload')]
+                    recording_controls=[page.locator('#'+id).bounding_box() for id in ('audio-upload','audio-cancel')]
                     input_box=page.locator('.composer-input').bounding_box()
-                    assert all(box['height']>=44 and box['width']>=64 for box in recording_controls)
-                    assert abs(recording_controls[-1]['x']+recording_controls[-1]['width']-(input_box['x']+input_box['width']))<1
-                    assert recording_controls[-1]['x']>=input_box['x']+input_box['width']/2
+                    assert all(box['height']>=44 and box['width']>=44 for box in recording_controls)
+                    timer=page.locator('#audio-status').bounding_box()
+                    assert timer['x']==input_box['x']
+                    assert timer['x']+timer['width']<=recording_controls[0]['x']
+                    assert recording_controls[0]['x']+recording_controls[0]['width']<=recording_controls[1]['x']
                     assert all(page.evaluate('(id)=>{const b=$(id).getBoundingClientRect();return document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===$(id)}',id) for id in ('audio-cancel','audio-upload','attach','send','microphone'))
                     page.screenshot(path=f'/tmp/linko-compact-composer-{width}.png')
                     geometry.append({'viewport': [width,height], 'composer': composer, 'controls': boxes, 'recording_controls': recording_controls})

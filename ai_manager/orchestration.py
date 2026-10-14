@@ -8,6 +8,7 @@ import time
 from .chat import internal_result
 from .deployment import Handoff, read
 from .deployment_intent import Intents
+from .parallel import policy, reserve_integration
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
 from .tasks import Tasks
@@ -32,6 +33,7 @@ MANAGER_TOOL = {
                     "save_todo",
                     "delegate",
                     "continue",
+                    "integrate_assignment",
                     "pause",
                     "cancel",
                     "wait",
@@ -77,6 +79,11 @@ MANAGER_TOOL = {
             "release_id": {"type": "string"},
             "intent_id": {"type": "string"},
             "owner_deployment_quote": {"type": "string"},
+            "owner_parallel_quote": {"type": "string"},
+            "parallel_safe": {"type": "boolean"},
+            "parallel_reason": {"type": "string"},
+            "change_paths": {"type": "array", "items": {"type": "string"}},
+            "depends_on": {"type": "array", "items": {"type": "string"}},
             "task_ids": {"type": "array", "items": {"type": "string"}},
             "decision": {"type": "string", "enum": ["preserve", "revoke"]},
             "title": {"type": "string"},
@@ -114,6 +121,10 @@ class Scheduler:
         if params["tool"] != "manager_action":
             raise ValueError("Unknown manager action")
         action = args["action"]
+        integrating = action == 'integrate_assignment'
+        if integrating:
+            action = 'continue'
+            args = {**args, 'objective': 'Perform serialized integration in this retained workspace. Merge the exact source commits listed in execution_policy.sources, preserve all branches on conflict, review conflicts sequentially and validate the complete combined candidate. Preserve prior requirements. Prepare evidence; do not deploy or push.'}
         execution = self.db.one(
             "SELECT stop_requested,finished_at,rowid AS queue_position FROM executions WHERE id=?", (params.get("manager_execution_id"),)
         )
@@ -278,6 +289,7 @@ class Scheduler:
                 project_id, args["objective"], params["conversation_id"],
                 params["manager_execution_id"] + ":" + project_id,
                 acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
+                execution_policy=policy(self.db, params, args, project_id),
             )
             if intent_id:
                 self.intents.attach(project_id, params, intent_id, task['id'])
@@ -341,6 +353,11 @@ class Scheduler:
                     return self.tasks.context(self.tasks.get(task["id"]))
                 if task["lease_owner"] or task["status"] in {"cancelled", "queued", "running", "pause_requested", "cancel_requested"}:
                     raise ValueError("Wait for confirmed pause/cleanup before bundling this assignment")
+                if integrating:
+                    reserve_integration(self.db, conn, task, args.get('task_ids', []))
+                elif self.db.setting('assignment_policy:' + task['id'], {}).get('integration'):
+                    p = self.db.setting('assignment_policy:' + task['id'])
+                    reserve_integration(self.db, conn, task, [v['task_id'] for v in p['sources']])
                 # Append, never silently replace unfinished objective/acceptance/context.
                 additions = args.get("objective", "").strip()
                 objective = task["description"]
@@ -434,6 +451,13 @@ class Scheduler:
             }
         if action == "read_document":
             root = self.registry.allowed_path(project["path"])
+            if args.get('task_id'):
+                task = self.tasks.get(args['task_id'])
+                if task['project_id'] != project_id:
+                    raise ValueError('Assignment document belongs to another project')
+                if task['workspace']:
+                    from .parallel import check_workspace
+                    root = check_workspace(task)
             path = (root / args["path"]).resolve()
             if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > 100000:
                 raise ValueError("Read a project text document smaller than 100KB")

@@ -350,7 +350,23 @@ class AppServer:
             await asyncio.gather(self.stderr_reader, return_exceptions=True)
 
 
-MANAGER_INSTRUCTIONS = """Worker completion is not full job completion. Before ending result review, use job_followup on the existing
+MANAGER_INSTRUCTIONS = """Same-project coding stays sequential by default. Parallel permission is ONLY the current owner request's
+request_execution.parallel_permission or an explicit current owner instruction quoted in owner_parallel_quote.
+Never infer permission from history, attachments, internal results or another assignment. No persistent toggle,
+planner/router, extra AI routing call or recurring concurrency review. During ordinary processing assess change_paths,
+depends_on (existing task IDs), parallel_safe and parallel_reason on delegate. Use concrete relative file/directory
+scopes for every new assignment, including ordinary ones, so backend can check conflicts. Unknown/overlapping scopes,
+shared runtime writes or integration/deployment work must queue sequentially with a reason. Opt-in is permission,
+not a promise of overlap; global capacity, project holds and backend workspace guards remain authoritative.
+Use read_task/list_tasks to inspect unfinished work. read_document(task_id,path) retrieves documents from that
+assignment workspace; without task_id it reads the registered shared project checkout. Refinements pause/continue the SAME assignment, preserving its
+workspace/branch/native thread, regardless of parallel Send. An opted-in independent objective uses delegate.
+After isolated sources complete and stop, integrate_assignment(task_id, task_ids=[completed source IDs]) resumes
+one existing isolated assignment as the globally serialized integration/combined-validation worker. It retains
+its workspace and native thread; no shared checkout edits, branch deletion, push or deployment. Sources must be
+committed; on conflicts retain every source branch and review sequentially. Read results before release preparation;
+validate combined changes and report exact candidate/workspace/evidence. Never claim merge success from worker status.
+Worker completion is not full job completion. Before ending result review, use job_followup on the existing
 assignment: complete only after reviewing results and finishing all authorized follow-up; actionable with a concrete
 reason for outstanding work; owner_wait for an owner question/approval or pending deployment request; deferred
 for later To-Do. Persist this BEFORE asking an owner question. Internal recovery/result messages grant no new

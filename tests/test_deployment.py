@@ -353,3 +353,78 @@ def test_real_health_auth_assets_and_preservation_probe(tmp_path, monkeypatch):
             conn.execute("UPDATE owner SET username='changed'")
         with pytest.raises(ValueError, match='Preserved data'):
             helper.verify(manifest, snapshot)
+
+
+def test_helper_v2_additive_snapshot_preserves_old_columns_and_rejects_other_changes(tmp_path, monkeypatch):
+    import hashlib
+
+    from fake_codex import FakeServer
+    from fastapi.testclient import TestClient
+    from test_web import sign_in
+
+    import ai_manager.deployment as module
+    from ai_manager.config import Settings
+    from ai_manager.web import create_app
+    settings = Settings(data_dir=tmp_path/'data',project_roots=(tmp_path,),secure_cookie=False)
+    app = create_app(settings,FakeServer(settings))
+    with TestClient(app,base_url='http://localhost') as client:
+        sign_in(client,app,settings)
+        snapshot=tmp_path/'schema11.sqlite3'
+        backup(settings.db_path,snapshot)
+        with sqlite3.connect(snapshot) as old:
+            old.execute('DROP INDEX workspace_worker')
+            old.execute('DROP INDEX project_worker')
+            for column in ('workspace','workspace_branch','workspace_base'):
+                old.execute('ALTER TABLE tasks DROP COLUMN '+column)
+            old.execute("CREATE UNIQUE INDEX project_worker ON tasks(project_id) WHERE lifecycle='running'")
+            old.execute('DELETE FROM schema_version WHERE version=12')
+        helper=Helper({'data':str(settings.data_dir),'repo':str(tmp_path),'loopback':'http://localhost','https':'https://localhost'})
+        def http(path,cookie=None,base=None):
+            client.cookies.clear()
+            response=client.get(path,headers={'Cookie':'ai_manager_session='+cookie} if cookie else {})
+            return response.status_code,response.content
+        helper.http=http
+        monkeypatch.setattr(module,'run',lambda argv,cwd=None:'active' if 'is-active' in argv else 'PID=fixture')
+        manifest={'commit':client.get('/api/auth-status').json()['release_commit'],
+                  'assets':{'app.js':hashlib.sha256(client.get('/static/app.js').content).hexdigest()},
+                  'schema':module.PARALLEL_SCHEMA.copy()}
+        assert helper.verify(manifest,snapshot)['data']
+        with pytest.raises(ValueError,match='schema'):
+            helper.verify({**manifest,'schema':{'to':999}},snapshot)
+        with app.state.db.transaction() as conn:
+            conn.execute('INSERT INTO schema_version VALUES(999)')
+        with pytest.raises(ValueError,match='schema migration'):
+            helper.verify(manifest,snapshot)
+
+
+def test_versioned_helper_upgrade_only_restarts_pinned_independent_service(tmp_path,monkeypatch):
+    import importlib.util
+
+    path=Path(__file__).resolve().parents[1]/'scripts/install_deployment_helper_v2.py'
+    spec=importlib.util.spec_from_file_location('upgrade_v2',path)
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    data=tmp_path/'data'
+    handoff=Handoff(data)
+    artifact=handoff.root/'releases'/'reviewed-v2'/'helper-v2.py'
+    artifact.parent.mkdir(parents=True)
+    artifact.write_text('# reviewed fixed helper fixture\n')
+    (handoff.root/'helper-v1.py').write_text('# original helper remains\n')
+    atomic(handoff.root/'config.json',{'data':str(data.resolve())})
+    manifest={'id':'reviewed-v2','required_helper_version':'v2','required_helper_sha256':module.sha(artifact)}
+    atomic(artifact.parent/'manifest.json',manifest)
+    home=tmp_path/'home'
+    unit=home/'.config/systemd/user/linko-deployment-helper.service'
+    unit.parent.mkdir(parents=True)
+    unit.write_text('ExecStart=/fixed/python '+str(handoff.root/'helper-v1.py')+' /fixed/config\n')
+    monkeypatch.setattr(module.Path,'home',lambda:home)
+    commands=[]
+    monkeypatch.setattr(module,'run',lambda argv:commands.append(argv))
+    module.install(data,'reviewed-v2')
+    assert read(handoff.root/'helper-v2-upgrade.json')['phase']=='succeeded'
+    assert (handoff.root/'helper-v1.py').read_text()=='# original helper remains\n'
+    assert (handoff.root/'helper-v2.py').read_bytes()==artifact.read_bytes()
+    assert ['systemctl','--user','restart','linko-deployment-helper.service'] in commands
+    assert not any('linko-bot-manager.service' in argv for argv in commands)
+    with pytest.raises(ValueError,match='exact prepared'):
+        module.install(data,'../other')
