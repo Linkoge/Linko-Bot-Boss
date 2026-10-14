@@ -106,3 +106,23 @@ scope/manifest, interrupted preparation, restart/chat cleanup and no automatic r
 `scripts/browser_auto_deploy.py` checks authenticated/CSRF-protected desktop/mobile toggle
 persistence, one-time ON seed, project independence and layout. Final validation/artifact hashes
 and the publication-ready manager handoff are retained in this assignment's detailed report.
+
+## Exact registered release readiness audit — 2026-10-14
+
+`auto-deploy-standing-policy-v1-20261014` is registered (publication event 201759).
+The serialized audit verified all 82 registered files, pinned manifest/index, exact candidate
+`0223c3493a6edf9b54b280fa5993fb6404e2d8ca`, clean source and live base `bee8b088`.
+The existing 404-case backend, 20-browser and Ruff/JS gate remains valid and was reused.
+Missing separate risky review completed with findings; it is not a clean native post-check.
+The live manager also includes review tasks when comparing source-only intent/manifest hashes,
+which blocks exact intent review even after audit cleanup. Manager sequential review is required;
+this audit does not alter source, immutable release evidence or runtime intent records.
+
+Helper remains v2. This audit runs inside the manager cgroup and cannot safely install v3.
+The supported external installer delegates to v2 and has no installer cgroup check of its own;
+an authorized operator must enforce the documented outside-manager/helper precondition.
+No application activation or helper restart occurred. Full findings, identity assertions,
+coverage, precise external command and receipt requirements are retained in
+`assignment-workspaces/27b4bbb092704f739eb7b30b2bb4d308/.data/auto-deploy-bootstrap/REPORT.md`
+and `EXTERNAL_HANDOFF.md` under the manager data directory. Current recorded intent is
+`ba8ce92a3d406a98cdfc9fa81851c251`; this evidence does not create or expand authorization.
