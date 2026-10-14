@@ -46,7 +46,7 @@ The event records `review_required` and reasons. Old events without that field r
 
 `scripts/prepare_deployment.py` uses `release_policy` from `ai_manager/verification.py`, within the existing preparation
 gate. Smoke runs for every release. Normal/Risky run the full backend exactly once there; Small-only omits it.
-Changed Small test files run directly; runtime UI behavior uses existing selected browser acceptance. Python lint
+Changed Small test files (including root test files) run directly; changed test helpers select importing tests instead of attempting to collect the helper; runtime UI behavior uses existing selected browser acceptance. Python lint
 and JS syntax checks cover changed surviving files, resolved against the candidate rather than the manager checkout.
 
 `BROWSER_FEATURES` maps feature modules to existing consumers: audio/attachments → composer/audio;

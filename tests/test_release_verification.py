@@ -88,11 +88,15 @@ def test_preparation_reads_all_assignment_floors_and_actual_diff(tmp_path, monke
         for task, tier in [('small', 'small'), ('normal', 'normal'), ('risky', 'risky')]:
             conn.execute('INSERT INTO settings VALUES(?,?)', ('assignment_policy:' + task,
                          json.dumps({'verification': {'tier': tier}})))
+    with sqlite3.connect(tmp_path / 'manager.sqlite3') as conn:
+        conn.execute('INSERT INTO settings VALUES(?,?)', ('assignment_policy:integration',
+                     json.dumps({'integration': True, 'verification': {'tier': 'small'}})))
     monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'docs/x.md\ntest_changed.py')
     result = selected_policy(repo, 'live', 'candidate', tmp_path, ['small', 'normal'])
     assert result['tier'] == 'normal' and result['existing_files'] == ['test_changed.py']
     assert selected_policy(repo, 'live', 'candidate', tmp_path, ['small', 'risky'])['tier'] == 'risky'
     assert selected_policy(repo, 'live', 'candidate', tmp_path, ['missing'])['tier'] == 'risky'
+    assert selected_policy(repo, 'live', 'candidate', tmp_path, ['integration'])['tier'] == 'risky'
     monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'ai_manager/deployment.py')
     assert selected_policy(repo, 'live', 'candidate', tmp_path, ['small'])['tier'] == 'risky'
 
@@ -153,3 +157,21 @@ def test_retained_private_audit_artifacts_do_not_select_unrelated_browser_suites
     assert policy['browsers'] == ['worker_delivery', 'agent_controls', 'deployment', 'auto_deploy']
     commands = checks(Path(sys.executable), policy)
     assert not any('.data/auto-deploy-bootstrap/audit.py' in argv for argv in commands)
+
+
+
+def test_small_changed_test_helpers_select_consumers_and_root_tests(tmp_path, monkeypatch):
+    repo = tmp_path / 'repo'
+    (repo / 'tests').mkdir(parents=True)
+    (repo / 'tests/helper.py').write_text('VALUE = 1')
+    (repo / 'tests/test_consumer.py').write_text('from helper import VALUE')
+    (repo / 'tests/test_unrelated.py').write_text('')
+    (repo / 'test_root.py').write_text('')
+    with sqlite3.connect(tmp_path / 'manager.sqlite3') as conn:
+        conn.execute('CREATE TABLE settings(key TEXT,value TEXT)')
+    monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'tests/helper.py')
+    policy = selected_policy(repo, 'base', 'candidate', tmp_path, [])
+    assert policy['tier'] == 'small' and policy['target_tests'] == ['tests/test_consumer.py']
+    assert [sys.executable, '-m', 'pytest', '-q', 'tests/test_consumer.py'] in checks(Path(sys.executable), policy)
+    monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'test_root.py')
+    assert selected_policy(repo, 'base', 'candidate', tmp_path, [])['target_tests'] == ['test_root.py']
