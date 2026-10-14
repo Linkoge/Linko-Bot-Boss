@@ -108,24 +108,29 @@ succeeded receipt `02220171270ebe62d05f81f8fb71c0da.json`. Relative to that base
 dependencies, database schema, deployment helper or served static assets. Existing live functionality remains
 in the candidate; changes are confined to Option B worker/manager verification/batching, tests and docs.
 
-Review found a blocking defect before the full validation gate: `Tasks.batch` uses `dict.fromkeys` on
-selected-context lists, but attachment references are dictionaries. The new regression
-`test_batching_preserves_and_deduplicates_attachment_context` fails with `TypeError: unhashable type: 'dict'`
-at `ai_manager/tasks.py:100`, proving related Small requests with attachments cannot currently batch safely.
-The fix requires `ai_manager/` scope; declared change paths say `app/`, which does not exist in this repository.
-Scope clarification is pending before the backend can be edited. No release was prepared and no full/backend/browser
-suite was rerun during this integration. Fresh smoke passes 44 cases (312 deselected) in 3.06 s; smoke does not
-cover this new non-smoke regression, and the prior full-suite evidence does not establish release readiness.
+The owner corrected backend scope to `ai_manager/` and `scripts/` on this same assignment.
+The attachment regression is fixed: selected context is deduplicated by equality, allowing dictionaries
+without hashing or changing metadata. First-seen order is retained across old/new attachment references;
+existing constraints deduplicate and replay remains idempotent. The retained regression, tier/batching
+and attachment checks pass together (15 cases in 2.99 s). No partial auto-deploy work is included.
 
-Proposed release ID: `option-b-scoped-v1-20261014`. After correction and final commit, the existing fixed
-preparation gate must validate the complete candidate once using workspace-local data/output. The local
-preparation database contains only this assignment's task/project identity and scoped context events, copied
-read-only from runtime; no production database, reservation or intent is written by the worker. The actual
-manager integration reservation serializes this turn. Planned full validation includes all 19 browser scripts
-and real-deadline throwaway rollback. No bundle or manifest exists yet.
+Release ID: `option-b-scoped-v1-20261014`. The final committed candidate is validated once through the
+existing fixed preparation CLI with `--task-id c3aebb4c76db45de81ccd8567c2ac259`, workspace-local runtime
+and evidence. The scoped evidence database contains only this assignment's task/project/context rows
+copied read-only from runtime, providing the authoritative assignment hash. The actual manager integration
+reservation serializes this turn; the preparation lock/reservation affects only local evidence storage.
+Full backend and all 19 browser scripts run once; `LINKO_REAL_HEALTH_CLOCK=1` exercises the real health
+failure/rollback deadline. Browser screenshot destinations are redirected into workspace evidence storage;
+application assertions and the fixed CLI validation checks are unchanged. Smoke runs separately.
 
-Durable report, regression output, smoke timing and manager delivery facts:
-`.data/option-b-integration/REPORT.md` and `manager-summary.json` in the retained assignment workspace.
-Manager must resolve backend scope, resume this same assignment, then review the corrected candidate and exact
-prepared evidence under the existing matching intent. No deploy, push, shared checkout edits, live data writes
-or restarts occurred. Nothing is ready for activation from this turn.
+Durable report, exact candidate, command outputs, timings, hashes and manager delivery facts:
+`.data/option-b-integration/REPORT.md` and `manager-summary.json` in the retained workspace.
+Immutable release path:
+`.data/option-b-integration/runtime/deployment-helper/releases/option-b-scoped-v1-20261014/`.
+Only a complete manifest with matching bundle/validation hashes establishes preparation. Manager/operator
+publication of those exact bytes into the shared release store is a separate step after integration ends.
+No production data writes, shared checkout edits, service restarts, push or deployment are performed.
+
+**Deployment intent is revoked.** The latest owner correction supersedes the earlier existing-intent
+handoff; preparation does not grant activation permission. A future deployment needs new owner authorization,
+current-base verification, immutable evidence review and an actual succeeded helper receipt.

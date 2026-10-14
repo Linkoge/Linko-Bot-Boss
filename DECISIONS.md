@@ -21,3 +21,5 @@ Historical decisions and evidence remain in Git history; [docs/CODEBASE_CLEANUP.
   in an existing retained worker workspace, preserve conflict branches and exact deployment receipts.
   Any nonempty draft independently retains expanded composer/Send; timer and audio actions share the
   bottom-left row with conditional ⇈/Send at right. Contract: docs/PARALLEL_EXECUTION.md and docs/chat-history.md.
+
+- 2026-10-14: Close correction on the retained Option B assignment authorizes actual `ai_manager/` and `scripts/` scope. Deduplicate selected context by equality so dictionary attachment references retain metadata and first-seen order; preserve the regression and all original tier requirements. Prepare only the scoped candidate with its exact task binding. Latest owner explicitly revoked deployment intent; no automatic deployment or activation under the earlier intent. Exact validation/preparation evidence stays in the retained workspace and STATE.md.

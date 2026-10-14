@@ -6,7 +6,7 @@ Current architecture, superseding prior supervision requirements as authorized o
 
 - Conversation mode is read-only; Auto delegates requested work; Execute treats the message as an objective through the same manager path.
 - Natural conversational requests; the manager decides when requested work should be delegated.
-- One ordinary request becomes one complete objective, with necessary project/conversation context.
+- One ordinary request becomes one complete objective, with necessary project/conversation context. Related Small requests may batch into a queued, never-started assignment while the combined scope remains Small, preserving selected attachment references, metadata and first-seen order.
 - Native Codex tools handle investigation, editing, commands, dependency installation, builds, testing, debugging and Git.
 - Validation follows deterministic risk tiers (owner-approved 2026-10-14, [contract](docs/VERIFICATION_TIERS.md)): Small (UI/text) runs smoke plus touched-file tests and build/lint; Normal adds the full backend suite once at the end; Risky (DB/auth/deploy/worker/manager logic, integration, deployment) adds one automatic cheap read-only diff review. Paths/text set a floor that the manager may raise, never lower. The actual branch diff is reclassified after completion. Every task runs the fast smoke suite. Release preparation runs the full backend+browser suite once. Reports stay short; full evidence stays in execution records. Completion does not imply independent acceptance certification.
 - No separate planner, task DAG, verification controller, registered verification commands, permission profiles, capability broker or integration controller; the tier review is the only reviewer.

@@ -1,35 +1,40 @@
-# Option B serialized candidate — blocked before preparation, not deployed — 2026-10-14
+# Option B scoped candidate — correction complete, not deployed — 2026-10-14
 
-Serialized integration resumed in this same retained assignment workspace. The sole pinned
-source `52ee9e7a9e8f686b8ab0cf63cf4e49c01149bdbc` is already included; its explicit
-fast-forward merge is up to date, with no conflicts and no branches removed. Read-only
-live health and succeeded receipt `02220171270ebe62d05f81f8fb71c0da.json` establish live
-commit `c36b163216cd6c43ae75f40d8dfa1a7e736bedcb`, the candidate's ancestor/base.
+Serialized integration remains in assignment `c3aebb4c76db45de81ccd8567c2ac259` on its
+retained `linko/assignment-c3aebb4c76db45de81ccd8567c2ac259` branch. The sole pinned
+source `52ee9e7a9e8f686b8ab0cf63cf4e49c01149bdbc` is included; explicit fast-forward
+merge reported up to date with no conflicts or branch removal. The owner corrected
+`app/` scope to `ai_manager/` and `scripts/` and authorized the batching correction.
+No unrelated or partial auto-deploy changes are included.
+
+`Tasks.batch` now deduplicates selected context by equality, preserving first-seen
+attachment dictionaries, all reference metadata and order. The retained manager-delegation
+regression, attachment tests and tier/batching tests pass: 15 cases in 2.99 s.
+The former blocked state is superseded; pre-tier/running assignments retain their behavior.
+Full release readiness is established by the exact manifest and report below, not by smoke
+or source implementation alone. The fixed preparation gate runs the final backend suite and
+all 19 browser scripts once, including the real-deadline throwaway rollback rehearsal.
+
+Release ID: `option-b-scoped-v1-20261014`. Immutable preparation evidence is retained under
+this workspace's `.data/option-b-integration/runtime/deployment-helper/releases/option-b-scoped-v1-20261014/`.
+The CLI binds `--task-id c3aebb4c76db45de81ccd8567c2ac259`; a local SQLite evidence copy
+contains only scoped task/project/context rows from read-only runtime. No shared database
+is written. Exact commit, check outcomes, timings, hashes and routine manager delivery facts:
+`.data/option-b-integration/REPORT.md` and sibling `manager-summary.json`. A matching
+manifest, bundle and validation log are required before calling this candidate prepared.
+
+Observed live remains clean commit `c36b163216cd6c43ae75f40d8dfa1a7e736bedcb`, an ancestor,
+with healthy scheduler and succeeded receipt `02220171270ebe62d05f81f8fb71c0da.json`.
+Dependencies, database schema, deployment helper and static assets are unchanged from live.
 The earlier helper/application-pending headings below are historical for that release.
 
-Proposed Option B release ID: `option-b-scoped-v1-20261014`. Review found a blocking
-attachment batching defect in `ai_manager/tasks.py:100`: dictionary attachment references
-cannot be deduplicated by `dict.fromkeys`. The new regression
-`test_batching_preserves_and_deduplicates_attachment_context` reproduces
-`TypeError: unhashable type: 'dict'`. This source is not a deployable candidate.
-Fresh smoke still passes: 44 cases, 312 deselected in 3.06 s. Earlier full/backend/browser
-passing results predate this regression and do not establish readiness for this integration.
-
-The declared backend scope is `app/`, but the repository has only `ai_manager/`.
-Backend-scope clarification is requested before editing the required fix. Integration is
-paused for that dependency; the full suite has not been rerun and no immutable manifest
-or bundle exists. Detailed reproduction, scope and manager facts are retained in this
-workspace's `.data/option-b-integration/REPORT.md` and `manager-summary.json`.
-After the fix is authorized and committed, the complete candidate must pass the existing
-fixed backend/browser preparation gate once, including real-deadline throwaway rollback.
-
-No shared runtime database writes, services, source branches or checkout are modified.
-After the fix and successful preparation, and once integration releases, manager/operator must publish the exact local
-release directory into the shared helper release store, verify its hashes and assignment
-binding, review the candidate under the existing matching intent and activate via the helper.
-This worker neither creates nor consumes intent. Reprepare under a fresh ID if live advances
-or the immutable candidate/evidence changes. Deployment remains pending a succeeded receipt.
-Full integration contract/evidence pointer: [verification tiers](docs/VERIFICATION_TIERS.md).
+Deployment intent is revoked by the latest owner correction. No deployment, push, shared
+checkout edit, live data write, service restart, intent consumption or automatic activation
+is authorized or performed. After integration releases, manager/operator may publish the
+exact preparation artifacts to the shared helper store and verify hashes/assignment binding.
+Any later activation requires new owner authorization and controlled helper success; this
+report grants none. If live advances, reprepare against the actual base under a fresh ID.
+Contract: [verification tiers](docs/VERIFICATION_TIERS.md).
 
 # Option B verification — implemented and verified, not deployed — 2026-10-14
 

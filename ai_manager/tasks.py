@@ -97,7 +97,13 @@ class Tasks:
                            (target['id'],)).fetchone()
         context = json.loads(old['payload']) if old else {}
         for key, values in (selected or {}).items():
-            context[key] = list(dict.fromkeys(context.get(key, []) + values))
+            # Attachment references are dictionaries; equality preserves their
+            # metadata and first-seen order without requiring hashable values.
+            merged = []
+            for value in context.get(key, []) + values:
+                if value not in merged:
+                    merged.append(value)
+            context[key] = merged
         if (verification['tier'] != 'small' or len(objective) > 24000 or len(combined) > 12000
                 or len(json.dumps(context)) > 12000):
             return None
