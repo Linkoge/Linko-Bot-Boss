@@ -4,57 +4,65 @@ Owner-approved 2026-10-14. Small tasks use less time and fewer tokens. Risky wor
 Code: `ai_manager/verification.py`, delegate/continue in `ai_manager/orchestration.py`, batching in
 `ai_manager/tasks.py`, worker prompt and post-checks in `ai_manager/workers.py`.
 
-## Tiers
+## Tiers (approved reductions, 2026-10-14)
 
-| Tier | Typical scope / route | Worker checks | Skipped |
-|---|---|---|---|
-| Small | UI/text, one script/test file; cheapest family or workhorse at Low | smoke suite, tests covering touched files, build/lint of touched files | full suite (release preparation runs it once), reviewer |
-| Normal | ordinary code; workhorse at Medium | smoke, targeted tests while iterating, build/lint, full backend suite **once** at the end | repeated full runs, reviewer |
-| Risky | DB/schema, auth/session, deploy/release/backup, worker/manager/recovery logic, integration, deployment preparation; workhorse High or strongest | Normal checks + browser/acceptance scripts for touched behavior, then **one** cheap read-only diff review (automatic) | worker self-review passes |
+| Tier | Worker checks | Release preparation |
+|---|---|---|
+| Small | Smoke, changed-behavior targeted tests, relevant build/lint | Smoke, changed test files, relevant lint/syntax and selected existing behavior checks; no mandatory full backend or full browser suite |
+| Normal | Smoke, targeted tests while iterating, relevant build/lint; no end-of-task full backend | Full backend once plus smoke, relevant build/lint and existing browser checks for changed behavior |
+| Risky | Normal worker checks plus relevant acceptance; independent review only for sensitive actual changes | Normal release checks plus existing relevant migration/dependency rehearsal |
 
-The full backend+browser suite runs exactly once per release in `scripts/prepare_deployment.py`. Small tasks rely on
-that gate. Every tier runs the smoke suite and gets the same short report rule. The worker's final reply is at most 12
-lines: outcome, files, commit, checks with pass/fail counts, limitations. The execution record is the detailed
-evidence. It keeps every native command/output event and the `task.verification` record, alongside updated docs.
+Correct substantive findings and failures, then rerun affected checks after fixes. Do not repeat successful unrelated
+suites. No additional validation stage, periodic checks, AI planning/routing call, reviewer layer or approval step.
+Worker replies remain at most 12 short lines; full native commands/outputs and `task.verification` stay in the execution
+record. Completed work follows the existing standing Auto-deploy setting and normal manager handoff.
 
-## Deterministic classification
+## Deterministic classification and combined releases
 
-`select(change_paths, objective, acceptance, requested, integration, deployment, previous)` has no AI call:
+The existing `select(change_paths, objective, acceptance, requested, integration, deployment, previous)` classifier
+and its broad risky path/text floors are unchanged. DB/auth/deploy/worker/manager/entry-point/configuration code,
+dependency/infra manifests, risky request text, integration and deployment-intent assignments stay Risky. Docs/tests
+are not risky by path. Small requires 1–3 concrete UI/text/test files, at most one script/test; other ordinary scopes
+are Normal. Manager requests and continuations can raise the floor and never lower it. Model routing is unchanged.
 
-- **Risky** if any declared path is a dependency/infra manifest (`pyproject.toml`, `uv.lock`, `package.json`, `.env`, …),
-  has a DB/unit suffix (`.sql`, `.sqlite`, `.service`, `.timer`, …), is a code file under a risky directory
-  (`deploy/`, `migrations/`, `auth/`, `db/`, `security/`, `.github/`, …), or is a code file whose name contains a risky word
-  (db, schema, migration, auth, session, csrf, secret, permission, deploy, release, rollback, backup, restore, worker, manager,
-  orchestration, scheduler, recovery, lease, assignment, parallel, provider, codex, claude, tasks, server, service, api).
-  Backend code is also risky when its name contains an entry-point/config word (app, main, web, cli, config, settings,
-  chat, routes, …). UI scripts such as `app.js` are not risky for those words. Also risky: objective/acceptance text that names
-  databases/schemas/migrations, auth/login/sessions/CSRF/passwords/credentials/secrets, encryption, security, permissions,
-  rollback, backup/restore, systemd or leases. Integration assignments and deployment-intent delegations are risky too.
-  Docs (`.md`, `.txt`, `.rst`) and test files are never risky by path.
-- **Small** only with 1–3 concrete files, all docs/styles/assets/UI scripts/tests, at most one script/test file.
-- **Normal** otherwise, including empty, directory or unknown scope and any backend/configuration code.
+Post-completion classifies actual changes against `workspace_base`, including untracked files, and records assigned,
+actual/effective tiers, escalation and undeclared paths. Escalations require same-assignment follow-up. Preparation
+classifies the complete live-base-to-candidate diff and takes the highest tier across every included assignment
+policy and actual diff. Unknown/pre-tier included assignments conservatively retain a Risky floor. Integration's
+existing Risky floor remains. Declared Small work cannot conceal an actual risky file.
 
-The manager's optional `verification_tier` can raise the floor and never lower it. A requested lower tier is recorded
-as `requested <tier> not allowed`. `continue` reclassifies the appended objective/acceptance with the previous tier as
-a floor (`tier never lowers`). For integration it is risky. Repeated identical inputs give identical records
-(`{version, tier, requested, reasons}`) in `assignment_policy:<task>.verification`.
+## Sensitive independent review
 
-In Automatic model mode, a Risky delegate is rejected if its pair is weaker than workhorse High or strongest family while
-such a pair is permitted. Manual mode always uses the owner's saved pair (see [model settings](MODEL_SETTINGS.md)).
+Tier and review eligibility are separate. Review reasons come from actual runtime paths and changed diff lines,
+plus sensitive requested behavior: auth/security, database migrations/schema, deployment/rollback/backup and worker
+concurrency/recovery. Ordinary manager/backend/provider/chat filenames alone no longer purchase a review. For
+DB/worker/task/scheduler/orchestration/assignment paths, changed migration/concurrency/recovery indicators select
+review rather than the broad filename alone. Docs/tests alone do not select a path review. The existing cheapest
+permitted read-only process, bounded input/time and interruption behavior remain. Findings remain substantive;
+unavailability never changes worker completion, but required unavailable/failed review prevents automatic deployment.
+The event records `review_required` and reasons. Old events without that field retain their prior Risky review rule.
 
-## Post-completion guard and diff review
+## Selected release checks and exact evidence
 
-Mis-declared paths cannot keep risky work Small. When a tiered worker turn completes, the backend lists the assignment
-branch's actual changes against `workspace_base`, including untracked files. It classifies those paths with the same
-rules. The `task.verification` event records: assigned/actual/effective tier, `escalated`, changed files, undeclared files.
-If the effective tier is Risky and files changed, it runs one review turn. This turn uses a separate non-native,
-read-only provider process on the cheapest pair the owner policy permits. The input is the objective, the acceptance
-criteria and a diff bounded to 60 000 characters. There is a 300 s bound. Findings are recorded. Review failure records
-`unavailable` and never blocks completion. A pause or cancel during review interrupts it like the worker.
+`scripts/prepare_deployment.py` uses `release_policy` from `ai_manager/verification.py`, within the existing preparation
+gate. Smoke runs for every release. Normal/Risky run the full backend exactly once there; Small-only omits it.
+Changed Small test files run directly; runtime UI behavior uses existing selected browser acceptance. Python lint
+and JS syntax checks cover changed surviving files, resolved against the candidate rather than the manager checkout.
 
-The manager's `worker_result.verification` is compact (tiers, escalation, up to 5 undeclared paths, review status and
-600 characters of findings). An escalation or review findings mean `continue` on the same assignment before the job
-is complete. If recovery finishes a turn after a restart, the notice says `post_check: not recorded for this attempt`.
+`BROWSER_FEATURES` maps feature modules to existing consumers: audio/attachments → composer/audio;
+registry/projects → project UI/stash; memory, models, usage, markdown and To-Do → their checks; deployment/publication
+→ deployment/auto-deploy; verification → worker delivery, controls, deployment/auto-deploy; tasks/workers/assignment/
+orchestration/native transport → delivery, controls, parallel/To-Do/model/auto-deploy consumers as applicable.
+Changed browser scripts select themselves. Docs/tests alone select no browser. Shared HTTP/auth/DB/config or unknown
+runtime modules conservatively select all consumers, with a per-script reason. Small shared UI changes use existing
+representative composer, project UI and smoke acceptance instead of a mandatory full browser suite, alongside worker
+changed-behavior checks. Tests remain available; no useful coverage is removed.
+
+The manifest and hashed validation log record tier, actual paths, selected browsers/coverage and skipped-check reasons.
+The new automatic attestation says `release_checks: passed`, replacing mandatory `full_suite: passed`. Dispatch and
+the independent helper require the exact new attestation and policy version; immutable historical full-suite
+attestations remain supported. Commit/scope/base/assets/bundle/log/index binding, failed-check rejection, idle/drain,
+backups, post-activation health, rollback and ON/OFF/holds remain intact.
 
 ## Batching
 
@@ -88,6 +96,10 @@ preservation checks. `systemctl` is simulated by a local server process, so the 
 unhealthy candidate ends `rolled_back`: detached base checkout, forward `main` preserved, base assets served, database
 untouched, one report. A healthy control ends `succeeded`. `LINKO_REAL_HEALTH_CLOCK=1` keeps the real 45 s deadline.
 It passed in 45.6 s on 2026-10-14.
+
+## Historical evidence before the approved reductions
+
+Dated sections below retain their original checks; the current policy above supersedes mandatory full-suite/review wording.
 
 ## Documentation follow-up evidence — 2026-10-14
 
@@ -161,8 +173,8 @@ retained report; no blind full-suite repetition or worker activation.
 ## Optional automatic deployment
 
 With per-project Auto-deploy verified work ON, the worker post-check also records its clean
-commit. The deterministic pipeline requires the current tier and, for Risky, the completed
+commit. The deterministic pipeline requires the current tier and, for sensitive changes, the completed
 nonblocking cheap review before release checks. Missing, failed or escalated evidence does not
-auto-deploy. A smoke gate plus the one fixed full backend/browser release gate binds the exact
+auto-deploy. The tier-selected preparation gate binds the exact
 candidate before preparation. Explicit holds/OFF and changed scope are retained; unrelated chat
 needs no renewed approval. See [AUTO_DEPLOY.md](AUTO_DEPLOY.md).

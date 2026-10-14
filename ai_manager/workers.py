@@ -24,7 +24,7 @@ from .recovery import (
     with_reset,
 )
 from .tasks import Tasks
-from .verification import REVIEW_INSTRUCTIONS, changes, floor, plan, rank
+from .verification import DIFF_LIMIT, REVIEW_INSTRUCTIONS, changes, floor, plan, rank, review_reasons
 
 REVIEW_SECONDS = 300
 
@@ -347,7 +347,7 @@ class Workers:
                 )
 
     async def verify(self, task, execution_id, root, route):
-        """Classify the actual branch diff; effective risky work gets one cheap read-only diff review.
+        """Classify the actual branch diff; sensitive actual changes get one cheap read-only diff review.
 
         Evidence is recorded internally and never blocks or changes completion; the manager decides follow-up.
         """
@@ -385,7 +385,9 @@ class Workers:
             current = conn.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone()
             record['scope'] = assignment_evidence(conn, current)
         record["escalated"] = rank(record["effective"]) > rank(assigned)
-        if record["effective"] == "risky":
+        record["review_reasons"] = review_reasons(paths, (task["description"] or "") + "\n" + (task["acceptance"] or ""), diff)
+        record["review_required"] = bool(record["review_reasons"])
+        if record["review_required"]:
             record["review"] = await self.review(task, root, route, paths, diff, truncated) if paths else {
                 "status": "unavailable", "reason": "No actual changes to review"}
         with self.db.transaction() as conn:
@@ -403,7 +405,7 @@ class Workers:
                 queue = asyncio.Queue()
                 server.queues[thread_id] = queue
                 prompt = {"objective": task["description"][:6000], "acceptance_criteria": task["acceptance"][:3000],
-                          "changed_files": paths[:200], "diff": diff, "diff_truncated": truncated}
+                          "changed_files": paths[:200], "diff": diff[:DIFF_LIMIT], "diff_truncated": truncated}
                 turn = await server.request("turn/start", {"threadId": thread_id, "input": [
                     {"type": "text", "text": json.dumps(prompt)}], **pair, "serviceTierForTurn": "default"})
                 turn_id = turn["turn"]["id"]

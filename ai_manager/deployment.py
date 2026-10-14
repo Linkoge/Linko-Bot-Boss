@@ -168,14 +168,21 @@ def auto_guard(conn, origin, manifest, release):
     context = conn.execute("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task['id'],)).fetchone()
     fields['context'] = json.loads(context[0]) if context else {}
     digest = hashlib.sha256(json.dumps(fields, sort_keys=True).encode()).hexdigest()
-    attestation = manifest.get('auto_deploy') or {}
     if (manifest.get('assignment_evidence_version') != 2 or manifest.get('assignments') != {task['id']: digest}
-            or attestation != {'execution_id': execution['id'], 'commit': manifest['commit'],
-                               'tier_checks': 'passed', 'full_suite': 'passed'} or not manifest.get('restore_database')):
-        raise ValueError('Auto-deploy scope or full-suite evidence changed')
+            or not release_attested(manifest, execution['id']) or not manifest.get('restore_database')):
+        raise ValueError('Auto-deploy scope or release-check evidence changed')
     intent = conn.execute('SELECT value FROM settings WHERE key=?', ('deployment_intent:' + origin['intent_id'],)).fetchone()
     if not intent or json.loads(intent[0]).get('status') != 'dispatched':
         raise ValueError('Auto-deploy intent cancelled or not consumed')
+
+
+def release_attested(manifest, execution_id):
+    """Exact new scoped-gate attestation, with immutable historical full-gate compatibility."""
+    common = {'execution_id': execution_id, 'commit': manifest['commit'], 'tier_checks': 'passed'}
+    attestation = manifest.get('auto_deploy')
+    return (attestation == {**common, 'full_suite': 'passed'} or
+            (attestation == {**common, 'release_checks': 'passed'}
+             and (manifest.get('verification') or {}).get('version') == 2))
 
 
 def atomic(path, value):

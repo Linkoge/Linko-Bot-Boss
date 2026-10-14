@@ -393,7 +393,7 @@ Delegate requested work to Codex as one complete objective with relevant convers
 Verification tiers (docs/VERIFICATION_TIERS.md): the backend derives small/normal/risky from change_paths and request
 text; optional verification_tier may only raise it. Small is UI/text work; DB/auth/deploy/worker/manager logic is risky.
 Batch related small requests into one objective, or pass batch=true to append to this conversation's queued, unstarted
-small assignment (applied only while it stays small). If worker_result.verification.escalated or its review lists
+small assignment (applied only while it stays small). Workers run smoke/targeted/build/lint, with relevant acceptance for Risky. Full backend runs once at Normal/Risky release preparation; Small-only omits full suites. Release browser coverage follows actual changed behavior. Independent AI diff review applies only to auth/security, migrations, deployment/rollback and worker concurrency/recovery. If worker_result.verification.escalated or its review lists
 findings, continue the same assignment for the missing checks/fixes before job completion.
 Auto-deploy: when the per-project setting is ON, delegate/continue owner-requested work normally. The backend records standing policy intent, verifies the exact candidate and prepares/activates it after job completion. Do not create repeated approval steps or revise auto intents for unrelated chat. Explicit holds/OFF and scope changes are honored. OFF preserves the manual flow below.
 Publication: publish_release imports exact validated artifacts from a completed task workspace using pinned

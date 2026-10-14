@@ -1,3 +1,22 @@
+# Approved verification reductions — implemented candidate, 2026-10-14
+
+Assignment `e684e6b33ca14b778ef7769dfc92a0fc` implements the owner's complete reduced Option B policy.
+Worker/manager prompts, actual-diff review selection, release preparation and exact automatic attestation agree.
+Small-only preparation omits full suites; Normal/Risky defer backend to one preparation run and select existing
+browser consumers deterministically. Combined work takes the highest included/actual tier. Sensitive review,
+failure correction, integrity/binding, idle/drain, backups, health/rollback and standing Auto-deploy remain.
+Contract: docs/VERIFICATION_TIERS.md, docs/AUTO_DEPLOY.md and docs/DEPLOYMENT_HELPER.md.
+
+Read-only inspection established live `addfcd092e7a4c34205264156feb8f0f06d2dba7`, matching succeeded
+receipt `deployment-helper/results/1178e069284821703d9370a94bc6b0e3.json`; project Auto-deploy is ON.
+Focused policy/worker/auto-deploy regressions passed 70 cases; smoke passed 44 cases; Ruff passed.
+Exact final candidate, final preparation/check results, hashes, skipped checks/reasons and routine manager
+handoff facts are retained in this workspace's `.data/verification-reductions/REPORT.md` and
+`manager-summary.json`. Only a complete matching manifest establishes local preparation. Manager activation
+still needs normal completed-job handoff and a new durable succeeded receipt. This isolated worker does not
+write shared runtime data, publish, push, install a helper, deploy or restart services. Older state below is
+historical; it does not establish deployment of this candidate.
+
 # Automatic deployment readiness corrections — 2026-10-14
 
 The retained auto-deploy source assignment `44097fd1a52c4f9096fcd901bd04d344` implements the

@@ -20,7 +20,7 @@ Internal follow-ups may finish the original assignment but cannot invent an owne
 
 The scheduler waits for worker cleanup, delivered results and completed job follow-up. Its
 checks require the current Option B tier record, no tier escalation/error, and a clean commit
-matching `task.verification.commit`. Risky work also requires a completed cheap diff review
+matching `task.verification.commit`. Sensitive actual changes also require a completed cheap diff review
 with no blocking findings. Older records lacking exact commit evidence are not eligible.
 `assignment_source` and the actual workspace HEAD/cleanliness must agree. A candidate must
 include the current live commit; stacked sequential workspaces are supported without changing
@@ -28,9 +28,10 @@ another assignment's branch. A diverging candidate needs serialized source recon
 is reported; it is never silently merged or activated under a different commit.
 
 Preparation fetches that exact source commit into a disposable clone. The running manager's
-fixed preparation script runs the smoke gate for an automatic assignment and the full
-backend/browser, Ruff and JS checks once per release. Full-suite coverage also includes all
-required targeted/backend/browser checks. No manifest exists after a failed check. The
+preparation script runs smoke and the tier-selected gate: Small-only omits full suites; Normal/Risky
+run backend once and relevant existing browser checks. Changed-file build/lint and targeted checks remain.
+Combined releases use the highest included/actual tier. Selection and coverage reasons stay in the manifest
+and hashed log. The exact attestation is `release_checks: passed`; historical full-suite receipts remain supported. No manifest exists after a failed check. The
 manifest binds the execution, commit, stable Option B v2 assignment scope, live base, asset
 hashes, bundle and validation log. An evidence index inventories every release artifact.
 

@@ -60,7 +60,7 @@ def automatic(rehearsal, monkeypatch):
     chat.action_handler = scheduler.manager_action
     atomic(scheduler.deployment.root / 'config.json', {'repo': str(live)})
     scheduler.auto_deploy.set(project, True)
-    monkeypatch.setattr(prepare_deployment, 'checks', lambda python: [[str(python), '-m', 'pytest', '-q']])
+    monkeypatch.setattr(prepare_deployment, 'checks', lambda python, policy: [[str(python), '-m', 'pytest', '-q']])
     async def prepare(checkout, live, data, release_id, task_id):
         execution = db.one('SELECT id FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1', (task_id,))['id']
         return await asyncio.to_thread(prepare_deployment.prepare, checkout, live, data, release_id,
@@ -209,7 +209,7 @@ async def test_failed_verification_or_rehearsal_never_deploys_or_retries(automat
     db, _, _, _, scheduler, _, _, _, _ = automatic
     task, execution, _ = await complete(automatic)
     if failure == 'full_suite':
-        monkeypatch.setattr(prepare_deployment, 'checks', lambda python: [[str(python), '-c', 'raise SystemExit(1)']])
+        monkeypatch.setattr(prepare_deployment, 'checks', lambda python, policy: [[str(python), '-c', 'raise SystemExit(1)']])
     else:
         def fail(*args):
             raise ValueError('Migration rehearsal failed')

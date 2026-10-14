@@ -230,10 +230,10 @@ class Intents:
             from .auto_deploy import verified
             if verified(conn, task, execution_id, commit):
                 raise ValueError('Assignment verification no longer passes')
-            if (manifest.get('auto_deploy') != {'execution_id': execution_id, 'commit': commit,
-                                               'tier_checks': 'passed', 'full_suite': 'passed'}
+            from .deployment import release_attested
+            if (not release_attested(manifest, execution_id)
                     or not manifest.get('restore_database')):
-                raise ValueError('Release lacks the exact full-suite auto-deploy attestation')
+                raise ValueError('Release lacks the exact release-check auto-deploy attestation')
             if git(task['workspace'], 'rev-parse', 'HEAD') != commit or git(task['workspace'], 'status', '--porcelain'):
                 raise Superseded('Assignment workspace changed after verification')
             origin = {'project_id': value['project_id'], 'conversation_id': value['conversation_id'],

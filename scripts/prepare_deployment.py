@@ -33,33 +33,45 @@ def prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=No
                 conn.execute("DELETE FROM settings WHERE key='release_preparation'")
 
 
-def checks(python):
-    """Fixed full backend + browser gate, run exactly once per release."""
-    return [[str(python), '-m', 'pytest', '-q'], [str(python), '-m', 'ruff', 'check', '.'],
-            ['node', '--check', 'ai_manager/static/app.js'],
-            ['node', '--check', 'ai_manager/static/usage.js'],
-            ['node', '--check', 'ai_manager/static/model-settings.js'],
-            ['node', '--check', 'ai_manager/static/memory.js'],
-            ['node', '--check', 'ai_manager/static/audio.js'],
-            ['node', '--check', 'ai_manager/static/attachments.js'],
-            [str(python), 'scripts/browser_model_scroll.py'],
-            [str(python), 'scripts/browser_composer.py'],
-            [str(python), 'scripts/browser_parallel_composer.py'],
-            [str(python), 'scripts/browser_worker_delivery.py'],
-            [str(python), 'scripts/browser_audio.py'],
-            [str(python), 'scripts/browser_chat_reliability.py'],
-            [str(python), 'scripts/browser_project_ui.py'],
-            [str(python), 'scripts/browser_project_stash.py'],
-            [str(python), 'scripts/browser_global_recency.py'],
-            [str(python), 'scripts/browser_agent_controls.py'],
-            [str(python), 'scripts/browser_todos.py'],
-            [str(python), 'scripts/browser_todo_chat.py'],
-            [str(python), 'scripts/browser_project_memory.py'],
-            [str(python), 'scripts/browser_fetch_recovery.py'],
-            [str(python), 'scripts/browser_smoke.py'], [str(python), 'scripts/browser_markdown.py'], [str(python), 'scripts/browser_deployment.py'],
-            [str(python), 'scripts/browser_account_usage.py'],
-            [str(python), 'scripts/browser_auto_deploy.py'],
-            ['xvfb-run', '-a', str(python), 'scripts/browser_pwa.py']]
+def checks(python, policy=None):
+    """Existing gate with deterministic tier/scope selection, no extra validation stage."""
+    from ai_manager.verification import BROWSERS
+    policy = policy or {'full_backend': True, 'browsers': BROWSERS, 'changed_files': []}
+    paths = policy.get('existing_files', policy['changed_files'])
+    commands = [[str(python), '-m', 'pytest', '-q', '-m', 'smoke']]
+    if policy['full_backend']:
+        commands.append([str(python), '-m', 'pytest', '-q'])
+    else:
+        # Small may change one test file. Runtime UI behavior is covered by selected
+        # existing browsers below; documentation needs no invented targeted test.
+        tests = [p for p in paths if p.startswith('tests/') and p.endswith('.py')]
+        if tests:
+            commands.append([str(python), '-m', 'pytest', '-q', *tests])
+    lint = [p for p in paths if p.endswith('.py')]
+    if lint:
+        commands.append([str(python), '-m', 'ruff', 'check', *lint])
+    commands.extend(['node', '--check', p] for p in paths if p.endswith(('.js', '.mjs')))
+    for name in policy['browsers']:
+        argv = [str(python), 'scripts/browser_' + name + '.py']
+        commands.append(['xvfb-run', '-a', *argv] if name == 'pwa' else argv)
+    return commands
+
+
+def selected_policy(repo, base, commit, data, task_ids):
+    import json
+
+    from ai_manager.verification import release_policy
+    paths = run(['git', 'diff', '--name-only', base, commit], repo).splitlines()
+    records = []
+    with sqlite3.connect(f'file:{data / "manager.sqlite3"}?mode=ro', uri=True) as conn:
+        for task_id in task_ids:
+            row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_policy:' + task_id,)).fetchone()
+            policy = json.loads(row[0]) if row else {}
+            # Unknown/pre-tier included work keeps the old conservative floor.
+            records.append(policy.get('verification') or {'tier': 'risky'})
+    result = release_policy(paths, records)
+    result['existing_files'] = [p for p in paths if (repo / p).is_file()]
+    return result
 
 
 def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=None):
@@ -71,6 +83,7 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
     commit = run(['git', 'rev-parse', 'HEAD'], repo)
     run(['git', 'merge-base', '--is-ancestor', base, commit], repo)
     schema = schema_change(repo, base, commit)
+    policy = selected_policy(repo, base, commit, data, task_ids)
     target = Handoff(data).root / 'releases' / release_id
     target.mkdir(parents=True, mode=0o700)  # Never overwrite a prepared receipt.
     # Candidate code and tests must import the candidate, never the running manager's modules.
@@ -107,12 +120,12 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
                 rehearsal = rehearse(data / 'manager.sqlite3', repo, python, target / 'rehearsal', base, commit)
                 log.write('Migration rehearsal passed on a private database copy\n')
                 log.flush()
-            if auto_execution:
-                result = subprocess.run([str(python), '-m', 'pytest', '-q', '-m', 'smoke'], cwd=repo,
-                                        stdout=log, stderr=log, timeout=30, env=env)
-                if result.returncode:
-                    raise ValueError('Required tier smoke verification failed')
-            for argv in checks(python):
+            import json
+            log.write('Release policy: ' + json.dumps(policy, sort_keys=True) + '\n')
+            log.flush()
+            for argv in checks(python, policy):
+                log.write('Check: ' + json.dumps(argv) + '\n')
+                log.flush()
                 # The >400-test backend suite can exceed three minutes on a busy managed worker.
                 # Keep a bounded full gate; do not skip or retry individual checks automatically.
                 timeout = 600 if argv[1:3] == ['-m', 'pytest'] else 180
@@ -134,7 +147,7 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
                 for name in names}
     manifest = {'id': release_id, 'base': base, 'commit': commit,
                 'assets': assets(commit), 'base_assets': assets(base),
-                'bundle_sha256': sha(target / 'release.bundle'), 'validation_sha256': sha(target / 'validation.log')}
+                'verification': policy, 'bundle_sha256': sha(target / 'release.bundle'), 'validation_sha256': sha(target / 'validation.log')}
     if schema:
         manifest['schema'] = schema
     # This second-stage release bootstraps helper v3 even for a code-only diff.
@@ -165,7 +178,7 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
                 if assignments != {task_ids[0]: scope}:
                     raise ValueError('Assignment scope changed during release checks')
                 manifest['auto_deploy'] = {'execution_id': auto_execution, 'commit': commit,
-                                          'tier_checks': 'passed', 'full_suite': 'passed'}
+                                          'tier_checks': 'passed', 'release_checks': 'passed'}
                 manifest['restore_database'] = True
     atomic(target / 'manifest.json', manifest)
     atomic(target / 'evidence-index.json', {'release_id': release_id, 'candidate': commit, 'base': base,

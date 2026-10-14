@@ -55,9 +55,9 @@ def test_tier_floor_is_deterministic_and_risky_paths_never_downgrade():
 @pytest.mark.smoke
 def test_tier_plans_scale_checks_and_keep_reports_short():
     small, normal, risky = (plan(select(p, 'x')) for p in (['a.css'], ['a.py'], ['db.py']))
-    assert not any('Full' in check for check in small['checks']) and any('Full suite' in s for s in small['skip'])
+    assert not any('Full' in check for check in small['checks']) and any('Full suites' in s for s in small['skip'])
     assert all(any('smoke' in check.lower() for check in p['checks']) for p in (small, normal, risky))
-    assert sum('Full backend suite exactly once' in check for check in normal['checks']) == 1
+    assert not any('Full backend' in check for p in (normal, risky) for check in p['checks'])
     assert 'Reviewer' in normal['skip'] and any('diff review' in s for s in risky['skip'])
     assert plan(select(['a.css'], 'x'), integration=True)['tier'] == 'risky'
     assert '12 short lines' in small['report'] and 'execution record' in small['report']
@@ -166,7 +166,7 @@ async def test_delegate_records_tier_and_risky_rejects_weak_automatic_pair(syste
     assert risky['execution_policy']['verification']['tier'] == 'risky'
     small = await delegate(scheduler, chat, project, 'd', objective='Make Send red', change_paths=['style.css'],
                            worker_route=weak)
-    assert small['execution_policy']['verification'] == {'version': 1, 'tier': 'small', 'requested': None,
+    assert small['execution_policy']['verification'] == {'version': 2, 'tier': 'small', 'requested': None,
                                                           'reasons': ['UI/text change of at most 3 files']}
     # Manual settings are never overridden by the tier.
     config = current(db, server)

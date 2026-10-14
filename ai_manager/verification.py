@@ -9,7 +9,7 @@ import subprocess
 from pathlib import PurePosixPath
 
 TIERS = ('small', 'normal', 'risky')
-VERSION = 1
+VERSION = 2
 SMALL_MAX_FILES = 3
 DIFF_LIMIT = 60000
 
@@ -43,26 +43,25 @@ PLANS = {
         'checks': ['Smoke suite once (here: python -m pytest -q -m smoke)',
                    'Only tests covering the touched files (find via test names/imports)',
                    'Build/lint of touched files (e.g. ruff check, node --check)'],
-        'skip': ['Full suite: release preparation runs it once', 'Reviewer'],
+        'skip': ['Full suites for Small-only releases', 'Reviewer'],
     },
     'normal': {
-        'checks': ['Smoke suite once', 'Targeted tests while iterating', 'Build/lint',
-                   'Full backend suite exactly once at the end, after final edits'],
-        'skip': ['Repeated full-suite runs', 'Reviewer'],
+        'checks': ['Smoke suite once', 'Targeted tests while iterating', 'Build/lint'],
+        'skip': ['End-of-task full backend run: Normal/Risky release preparation runs it once', 'Reviewer'],
     },
     'risky': {
         'checks': ['Smoke suite once', 'Targeted tests while iterating', 'Build/lint',
-                   'Browser/acceptance scripts covering touched behavior',
-                   'Full backend suite exactly once at the end, after final edits'],
-        'skip': ['Repeated full-suite runs',
-                 'Self-review passes: one cheap read-only diff review runs automatically after you finish'],
+                   'Browser/acceptance scripts covering touched behavior'],
+        'skip': ['End-of-task full backend run: Normal/Risky release preparation runs it once',
+                 'Self-review passes: automatic independent diff review only for sensitive actual changes'],
     },
 }
 ESCALATE = ('If actual changes touch risky areas (DB/schema, auth/session, deploy/release/backup, worker/manager/'
             'recovery logic) or exceed declared change_paths, apply the higher tier checks. Never lower the tier.')
 REPORT = ('Final reply at most 12 short lines: outcome, files changed, commit, checks run with pass/fail counts, '
           'limitations/pending. Do not paste logs; commands and outputs are retained in the execution record, '
-          'which is the detailed evidence together with updated authoritative docs.')
+          'which is the detailed evidence together with updated authoritative docs. Correct substantive findings/failures and '
+          'rerun affected checks after fixes; full backend runs once at Normal/Risky release preparation.')
 REVIEW_INSTRUCTIONS = """Review one assignment diff read-only. Never modify files, run mutating commands or ask questions.
 Report only concrete defects: correctness, security, data loss, concurrency or missed acceptance criteria,
 each with file:line and a one-line reason. Reply exactly 'No blocking findings.' when there are none. At most 200 words.
@@ -153,8 +152,104 @@ def git(root, *args):
 
 
 def changes(root, base):
-    """Actual changed paths and a bounded diff of the assignment branch versus its base."""
+    """Actual paths and full diff for classification; only the AI review input is bounded."""
     paths = set(git(root, 'diff', '--name-only', base).splitlines())
     paths |= set(git(root, 'ls-files', '--others', '--exclude-standard').splitlines())
     diff = git(root, 'diff', '--stat', base) + '\n' + git(root, 'diff', base)
-    return sorted(p for p in paths if p), diff[:DIFF_LIMIT], len(diff) > DIFF_LIMIT
+    return sorted(p for p in paths if p), diff, len(diff) > DIFF_LIMIT
+
+
+# Review selection is narrower than tier classification. Ordinary manager/backend names
+# still raise the verification floor but do not alone purchase an independent AI review.
+REVIEW_WORDS = {'auth', 'authentication', 'authorization', 'login', 'logout', 'session', 'sessions',
+                'csrf', 'security', 'secret', 'secrets', 'password', 'passwords', 'permission', 'permissions',
+                'credential', 'credentials', 'encrypt', 'encryption', 'crypto', 'authz',
+                'db', 'database', 'schema', 'migration', 'migrations', 'migrate', 'deploy', 'deployment',
+                'release', 'rollback', 'backup', 'restore', 'worker', 'workers', 'parallel', 'recovery',
+                'lease', 'scheduler', 'tasks', 'orchestration', 'assignment'}
+REVIEW_TEXT = re.compile(r'\b(auth\w*|security|encrypt\w*|crypto\w*|permissions?|csrf|sessions?|credentials?|secrets?|passwords?|'
+                         r'migrations?|schemas?|deploy\w*|rollback|backup|restore|concurren\w*|'
+                         r'recovery|leases?)\b', re.I)
+
+
+def review_reasons(paths, text='', diff=''):
+    reasons = []
+    for value in paths:
+        path = PurePosixPath(value)
+        if kind(path) in {'doc', 'test'}:
+            continue
+        words = set(re.split(r'[^a-z0-9]+', path.stem.lower())) | {p.lower() for p in path.parts[:-1]}
+        direct = REVIEW_WORDS - {'db', 'database', 'worker', 'workers', 'parallel', 'recovery',
+                                 'lease', 'scheduler', 'tasks', 'orchestration', 'assignment'}
+        blocks = diff.split('diff --git ')
+        scoped = ''.join(block for block in blocks[1:] if block.splitlines()[0].endswith(' b/' + value))
+        source = scoped if len(blocks) > 1 else diff
+        changed = '\n'.join(line[1:] for line in source.splitlines()
+                            if line.startswith(('+', '-')) and not line.startswith(('+++', '---')))
+        behavioral = re.search(r'\b(schema|migrat\w*|alter|create|lease\w*|concurren\w*|lock\w*|'
+                               r'recover\w*|claim\w*|heartbeat|parallel|cancel\w*|resume\w*|await|async|asyncio|gather|semaphore|queue|transaction|retry|reconnect|executor|thread|spawn|stop_requested)\b', changed, re.I)
+        if (words & direct or path.suffix.lower() in RISKY_SUFFIXES
+                or (words & REVIEW_WORDS and behavioral)):
+            reasons.append('sensitive actual path ' + value)
+    if any(kind(PurePosixPath(p)) not in {'doc', 'test'} for p in paths) and REVIEW_TEXT.search(text):
+        reasons.append('sensitive assignment behavior')
+    return reasons
+
+
+BROWSERS = ('model_scroll', 'composer', 'parallel_composer', 'worker_delivery', 'audio',
+            'chat_reliability', 'project_ui', 'project_stash', 'global_recency', 'agent_controls',
+            'todos', 'todo_chat', 'project_memory', 'fetch_recovery', 'smoke', 'markdown',
+            'deployment', 'account_usage', 'auto_deploy', 'pwa')
+# Shared app/style/HTTP/auth/DB primitives affect all browser behavior. Feature modules
+# select only their consumers. Unknown runtime modules conservatively use shared coverage.
+BROWSER_FEATURES = {
+    'model': ('model_scroll',), 'usage': ('account_usage',), 'audio': ('audio', 'composer'),
+    'attachment': ('audio', 'composer'), 'memory': ('project_memory',),
+    'registry': ('project_ui', 'project_stash'), 'project': ('project_ui', 'project_stash'),
+    'stash': ('project_stash',), 'recency': ('global_recency',), 'markdown': ('markdown',),
+    'todo': ('todos', 'todo_chat'), 'pwa': ('pwa',), 'manifest': ('pwa',),
+    'deploy': ('deployment', 'auto_deploy'), 'release': ('deployment', 'auto_deploy'),
+    'verification': ('worker_delivery', 'agent_controls', 'auto_deploy', 'deployment'),
+    'worker': ('worker_delivery', 'agent_controls', 'parallel_composer', 'auto_deploy'),
+    'task': ('worker_delivery', 'agent_controls', 'parallel_composer', 'todos', 'auto_deploy'),
+    'assignment': ('worker_delivery', 'agent_controls', 'parallel_composer', 'auto_deploy'),
+    'parallel': ('parallel_composer', 'worker_delivery', 'auto_deploy'),
+    'recovery': ('fetch_recovery', 'chat_reliability', 'worker_delivery'),
+    'orchestration': ('worker_delivery', 'agent_controls', 'parallel_composer', 'todos', 'auto_deploy'),
+    'codex': ('worker_delivery', 'agent_controls', 'parallel_composer', 'auto_deploy', 'model_scroll'),
+    'chat': ('chat_reliability', 'composer', 'todo_chat', 'worker_delivery', 'markdown'),
+}
+
+
+def browser_selection(paths):
+    selected, reasons = set(), {}
+    for value in paths:
+        path = PurePosixPath(value)
+        if kind(path) in {'doc', 'test'}:
+            continue
+        name = path.stem.lower()
+        if name.startswith('browser_') and name[8:] in BROWSERS:
+            relevant = (name[8:],)
+            why = 'changed browser check'
+        else:
+            features = [k for k in BROWSER_FEATURES if k in name]
+            relevant = tuple(b for k in features for b in BROWSER_FEATURES[k]) if features else BROWSERS
+            why = 'feature consumers' if features else 'shared or unknown runtime behavior'
+        for browser in relevant:
+            selected.add(browser)
+            reasons.setdefault(browser, []).append(value + ': ' + why)
+    return [b for b in BROWSERS if b in selected], reasons
+
+
+def release_policy(paths, records=()):
+    actual = floor(paths)[0] if paths else 'small'
+    tier = max([actual] + [r['tier'] for r in records if r], key=rank)
+    browsers, coverage = browser_selection(paths)
+    if tier == 'small' and len(browsers) == len(BROWSERS):
+        # Existing representative acceptance covers shared visual Small behavior.
+        browsers = ['composer', 'project_ui', 'smoke']
+        coverage = {b: coverage[b] for b in browsers}
+    return {'version': VERSION, 'tier': tier, 'actual': actual, 'changed_files': sorted(paths),
+            'full_backend': tier != 'small', 'browsers': browsers, 'coverage': coverage,
+            'skipped_browsers': [b for b in BROWSERS if b not in browsers],
+            'skipped': ['unrelated browser scripts'] + (['full backend (Small-only)'] if tier == 'small' else [])}

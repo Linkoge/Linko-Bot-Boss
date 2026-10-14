@@ -2,7 +2,7 @@
 
 Per-project setting "Auto-deploy verified work". When on, the owner's Auto/Execute work request is the recorded
 deployment intent for that assignment's exact release only. No AI call decides deployment: the Option B
-verification record, the fixed preparation gate (full backend+browser suite, migration rehearsal for
+verification record, the fixed preparation gate (tier-selected release checks, migration rehearsal for
 schema/dependency releases) and the existing helper protocol (idle wait, backup, health check, automatic
 rollback) do. Failed verification or preparation never deploys; nothing is retried automatically.
 """
@@ -70,7 +70,7 @@ def verified(conn, task, execution_id, commit=None):
     if commit and record.get('commit') != commit:
         return 'verification is not bound to the exact clean commit'
     review = record.get('review') or {}
-    if record['effective'] == 'risky' and (review.get('status') != 'completed'
+    if record.get('review_required', record['effective'] == 'risky') and (review.get('status') != 'completed'
                                            or not review.get('findings', '').strip().startswith('No blocking findings')):
         return 'risky diff review did not pass: ' + (review.get('reason') or review.get('findings') or 'unavailable')[:300]
     return ''
@@ -278,7 +278,7 @@ class AutoDeploy:
                         return
                     self.mark(conn, value, 'preparing',
                               f"Auto-deploy: assignment {candidate['task']['id'][:8]} passed its tier checks; preparing "
-                              f"release {candidate['release_id']} (full backend+browser suite"
+                              f"release {candidate['release_id']} (tier-selected release checks"
                               + '; migration rehearsal when needed).',
                               execution_id=candidate['execution_id'], release_id=candidate['release_id'],
                               commit=candidate['commit'], scope=candidate['scope'])
