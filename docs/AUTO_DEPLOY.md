@@ -26,6 +26,14 @@ branch is committed and clean. It never forces anything:
 - OFF means no merge and no deploy; work stays on its assignment branch. The manager `deploy` action (owner asks to
   deploy now, optional `task_id` to merge first) works regardless.
 
+## Checkout fence
+
+One lock file (`DATA/deploy/checkout.lock`, `ai_manager/fence.py`) protects the live checkout. Merges (automatic and the
+manager `deploy` action) take it exclusively and re-check for a pending deploy inside it; task claims and chat sends take
+it briefly in shared mode. The deploy script holds it exclusively from its final idle check until the service is healthy
+or rolled back, so no merge or new work can start in that window. Both sides resolve the main branch the same way
+(`main`, else `master`).
+
 ## 3. Deploy (one script)
 
 After a successful merge into the manager's own repository the pipeline writes `DATA/deploy/request.json`. systemd
@@ -35,13 +43,14 @@ After a successful merge into the manager's own repository the pipeline writes `
 2. Wait until nothing is active (no unfinished execution, worker lease, streaming message or running delivery).
    While a request is pending the scheduler starts no new coding and merges nothing. Owner OFF, a paused project, or
    cancelling the request (Settings → Cancel) stops the deploy here, before anything changes. Waiting is bounded (6 h).
-3. Back up the SQLite database (online, integrity-checked), stop the service, take a second consistent copy.
+3. Take the fence, re-check idle, back up the SQLite database (online, integrity-checked), stop the service, take a second consistent copy.
 4. Update code to `main` (`uv sync --locked` only if `pyproject.toml`/`uv.lock` changed), start the service.
 5. Health check (60 s): `/api/auth-status` answers 200 with `scheduler_running` and the new commit, an unauthenticated
    `/api/portfolio` is 401, and a temporary session works (login path) and is removed.
 6. Any failure after the stop rolls back automatically: `main` is reset to the previously running commit (the failed
    commits stay reachable under tag `linko-failed-<id>`), the database is restored from the stopped copy, dependencies
-   are re-synced if they changed, and the old version must pass the same health check.
+   are re-synced if they changed, and the old version must pass the same health check. The service is always started
+   again, even if a rollback step fails (then the result is `rollback_failed` with every failed step named).
 
 The outcome is one short result in `DATA/deploy/last-deploy.txt` (also `result.json`, `results/<id>.json`): `success`,
 `failed` (nothing changed), `rolled_back` (with the reason), `rollback_failed` (needs attention) or `cancelled`. The

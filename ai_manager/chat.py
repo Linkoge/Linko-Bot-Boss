@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .attachments import native_image
@@ -342,6 +343,15 @@ class Chat:
                 raise ValueError("Request ID already used with different message or context")
             return json.loads(row["receipt"])
 
+    @contextmanager
+    def deploy_fence(self):
+        from .fence import Busy, hold
+        try:
+            with hold(self.db.path.parent, exclusive=False):
+                yield
+        except Busy:
+            raise ValueError('A deploy is restarting the service; retry in a minute') from None
+
     async def submit(self, project_id, content, conversation_id=None, delivery=None, mode="auto", request_id=None,
                      attachment_ids=None, recovery_task=None, todos=None, parallel=False):
         if parallel and (type(parallel) is not bool or mode == 'conversation' or delivery or recovery_task or not project_id):
@@ -383,7 +393,7 @@ class Chat:
         route = manager_route(self.db)
         execution_id, response_id, now = new_id(), new_id(), time.time()
         receipt = {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
-        with self.db.transaction() as conn:
+        with self.deploy_fence(), self.db.transaction() as conn:
             if request_id and (original := self.request_receipt(conn, request_id, payload_hash)):
                 return original
             if not conn.execute(

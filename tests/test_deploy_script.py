@@ -21,9 +21,19 @@ spec = importlib.util.spec_from_file_location('deploy_script', ROOT / 'scripts/d
 deploy_script = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy_script)
 
-CTL = '''import os, signal, subprocess, sys, time
+CTL = '''import fcntl, os, signal, subprocess, sys, time
 from pathlib import Path
 action, state, repo = sys.argv[1:4]
+os.makedirs(os.environ['AI_MANAGER_DATA'] + '/deploy', exist_ok=True)
+lock = open(os.environ['AI_MANAGER_DATA'] + '/deploy/checkout.lock', 'a')
+try:
+    fcntl.flock(lock, fcntl.LOCK_SH | fcntl.LOCK_NB)
+    seen = 'free'
+except OSError:
+    seen = 'fenced'
+with open(Path(state) / 'probe', 'a') as probe:
+    probe.write(action + ':' + seen + '\\n')
+lock.close()
 pid_file = Path(state) / 'pid'
 if action == 'start':
     log = open(Path(state) / 'service.log', 'ab')
@@ -85,7 +95,7 @@ class Runtime:
             monkeypatch.setenv(key, str(value))
         (tmp_path / 'projects').mkdir()
         ctl = [sys.executable, str(tmp_path / 'ctl.py')]
-        self.config = {'repo': str(self.repo), 'data': str(self.data), 'branch': 'main',
+        self.config = {'repo': str(self.repo), 'data': str(self.data), 
                        'url': f'http://127.0.0.1:{self.port}', 'test_cmd': None, 'health_seconds': 25,
                        'poll_seconds': 0.1, 'idle_seconds': 20,
                        'service_cmds': {'stop': [*ctl, 'stop', str(self.state), str(self.repo)],
@@ -306,7 +316,7 @@ def test_installer_writes_config_units_and_first_request(tmp_path, monkeypatch):
     monkeypatch.setenv('PATH', f"{bin_dir}{os.pathsep}{os.environ['PATH']}")
     module.install(repo, data, home)
     config = json.loads((data / 'deploy/installed.json').read_text())
-    assert config['repo'] == str(repo) and config['branch'] == 'main'
+    assert config['repo'] == str(repo) and 'branch' not in config
     path_unit = (home / '.config/systemd/user/linko-bot-manager-deploy.path').read_text()
     assert f'PathExists={data}/deploy/request.json' in path_unit and '@' not in path_unit
     service = (home / '.config/systemd/user/linko-bot-manager-deploy.service').read_text()
@@ -316,3 +326,75 @@ def test_installer_writes_config_units_and_first_request(tmp_path, monkeypatch):
     assert 'daemon-reload' in calls and 'enable --now linko-bot-manager-deploy.path' in calls
     module.install(repo, data, home)  # Safe to re-run; the queued first request is kept.
     assert (data / 'deploy/request.json').exists()
+
+
+def probes(runtime):
+    return (runtime.state / 'probe').read_text().split()
+
+
+def test_checkout_is_fenced_from_idle_check_through_stop_start_and_rollback(runtime):
+    runtime.start()
+    assert probes(runtime) == ['start:free']
+    commit(runtime.repo, 'docs', **{'README.md': ('# Linko Bot Boss', '# Linko Bot Boss fenced')})
+    runtime.request()
+    assert runtime.run()['status'] == 'success'
+    assert probes(runtime) == ['start:free', 'stop:fenced', 'start:fenced']
+    commit(runtime.repo, 'bad', **{'ai_manager/web.py': (
+        '"scheduler_running": bool(scheduler.job and not scheduler.job.done()),', '"scheduler_running": False,')})
+    runtime.config['health_seconds'] = 5
+    runtime.request()
+    assert runtime.run()['status'] == 'rolled_back'
+    assert probes(runtime)[3:] == ['stop:fenced', 'start:fenced', 'stop:fenced', 'start:fenced']
+    from ai_manager import fence
+    with fence.hold(runtime.data, True):  # released again after the deploy
+        pass
+
+
+def test_work_that_slips_in_before_the_fence_is_not_interrupted(runtime):
+    runtime.start()
+    commit(runtime.repo, 'docs', **{'README.md': ('# Linko Bot Boss', '# Linko Bot Boss slip')})
+    deploy = deploy_script.Deploy(runtime.config)
+    calls = {'n': 0}
+
+    def busy():  # idle at the first look, work appears once the fence is held, then finishes
+        calls['n'] += 1
+        return {'leases': 1} if calls['n'] == 2 else {}
+    deploy.busy = busy
+    runtime.request()
+    result = deploy.main()
+    assert result['status'] == 'success' and calls['n'] >= 3
+    assert probes(runtime)[1:] == ['stop:fenced', 'start:fenced']
+
+
+def test_rollback_still_restarts_the_service_when_the_code_rollback_fails(runtime, monkeypatch):
+    runtime.start()
+    commit(runtime.repo, 'bad', **{'ai_manager/web.py': (
+        '"scheduler_running": bool(scheduler.job and not scheduler.job.done()),', '"scheduler_running": False,')})
+    runtime.config['health_seconds'] = 4
+    deploy = deploy_script.Deploy(runtime.config)
+
+    def broken(*args):
+        raise RuntimeError('git exploded')
+    monkeypatch.setattr(deploy, 'rollback', broken)
+    runtime.request()
+    result = deploy.main()
+    assert result['status'] == 'rollback_failed' and 'code rollback failed: git exploded' in result['reason']
+    assert probes(runtime).count('start:fenced') == 2  # deploy start plus the rollback attempt to start again
+    assert (runtime.state / 'pid').exists()
+
+
+def test_deploy_and_merge_agree_on_a_master_branch(runtime):
+    from ai_manager import fence
+    from ai_manager.pipeline import merge_into_main
+    git(runtime.repo, 'branch', '-m', 'master')
+    runtime.start()
+    assert fence.main_branch(runtime.repo, runtime.config.get('branch')) == 'master'
+    git(runtime.repo, 'checkout', '-q', '-b', 'work')
+    work = commit(runtime.repo, 'work', **{'README.md': ('# Linko Bot Boss', '# Linko Bot Boss master')})
+    git(runtime.repo, 'checkout', '-q', 'master')
+    head, changed = merge_into_main(runtime.repo, work)
+    assert changed and head == work and git(runtime.repo, 'symbolic-ref', '--short', 'HEAD') == 'master'
+    git(runtime.repo, 'checkout', '-q', '--detach')  # a deploy must return to master, not to a hardcoded main
+    runtime.request()
+    result = runtime.run()
+    assert result['status'] == 'success' and git(runtime.repo, 'symbolic-ref', '--short', 'HEAD') == 'master'

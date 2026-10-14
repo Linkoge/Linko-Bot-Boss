@@ -19,7 +19,11 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import ExitStack
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from ai_manager import fence  # noqa: E402
 
 IDLE = {
     'unfinished_executions': 'SELECT count(*) FROM executions WHERE finished_at IS NULL',
@@ -66,13 +70,16 @@ class Deploy:
         self.repo, self.data = Path(config['repo']), Path(config['data'])
         self.root = self.data / 'deploy'
         self.db = self.data / 'manager.sqlite3'
-        self.branch = config.get('branch', 'main')
         self.url = config.get('url', 'http://127.0.0.1:8787')
         systemctl = config.get('systemctl', ['systemctl', '--user'])
         service = config.get('service', 'linko-bot-manager.service')
         self.commands = {'stop': [*systemctl, 'stop', service], 'start': [*systemctl, 'start', service],
                          **config.get('service_cmds', {})}
         self.id = None
+
+    @property
+    def branch(self):
+        return fence.main_branch(self.repo, self.config.get('branch'))  # same resolution as the merge step
 
     # ---- bookkeeping --------------------------------------------------------------------------------------------
     def log(self, text):
@@ -225,14 +232,19 @@ class Deploy:
         stopped = changed = synced = False
         previous = target = None
         backups = self.root / 'backups' / self.id
+        fenced = ExitStack()  # holds the checkout fence from the final idle check to the end
         try:
             self.state('testing')
-            if self.git('status', '--porcelain', '--untracked-files=no'):
-                raise Stop('failed', 'live checkout has uncommitted changes')
-            previous = self.running_commit() or (read(self.root / 'last_good.json') or {}).get('commit')
-            if self.git('symbolic-ref', '-q', '--short', 'HEAD', check=False) != self.branch:
-                self.git('checkout', '--quiet', self.branch)
-            target = self.git('rev-parse', 'HEAD')
+            try:
+                with fence.hold(self.data, True, wait=60):  # no merge may change the checkout under us
+                    if self.git('status', '--porcelain', '--untracked-files=no'):
+                        raise Stop('failed', 'live checkout has uncommitted changes')
+                    previous = self.running_commit() or (read(self.root / 'last_good.json') or {}).get('commit')
+                    if self.git('symbolic-ref', '-q', '--short', 'HEAD', check=False) != self.branch:
+                        self.git('checkout', '--quiet', self.branch)
+                    target = self.git('rev-parse', 'HEAD')
+            except fence.Busy as error:
+                raise Stop('failed', 'live checkout is busy: ' + str(error)) from error
             if previous == target:
                 raise Stop('success', f'{target[:10]} is already live; nothing to deploy')
             tests = self.config.get('test_cmd')
@@ -246,10 +258,19 @@ class Deploy:
                 self.check_request(request)
                 busy = self.busy()
                 if not busy:
-                    break
+                    # Fence: from here until the end no merge and no new task/chat can start, so the idle
+                    # check below cannot be invalidated before the stop. Work that slipped in releases the fence.
+                    try:
+                        fenced.enter_context(fence.hold(self.data, True, wait=5))
+                        if not (busy := self.busy()):
+                            break
+                        fenced.close()
+                    except fence.Busy:
+                        busy = {'checkout': 1}
                 if time.monotonic() >= deadline:
                     raise Stop('failed', 'not idle after waiting: ' + json.dumps(busy))
                 self.sleep(self.config.get('poll_seconds', 5))
+            self.check_request(request)
             self.state('backing_up')
             self.backup(backups / 'before.sqlite3')
             self.check_request(request)
@@ -278,18 +299,27 @@ class Deploy:
             if not stopped:
                 return self.finish(request, 'failed', str(error), commit=target, previous=previous)
             self.state('rolling_back')
+            problems = []
+            for step, action in (('stop', lambda: run(self.commands['stop'], timeout=120, check=False)),
+                                 ('code', lambda: changed and self.rollback(previous, target, synced)),
+                                 ('database', lambda: changed and self.restore(backups / 'stopped.sqlite3'))):
+                try:
+                    action()
+                except Exception as rollback_error:  # keep going: the service must still be started
+                    problems.append(f'{step} rollback failed: {str(rollback_error)[:200]}')
             try:
-                run(self.commands['stop'], timeout=120, check=False)
-                if changed:
-                    self.rollback(previous, target, synced)
-                    self.restore(backups / 'stopped.sqlite3')
                 run(self.commands['start'], timeout=120)
-                self.wait_health(previous)
-                return self.finish(request, 'rolled_back', f'{str(error)[:300]}; code and database restored to '
-                                   f'{previous[:10]}', commit=target, previous=previous, backup=str(backups))
-            except Exception as rollback_error:
-                return self.finish(request, 'rollback_failed', f'{str(error)[:200]}; rollback failed: '
-                                   f'{str(rollback_error)[:250]}', commit=target, previous=previous, backup=str(backups))
+                if not problems:
+                    self.wait_health(previous)
+            except Exception as start_error:
+                problems.append(f'restart/health failed: {str(start_error)[:200]}')
+            if problems:
+                return self.finish(request, 'rollback_failed', f'{str(error)[:200]}; ' + '; '.join(problems),
+                                   commit=target, previous=previous, backup=str(backups))
+            return self.finish(request, 'rolled_back', f'{str(error)[:300]}; code and database restored to '
+                               f'{previous[:10]}', commit=target, previous=previous, backup=str(backups))
+        finally:
+            fenced.close()
 
     def main(self):
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)

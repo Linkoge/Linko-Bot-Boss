@@ -169,3 +169,56 @@ async def test_pending_deploy_stops_new_coding_until_it_finishes(pipe):
     (pipeline.root / 'request.json').unlink()
     await scheduler.tick()
     assert [t['id'] for t in launched] == [task['id']]
+
+
+@pytest.mark.asyncio
+async def test_owner_merge_honors_holds_pending_deploy_and_the_shared_fence(pipe):
+    from ai_manager import fence
+    pipeline, db, project = pipe
+    root = Path(project['path'])
+    held = finish_task(db, project, 'held.txt')
+    with db.transaction() as conn:
+        update(db, conn, held['id'], 'owner_wait', 'Owner will decide')
+    with pytest.raises(ValueError, match='owner hold'):
+        await pipeline.merge_assignment(held['id'])
+    assert not (root / 'held.txt').exists()
+    with db.transaction() as conn:
+        update(db, conn, held['id'], 'complete', 'Released')
+    # A deploy holding the fence blocks both merge paths, and step() leaves no failure mark behind.
+    with fence.hold(db.path.parent, True):
+        with pytest.raises(ValueError, match='live checkout'):
+            await pipeline.merge_assignment(held['id'])
+        await tick(pipeline)
+        assert not (root / 'held.txt').exists()
+        assert not db.all("SELECT 1 FROM events WHERE kind='pipeline.merge_failed'")
+    # A pending deploy request blocks the owner merge too.
+    pipeline.request(project['id'], 'owner')
+    with pytest.raises(ValueError, match='deploy is pending'):
+        await pipeline.merge_assignment(held['id'])
+    (pipeline.root / 'request.json').unlink()
+    assert (await pipeline.merge_assignment(held['id']))['changed'] and (root / 'held.txt').exists()
+
+
+@pytest.mark.asyncio
+async def test_request_written_after_the_pending_check_still_stops_the_merge(pipe):
+    pipeline, db, project = pipe
+    finish_task(db, project, 'late.txt')
+    candidate = pipeline.candidate()
+    pipeline.request(project['id'], 'owner')  # appears between candidate selection and the locked merge
+    await pipeline.merge(candidate)
+    assert not (Path(project['path']) / 'late.txt').exists()
+    assert not db.all("SELECT 1 FROM events WHERE kind IN ('pipeline.merged','pipeline.merge_failed')")
+
+
+def test_a_deploy_fence_stops_new_tasks_and_chat_until_released(pipe):
+    from ai_manager import fence
+    from ai_manager.chat import Chat
+    pipeline, db, project = pipe
+    tasks = Tasks(db)
+    task = tasks.add(project['id'], 'queued work', execution_policy=p(['x.txt']))
+    with fence.hold(db.path.parent, True):
+        assert tasks.claim(2) is None and tasks.get(task['id'])['status'] == 'queued'
+        with pytest.raises(ValueError, match='deploy is restarting'):
+            with Chat.deploy_fence(type('C', (), {'db': db})()):
+                pass
+    assert tasks.claim(2)['id'] == task['id']

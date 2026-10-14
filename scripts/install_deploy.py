@@ -31,7 +31,7 @@ def install(repo, data, home):
     if any(ch in str(repo) + str(data) for ch in ' \n\r"%'):
         raise SystemExit('Use paths without spaces or systemd escape characters')
     uv = shutil.which('uv') or str(home / '.local/bin/uv')
-    config = {'repo': str(repo), 'data': str(data), 'branch': 'main', 'service': 'linko-bot-manager.service',
+    config = {'repo': str(repo), 'data': str(data), 'service': 'linko-bot-manager.service',
               'url': 'http://127.0.0.1:' + os.getenv('AI_MANAGER_PORT', '8787'), 'uv': uv if Path(uv).exists() else None,
               'test_cmd': [str(venv_python), '-m', 'pytest', '-q', '-p', 'no:cacheprovider'],
               'installed_at': time.time()}

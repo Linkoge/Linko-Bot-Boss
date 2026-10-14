@@ -15,6 +15,9 @@ import subprocess
 import time
 from pathlib import Path
 
+from . import fence
+from .fence import Busy, main_branch
+
 SETTING = 'auto_deploy:'
 SEED = 'auto_deploy_seed'
 ROOT = Path(os.getenv('AI_MANAGER_REPO') or Path(__file__).resolve().parents[1]).resolve()  # live code checkout
@@ -52,13 +55,6 @@ def git(root, *args, check=True):
     if check and result.returncode:
         raise ValueError('git ' + args[0] + ' failed: ' + (result.stderr or result.stdout).strip()[:300])
     return result.stdout.strip() if check else result
-
-
-def main_branch(root):
-    for name in ('main', 'master'):
-        if git(root, 'show-ref', '--verify', '--quiet', 'refs/heads/' + name, check=False).returncode == 0:
-            return name
-    raise ValueError('No main branch in the project checkout')
 
 
 def merge_into_main(root, commit):
@@ -209,9 +205,8 @@ class Pipeline:
                 if (not execution or execution['status'] != 'completed' or execution['stop_requested']
                         or execution['delivery'] not in {'delivered', 'discarded'}):
                     continue
-                flow = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_workflow:' + task['id'],)).fetchone()
-                if flow and json.loads(flow[0]).get('state') != 'complete':
-                    continue  # Owner hold, wait, deferral or unfinished repair.
+                if self.held(conn, task['id']):
+                    continue
                 row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_source:' + task['id'],)).fetchone()
                 source = json.loads(row[0]) if row else {}
                 if not source.get('commit') or source.get('dirty'):
@@ -221,6 +216,17 @@ class Pipeline:
                     continue  # Merged or already reported failed; a new commit is a new attempt.
                 return {'task': dict(task), 'commit': source['commit'], 'execution': dict(execution)}
         return None
+
+    def held(self, conn, task_id):
+        flow = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_workflow:' + task_id,)).fetchone()
+        return bool(flow and json.loads(flow[0]).get('state') != 'complete')  # owner hold, wait, deferral or repair
+
+    def locked_merge(self, project_path, commit):
+        """The only path into main: exclusive checkout fence, re-checked pending deploy, then the merge."""
+        with fence.hold(self.db.path.parent, exclusive=True):
+            if self.pending():
+                raise Busy('a deploy is pending')
+            return merge_into_main(project_path, commit)
 
     def mark(self, conn, candidate, state, reason, **extra):
         task = candidate['task']
@@ -251,7 +257,7 @@ class Pipeline:
                               f'Assignment {short} was not merged: the worker reported failing checks after its repair '
                               'rounds. Nothing was merged or deployed.')
                 return
-            head, changed = await asyncio.to_thread(merge_into_main, task['project_path'], commit)
+            head, changed = await asyncio.to_thread(self.locked_merge, task['project_path'], commit)
             requested = None
             if changed and self.deployable(task['project_path']):
                 requested = self.request(task['project_id'], 'auto', task['id'], task['origin_conversation'],
@@ -264,6 +270,8 @@ class Pipeline:
                               + ('; deploy requested.' if requested else '.'))
         except asyncio.CancelledError:
             raise
+        except Busy:
+            return  # A deploy or another merge owns the checkout; the next tick retries. Nothing is marked.
         except Exception as error:
             logging.getLogger(__name__).warning('merge of %s failed: %s', short, error)
             with self.db.transaction() as conn:
@@ -273,17 +281,25 @@ class Pipeline:
                           'repair the existing assignment.')
 
     async def merge_assignment(self, task_id):
-        """Owner-requested merge (manager `deploy` action) even when Auto-deploy is OFF."""
+        """Owner-requested merge (manager `deploy` action) even when Auto-deploy is OFF. Same fence and holds as step()."""
+        if self.pending():
+            raise ValueError('A deploy is pending; merge after it finishes')
         with self.db.connect() as conn:
             task = conn.execute("SELECT t.*,p.path AS project_path FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?",
                                 (task_id,)).fetchone()
             row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_source:' + task_id,)).fetchone()
+            held = bool(task) and self.held(conn, task_id)
         source = json.loads(row[0]) if row else {}
         if (not task or task['lifecycle'] != 'completed' or task['lease_owner'] or not source.get('commit')
                 or source.get('dirty')):
             raise ValueError('Assignment must be completed, stopped and committed to merge')
+        if held:
+            raise ValueError('Assignment is on an owner hold or has unfinished follow-up; it is not merged')
         execution = self.db.one('SELECT * FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1', (task_id,))
-        head, changed = await asyncio.to_thread(merge_into_main, task['project_path'], source['commit'])
+        try:
+            head, changed = await asyncio.to_thread(self.locked_merge, task['project_path'], source['commit'])
+        except Busy as error:
+            raise ValueError('Another merge or a deploy is using the live checkout: ' + str(error)) from error
         with self.db.transaction() as conn:
             self.mark(conn, {'task': dict(task), 'commit': source['commit'], 'execution': execution}, 'merged',
                       'merged into main by owner request', main=head)

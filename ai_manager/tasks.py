@@ -230,6 +230,14 @@ class Tasks:
         return self.get(task_id)
 
     def claim(self, max_workers):
+        from .fence import Busy, hold
+        try:
+            with hold(self.db.path.parent, exclusive=False):
+                return self._claim(max_workers)
+        except Busy:
+            return None  # A deploy holds the fence: no new work starts until it finishes.
+
+    def _claim(self, max_workers):
         with self.db.transaction() as conn:
             from .parallel import active_workers, admission, prepare_workspace
             if active_workers(conn) >= max_workers:

@@ -32,7 +32,7 @@ wait with "waiting for the one-time install command" in Settings.
 ## Verification (this branch)
 
 Full backend suite once at the end; deploy/rollback/health paths run against a private disposable copy with its own Git
-repo, SQLite database and port (`tests/test_deploy_script.py`). Final run: 308 passed (full backend, once), ruff clean, `browser_smoke.py` and `browser_auto_deploy.py` passed. Not verified: the
+repo, SQLite database and port (`tests/test_deploy_script.py`). Final run: 315 passed (full backend, once), ruff clean, `browser_smoke.py` and `browser_auto_deploy.py` passed. Not verified: the
 real systemd path unit and real `systemctl` stop/start (the installer test uses a fake `systemctl`); the first live
 deploy will be the first real systemd run.
 
