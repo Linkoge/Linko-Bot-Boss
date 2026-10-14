@@ -15,8 +15,8 @@ Full release readiness is established by the exact manifest and report below, no
 or source implementation alone. The fixed preparation gate runs the final backend suite and
 all 19 browser scripts once, including the real-deadline throwaway rollback rehearsal.
 
-Release ID: `option-b-scoped-v1-20261014`. Immutable preparation evidence is retained under
-this workspace's `.data/option-b-integration/runtime/deployment-helper/releases/option-b-scoped-v1-20261014/`.
+Release ID: `option-b-scoped-v2-20261014`. Immutable preparation evidence is retained under
+this workspace's `.data/option-b-integration/runtime/deployment-helper/releases/option-b-scoped-v2-20261014/`.
 The CLI binds `--task-id c3aebb4c76db45de81ccd8567c2ac259`; a local SQLite evidence copy
 contains only scoped task/project/context rows from read-only runtime. No shared database
 is written. Exact commit, check outcomes, timings, hashes and routine manager delivery facts:
