@@ -8,8 +8,8 @@ Current architecture, superseding prior supervision requirements as authorized o
 - Natural conversational requests; the manager decides when requested work should be delegated.
 - One ordinary request becomes one complete objective, with necessary project/conversation context.
 - Native Codex tools handle investigation, editing, commands, dependency installation, builds, testing, debugging and Git.
-- Codex decides validation. Completion reports evidence and limitations; it does not imply independent acceptance certification.
-- No separate planner, task DAG, reviewer, verification controller, registered verification commands, permission profiles, capability broker or integration controller.
+- Validation follows deterministic risk tiers (owner-approved 2026-10-14, [contract](docs/VERIFICATION_TIERS.md)): Small (UI/text) runs smoke plus touched-file tests and build/lint; Normal adds the full backend suite once at the end; Risky (DB/auth/deploy/worker/manager logic, integration, deployment) adds one automatic cheap read-only diff review. Paths/text set a floor that the manager may raise, never lower. The actual branch diff is reclassified after completion. Every task runs the fast smoke suite. Release preparation runs the full backend+browser suite once. Reports stay short; full evidence stays in execution records. Completion does not imply independent acceptance certification.
+- No separate planner, task DAG, verification controller, registered verification commands, permission profiles, capability broker or integration controller; the tier review is the only reviewer.
 - No routine owner approval. Preserve explicit confirmation for catastrophic broad destruction, using native interaction where available and conversational continuation otherwise.
 - Automatic durable worker-result delivery to the originating manager conversation, including when the browser disconnects or another project is selected.
 - Existing and future registered projects participate automatically. Sequential same-project coding by default; explicit per-request owner chat/⇈ Send permission may enable isolated concurrent assignments under dependency/conflict/global-capacity guards. Integration/preparation/deployment remain serialized. Contract: docs/PARALLEL_EXECUTION.md.
@@ -36,6 +36,7 @@ Implementation uses existing FastAPI, SQLite, plain JavaScript and Codex App Ser
 
 Implementation contract and evidence navigation: docs/PROJECT_MEMORY.md.
 
+- Related Small requests may be batched into one queued, unstarted Small assignment (`delegate batch=true`) only while the combined scope stays Small. Post-deploy health failure automatically rolls back to the exact old commit without restoring old data; a throwaway rehearsal is in tests/test_rollback_rehearsal.py.
 - Owner deployment intent must be recorded before asynchronous preparation/audit, survive result/restart handoff, and consume only one reviewed exact prepared release. Later owner corrections/holds revoke or suspend unused intent; internal messages grant no new permission. Contract: docs/DEPLOYMENT_HELPER.md.
 
 - Outstanding job follow-up persists on existing assignments independently of worker completion; SQLite-only idle/grace checks queue one deduplicated internal manager review with durable backoff. Preserve all owner holds, read-only mode and authorization boundaries. Contract: docs/AUTOMATIC_RECOVERY.md.

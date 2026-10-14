@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import subprocess
 import time
 
 from .attachments import native_image
@@ -23,6 +24,9 @@ from .recovery import (
     with_reset,
 )
 from .tasks import Tasks
+from .verification import REVIEW_INSTRUCTIONS, changes, floor, plan, rank
+
+REVIEW_SECONDS = 300
 
 WORKER_INSTRUCTIONS = """Ordinary development needs no approval. Ask before catastrophic broad destruction
 of repositories, volumes, production databases or shared infrastructure.
@@ -156,8 +160,10 @@ class Workers:
                 "workspace_ownership": {"task_id": task["id"], "path": str(root),
                     "branch": task.get("workspace_branch"), "base": task.get("workspace_base"),
                     "shared_checkout": project["path"], "integration": policy.get("integration", False)},
-                "execution_policy": policy,
+                "execution_policy": {k: v for k, v in policy.items() if k != "verification"},
             }
+            if policy.get("verification"):  # Pre-tier assignments keep their original prompt.
+                prompt["verification"] = plan(policy["verification"], policy.get("integration"))
             selected = self.db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task["id"],))
             if selected:
                 prompt["task_context"] = json.loads(selected["payload"])
@@ -282,6 +288,8 @@ class Workers:
                             self.db, execution_id, await with_reset(server, failure), error.get("message", ""), output
                         )
                     else:
+                        if state == "completed":
+                            await self.verify(task, execution_id, root, route)
                         if state == "waiting":
                             error = {**error, "message": "Stopped by user"}
                         self.finish(execution_id, state, output, error.get("message", ""), started)
@@ -337,6 +345,82 @@ class Workers:
                 conn.execute(
                     "UPDATE questions SET status='expired' WHERE execution_id=? AND status='pending'", (execution_id,)
                 )
+
+    async def verify(self, task, execution_id, root, route):
+        """Classify the actual branch diff; effective risky work gets one cheap read-only diff review.
+
+        Evidence is recorded internally and never blocks or changes completion; the manager decides follow-up.
+        """
+        try:
+            await self._verify(task, execution_id, root, route)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            with self.db.transaction() as conn:
+                self.db.event(conn, "task.verification", {"error": str(error)[:300] or type(error).__name__},
+                              task["project_id"], task["id"], execution_id)
+
+    async def _verify(self, task, execution_id, root, route):
+        policy = self.db.setting("assignment_policy:" + task["id"], {})
+        if not policy.get("verification"):
+            return
+        assigned = plan(policy["verification"], policy.get("integration"))["tier"]
+        record, paths, diff, truncated = {"assigned": assigned, "actual": "unknown", "effective": assigned}, [], "", False
+        try:
+            if not task.get("workspace_base"):
+                raise ValueError("No assignment base; actual diff unavailable")
+            paths, diff, truncated = changes(root, task["workspace_base"])
+            actual, reasons = floor(paths) if paths else ("small", ["no file changes"])
+            declared = policy.get("change_paths", [])
+            undeclared = [p for p in paths if not any(p == d or p.startswith(d.rstrip("/") + "/") for d in declared)]
+            record.update(actual=actual, effective=max(assigned, actual, key=rank), reasons=reasons[:12],
+                          changed_files=paths[:100], changed_count=len(paths), undeclared=undeclared[:20])
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            record["actual_error"] = str(error)[:300]
+        record["escalated"] = rank(record["effective"]) > rank(assigned)
+        if record["effective"] == "risky":
+            record["review"] = await self.review(task, root, route, paths, diff, truncated) if paths else {
+                "status": "unavailable", "reason": "No actual changes to review"}
+        with self.db.transaction() as conn:
+            self.db.event(conn, "task.verification", record, task["project_id"], task["id"], execution_id)
+
+    async def review(self, task, root, route, paths, diff, truncated):
+        from .model_settings import cheapest, provider_of
+        server, output, usage, spent = self.factory(self.settings, native=False), "", TurnUsage(), {}
+        try:
+            async with asyncio.timeout(REVIEW_SECONDS):
+                await server.start()
+                pair = server.route(**cheapest(self.db, server, provider_of(route["model"])))
+                thread_id = await server.thread(root, REVIEW_INSTRUCTIONS, None, pair["model"])
+                queue = asyncio.Queue()
+                server.queues[thread_id] = queue
+                prompt = {"objective": task["description"][:6000], "acceptance_criteria": task["acceptance"][:3000],
+                          "changed_files": paths[:200], "diff": diff, "diff_truncated": truncated}
+                turn = await server.request("turn/start", {"threadId": thread_id, "input": [
+                    {"type": "text", "text": json.dumps(prompt)}], **pair, "serviceTierForTurn": "default"})
+                turn_id = turn["turn"]["id"]
+                while True:
+                    event = await queue.get()
+                    method, params = event["method"], event.get("params", {})
+                    if method == "transport/lost":
+                        raise CodexError("Review connection lost")
+                    event_turn = params.get("turnId") or (params.get("turn") or {}).get("id")
+                    if event_turn and event_turn != turn_id:
+                        continue
+                    if method == "item/agentMessage/delta":
+                        output = (output + params.get("delta", ""))[-20000:]
+                    if method == "thread/tokenUsage/updated":
+                        spent = usage.record(params.get("tokenUsage", {}))
+                    if method == "turn/completed":
+                        output = params.get("reconciled_output", output)
+                        status = "completed" if params["turn"]["status"] == "completed" else "failed"
+                        return {"status": status, **pair, "findings": output[-4000:], "usage": spent}
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            return {"status": "unavailable", "reason": (str(error) or type(error).__name__)[:300]}
+        finally:
+            await server.close()
 
     def finish(self, execution_id, status, output, error, started=None, controlled=False):
         with self.db.transaction() as conn:

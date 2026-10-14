@@ -291,6 +291,9 @@ class Chat:
             prompt['deployment_intents'] = intents
         if source:
             prompt["worker_result"] = self.result_notice(source)
+            verification = self.verification_notice(source)
+            if verification:
+                prompt["worker_result"]["verification"] = verification
         recovery_task = self.db.setting('execution_recovery:' + execution_id)
         if recovery_task:
             prompt['message'] = 'Internal unfinished-work review; inspect this existing assignment and result only. Preserve owner holds. No new deployment authorization; only a matching recorded owner intent may be reviewed/consumed.'
@@ -692,6 +695,26 @@ class Chat:
             "output_characters": len(result["output"]),
             "evidence_action": "read_result", "deployment": "unverified; consult exact succeeded receipt",
         }
+
+    def verification_notice(self, result):
+        """Compact tier outcome; the full record stays in the task.verification event."""
+        tier = self.db.setting("assignment_policy:" + result["task_id"], {}).get("verification")
+        if not tier:
+            return None
+        row = self.db.one("SELECT payload FROM events WHERE execution_id=? AND kind='task.verification' ORDER BY seq DESC LIMIT 1",
+                          (result["id"],))
+        if not row:
+            return {"tier": tier["tier"], "post_check": "not recorded for this attempt"}
+        record = json.loads(row["payload"])
+        if "error" in record:
+            return {"tier": tier["tier"], "post_check": "failed: " + record["error"][:300]}
+        notice = {k: record[k] for k in ("assigned", "actual", "effective", "escalated", "changed_count") if k in record}
+        if record.get("undeclared"):
+            notice["undeclared"] = record["undeclared"][:5]
+        if record.get("review"):
+            review = record["review"]
+            notice["review"] = {"status": review["status"], "findings": (review.get("findings") or review.get("reason", ""))[:600]}
+        return notice
 
     async def deliver_results(self):
         for result in self.db.all(

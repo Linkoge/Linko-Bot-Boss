@@ -48,6 +48,7 @@ def done(db, task, filename=None, text='changed\n'):
         retain_source(db, conn, task['id'])
 
 
+@pytest.mark.smoke
 def test_default_fifo_optin_capacity_real_worktrees_and_combined_merge(repo):
     db, _, _, _, project = repo
     tasks = Tasks(db)

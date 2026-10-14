@@ -88,6 +88,7 @@ def restricted(db, server):
     return save(db, server, config)
 
 
+@pytest.mark.smoke
 def test_every_pair_and_catalog_support_are_enforced(system):
     db, _, _, server, *_ = system
     config = restricted(db, server)
@@ -110,6 +111,7 @@ def test_every_pair_and_catalog_support_are_enforced(system):
         save(db, server, config)
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_manager_delegation_pins_actual_worker_turn_and_resume(system):
     db, registry, settings, server, chat, workers, scheduler = system

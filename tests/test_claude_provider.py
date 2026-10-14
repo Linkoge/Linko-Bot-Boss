@@ -96,6 +96,7 @@ class Backend:
         pass
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_provider_server_routes_by_model_and_thread(tmp_path):
     settings = Settings(data_dir=tmp_path)

@@ -78,6 +78,7 @@ async def completed_audit(flow, params, intent):
     return task, source, internal
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_owner_delegate_result_review_exact_deploy_restart_and_replay(flow):
     db, _, chat, settings, _, scheduler, project = flow

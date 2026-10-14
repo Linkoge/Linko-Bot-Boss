@@ -211,6 +211,7 @@ def test_many_deliveries_bound_default_context_with_explicit_state_condensation(
     assert "Open reboot acceptance" in snapshot["brief"]["pending"]
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_workers_receive_focused_acceptance_and_selected_context_only(system):
     project, memory, _ = ready(system)

@@ -69,6 +69,7 @@ def test_archive_retains_all_messages_thread_and_search_across_restart(chat):
     assert not restored.search_history(search="missing")["conversations"]
 
 
+@pytest.mark.smoke
 def test_clear_preserves_archives_and_other_contexts_and_resets_thread(chat, tmp_path):
     old, last = seed(chat)
     chat.reset(None, old, last, True, archive=True)

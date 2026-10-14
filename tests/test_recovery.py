@@ -230,6 +230,7 @@ async def test_usage_without_reset_increases_bounded_delay_without_claiming_rese
     assert db.setting(GATE) is None
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_crash_reconciles_unfinished_native_turn_and_preserves_partial_work(system):
     db, registry, _, settings = system
@@ -462,6 +463,7 @@ async def test_waiting_project_does_not_consume_capacity_or_allow_second_writer(
         (CodexError("RPC quota", {"code": -32000, "data": {"codexErrorInfo": "usageLimitExceeded"}}), "usage"),
     ],
 )
+@pytest.mark.smoke
 def test_structured_classification(error, kind):
     failure = classify(error)
     assert (failure.kind if failure else None) == kind

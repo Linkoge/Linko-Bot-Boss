@@ -230,6 +230,13 @@ failure. An interrupted helper or failed rollback stays fenced in `rollback_fail
 replays an uncertain activation or kills potentially active workers. External inspection/forward repair is then
 required. After successful detached rollback, prepare the next release against actual HEAD; review branch state.
 
+Throwaway rehearsal (2026-10-14, `tests/test_rollback_rehearsal.py`) runs the real helper code against a temporary
+checkout, bundle and database. Only `systemctl` is simulated by a local server process, so the live unit is never
+touched. The real activation, verification, rollback and report path is used. An unhealthy candidate is rolled back to
+the detached base, with base assets served, forward `main` retained, data unmodified and one origin report. A healthy
+control succeeds. It also passed with the real 45 s health deadline (`LINKO_REAL_HEALTH_CLOCK=1`, 45.6 s).
+Helper code is unchanged; no installed-helper upgrade is needed.
+
 Each request/result is durable under `deployment-helper/results/<nonce>.json`; backup paths and service identity
 are recorded there. Restarted manager reports exactly once in the originating conversation and retains a
 `deployment.result` execution event/reference. Deleted conversations are not recreated. Manager context and

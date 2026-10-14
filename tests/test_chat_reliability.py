@@ -222,6 +222,7 @@ def test_concurrent_same_request_has_one_transactional_acceptance(system):
     assert len(db.all("SELECT * FROM chat_requests")) == 1 and len(db.all("SELECT * FROM messages")) == 2
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_accepted_transaction_survives_crash_before_runner_launch(system):
     db, registry, chat, settings = system

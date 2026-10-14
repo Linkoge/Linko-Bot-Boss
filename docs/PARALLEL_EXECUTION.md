@@ -2,8 +2,9 @@
 
 This supersedes unconditional one-worker-per-project requirements. Architecture remains
 User → Manager → native Codex workers → Manager → User. No planner/router, DAG,
-independent reviewer, integration controller, recurring AI review or additional routing
-inference is introduced. The existing manager assesses the request during its normal turn.
+integration controller, recurring AI review or additional routing inference is introduced
+(the Risky-tier diff review in [verification tiers](VERIFICATION_TIERS.md) is the only reviewer;
+integration assignments are Risky). The existing manager assesses the request during its normal turn.
 
 Ordinary requests execute sequentially per project with FIFO admission. An explicit owner
 instruction in the current chat request or expanded composer **⇈ Send** grants permission

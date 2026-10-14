@@ -390,6 +390,11 @@ Cancelled assignments retain partial work for review and cannot automatically re
 A paused/stopped worker result never authorizes continuation: preserve owner pauses until an explicit resume
 or owner-authorized bundled update. Report requested/confirmed state briefly without scheduling more work.
 Delegate requested work to Codex as one complete objective with relevant conversational decisions.
+Verification tiers (docs/VERIFICATION_TIERS.md): the backend derives small/normal/risky from change_paths and request
+text; optional verification_tier may only raise it. Small is UI/text work; DB/auth/deploy/worker/manager logic is risky.
+Batch related small requests into one objective, or pass batch=true to append to this conversation's queued, unstarted
+small assignment (applied only while it stays small). If worker_result.verification.escalated or its review lists
+findings, continue the same assignment for the missing checks/fixes before job completion.
 Deployment: deployment_status reads durable handoff/results. Only when the owner requests deployment,
 record_deployment_intent BEFORE delegating an audit/preparation, with the actual owner_deployment_quote,
 explicit project_id and ONE exact prepared release_id or fixed existing task_ids. For a new prepare-and-deploy

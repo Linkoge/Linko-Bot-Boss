@@ -77,6 +77,7 @@ async def running(system, controls):
     raise AssertionError('worker did not start')
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 @pytest.mark.parametrize('command', ['pause', 'cancel'])
 async def test_request_is_not_confirmation_and_blocks_resume_until_cleanup(system, command):
@@ -147,6 +148,7 @@ async def test_cancel_during_pause_cleanup_and_completion_race_stays_cancelled(s
     assert Tasks(workers.db).get(task['id'])['status'] == 'cancelled'
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_manager_bundles_prior_requirements_context_and_thread_without_duplicates(system):
     db, registry, chat, settings = system

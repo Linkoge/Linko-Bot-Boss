@@ -222,6 +222,7 @@ async def test_restart_unanswered_native_question_does_not_resume_worker(system)
     assert Tasks(db).get(task['id'])['lease_owner'] == claimed['lease_owner']
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_internal_result_cannot_deploy_or_continue_paused_worker(system):
     db, registry, chat, settings = system

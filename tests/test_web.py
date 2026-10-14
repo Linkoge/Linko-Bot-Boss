@@ -32,6 +32,7 @@ def sign_in(client, app, settings):
     client.headers["X-CSRF-Token"] = response.json()["csrf"]
 
 
+@pytest.mark.smoke
 def test_auth_setup_csrf_logout_and_secure_headers(client):
     browser, app, settings = client
     assert browser.get("/api/portfolio").status_code == 401
@@ -100,6 +101,7 @@ def test_chat_modes_stale_origin_and_history_without_supervision_tables(client):
     assert response.json()["historical_verification"] == [{"task_id": task["id"], "evidence": "Historical evidence"}]
 
 
+@pytest.mark.smoke
 def test_owner_request_receipt_replay_and_changed_payload_conflict(client):
     browser, app, settings = client
     body = {"request_id": "http-owner-request-1", "content": "Discuss", "mode": "conversation"}

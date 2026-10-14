@@ -103,6 +103,7 @@ def test_legacy_migration_preserves_rows_and_history(system):
     assert Tasks(reopened).claim(2) is None
 
 
+@pytest.mark.smoke
 def test_idempotency_exclusive_project_and_future_projects(system):
     db, registry, chat, settings = system
     tasks = Tasks(db)
@@ -125,6 +126,7 @@ def test_idempotency_exclusive_project_and_future_projects(system):
     assert tasks.claim(3)["project_id"] == future["id"]
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_direct_delegation_native_execution_and_return(system):
     db, registry, chat, settings = system
@@ -221,6 +223,7 @@ async def test_catastrophic_question_waits_for_exact_answer(system):
     assert await request == {"decision": "decline"}
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_restart_recovers_completed_worker_without_replay(system):
     db, registry, _, settings = system
@@ -253,6 +256,7 @@ async def test_launch_without_turn_id_is_not_blindly_replayed(system):
     assert not workers.jobs
 
 
+@pytest.mark.smoke
 def test_backup_restore_and_native_configuration(system, tmp_path):
     db, _, _, settings = system
     backup, restored = tmp_path / "backup.sqlite", tmp_path / "restored.sqlite"
@@ -524,6 +528,7 @@ async def test_large_result_and_concurrent_delivery_claims(system):
     assert len(db.all("SELECT id FROM messages WHERE role='worker'")) == 1
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 @pytest.mark.parametrize("mode", ["conversation", "auto", "execute"])
 async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
@@ -566,6 +571,7 @@ async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
     assert len(chat.server.prompts) == 1
 
 
+@pytest.mark.smoke
 def test_fresh_schema_contains_only_current_storage(system):
     db, _, _, _ = system
     tables = {r["name"] for r in db.all("SELECT name FROM sqlite_master WHERE type='table'")}

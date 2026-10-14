@@ -168,6 +168,7 @@ def test_handoff_atomic_replay_failure_and_retained_source(client, monkeypatch):
     assert Todos(Database(settings.db_path)).list(project) == [b]
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_manager_delegate_and_bundled_continue_handoff(client):
     _, app, settings = client

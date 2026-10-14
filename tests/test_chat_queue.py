@@ -18,6 +18,7 @@ def complete(chat, faults, execution_id):
     chat.server.queues[row['thread_id']].put_nowait({'method': 'turn/completed', 'params': {'turn': turn}})
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_busy_fifo_modes_history_and_completion_race(system):
     db, registry, chat, settings = system

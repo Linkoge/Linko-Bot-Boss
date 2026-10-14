@@ -40,6 +40,7 @@ def test_id_scope_overlap_and_retry(tmp_path):
     "INSERT INTO questions VALUES('q','e','{}','input',NULL,'pending',1)",
     "INSERT INTO messages VALUES('m','c','assistant','','streaming',NULL,1)",
 ])
+@pytest.mark.smoke
 def test_idle_blocks_every_unresolved_record(tmp_path, sql):
     db, handoff = setup(tmp_path)
     # Fixture deliberately permits dangling IDs to cover conservative read-only gates.
@@ -109,6 +110,7 @@ def simulation(tmp_path):
     return db, handoff, helper, repo, base
 
 
+@pytest.mark.smoke
 def test_activation_and_durable_result(tmp_path):
     _, handoff, helper, repo, _ = simulation(tmp_path)
     assert helper.execute()['phase'] == 'succeeded'
@@ -120,6 +122,7 @@ def test_activation_and_durable_result(tmp_path):
     assert helper.operations == ['stop', 'start']
 
 
+@pytest.mark.smoke
 def test_failed_health_rolls_back_without_restoring_database(tmp_path):
     db, handoff, helper, repo, base = simulation(tmp_path)
     db.set_setting('new-data', 'preserve')

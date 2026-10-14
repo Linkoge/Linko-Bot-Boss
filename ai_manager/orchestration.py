@@ -13,6 +13,7 @@ from .project_memory import ProjectMemory
 from .recovery import SilentObserver
 from .tasks import Tasks
 from .todos import Todos
+from .verification import select
 
 MANAGER_TOOL = {
     "type": "function",
@@ -83,6 +84,8 @@ MANAGER_TOOL = {
             "parallel_safe": {"type": "boolean"},
             "parallel_reason": {"type": "string"},
             "change_paths": {"type": "array", "items": {"type": "string"}},
+            "verification_tier": {"type": "string", "enum": ["small", "normal", "risky"]},
+            "batch": {"type": "boolean"},
             "depends_on": {"type": "array", "items": {"type": "string"}},
             "task_ids": {"type": "array", "items": {"type": "string"}},
             "decision": {"type": "string", "enum": ["preserve", "revoke"]},
@@ -283,17 +286,22 @@ class Scheduler:
                     value = self.intents.get(conn, intent_id, project_id, params)
                     if value['source_message_id'] != source['id'] or value['status'] != 'recorded':
                         raise ValueError('Delegate preparation/audit from the original recorded owner turn')
+            execution_policy = policy(self.db, params, args, project_id)
+            execution_policy['verification'] = select(
+                execution_policy['change_paths'], args['objective'], args.get('acceptance', ''),
+                args.get('verification_tier'), deployment=bool(intent_id))
             await self.chat.server.start()
-            route = delegation(self.db, self.chat.server, args.get('worker_route'))
+            route = delegation(self.db, self.chat.server, args.get('worker_route'), execution_policy['verification']['tier'])
             task = self.tasks.add(
                 project_id, args["objective"], params["conversation_id"],
                 params["manager_execution_id"] + ":" + project_id,
                 acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
-                execution_policy=policy(self.db, params, args, project_id),
+                execution_policy=execution_policy, batch=args.get('batch') is True and not intent_id,
             )
             if intent_id:
                 self.intents.attach(project_id, params, intent_id, task['id'])
-            return {**self.tasks.context(task), **({'deployment_intent_id': intent_id} if intent_id else {})}
+            return {**self.tasks.context(task), **({'deployment_intent_id': intent_id} if intent_id else {}),
+                    **({'batched': True} if task.get('batched') else {})}
         if action == 'job_followup':
             task = self.tasks.get(args['task_id'])
             state, reason = args.get('followup_state'), args.get('reason', '').strip()
@@ -384,6 +392,12 @@ class Scheduler:
                     raise ValueError("Assignment changed while continuing")
                 if args.get("todos"):
                     Todos(self.db).consume(conn, args["todos"], project_id, task["id"])
+                from .parallel import load, save
+                p = load(conn, 'assignment_policy:' + task['id'], {})
+                if p.get('verification'):  # Pre-tier assignments keep their original verification behavior.
+                    p['verification'] = select(p.get('change_paths', []), objective, acceptance, args.get('verification_tier'),
+                                               integration=bool(p.get('integration')), previous=p['verification'])
+                    save(conn, 'assignment_policy:' + task['id'], p)
                 from .assignment_workflow import update
                 update(self.db, conn, task["id"], "actionable", "Explicit authorized continuation", reset_retry=True)
                 if context:
