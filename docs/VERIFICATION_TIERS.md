@@ -1,6 +1,6 @@
 # Risk-tiered worker verification (Option B)
 
-Owner-approved 2026-10-14. Small tasks use less time and fewer tokens. Risky work keeps its checks.
+Owner-approved 2026-10-14. Updated with the owner-approved execution reductions; Risky retains relevant acceptance and sensitive review.
 Code: `ai_manager/verification.py`, delegate/continue in `ai_manager/orchestration.py`, batching in
 `ai_manager/tasks.py`, worker prompt and post-checks in `ai_manager/workers.py`.
 
@@ -53,7 +53,7 @@ and JS syntax checks cover changed surviving files, resolved against the candida
 registry/projects → project UI/stash; memory, models, usage, markdown and To-Do → their checks; deployment/publication
 → deployment/auto-deploy; verification → worker delivery, controls, deployment/auto-deploy; tasks/workers/assignment/
 orchestration/native transport → delivery, controls, parallel/To-Do/model/auto-deploy consumers as applicable.
-Changed browser scripts select themselves. Docs/tests alone select no browser. Shared HTTP/auth/DB/config or unknown
+Retained `.data` reports/audits are not runtime browser coverage or lint inputs. Changed browser scripts select themselves. Docs/tests alone select no browser. Shared HTTP/auth/DB/config or unknown
 runtime modules conservatively select all consumers, with a per-script reason. Small shared UI changes use existing
 representative composer, project UI and smoke acceptance instead of a mandatory full browser suite, alongside worker
 changed-behavior checks. Tests remain available; no useful coverage is removed.

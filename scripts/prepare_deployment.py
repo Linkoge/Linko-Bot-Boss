@@ -47,7 +47,7 @@ def checks(python, policy=None):
         tests = [p for p in paths if p.startswith('tests/') and p.endswith('.py')]
         if tests:
             commands.append([str(python), '-m', 'pytest', '-q', *tests])
-    lint = [p for p in paths if p.endswith('.py')]
+    lint = [p for p in paths if p.endswith('.py') and not p.startswith('.data/')]
     if lint:
         commands.append([str(python), '-m', 'ruff', 'check', *lint])
     commands.extend(['node', '--check', p] for p in paths if p.endswith(('.js', '.mjs')))

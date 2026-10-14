@@ -143,3 +143,13 @@ def test_review_selection_uses_full_per_file_diff_and_ignores_test_context():
     assert review_reasons(['ai_manager/tasks.py', 'ai_manager/workers.py'], diff=diff) == [
         'sensitive actual path ai_manager/workers.py']
     assert not review_reasons(['docs/security.md'], 'Explain authentication')
+
+
+
+def test_retained_private_audit_artifacts_do_not_select_unrelated_browser_suites():
+    policy = release_policy(['.data/auto-deploy-bootstrap/audit.py',
+                             '.data/auto-deploy-bootstrap/audit.json',
+                             'ai_manager/verification.py'], [{'tier': 'risky'}])
+    assert policy['browsers'] == ['worker_delivery', 'agent_controls', 'deployment', 'auto_deploy']
+    commands = checks(Path(sys.executable), policy)
+    assert not any('.data/auto-deploy-bootstrap/audit.py' in argv for argv in commands)

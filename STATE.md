@@ -9,7 +9,10 @@ Contract: docs/VERIFICATION_TIERS.md, docs/AUTO_DEPLOY.md and docs/DEPLOYMENT_HE
 
 Read-only inspection established live `addfcd092e7a4c34205264156feb8f0f06d2dba7`, matching succeeded
 receipt `deployment-helper/results/1178e069284821703d9370a94bc6b0e3.json`; project Auto-deploy is ON.
-Focused policy/worker/auto-deploy regressions passed 70 cases; smoke passed 44 cases; Ruff passed.
+Focused policy/worker/auto-deploy regressions passed 71 cases; smoke passed 44 cases; Ruff passed.
+The one backend run passed 442 cases before the retained-evidence selector correction; affected checks passed
+after that correction. The initial preparation failed lint on inherited audit artifacts and created no manifest.
+Those evidence files are now excluded from runtime browser/lint selection; normal manager preparation remains.
 Exact final candidate, final preparation/check results, hashes, skipped checks/reasons and routine manager
 handoff facts are retained in this workspace's `.data/verification-reductions/REPORT.md` and
 `manager-summary.json`. Only a complete matching manifest establishes local preparation. Manager activation

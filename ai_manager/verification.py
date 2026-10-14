@@ -227,6 +227,8 @@ def browser_selection(paths):
         path = PurePosixPath(value)
         if kind(path) in {'doc', 'test'}:
             continue
+        if path.parts and path.parts[0] == '.data':
+            continue  # Retained reports/audits are evidence, not served runtime behavior.
         name = path.stem.lower()
         if name.startswith('browser_') and name[8:] in BROWSERS:
             relevant = (name[8:],)
