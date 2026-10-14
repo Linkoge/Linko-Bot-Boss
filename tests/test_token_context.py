@@ -166,7 +166,13 @@ async def test_worker_continuation_keeps_thread_and_only_updates_changed_context
     workers.launch(Tasks(db).claim(2))
     await settled(workers)
     assert Tasks(db).get(task["id"])["native_thread"] == first_thread
-    assert json.loads(servers[-1].prompts[-1]) == {"objective": "First objective"}
+    continued = json.loads(servers[-1].prompts[-1])
+    assert set(continued) == {"objective", "verification"}
+    assert continued["objective"] == "First objective"
+    assert continued["verification"]["tier"] == "normal"
+    assert continued["verification"]["repair_rounds_used"] == 1
+    assert continued["verification"]["repair_rounds_remaining"] == 2
+    assert "project" not in continued  # Unchanged project context remains in the retained native thread.
     assert (
         json.loads(
             db.all("SELECT input FROM executions WHERE task_id=? ORDER BY started_at", (task["id"],))[-1]["input"]
