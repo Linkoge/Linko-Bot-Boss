@@ -1,7 +1,7 @@
 # Current bundled delivery — 2026-10-14
 
 Owner explicitly authorized implementation after design discussion. Exact integrated candidate:
-`parallel-composer-integrated-v4-20261014`; source assignment `65e5086b085547419703d1c4c6e08930`.
+`parallel-composer-integrated-v5-20261014`; source assignment `65e5086b085547419703d1c4c6e08930`.
 Implementation and disposable Git/native-process/history/browser checks cover per-request parallel
 consent, isolated assignment ownership/recovery, serialized combined integration, and revised composer.
 Exact prepared manifest and full evidence define readiness; see [STATE.md](STATE.md).

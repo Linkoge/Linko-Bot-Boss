@@ -1,6 +1,6 @@
 # Reprepared provider/parallel/composer integration — 2026-10-14
 
-Current exact candidate: `parallel-composer-integrated-v4-20261014` in
+Current exact candidate: `parallel-composer-integrated-v5-20261014` in
 `/home/codex/checkouts/linko-parallel-provider-20261014`. It merges actual live provider
 commit `b0f0c8dafa45e8fba848e134a4dc06e2ad0f2f8b` and reviewed parallel/composer commit
 `b57d0c29e3699d1ec39e6388885e5be9b168b2ca`. All original feature acceptance remains;
@@ -23,7 +23,7 @@ extended to preserve Claude application and native resume history alongside Code
 and to verify both providers' saved settings. Missing/ambiguous required native history fails
 closed. A separately authorized helper v2 upgrade remains a concrete activation prerequisite;
 this task does not install it or deploy/push/restart anything. Preparation is established only
-by `deployment-helper/releases/parallel-composer-integrated-v4-20261014/manifest.json`.
+by `deployment-helper/releases/parallel-composer-integrated-v5-20261014/manifest.json`.
 
 Authoritative feature contracts remain docs/PARALLEL_EXECUTION.md, docs/chat-history.md,
 docs/AUDIO.md and docs/MODEL_SETTINGS.md. Full durable report, stale-base reproduction,
