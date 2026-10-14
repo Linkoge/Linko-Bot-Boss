@@ -63,6 +63,12 @@ Keep detailed execution/report evidence and update relevant authoritative docs. 
 needed when meaningful established facts change, not as a mandatory stage for every task. Related queued small
 requests may still batch while their combined scope is compatible and their workspace/thread identity is preserved.
 
+Automatic preparation uses the pinned execution and the pinned candidate gate. Complete identical published v3
+validation can be reused in that same step with full inventory/provenance verification and a new immutable execution
+envelope, preserving the original source bytes. Different code/base/scope/policy uses fresh checks. An event without
+a completed/delivered latest execution and cleaned-up assignment cannot establish automatic readiness. The final
+binding rechecks execution/scope before sealing; helper receipt hash must also match exact installed bytes.
+
 ## Retained assignment and delivery facts
 
 Assignment `e684e6b33ca14b778ef7769dfc92a0fc` retains its earlier exact source/check evidence. The delayed multiline

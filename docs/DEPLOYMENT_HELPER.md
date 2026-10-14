@@ -8,6 +8,11 @@ immutable historical v2 scoped and full-suite attestations remain accepted. Mani
 Automatic ON deployment requires no additional owner approval. Exact binding, idle/drain, backups, health/rollback
 and OFF/holds remain intact. Dated evidence below is historical and does not override this current contract.
 
+Automatic execution binding can reuse an identical published v3 gate in a fresh immutable envelope; see
+[AUTO_DEPLOY](AUTO_DEPLOY.md). The source manifest/index/log remain pinned and unchanged. Actual completed
+latest execution and matching current commit/base/scope/policy/schema/helper are required; otherwise fresh checks
+remain mandatory. Exact installed helper bytes and upgrade-receipt hash must both match before automatic dispatch.
+
 # Supported immutable publication and stable scope binding — 2026-10-14
 
 `ai_manager/release_publication.py` and `scripts/publish_release.py` import already validated

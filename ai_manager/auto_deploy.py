@@ -46,6 +46,12 @@ def git(root, *args):
 
 def verified(conn, task, execution_id, commit=None):
     """'' when the completed attempt passed its required Option B tier checks, else the reason it did not."""
+    execution = conn.execute('SELECT * FROM executions WHERE id=? AND task_id=?', (execution_id, task['id'])).fetchone()
+    latest = conn.execute('SELECT id FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1', (task['id'],)).fetchone()
+    if (not execution or execution['status'] != 'completed' or execution['finished_at'] is None
+            or execution['stop_requested'] or execution['delivery'] != 'delivered' or not latest or latest['id'] != execution_id
+            or task['lifecycle'] != 'completed' or task['lease_owner']):
+        return 'verification requires the current completed execution and cleaned-up assignment'
     row = conn.execute("SELECT payload FROM events WHERE execution_id=? AND kind='task.verification' ORDER BY seq DESC LIMIT 1",
                        (execution_id,)).fetchone()
     if not row:
@@ -283,7 +289,7 @@ class AutoDeploy:
                                     candidate['project_path'], str(checkout))
             await asyncio.to_thread(git, checkout, 'fetch', '--quiet', task['workspace'], candidate['commit'])
             await asyncio.to_thread(git, checkout, 'checkout', '--quiet', '--detach', candidate['commit'])
-            await self.prepare(checkout, Path(candidate['project_path']), self.db.path.parent, release_id, task['id'])
+            await self.prepare(checkout, Path(candidate['project_path']), self.db.path.parent, release_id, task['id'], candidate['execution_id'])
             with self.db.transaction() as conn:
                 value = next(v for v in rows(conn) if v['id'] == intent_id)
                 if value['status'] == 'recorded':
@@ -305,7 +311,8 @@ class AutoDeploy:
         helper = self.handoff.root / 'helper-v3.py'
         upgrade = read(self.handoff.root / 'helper-v3-upgrade.json') or {}
         from .deployment import sha
-        if (upgrade.get('phase') != 'succeeded' or not helper.is_file()
+        if (upgrade.get('phase') != 'succeeded'
+                or upgrade.get('helper_sha256') != manifest.get('required_helper_sha256') or not helper.is_file()
                 or sha(helper) != manifest.get('required_helper_sha256')):
             if value['auto'].get('reason') != 'helper v3 bootstrap required':
                 self.mark(conn, value, 'prepared', 'Auto-deploy is prepared and waiting for the external helper v3 upgrade. '
@@ -329,15 +336,15 @@ class AutoDeploy:
                 if value['status'] == 'recorded':
                     self.fail(conn, value, 'Deployment request failed: ' + str(error)[:400])
 
-    async def prepare_release(self, checkout, live, data, release_id, task_id):
-        """Run the RUNNING manager's fixed preparation gate against the candidate clone."""
+    async def prepare_release(self, checkout, live, data, release_id, task_id, execution_id):
+        """Run the pinned candidate gate with the already verified execution, without reselecting it."""
         log = data / 'auto-deploy' / (release_id + '.log')
-        argv = [sys.executable, str(ROOT / 'scripts/prepare_deployment.py'), release_id, '--live', str(live),
-                '--data', str(data), '--task-id', task_id, '--auto-execution', self.db.one('SELECT id FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1', (task_id,))['id'], '--candidate', str(checkout)]
+        argv = [sys.executable, str(checkout / 'scripts/prepare_deployment.py'), release_id, '--live', str(live),
+                '--data', str(data), '--task-id', task_id, '--auto-execution', execution_id, '--candidate', str(checkout)]
         with log.open('w') as stream:
             os.chmod(log, 0o600)
-            process = await asyncio.create_subprocess_exec(*argv, cwd=ROOT, stdout=stream, stderr=stream,
-                                                           start_new_session=True, env={**os.environ, 'PYTHONPATH': str(ROOT)})
+            process = await asyncio.create_subprocess_exec(*argv, cwd=checkout, stdout=stream, stderr=stream,
+                                                           start_new_session=True, env={**os.environ, 'PYTHONPATH': str(checkout)})
             try:
                 code = await asyncio.wait_for(process.wait(), PREPARE_SECONDS)
             except BaseException:

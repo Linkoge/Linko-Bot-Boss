@@ -27,6 +27,22 @@ include the current live commit; stacked sequential workspaces are supported wit
 another assignment's branch. A diverging candidate needs serialized source reconciliation and
 is reported; it is never silently merged or activated under a different commit.
 
+Automatic preparation keeps the execution selected by `evaluate`, rather than looking up a newer attempt later.
+The pinned clone's preparation script/module imports apply that candidate's approved verification policy; running
+older manager code does not impose its obsolete check list. Actual completed/delivered latest execution, cleaned-up
+assignment and unchanged scope/commit are checked before validation and again before sealing an automatic envelope.
+
+Within the existing preparation step, a complete published v3 Deploy release may supply unchanged validation only
+when commit, live base, task/scope binding, policy/check selection, schema, bundle and helper bytes match exactly.
+The full immutable inventory and hashes are verified before/after copying. A fresh release ID and hashed index bind
+the real completed execution with `restore_database: true` and reference the source manifest/index hashes in
+`reused_validation`; source artifacts/logs are never amended and their checks are not claimed as newly executed.
+Changed code/base/scope/policy takes the ordinary fresh gate; corruption of matching evidence fails closed.
+The existing helper still checks the exact automatic execution envelope and all activation guards.
+Helper dispatch requires both exact installed bytes and a succeeded upgrade receipt naming the required helper hash.
+A prior upgrade receipt for different bytes cannot authorize cutover. These are existing pipeline bindings, not new
+AI calls, validation stages or owner consent. No worker writes shared runtime or activates code.
+
 Preparation fetches that exact source commit into a disposable clone. The running manager's
 preparation script runs full backend once for every final combined candidate, smoke, relevant build/lint
 and relevant existing browser checks. Policy v3 Deploy/full-backend selection and coverage reasons stay in the

@@ -61,8 +61,7 @@ def automatic(rehearsal, monkeypatch):
     atomic(scheduler.deployment.root / 'config.json', {'repo': str(live)})
     scheduler.auto_deploy.set(project, True)
     monkeypatch.setattr(prepare_deployment, 'checks', lambda python, policy: [[str(python), '-m', 'pytest', '-q']])
-    async def prepare(checkout, live, data, release_id, task_id):
-        execution = db.one('SELECT id FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1', (task_id,))['id']
+    async def prepare(checkout, live, data, release_id, task_id, execution):
         return await asyncio.to_thread(prepare_deployment.prepare, checkout, live, data, release_id,
                                        Path(sys.executable), [task_id], execution)
     scheduler.auto_deploy.prepare = prepare
@@ -126,7 +125,7 @@ async def prepare_and_dispatch(automatic):
     release = scheduler.deployment.root / 'releases' / intent['auto']['release_id']
     # External upgrade receipt simulated in this disposable runtime only.
     (scheduler.deployment.root / 'helper-v3.py').write_bytes((release / 'helper-v3.py').read_bytes())
-    atomic(scheduler.deployment.root / 'helper-v3-upgrade.json', {'phase': 'succeeded'})
+    atomic(scheduler.deployment.root / 'helper-v3-upgrade.json', {'phase': 'succeeded', 'helper_sha256': sha(release / 'helper-v3.py')})
     pipeline.step()
     await pipeline.job
     assert scheduler.deployment.status()['phase'] == 'waiting_idle'
@@ -515,3 +514,107 @@ async def test_obsolete_review_and_tier_findings_do_not_block_exact_candidate(au
         conn.execute('UPDATE events SET payload=? WHERE seq=?', (json.dumps(record), row['seq']))
         assert verified(conn, current, execution, commit) == ''
         assert 'exact clean commit' in verified(conn, current, execution, '0' * 40)
+
+
+async def test_published_checks_reused_in_fresh_actual_execution_envelope(automatic, monkeypatch):
+    from ai_manager.release_publication import inventory
+    db, _, _, _, scheduler, _, live, _, _ = automatic
+    task, execution, _ = await complete(automatic, migration=False)
+    workspace = Path(scheduler.tasks.get(task['id'])['workspace'])
+    published = prepare_deployment.prepare(workspace, live, db.path.parent, 'published-exact',
+                                           Path(sys.executable), [task['id']])
+    source = scheduler.deployment.root / 'releases/published-exact'
+    original_manifest, original_index = sha(source / 'manifest.json'), sha(source / 'evidence-index.json')
+    def forbidden(*args):
+        raise AssertionError('Unchanged published checks must not run again')
+    monkeypatch.setattr(prepare_deployment, 'checks', forbidden)
+    intent, target = await prepare_and_dispatch(automatic)
+    bound = json.loads((target / 'manifest.json').read_text())
+    assert bound['commit'] == published['commit']
+    assert bound['auto_deploy']['execution_id'] == execution and bound['restore_database']
+    assert bound['reused_validation']['manifest_sha256'] == original_manifest
+    assert bound['reused_validation']['index_sha256'] == original_index
+    assert bound['validation_sha256'] == published['validation_sha256']
+    inventory(source, original_manifest, original_index)  # Original bytes never mutated.
+    with db.connect() as conn:
+        dispatched = next(v for v in rows(conn) if v['id'] == intent['id'])
+    assert bound['id'] != published['id'] and dispatched['status'] == 'dispatched'
+    scheduler.deployment.acknowledge(db)
+    helper = Helper({'repo': str(live), 'data': str(db.path.parent), 'native': str(db.path.parent / 'native'),
+                     'preserve_files': [], 'loopback': f'http://127.0.0.1:{automatic[7]}',
+                     'https': f'http://localhost:{automatic[7]}'})
+    assert helper.execute()['phase'] == 'succeeded'  # Disposable real helper validates the envelope.
+
+
+@pytest.mark.parametrize('mutation', ['scope', 'policy', 'corrupt'])
+async def test_published_reuse_rejects_changed_scope_policy_and_corruption(automatic, monkeypatch, mutation):
+    db, _, _, _, scheduler, _, live, _, _ = automatic
+    task, execution, _ = await complete(automatic, migration=False)
+    workspace = Path(scheduler.tasks.get(task['id'])['workspace'])
+    prepare_deployment.prepare(workspace, live, db.path.parent, 'published-checks', Path(sys.executable), [task['id']])
+    source = scheduler.deployment.root / 'releases/published-checks'
+    path = source / 'manifest.json'
+    value = json.loads(path.read_text())
+    if mutation == 'corrupt':
+        (source / 'validation.log').write_text('tampered')
+    else:
+        if mutation == 'scope':
+            value['assignments'][task['id']] = '0' * 64
+        else:
+            value['verification']['full_backend'] = False
+        path.write_text(json.dumps(value))  # Deliberate private invalid fixture.
+    def forbidden(*args):
+        raise RuntimeError('fresh validation required')
+    monkeypatch.setattr(prepare_deployment, 'checks', forbidden)
+    with pytest.raises(ValueError if mutation == 'corrupt' else RuntimeError):
+        prepare_deployment.prepare(workspace, live, db.path.parent, 'rejected-reuse', Path(sys.executable), [task['id']], execution)
+    assert not (scheduler.deployment.root / 'releases/rejected-reuse/manifest.json').exists()
+
+
+@pytest.mark.parametrize('status,finished,delivery', [('running', None, 'delivered'),
+                                                   ('failed', 1, 'delivered'), ('completed', 1, 'pending')])
+async def test_event_alone_cannot_stamp_incomplete_execution(automatic, status, finished, delivery):
+    from ai_manager.auto_deploy import verified
+    db, _, _, _, scheduler, _, _, _, _ = automatic
+    task, execution, _ = await complete(automatic)
+    with db.transaction() as conn:
+        conn.execute('UPDATE executions SET status=?,finished_at=?,delivery=? WHERE id=?', (status, finished, delivery, execution))
+        actual = conn.execute('SELECT * FROM tasks WHERE id=?', (task['id'],)).fetchone()
+        assert 'current completed execution' in verified(conn, actual, execution)
+
+
+async def test_helper_file_without_matching_upgrade_receipt_cannot_dispatch(automatic):
+    db, _, _, _, scheduler, _, _, _, _ = automatic
+    await complete(automatic, migration=False)
+    scheduler.auto_deploy.step()
+    await scheduler.auto_deploy.job
+    with db.connect() as conn:
+        value = next(v for v in rows(conn) if v.get('kind') == 'auto')
+    release = scheduler.deployment.root / 'releases' / value['auto']['release_id']
+    (scheduler.deployment.root / 'helper-v3.py').write_bytes((release / 'helper-v3.py').read_bytes())
+    atomic(scheduler.deployment.root / 'helper-v3-upgrade.json', {'phase': 'succeeded', 'helper_sha256': '0' * 64})
+    scheduler.auto_deploy.step()
+    assert not scheduler.auto_deploy.busy() and scheduler.deployment.status()['phase'] == 'idle'
+    with db.connect() as conn:
+        assert next(v for v in rows(conn) if v.get('kind') == 'auto')['auto']['state'] == 'prepared'
+
+
+async def test_candidate_preparation_keeps_pinned_execution_and_candidate_gate(automatic, monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    pipeline = automatic[4].auto_deploy
+    checkout = tmp_path / 'candidate'
+    checkout.mkdir()
+    data = automatic[0].path.parent
+    (data / 'auto-deploy').mkdir(exist_ok=True)
+    captured = {}
+    async def done():
+        return 0
+    async def spawn(*argv, **kwargs):
+        captured.update(argv=argv, kwargs=kwargs)
+        return SimpleNamespace(wait=done, pid=123)
+    monkeypatch.setattr('asyncio.create_subprocess_exec', spawn)
+    await pipeline.prepare_release(checkout, automatic[6], data, 'pinned-gate', 'task', 'verified-execution')
+    assert captured['argv'][1] == str(checkout / 'scripts/prepare_deployment.py')
+    assert captured['argv'][captured['argv'].index('--auto-execution') + 1] == 'verified-execution'
+    assert captured['kwargs']['cwd'] == checkout
+    assert captured['kwargs']['env']['PYTHONPATH'] == str(checkout)

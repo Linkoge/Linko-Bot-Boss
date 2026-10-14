@@ -58,6 +58,79 @@ def selected_policy(repo, base, commit, data, task_ids):
     return result
 
 
+def reuse_published(repo, live, data, release_id, base, commit, policy, task_ids, execution_id, scope):
+    """Reuse a complete published gate only for identical code/base/policy/task scope.
+
+    Produce a new immutable execution envelope. Never amend the published source or
+    claim to have run its checks again. A bad matching artifact fails closed.
+    """
+    import json
+
+    from ai_manager.release_publication import inventory
+    root = Handoff(data).root / 'releases'
+    if not root.exists():
+        return None
+    for source in sorted(root.iterdir()):
+        if source.name == release_id or source.is_symlink() or not source.is_dir():
+            continue
+        path = source / 'manifest.json'
+        if not path.is_file():
+            continue
+        hint = json.loads(path.read_text())
+        if (hint.get('commit') != commit or hint.get('base') != base
+                or hint.get('assignment_evidence_version') != 2
+                or hint.get('assignments') != {task_ids[0]: scope}
+                or hint.get('verification') != policy):
+            continue
+        manifest_hash, index_hash = sha(path), sha(source / 'evidence-index.json')
+        manifest, files = inventory(source, manifest_hash, index_hash)
+        if (policy.get('version') != 3 or policy.get('tier') != 'deploy' or not policy.get('full_backend')
+                or manifest.get('required_helper_sha256') != sha(repo / 'ai_manager/deployment.py')):
+            continue
+        if manifest.get('schema') != schema_change(repo, base, commit):
+            continue
+        run(['git', 'bundle', 'verify', str(source / 'release.bundle')], repo)
+        heads = run(['git', 'bundle', 'list-heads', str(source / 'release.bundle')], repo)
+        if commit + ' HEAD' not in heads.splitlines():
+            raise ValueError('Published bundle does not contain the exact candidate')
+        # Publication already checked the asset map, source bytes and complete gate inventory.
+        target = root / release_id
+        target.mkdir(mode=0o700)
+        for name in files:
+            if name in {'manifest.json', 'evidence-index.json'}:
+                continue
+            destination = target / name
+            destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            shutil.copyfile(source / name, destination)
+            destination.chmod(0o600)
+            if sha(destination) != files[name]:
+                raise ValueError('Published artifact changed while copying evidence')
+        bound = {**manifest, 'id': release_id, 'restore_database': True,
+                 'auto_deploy': {'execution_id': execution_id, 'commit': commit,
+                                'tier_checks': 'passed', 'release_checks': 'passed'},
+                 'reused_validation': {'release_id': manifest['id'], 'manifest_sha256': manifest_hash,
+                                       'index_sha256': index_hash, 'commit': commit}}
+        # Candidate/live/source bytes must still be unchanged before sealing the new envelope.
+        inventory(source, manifest_hash, index_hash)
+        if run(['git', 'status', '--porcelain'], repo) or run(['git', 'rev-parse', 'HEAD'], repo) != commit:
+            raise ValueError('Candidate changed while binding published evidence')
+        from ai_manager.auto_deploy import verified
+        from ai_manager.deployment_intent import assignment_evidence
+        if run(['git', 'rev-parse', 'HEAD'], live) != base:
+            raise ValueError('Live base changed while binding published evidence')
+        with sqlite3.connect(f'file:{data / "manager.sqlite3"}?mode=ro', uri=True) as conn:
+            conn.row_factory = sqlite3.Row
+            task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_ids[0],)).fetchone()
+            if verified(conn, task, execution_id, commit) or assignment_evidence(conn, task) != scope:
+                raise ValueError('Completed execution/scope changed while binding published evidence')
+        atomic(target / 'manifest.json', bound)
+        atomic(target / 'evidence-index.json', {'release_id': release_id, 'candidate': commit, 'base': base,
+               'files': {p.relative_to(target).as_posix(): sha(p) for p in target.rglob('*')
+                         if p.is_file() and p != target / 'evidence-index.json'}})
+        return bound
+    return None
+
+
 def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=None):
     if not ID.fullmatch(release_id):
         raise ValueError('Invalid release ID')
@@ -69,15 +142,6 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
     schema = schema_change(repo, base, commit)
     policy = selected_policy(repo, base, commit, data, task_ids)
     target = Handoff(data).root / 'releases' / release_id
-    target.mkdir(parents=True, mode=0o700)  # Never overwrite a prepared receipt.
-    # Candidate code and tests must import the candidate, never the running manager's modules.
-    env = {**os.environ, 'PYTHONPATH': str(repo)}
-    for name in ('LINKO_EVIDENCE_DIR', 'LINKO_AGENT_EVIDENCE', 'LINKO_PWA_EVIDENCE', 'LINKO_USAGE_EVIDENCE',
-                 'LINKO_PROJECT_EVIDENCE', 'LINKO_STASH_EVIDENCE', 'LINKO_MODEL_EVIDENCE', 'LINKO_MEMORY_EVIDENCE',
-                 'LINKO_AUDIO_EVIDENCE', 'LINKO_BUNDLE_EVIDENCE', 'LINKO_CHAT_EVIDENCE', 'LINKO_MARKDOWN_EVIDENCE'):
-        evidence = target / 'browser-evidence' / name.lower()
-        evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
-        env[name] = str(evidence)
     scope = None
     if auto_execution:
         if len(task_ids) != 1:
@@ -90,6 +154,21 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
             if not task or verified(conn, task, auto_execution, commit):
                 raise ValueError('Auto-deploy candidate has not passed exact task verification')
             scope = assignment_evidence(conn, task)
+    if target.exists():
+        raise ValueError('Prepared release ID already exists; never overwrite')
+    if auto_execution:
+        reused = reuse_published(repo, live, data, release_id, base, commit, policy, task_ids, auto_execution, scope)
+        if reused:
+            return reused
+    target.mkdir(parents=True, mode=0o700)  # Never overwrite a prepared receipt.
+    # Candidate code and tests must import the candidate, never the running manager's modules.
+    env = {**os.environ, 'PYTHONPATH': str(repo)}
+    for name in ('LINKO_EVIDENCE_DIR', 'LINKO_AGENT_EVIDENCE', 'LINKO_PWA_EVIDENCE', 'LINKO_USAGE_EVIDENCE',
+                 'LINKO_PROJECT_EVIDENCE', 'LINKO_STASH_EVIDENCE', 'LINKO_MODEL_EVIDENCE', 'LINKO_MEMORY_EVIDENCE',
+                 'LINKO_AUDIO_EVIDENCE', 'LINKO_BUNDLE_EVIDENCE', 'LINKO_CHAT_EVIDENCE', 'LINKO_MARKDOWN_EVIDENCE'):
+        evidence = target / 'browser-evidence' / name.lower()
+        evidence.mkdir(parents=True, exist_ok=True, mode=0o700)
+        env[name] = str(evidence)
     rehearsal, venv = None, target / 'rehearsal-venv'
     try:
         with (target / 'validation.log').open('w') as log:
@@ -159,8 +238,8 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
             manifest['assignments'] = assignments
             manifest['assignment_evidence_version'] = 2
             if auto_execution:
-                if assignments != {task_ids[0]: scope}:
-                    raise ValueError('Assignment scope changed during release checks')
+                if assignments != {task_ids[0]: scope} or verified(conn, task, auto_execution, commit):
+                    raise ValueError('Completed execution or assignment scope changed during release checks')
                 manifest['auto_deploy'] = {'execution_id': auto_execution, 'commit': commit,
                                           'tier_checks': 'passed', 'release_checks': 'passed'}
                 manifest['restore_database'] = True

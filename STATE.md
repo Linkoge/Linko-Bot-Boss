@@ -1,3 +1,12 @@
+# Automatic evidence lifecycle correction — implemented, not activated
+
+The published `simplified-reconciled-e684-v2` and b1e59d9 checks remain immutable historical evidence.
+This retained continuation pins automatic preparation to its actual completed execution and candidate gate,
+and supports reuse of identical published checks in a fresh execution-bound envelope. Changed code/base/scope/
+policy cannot borrow that old result. Completion/delivery, final scope/commit checks and matching installed helper
+bytes plus upgrade-receipt hash remain required. Current exact commit, focused verification and manager handoff
+are in `.data/verification-reductions/REPORT.md`. No shared mutation, immutable rewriting or direct activation.
+
 # Simplified verification — implemented candidate, not deployed — 2026-10-15
 
 This retained assignment implements the owner's replacement task/deploy policy: uniform Normal task checks,
