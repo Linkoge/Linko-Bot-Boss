@@ -22,7 +22,7 @@ from .attachments import Attachments
 from .audio import Audio
 from .auth import Auth
 from .chat import ROLES, Chat
-from .codex import AppServer, CodexError
+from .codex import CodexError
 from .config import Settings
 from .db import Database
 from .execution_ui import execution_summary
@@ -143,12 +143,19 @@ class AnswerBody(BaseModel):
     answers: dict
 
 
-def create_app(settings: Settings | None = None, server=None, worker_factory=AppServer):
+def create_app(settings: Settings | None = None, server=None, worker_factory=None):
     settings = settings or Settings()
     settings.prepare()
     db = Database(settings.db_path)
     registry, tasks, auth = Registry(db, settings.project_roots), Tasks(db), Auth(db, settings)
-    chat = Chat(db, registry, server or AppServer(settings))
+    from .model_settings import active
+    from .providers import ProviderServer
+
+    def provider_factory(settings, native=False):
+        return ProviderServer(settings, native, active=lambda: active(db))
+
+    worker_factory = worker_factory or provider_factory
+    chat = Chat(db, registry, server or provider_factory(settings))
     account_usage = AccountUsage(chat.server)
     audio = Audio(settings)
     attachments = Attachments(db, settings)
@@ -408,15 +415,27 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings():
-        from .model_settings import choices, current
-        await chat.server.start()
-        return {"choices": choices(chat.server), "settings": current(db, chat.server)}
+        from .model_settings import PROVIDERS, active, choices, current
+        try:
+            await chat.server.start()
+        except Exception:
+            pass  # Show the saved choices; unavailable models render disabled.
+        provider = active(db)
+        providers = {p: {"choices": choices(chat.server, p), "settings": current(db, chat.server, p)} for p in PROVIDERS}
+        return {"provider": provider, "providers": providers, **providers[provider]}
 
     @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
     async def save_model_settings(body: dict):
         from .model_settings import save
         await chat.server.start()
         return save(db, chat.server, body)
+
+    @app.put("/api/model-provider", dependencies=[Depends(require_owner)])
+    async def save_model_provider(body: dict):
+        from .model_settings import set_active
+        provider = set_active(db, body.get("provider"))
+        account_usage.invalidate()
+        return {"provider": provider}
 
     @app.put("/api/models/{role}", dependencies=[Depends(require_owner)])
     async def model_route(role: str, body: RouteBody):
@@ -593,7 +612,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=App
 
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():
-        return {"global_instructions": db.setting("global_instructions", ""), "max_workers": settings.max_workers}
+        from .model_settings import active
+        return {"global_instructions": db.setting("global_instructions", ""), "max_workers": settings.max_workers,
+                "model_provider": active(db)}
 
     static = Path(__file__).parent / "static"
     # Pin content and URLs to this process/release; never cache mutable aliases.

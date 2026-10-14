@@ -1,4 +1,5 @@
 import os
+import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -14,6 +15,9 @@ class Settings:
         )
     )
     codex_bin: str = field(default_factory=lambda: os.getenv("AI_MANAGER_CODEX", "codex"))
+    # Services often lack ~/.local/bin on PATH, where the Claude Code installer puts it.
+    claude_bin: str = field(default_factory=lambda: os.getenv("AI_MANAGER_CLAUDE") or shutil.which("claude")
+                            or str(Path.home() / ".local/bin/claude"))
     secure_cookie: bool = field(default_factory=lambda: os.getenv("AI_MANAGER_SECURE_COOKIE", "1") == "1")
     # Audio-only external provider; secrets never go through SQLite/browser settings.
     xai_api_key: str = field(default_factory=lambda: os.getenv("XAI_API_KEY", ""), repr=False)

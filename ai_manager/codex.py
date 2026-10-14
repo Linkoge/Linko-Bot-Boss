@@ -78,6 +78,14 @@ def safe_config(native=False) -> dict:
 
 
 class AppServer:
+    account_required = "chatgpt"
+
+    def command(self):
+        args = [self.settings.codex_bin, "app-server", "--listen", "stdio://"]
+        for key, value in self.config.items():
+            args += ["-c", f"{key}={json.dumps(value)}"]
+        return args
+
     def __init__(self, settings: Settings, native=False):
         self.settings = settings
         self.process = None
@@ -107,9 +115,7 @@ class AppServer:
                 await self.refresh_catalog()
                 return
             await self.close()
-            args = [self.settings.codex_bin, "app-server", "--listen", "stdio://"]
-            for key, value in self.config.items():
-                args += ["-c", f"{key}={json.dumps(value)}"]
+            args = self.command()
             self.process = await asyncio.create_subprocess_exec(
                 *args,
                 stdin=asyncio.subprocess.PIPE,
@@ -133,7 +139,7 @@ class AppServer:
                 await self.send({"method": "initialized", "params": {}})
                 account = await self.request("account/read", {"refreshToken": False})
                 self.account_type = (account.get("account") or {}).get("type")
-                if self.account_type != "chatgpt":
+                if self.account_type != self.account_required:
                     raise CodexError("A Codex ChatGPT login is required. API-key providers are disabled.")
                 await self.refresh_catalog(force=True)
             except BaseException:

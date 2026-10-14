@@ -26,7 +26,7 @@ function renderUsage(){
     $(id).title=`${name} remaining: ${known?usagePercent(w.remaining_percent):'unavailable'}${stale?' (stale)':''}`;
     labels.push($(id).title);
   }
-  $('usage-button').setAttribute('aria-label',`Codex account usage. ${labels.join('. ')}. Open details`);
+  $('usage-button').setAttribute('aria-label',`Account usage. ${labels.join('. ')}. Open details`);
   $('usage-button').title=labels.join(' · ');
   if(!$('usage-dialog').open)return;
   const stale=windows.some(usageStale)||!!usageData?.error;

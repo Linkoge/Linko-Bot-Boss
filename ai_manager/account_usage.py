@@ -63,7 +63,7 @@ class AccountUsage:
                 observed = self.clock()
                 self.buckets[key] = (value, observed)
                 # Only a usable account window establishes successful freshness.
-                if key == "codex" and any(
+                if key in ("codex", "claude") and any(
                     isinstance(value.get(slot), dict)
                     and value[slot].get("windowDurationMins") in (300, 10080)
                     and number(value[slot].get("usedPercent"))

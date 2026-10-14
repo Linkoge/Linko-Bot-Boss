@@ -1,13 +1,18 @@
 """Resolve only recognized, visible provider families; never guess an alias."""
 import re
 
-FAMILIES = ('Luna', 'Sol', 'Astra')
+PROVIDER_FAMILIES = {'codex': ('Luna', 'Sol', 'Astra'), 'claude': ('Haiku', 'Sonnet', 'Opus')}
+FAMILIES = PROVIDER_FAMILIES['codex'] + PROVIDER_FAMILIES['claude']
 _PATTERN = re.compile(r'^gpt-(\d+(?:\.\d+)*)-(luna|sol|astra)$')
+_CLAUDE = re.compile(r'^claude-(haiku|sonnet|opus)-(\d+(?:-\d+)*)$')
 
 
 def identity(model):
-    match = _PATTERN.fullmatch(model or '')
-    return (match[2].title(), tuple(int(n) for n in match[1].split('.'))) if match else None
+    if match := _PATTERN.fullmatch(model or ''):
+        return match[2].title(), tuple(int(n) for n in match[1].split('.'))
+    if match := _CLAUDE.fullmatch(model or ''):
+        return match[1].title(), tuple(int(n) for n in match[2].split('-'))
+    return None
 
 
 def family(model):
@@ -22,7 +27,7 @@ def latest(server, name):
                   and family(m['model']) == name and 'text' in m.get('inputModalities', ['text', 'image'])
                   and any(e['reasoningEffort'] in ('low', 'medium', 'high') for e in m['supportedReasoningEfforts'])]
     if not candidates:
-        raise ValueError(f'{name} model is not in the installed Codex catalog')
+        raise ValueError(f'{name} model is not in the installed provider catalog')
     # Numeric ordering, never catalog order, lexicographic sorting or cross-family fallback.
     return max(candidates, key=lambda m: identity(m['model'])[1])['model']
 

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from .attachments import native_image
 from .codex import MANAGER_INSTRUCTIONS, AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
+from .providers import owns_pid
 from .recovery import (
     Failure,
     classify,
@@ -376,8 +377,8 @@ class Chat:
         )
         if not conversation or (conversation_id and conversation["id"] != conversation_id):
             raise ValueError("Chat changed. Refresh before sending")
-        saved_models = self.db.setting("model_settings")
-        route = saved_models['manager'] if saved_models else self.db.setting("model_routes", {}).get("interactive", {"effort": "low"})
+        from .model_settings import manager_route
+        route = manager_route(self.db)
         execution_id, response_id, now = new_id(), new_id(), time.time()
         receipt = {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
         with self.db.transaction() as conn:
@@ -528,15 +529,12 @@ class Chat:
                     ("manager_tool_schema:" + conversation["id"], json.dumps(schema)),
                 )
             prompt, context = self.prompt(conversation, content, mode, execution_id, thread_id, prior)
-            from .model_settings import current, permitted
-            model_config = current(self.db, self.server)
+            from .model_settings import active, current, guidelines, permitted
+            provider = active(self.db)
+            model_config = current(self.db, self.server, provider)
             prompt['bot_selection'] = {'mode': model_config['bot']['mode'],
-                'manual': model_config['bot']['manual'], 'permitted_pairs': permitted(model_config, self.server),
-                'guidelines': 'Before delegate in Automatic choose worker_route from permitted_pairs by task difficulty. '
-                    'Luna: simple well-defined work. Sol: ordinary coding/debugging. Astra: difficult reasoning only when allowed. '
-                    'Choose Low for simple, Medium for ordinary, High for difficult work within permitted pairs. '
-                    'Manual uses the saved pair; never override it. No extra routing call. '
-                    'Existing assignments retain their selected pair on continue.'}
+                'manual': model_config['bot']['manual'], 'permitted_pairs': permitted(model_config, self.server, provider),
+                'guidelines': guidelines(provider)}
             execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
             if execution["retry_count"]:
                 prompt["recovery"] = (
@@ -726,7 +724,7 @@ class Chat:
             from .assignment_workflow import hold_conversation
             hold_conversation(self.db, conn, row['conversation_id'], execution_id)
         if row["status"] == "recovering" and execution_id not in self.jobs:
-            if row["turn_id"] and self.server.process and row["pid"] == self.server.process.pid:
+            if row["turn_id"] and owns_pid(self.server, row["pid"]):
                 try:
                     await self.server.interrupt(row["thread_id"], row["turn_id"])
                 except CodexError:
@@ -751,7 +749,7 @@ class Chat:
                 continue
             message = self.db.one("SELECT * FROM messages WHERE execution_id=? AND role='assistant'", (row["id"],))
             response_id = message["id"] if message else ""
-            own_process = self.server.process and row["pid"] == self.server.process.pid
+            own_process = owns_pid(self.server, row["pid"])
             if not own_process and owned_alive(row) and reap_orphan(row):
                 defer(self.db, row["id"], Failure("interrupted"), "Previous manager process is still present")
                 continue

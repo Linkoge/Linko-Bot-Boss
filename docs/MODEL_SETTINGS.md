@@ -1,3 +1,22 @@
+# Codex / Claude provider switch — 2026-10-14, not deployed
+
+The settings dialog has a Codex | Claude toggle on top; the gear button shows the active provider's
+logo (OpenAI or Anthropic). The active provider (`model_provider` setting) applies to **new** manager
+turns and new assignments. Claude mirrors the Codex panel with Haiku/Sonnet/Opus
+(`claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`) and Low/Medium/High effort. Its settings are stored
+separately (`model_settings:claude`). Defaults: Manager Sonnet/Low, Bot Automatic with every pair allowed.
+Codex settings, including `model_routes`, are unchanged by Claude edits.
+
+`ProviderServer` (ai_manager/providers.py) routes by exact model and thread, so pinned assignments
+keep their original provider after a switch. A manager conversation started on one provider starts a
+fresh native thread on the other. Claude runs through `claude_host.py`, a local process that speaks the
+App Server subset this app uses (threads = Claude session IDs, turns = `claude -p` stream-json runs, history
+in `<data>/claude-threads/` for `thread/read` recovery). The manager's `manager_action` tool reaches Claude through
+`claude_mcp.py`, a stdio MCP bridge over a private Unix socket. The Claude manager has only Read plus that tool.
+Claude workers run with `bypassPermissions`, which matches the Codex worker's full access. Usage badges follow the active
+provider (Claude 5h/weekly windows come from its rate-limit events). Memory review stays on Codex.
+The Claude binary is `AI_MANAGER_CLAUDE`, else `claude` on PATH, else `~/.local/bin/claude`.
+
 # Integrated activation status — 2026-10-13
 
 Current integrated activation target: `integrated-recovery-append-popup-v1-20261013`; see [STATE.md](../STATE.md).
