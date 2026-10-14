@@ -501,11 +501,9 @@ class Workers:
                                 )
                                 release_gate(conn, execution_id)
                             continue
-                        active = self.db.one(
-                            """SELECT count(*) AS n FROM tasks t JOIN executions e ON e.id=t.lease_owner
-                            WHERE e.finished_at IS NULL AND e.status!='recovering' AND e.id!=?""",
-                            (execution_id,),
-                        )["n"]
+                        from .parallel import active_workers
+                        with self.db.transaction() as conn:
+                            active = active_workers(conn, excluding=execution_id)
                         if active >= self.settings.max_workers:
                             with self.db.transaction() as conn:
                                 conn.execute(

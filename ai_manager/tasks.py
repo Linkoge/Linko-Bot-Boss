@@ -179,13 +179,9 @@ class Tasks:
         with self.db.transaction() as conn:
             if not gate_available(conn):
                 return None
-            if (
-                conn.execute("""SELECT count(*) FROM tasks t LEFT JOIN executions e ON e.id=t.lease_owner
-                WHERE t.lease_owner IS NOT NULL AND (e.id IS NULL OR e.status!='recovering')""").fetchone()[0]
-                >= max_workers
-            ):
+            from .parallel import active_workers, admission, prepare_workspace
+            if active_workers(conn) >= max_workers:
                 return None
-            from .parallel import admission, prepare_workspace
             rows = conn.execute("""SELECT t.*,p.path FROM tasks t JOIN projects p ON p.id=t.project_id
                 WHERE t.lifecycle='queued' AND p.status='active'
                 AND NOT EXISTS(SELECT 1 FROM settings s,json_each(s.value) a

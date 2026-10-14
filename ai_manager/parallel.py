@@ -299,3 +299,10 @@ def worker_admission(conn, task):
                     or overlaps(p['change_paths'],op['change_paths'])
                     or not (p.get('permission') or op.get('permission'))):
                 raise ValueError('Recovered project writers lack safe isolated per-request parallel ownership')
+
+
+def active_workers(conn, excluding=None):
+    from .recovery import owned_alive
+    rows = conn.execute('SELECT e.*,t.lease_owner FROM tasks t LEFT JOIN executions e ON e.id=t.lease_owner WHERE t.lease_owner IS NOT NULL').fetchall()
+    return sum(1 for row in rows if row['lease_owner'] != excluding and
+               (row['id'] is None or row['status'] != 'recovering' or owned_alive(row)))

@@ -1,10 +1,10 @@
 # Owner-approved parallel/composer integrated candidate — 2026-10-14
 
-Exact release ID: `parallel-composer-integrated-v2-20261014`. Candidate:
+Exact release ID: `parallel-composer-integrated-v3-20261014`. Candidate:
 `/home/codex/checkouts/linko-parallel-composer-20261014`, descended from latest prepared
 `owner-deploy-intent-stash-v1-20261014` commit `51bb67f5e61f4528566804ecc8a5a8c3e6815e91`.
 Preserves completed rename/stash/owner-deployment-intent fixes and every earlier integrated feature.
-The immutable `deployment-helper/releases/parallel-composer-integrated-v2-20261014/manifest.json`
+The immutable `deployment-helper/releases/parallel-composer-integrated-v3-20261014/manifest.json`
 establishes exact preparation/validation; source changes alone do not establish readiness.
 
 Actual live is now succeeded `todo-handoff-chat-trash-recording-agents-v1-20261013`, commit

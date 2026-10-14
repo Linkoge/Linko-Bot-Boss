@@ -1,6 +1,6 @@
 # Reviewed schema12/helper v2 bundle — 2026-10-14
 
-Candidate `parallel-composer-integrated-v2-20261014` includes the rename/stash/owner-intent fixes and
+Candidate `parallel-composer-integrated-v3-20261014` includes the rename/stash/owner-intent fixes and
 all succeeded To-Do/chat/PWA functionality. Preparation uses actual succeeded live base 6c42d5b,
 receipt `deployment-helper/results/2bf6554aecb9fd66c9ab49554bfb95ac.json`. Older PWA-only and waiting-idle
 observations below are historical. The owner explicitly says do not deploy or push this new bundle.

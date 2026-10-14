@@ -25,7 +25,7 @@ the quote must be a complete positive sentence, preventing omitted negation; neg
 Manager `delegate` supplies `change_paths` (concrete relative file/directory scopes, no globs),
 `depends_on` (existing same-project task IDs), `parallel_safe` and `parallel_reason`.
 Backend transactional admission enforces active project status, recovery/account gates,
-global capacity, archived/owner-held task states, existing leases and integration/preparation
+global capacity (including receipt-matched live recovering processes until cleanup), archived/owner-held task states, existing leases and integration/preparation
 reservations. Simultaneous assignments need real isolated workspaces, both manager assessments
 safe, known disjoint scopes and completed/integrated dependencies. Unknown or overlapping scopes,
 shared checkout ownership, unsafe shared operations and incomplete dependencies queue with a

@@ -452,3 +452,34 @@ async def test_chat_permission_cannot_strip_owner_sentence_negation(repo):
     await settled(chat)
     params['manager_execution_id']=approved['execution_id']
     assert policy(db,params,{'owner_parallel_quote':'Parallel execution is approved.'},project['id'])['permission']['source']=='chat'
+
+
+def test_live_recovering_process_keeps_global_capacity_until_confirmed_exit(repo):
+    import subprocess
+    import sys
+
+    from ai_manager.codex import process_start
+    from ai_manager.parallel import active_workers
+    db, registry, _, _, project=repo
+    tasks=Tasks(db)
+    tasks.add(project['id'],'owned source',execution_policy=p(['one']))
+    claimed=tasks.claim(1)
+    other=next(p for p in registry.list() if p['id']!=project['id'])
+    tasks.add(other['id'],'other project queued')
+    process=subprocess.Popen([sys.executable,'-c','import time; time.sleep(30)'],start_new_session=True)
+    try:
+        with db.transaction() as conn:
+            conn.execute("UPDATE executions SET status='recovering',pid=?,process_start=? WHERE id=?",
+                         (process.pid,process_start(process.pid),claimed['lease_owner']))
+            assert active_workers(conn)==1
+        assert tasks.claim(1) is None
+        process.terminate()
+        process.wait(timeout=5)
+        with db.transaction() as conn:
+            assert active_workers(conn)==0
+        assert tasks.claim(1)['project_id']==other['id']
+        assert tasks.get(claimed['id'])['lease_owner']==claimed['lease_owner']
+    finally:
+        if process.poll() is None:
+            process.kill()
+            process.wait(timeout=5)
