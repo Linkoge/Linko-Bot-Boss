@@ -47,11 +47,13 @@ def save(db, conn, value, event):
     return value
 
 
-def revoke(db, conn, reason, project_id=None, conversation_id=None, task_id=None, intent_id=None):
+def revoke(db, conn, reason, project_id=None, conversation_id=None, task_id=None, intent_id=None, manual_only=False):
     for value in rows(conn):
+        if manual_only and value.get('kind') == 'auto':
+            continue
         if value['status'] in {'revoked', 'failed'} or (value['status'] == 'dispatched' and value.get('kind') != 'auto'):
             continue
-        if intent_id and value['id'] != intent_id:
+        if intent_id and value['id'] != intent_id and value.get('manual_intent_id') != intent_id:
             continue
         if project_id and value['project_id'] != project_id:
             continue
@@ -144,7 +146,9 @@ class Intents:
                      'assignment_hashes': {t: assignment_evidence(conn, conn.execute('SELECT * FROM tasks WHERE id=?', (t,)).fetchone(), 2) for t in scope['task_ids']},
                      'checked_owner_message': source['id'],
                      'checked_owner_sha256': hashlib.sha256(source['content'].encode()).hexdigest()}
-            revoke(self.db, conn, 'Superseded by a new scoped owner deployment intent', project_id=project_id)
+            from .auto_deploy import enabled
+            revoke(self.db, conn, 'Superseded by a new scoped owner deployment intent', project_id=project_id,
+                   manual_only=enabled(conn, project_id))
             return save(self.db, conn, value, 'recorded')
 
     def attach(self, project_id, params, intent_id, task_id):
@@ -287,10 +291,19 @@ class Intents:
                 save(self.db, conn, value, 'owner_reviewed')
             return next(v for v in rows(conn) if v['id'] == intent_id)
 
-    def tasks(self, conn, value):
-        tasks = [conn.execute('SELECT * FROM tasks WHERE id=?', (t,)).fetchone() for t in value['task_ids'] + value.get('review_task_ids', [])]
+    def source_tasks(self, conn, value):
+        """Only the owner's fixed source scope; audit tasks never become release sources."""
+        tasks = [conn.execute('SELECT * FROM tasks WHERE id=?', (t,)).fetchone() for t in value['task_ids']]
         if value.get('task_request'):
-            tasks.append(conn.execute('SELECT * FROM tasks WHERE request_key=?', (value['task_request'],)).fetchone())
+            source = conn.execute('SELECT * FROM tasks WHERE request_key=?', (value['task_request'],)).fetchone()
+            if not source or not any(t and t['id'] == source['id'] for t in tasks):
+                tasks.append(source)
+        return tasks
+
+    def tasks(self, conn, value):
+        sources = self.source_tasks(conn, value)
+        tasks = sources + [conn.execute('SELECT * FROM tasks WHERE id=?', (t,)).fetchone()
+                           for t in value.get('review_task_ids', []) if t not in {s['id'] for s in sources if s}]
         for task in tasks:
             workflow = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_workflow:'+task['id'],)).fetchone() if task else None
             if (not task or task['project_id'] != value['project_id'] or task['lifecycle'] != 'completed'
@@ -314,7 +327,7 @@ class Intents:
                 version = value.get('evidence_version', 1)
                 if manifest.get('assignment_evidence_version', 1) != version:
                     raise ValueError('Prepared release does not match the fixed assignment evidence version; legacy evidence is not migrated')
-                expected = {t['id']: assignment_evidence(conn, t, version) for t in tasks}
+                expected = {t['id']: assignment_evidence(conn, t, version) for t in self.source_tasks(conn, value)}
                 if expected != value['assignment_hashes']:
                     raise ValueError('Assignment scope has not been sealed')
                 if manifest.get('assignments') != expected:

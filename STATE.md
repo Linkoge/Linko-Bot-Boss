@@ -1,3 +1,19 @@
+# Automatic deployment readiness corrections — 2026-10-14
+
+The retained auto-deploy source assignment `44097fd1a52c4f9096fcd901bd04d344` implements the
+close fixes requested after readiness audit `27b4bbb092704f739eb7b30b2bb4d308`: ON new-work
+explicit intent uses automatic policy; audit tasks remain readiness dependencies outside immutable
+source mappings. Installer cgroup precondition is enforced. Corrected source/evidence status is
+retained in `.data/auto-deploy-corrections/REPORT.md` and `manager-summary.json` in that workspace.
+Original registered `auto-deploy-standing-policy-v1-20261014` and its 82-file inventory are historical,
+unchanged evidence; they are not the corrected candidate or a succeeded deployment receipt.
+Live remains the Option B base `bee8b088fa0eb2c20d963b95f109cbf3a87caaeb` per read-only inspection.
+The unchanged recorded intent `ba8ce92a3d406a98cdfc9fa81851c251` seals the old source scope;
+this authorized continuation changed the scope. The live old manager cannot consume the new
+mapping under its existing source/audit review and stale-scope logic. Helper installation alone
+does not fix that supported-interface dependency. No live checkout/data mutation, helper upgrade,
+manager restart, activation or push by this worker. Older dated state below is historical.
+
 # Option B lifecycle repair — implemented; no activation — 2026-10-14
 
 The owner authorized a close publication/binding correction in the retained Option B workspace.

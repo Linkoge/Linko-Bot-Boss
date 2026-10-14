@@ -9,7 +9,14 @@ from pathlib import Path
 from ai_manager.deployment import ID, Handoff, atomic, lock, read, run, sha
 
 
+def check_external():
+    cgroup = Path('/proc/self/cgroup').read_text()
+    if 'linko-bot-manager.service' in cgroup or 'linko-deployment-helper.service' in cgroup:
+        raise ValueError('Helper installation requires an authorized context outside manager/helper cgroups')
+
+
 def install(data, release_id, version='v2'):
+    check_external()
     previous = 'v' + str(int(version[1:]) - 1)
     handoff = Handoff(data)
     if not ID.fullmatch(release_id):

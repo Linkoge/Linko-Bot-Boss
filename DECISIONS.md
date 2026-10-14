@@ -27,3 +27,13 @@ Historical decisions and evidence remain in Git history; [docs/CODEBASE_CLEANUP.
 - 2026-10-14: Subsequent explicit owner resume supersedes the earlier Option B intent revocation with recorded assignment-bound intent `c92b72ed0955ee84482c37422ef677eb`. Reuse valid retained targeted/smoke checks, finish exact scoped preparation and return publishable artifacts for manager review/activation. Worker does not deploy or push; exclude all partial auto-deploy changes.
 
 - 2026-10-14: Owner-authorized close deployment lifecycle repair adds serialized immutable import after worker cleanup, exposed as a separate publish_release action/CLI rather than assignment continuation. V2 scope hashes exclude lifecycle receipts and duplicate snapshots while retaining objective/acceptance/selected-context changes; V1 remains strict and unmigrated. Pin full artifact inventory at publication and review. Preserve old v3 evidence and revoked intent; no mutable resealing, automatic intent or activation. Reuse unchanged baseline validation and test affected paths. Contract: docs/DEPLOYMENT_HELPER.md.
+
+- 2026-10-14: Owner-authorized close corrections to source assignment
+  `44097fd1a52c4f9096fcd901bd04d344` resolve audit `27b4bbb092704f739eb7b30b2bb4d308`.
+  Route ON new-work explicit intents through standing automatic policy with preserved provenance;
+  separate immutable source mappings from audit readiness dependencies. Preserve real-divergence
+  reconciliation, OFF/manual, strict legacy hashes, original package/intent and all data rollback
+  requirements. Prepare a new source-task-bound candidate under existing deployment intent
+  `ba8ce92a3d406a98cdfc9fa81851c251`; do not reseal old artifacts or manufacture consent.
+  Helper-only bootstrap requires an authorized external context; old live manager and changed
+  source-scope compatibility remain explicit operational dependencies. No worker live activation.

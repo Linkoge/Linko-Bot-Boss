@@ -50,6 +50,24 @@ inspection. OFF retains the previous manual owner-intent → exact evidence revi
 flow, including its existing source-review behavior. ON is not a grant to arbitrary worker
 prose, unverified work, another project or another release.
 
+## Explicit intents and audit dependencies (readiness correction)
+
+ON also applies when new work is delegated with `owner_deployment_quote`, an explicit
+new-work `intent_id`, or a matching intent discovered from the same owner turn. The backend
+links that original manual provenance to a task-specific automatic intent and marks the unused
+manual stage superseded. It returns the automatic intent ID. No extra manual evidence-review
+or owner-message refresh stage is needed. Cancelling the original intent also cancels its linked
+automatic intent. A different new-work deployment request does not revoke another assignment's
+standing automatic intent. OFF retains the existing manual flow.
+
+A delegation explicitly auditing a fixed existing release or source assignment remains a
+readiness dependency of that fixed request. It cannot authorize deployment of the audit's own
+branch instead. Source tasks come only from fixed `task_ids` or the source `task_request`;
+`review_task_ids` require completed, unheld lifecycle and completed execution evidence, but
+are excluded from the expected immutable release-source mapping. Versions 1 and 2 retain
+their original hash algorithms and strict scope checks; no legacy record or artifact is resealed.
+Real divergence still requires serialized source reconciliation and exact renewed verification.
+
 ## Migration, backup and rollback
 
 New schema/dependency changes use helper v3's rehearsed contract. A candidate's `Database`
@@ -82,7 +100,7 @@ This worker does not activate production. The second release packages `helper-v3
 pinned hash even for a code-only application diff. The currently installed helper is v2.
 After worker cleanup and exact artifact publication, the authorized external manager/operator
 must install v3 using the candidate's `scripts/install_deployment_helper_v3.py` with the registered
-release ID and runtime `--data` path. The guarded installer pins the prepared helper, preserves
+release ID and runtime `--data` path. The guarded installer refuses manager/helper cgroups, pins the prepared helper, preserves
 the old unit/hash in its receipt, waits for no pending handoff, and upgrades only the independent
 helper service. It does not restart/deploy the application. This is a one-time bootstrap operation,
 not an additional owner deployment approval. It must run outside the helper/manager cgroup.
@@ -106,3 +124,17 @@ scope/manifest, interrupted preparation, restart/chat cleanup and no automatic r
 `scripts/browser_auto_deploy.py` checks authenticated/CSRF-protected desktop/mobile toggle
 persistence, one-time ON seed, project independence and layout. Final validation/artifact hashes
 and the publication-ready manager handoff are retained in this assignment's detailed report.
+
+The completed readiness audit `27b4bbb092704f739eb7b30b2bb4d308` covers the original registered
+82-file package. Close source corrections require a new release ID and current source-task scope;
+old artifacts and intent `ba8ce92a3d406a98cdfc9fa81851c251` remain unchanged. Continuing this
+source task changes its scope fingerprint, so the old sealed fingerprint no longer authorizes the
+new manifest. The live old manager additionally still combines source and audit tasks in review.
+Publication is possible after cleanup with current source binding; activation is not established
+by publication or helper installation. The current old manager has no scope refresh in
+`revise_deployment_intent(preserve)` (it refreshes message provenance only). An authorized manager
+must resolve this supported-interface compatibility dependency serially; do not modify SQLite
+intent mappings, drop review dependencies, fabricate a new owner request or request activation
+through shell. This is a concrete bootstrap limitation, not a new owner deployment approval.
+Corrected exact artifacts, review and external commands are in the retained assignment's
+`.data/auto-deploy-corrections/REPORT.md` and `EXTERNAL_HANDOFF.md`.

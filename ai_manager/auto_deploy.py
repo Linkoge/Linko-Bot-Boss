@@ -142,7 +142,7 @@ class AutoDeploy:
             if seeded:
                 conn.execute('INSERT INTO settings VALUES(?,?)', (SEED, json.dumps({'at': time.time(), 'projects': seeded})))
 
-    def owner_request(self, project_id, params, task_id):
+    def owner_request(self, project_id, params, task_id, manual_intent_id=None):
         """Record the owner's Auto/Execute request as this assignment's auto intent when the setting is on."""
         if params.get('internal') or params.get('mode') == 'conversation':
             return None
@@ -151,7 +151,25 @@ class AutoDeploy:
         with self.db.transaction() as conn:
             if not enabled(conn, project_id):
                 return None
-            return self.intents.record_auto(conn, project_id, params, task_id)
+            manual = None
+            if manual_intent_id:
+                manual = self.intents.get(conn, manual_intent_id, project_id, params)
+                task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
+                # A delegation auditing an existing fixed release/source is a readiness dependency,
+                # not permission to ship the audit's own branch instead of the requested source.
+                if (manual.get('task_request') != task['request_key'] or manual['task_ids']
+                        or manual['scope'].get('release_id')):
+                    return None
+                if manual['status'] not in {'recorded', 'superseded'}:
+                    raise ValueError('Manual deployment intent is no longer unused')
+            automatic = self.intents.record_auto(conn, project_id, params, task_id)
+            if manual:
+                automatic['manual_intent_id'] = manual['id']
+                save(self.db, conn, automatic, 'manual_policy_linked')
+                manual.update(status='superseded', auto_intent_id=automatic['id'],
+                              reason='New owner work uses the enabled automatic project policy')
+                save(self.db, conn, manual, 'automatic_policy')
+            return automatic
 
     def recover(self):
         """A preparation interrupted by a restart is failed, never resumed or retried."""

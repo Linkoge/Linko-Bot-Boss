@@ -13,7 +13,7 @@ Use Conversation for discussion, Auto to delegate requested work, or Execute to 
 
 New assignments use [Option B verification tiers](docs/VERIFICATION_TIERS.md): Small runs smoke, touched-file tests and build/lint; Normal adds the full backend suite once at the end; Risky adds one automatic cheap read-only diff review. Declared paths and request text set a deterministic floor, and actual changed paths are checked after completion. Risky paths cannot be downgraded to Small. Related Small requests can batch into one queued, unstarted task. Reports stay short; full evidence stays in internal execution records. Existing assignments retain their verification behavior. Release preparation runs the full backend and browser suites once; post-deploy health failure triggers automatic rollback.
 
-Attachment batching preserves dictionary references, their metadata and first-seen order; the retained regression passes. Exact scoped preparation evidence and validation status are in [current state](STATE.md). The lifecycle repair adds a supported [immutable publication command](docs/DEPLOYMENT_HELPER.md) after worker cleanup and stable V2 task-scope binding. The previous intent is revoked; nothing from this assignment is deployed.
+Attachment batching preserves dictionary references, their metadata and first-seen order; the retained regression passes. Exact scoped preparation evidence and validation status are in [current state](STATE.md). The lifecycle repair adds a supported [immutable publication command](docs/DEPLOYMENT_HELPER.md) after worker cleanup and stable V2 task-scope binding. See dated state entries for historical intent/deployment status.
 
 Different projects run concurrently with a global capacity default of two. Same-project coding is sequential by default; explicit current-request chat or ⇈ Send permission can admit isolated parallel work after dependency/conflict checks. See [parallel execution](docs/PARALLEL_EXECUTION.md). Projects participate automatically. Tasks, conversations, native thread references, questions and execution history persist in SQLite. Temporary network, process and account usage interruptions recover automatically with persisted backoff. Restart handling inspects native outcomes before resuming the same assignment and conversation. See [automatic recovery](docs/AUTOMATIC_RECOVERY.md) and [Pause/Cancel and bundled updates](docs/AGENT_CONTROLS.md).
 
@@ -46,3 +46,9 @@ PYTHONPATH=. uv run python scripts/smoke_minimal.py
 The fast pytest smoke suite covers 28 core-path tests (44 cases) with a 20-second budget. Run it on every tiered task; the full suite is the final Normal/Risky check and the release preparation gate. The real Codex smoke script uses a disposable calculator repository and database, fixes code, runs tests, commits locally and checks automatic manager delivery. It invokes the existing subscription. Browser acceptance uses an isolated local HTTP fixture. Neither script uses the production database.
 
 See [operations](docs/operations.md), [autonomy](docs/AUTONOMY_POLICY.md) and [cleanup/deployment evidence](docs/CODEBASE_CLEANUP.md). Historical reports link to their complete versions in Git.
+
+Automatic deployment contract and close readiness corrections: [AUTO_DEPLOY.md](docs/AUTO_DEPLOY.md).
+ON new owner work uses standing deployment policy even with an explicit new-work intent; source
+mappings remain separate from audit readiness dependencies. OFF retains manual behavior.
+Exact bootstrap and old-manager scope compatibility must be resolved externally before activation;
+implementation or publication is never a live deployment claim.

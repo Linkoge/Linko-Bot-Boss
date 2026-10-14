@@ -421,6 +421,7 @@ def test_versioned_helper_upgrade_only_restarts_pinned_independent_service(tmp_p
     unit.parent.mkdir(parents=True)
     unit.write_text('ExecStart=/fixed/python '+str(handoff.root/'helper-v1.py')+' /fixed/config\n')
     monkeypatch.setattr(module.Path,'home',lambda:home)
+    monkeypatch.setattr(module, 'check_external', lambda: None)  # Fully disposable unit/systemctl simulation.
     commands=[]
     monkeypatch.setattr(module,'run',lambda argv:commands.append(argv))
     module.install(data,'reviewed-v2')
@@ -431,3 +432,19 @@ def test_versioned_helper_upgrade_only_restarts_pinned_independent_service(tmp_p
     assert not any('linko-bot-manager.service' in argv for argv in commands)
     with pytest.raises(ValueError,match='exact prepared'):
         module.install(data,'../other')
+
+
+@pytest.mark.parametrize('service', ['linko-bot-manager.service', 'linko-deployment-helper.service'])
+def test_helper_installer_refuses_service_cgroup_before_any_mutation(tmp_path, monkeypatch, service):
+    from scripts import install_deployment_helper_v2 as installer
+    original = Path.read_text
+    def read_text(path, *args, **kwargs):
+        if str(path) == '/proc/self/cgroup':
+            return '0::/user.slice/' + service
+        return original(path, *args, **kwargs)
+    monkeypatch.setattr(Path, 'read_text', read_text)
+    operations = []
+    monkeypatch.setattr(installer, 'run', lambda args: operations.append(args))
+    with pytest.raises(ValueError, match='outside manager/helper'):
+        installer.install(tmp_path / 'data', 'corrected-release', 'v3')
+    assert not operations and not (tmp_path / 'data').exists()

@@ -69,11 +69,19 @@ def automatic(rehearsal, monkeypatch):
     return db, registry, chat, workers, scheduler, project, live, port, systemd
 
 
-async def complete(automatic, healthy=True, migration=True):
+async def complete(automatic, healthy=True, migration=True, deployment=None):
     db, _, chat, workers, scheduler, project, live, _, _ = automatic
-    params = await owner(chat, project, 'Implement my requested improvement')
+    params = await owner(chat, project, 'Implement my requested improvement and deploy verified result')
+    deployment_args = {}
+    if deployment == 'quote':
+        deployment_args['owner_deployment_quote'] = 'deploy verified result'
+    elif deployment in {'explicit', 'discovered'}:
+        intent = scheduler.intents.record(project, params, 'deploy verified result',
+                                          task_request=params['manager_execution_id'] + ':' + project)
+        if deployment == 'explicit':
+            deployment_args['intent_id'] = intent['id']
     task = await call(scheduler, project, params, 'delegate', objective='Implement requested improvement',
-                      change_paths=['ai_manager/', 'server.py', 'test_candidate.py'])
+                      change_paths=['ai_manager/', 'server.py', 'test_candidate.py'], **deployment_args)
     finish_owner(db, params)
     claim = scheduler.tasks.claim(2)
     assert claim and claim['workspace']
@@ -424,3 +432,59 @@ async def test_request_sql_crash_gap_is_reconciled_without_retry(automatic):
     assert scheduler.deployment.status() == receipt
     reopened.step()
     assert not reopened.busy()
+
+
+@pytest.mark.parametrize('deployment', ['quote', 'explicit', 'discovered'])
+async def test_on_explicit_new_work_deployment_uses_auto_policy_without_manual_review(automatic, deployment):
+    db, _, chat, _, scheduler, project, _, _, _ = automatic
+    task, _, _ = await complete(automatic, deployment=deployment)
+    with db.connect() as conn:
+        values = rows(conn)
+    automatic_intent = next(v for v in values if v.get('kind') == 'auto')
+    manual = next(v for v in values if v.get('kind') != 'auto')
+    assert task['deployment_intent_id'] == automatic_intent['id']
+    assert manual['status'] == 'superseded' and manual['auto_intent_id'] == automatic_intent['id']
+    assert manual['assignment_hashes'].keys() == {task['id']}
+    assert automatic_intent['manual_intent_id'] == manual['id']
+    assert automatic_intent['source_message_id'] == manual['source_message_id']
+    later = await owner(chat, project, 'Unrelated later chat', mode='conversation')
+    finish_owner(db, later)
+    await prepare_and_dispatch(automatic)
+    assert scheduler.deployment.status()['origin']['intent_id'] == automatic_intent['id']
+    assert not next(v for v in scheduler.intents.list(project) if v['id'] == automatic_intent['id'])['needs_owner_review']
+
+
+async def test_on_original_manual_intent_cancellation_still_cancels_linked_auto_work(automatic):
+    db, _, _, _, scheduler, _, _, _, _ = automatic
+    await complete(automatic, deployment='quote')
+    with db.transaction() as conn:
+        from ai_manager.deployment_intent import revoke
+        manual = next(v for v in rows(conn) if v.get('kind') != 'auto')
+        revoke(db, conn, 'Owner cancelled the original scoped instruction', intent_id=manual['id'])
+    scheduler.auto_deploy.step()
+    with db.connect() as conn:
+        assert all(v['status'] == 'revoked' for v in rows(conn))
+    assert not scheduler.auto_deploy.busy() and scheduler.deployment.status()['phase'] == 'idle'
+
+
+async def test_off_explicit_new_work_remains_manual(automatic):
+    db, _, _, _, scheduler, project, _, _, _ = automatic
+    scheduler.auto_deploy.set(project, False)
+    task, _, _ = await complete(automatic, deployment='quote')
+    with db.connect() as conn:
+        values = rows(conn)
+    assert len(values) == 1 and values[0]['status'] == 'recorded'
+    assert values[0].get('kind') != 'auto' and task['deployment_intent_id'] == values[0]['id']
+    scheduler.auto_deploy.step()
+    assert not scheduler.auto_deploy.busy() and scheduler.deployment.status()['phase'] == 'idle'
+
+
+async def test_on_new_explicit_work_does_not_revoke_another_assignments_standing_intent(automatic):
+    db, _, chat, _, scheduler, project, _, _, _ = automatic
+    first, _, _ = await complete(automatic)
+    second = await owner(chat, project, 'Implement another change and deploy verified result')
+    await call(scheduler, project, second, 'delegate', objective='Another requested change',
+               change_paths=['file'], owner_deployment_quote='deploy verified result')
+    with db.connect() as conn:
+        original = next(v for v in rows(conn) if v.get('kind') == 'auto' and v['task_ids'] == [first['id']])
+    assert original['status'] == 'recorded'

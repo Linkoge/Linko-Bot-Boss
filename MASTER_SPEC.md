@@ -99,3 +99,11 @@ backup; health failure rolls back code plus data, and changed dependencies. Fail
 automatically. The independent helper v3 must first be installed externally; this implementation
 is publication-ready only after the fixed validation gate and is not a live deployment claim.
 Contract and evidence: [automatic deployment](docs/AUTO_DEPLOY.md).
+
+Close readiness corrections: ON new work also uses automatic policy when its owner supplies an
+explicit new-work deployment intent or deployment quote; the original intent/provenance is linked
+and superseded without repeating approval. OFF/manual remains unchanged. Audits of an explicitly
+fixed existing source/release do not substitute their own branches. Review-task readiness/holds
+remain mandatory, but immutable release mappings contain only the owner's source tasks; V1/V2
+hash semantics remain strict. Helper installers refuse manager/helper cgroups. Corrected artifact
+preparation cannot refresh the old runtime's sealed scope or deploy the live application.

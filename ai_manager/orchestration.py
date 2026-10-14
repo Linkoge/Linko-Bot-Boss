@@ -319,8 +319,9 @@ class Scheduler:
             )
             if intent_id:
                 self.intents.attach(project_id, params, intent_id, task['id'])
-            if not intent_id:
-                self.auto_deploy.owner_request(project_id, params, task['id'])
+            automatic = self.auto_deploy.owner_request(project_id, params, task['id'], manual_intent_id=intent_id)
+            if automatic:
+                intent_id = automatic['id']
             return {**self.tasks.context(task), **({'deployment_intent_id': intent_id} if intent_id else {}),
                     **({'batched': True} if task.get('batched') else {})}
         if action == 'job_followup':

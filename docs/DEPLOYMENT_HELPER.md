@@ -383,3 +383,16 @@ The retained assignment branch was rebased onto that source without shared check
 The audit above is historical; it does not describe the final candidate. The contract for standing
 per-project intent, exact verification, v3 migration/data restoration and bootstrap is now
 [AUTO_DEPLOY.md](AUTO_DEPLOY.md). This worker performs no live activation or helper installation.
+
+## Close readiness corrections to automatic deployment
+
+New-work explicit deployment intents now enter ON standing policy; fixed source/release audits
+remain dependencies rather than substitute release sources. Manual review hashes only source
+assignments, while all review tasks still impose lifecycle/execution/hold dependencies. V1/V2
+hashing remains strict. The v2/v3 installer now enforces the outside-manager/helper cgroup
+precondition before mutations. See [AUTO_DEPLOY.md](AUTO_DEPLOY.md) for the corrected contract
+and the live old-manager/stale-scope limitation under recorded intent
+`ba8ce92a3d406a98cdfc9fa81851c251`. Preserve the original registered package; the corrected
+package must use a new release ID and `--task-id 44097fd1a52c4f9096fcd901bd04d344`.
+The detailed report and supported external helper-only command are retained at
+`.data/auto-deploy-corrections/REPORT.md` and sibling `EXTERNAL_HANDOFF.md` in that source workspace.

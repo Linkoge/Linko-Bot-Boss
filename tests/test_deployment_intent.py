@@ -1,5 +1,6 @@
 """Real owner queue/assignment/result routing with disposable storage, no activation."""
 import asyncio
+import json
 
 import pytest
 from fake_codex import FakeServer
@@ -481,3 +482,71 @@ async def test_unchanged_resume_keeps_v2_owner_scope_and_prepared_binding(flow):
     assert result['status'] == 'reviewed'
     assert result['assignment_hashes'] == {task['id']: bound}
     assert scheduler.deployment.status()['phase'] == 'idle'  # Review is not activation.
+
+
+@pytest.mark.parametrize('version', [1, 2])
+async def test_source_scope_remains_immutable_when_review_task_is_attached(flow, version):
+    db, _, chat, _, workers, scheduler, project = flow
+    initial = await owner(chat, project, 'Implement source')
+    source_task = await call(scheduler, project, initial, 'delegate', objective='Source work')
+    finish_owner(db, initial)
+    claim = scheduler.tasks.claim(2)
+    workers.finish(claim['lease_owner'], 'completed', 'Source complete', '')
+    with db.transaction() as conn:
+        conn.execute('UPDATE tasks SET lease_owner=NULL WHERE id=?', (source_task['id'],))
+    params = await owner(chat, project, 'Deploy this source after audit')
+    intent = await call(scheduler, project, params, 'record_deployment_intent', task_ids=[source_task['id']],
+                        owner_deployment_quote='Deploy this source after audit')
+    if version == 1:
+        with db.transaction() as conn:
+            intent['evidence_version'] = 1
+            source = conn.execute('SELECT * FROM tasks WHERE id=?', (source_task['id'],)).fetchone()
+            intent['assignment_hashes'] = {source_task['id']: assignment_evidence(conn, source, 1)}
+            conn.execute('UPDATE settings SET value=? WHERE key=?', (json.dumps(intent), 'deployment_intent:' + intent['id']))
+    fixed_hashes = dict(intent['assignment_hashes'])
+    prepared(scheduler.deployment, assignments=fixed_hashes)
+    manifest_path = scheduler.deployment.root / 'releases/candidate-1/manifest.json'
+    manifest = read(manifest_path)
+    manifest['assignment_evidence_version'] = version
+    atomic(manifest_path, manifest)
+    # ON must not substitute this audit branch for the owner's explicitly fixed source branch.
+    scheduler.auto_deploy.set(project, True)
+    review_task = await call(scheduler, project, params, 'delegate', objective='Audit requested source', intent_id=intent['id'])
+    assert db.setting('deployment_intent:' + intent['id'])['assignment_hashes'] == fixed_hashes
+    assert not [v for v in scheduler.intents.list(project) if v.get('kind') == 'auto']
+    with pytest.raises(ValueError, match='incomplete'):
+        await call(scheduler, project, params, 'review_deployment_intent', intent_id=intent['id'],
+                   release_id='candidate-1', reason='Cannot accept unfinished audit')
+    finish_owner(db, params)
+    claim = scheduler.tasks.claim(2)
+    assert claim['id'] == review_task['id']
+    workers.finish(claim['lease_owner'], 'completed', 'Audit complete', '')
+    with db.transaction() as conn:
+        conn.execute('UPDATE tasks SET lease_owner=NULL WHERE id=?', (review_task['id'],))
+    # Audit readiness is required, but adding it to the immutable source map is rejected.
+    expanded = {**manifest, 'assignments': {**fixed_hashes, review_task['id']: '0' * 64}}
+    atomic(manifest_path, expanded)
+    with pytest.raises(ValueError, match='fixed assignment scope'):
+        scheduler.intents.review(project, params, intent['id'], 'candidate-1', 'Audit is not a source')
+    atomic(manifest_path, manifest)
+    with db.transaction() as conn:
+        conn.execute("UPDATE executions SET status='failed' WHERE task_id=?", (review_task['id'],))
+    with pytest.raises(ValueError, match='Completed preparation result'):
+        scheduler.intents.review(project, params, intent['id'], 'candidate-1', 'A failed audit is not ready')
+    with db.transaction() as conn:
+        conn.execute("UPDATE executions SET status='completed' WHERE task_id=?", (review_task['id'],))
+    # The fixed mapping never includes the audit even once both tasks complete.
+    reviewed = scheduler.intents.review(project, params, intent['id'], 'candidate-1', 'Completed audit accepted')
+    assert reviewed['assignment_hashes'] == fixed_hashes
+    assert reviewed['candidate']['release_id'] == 'candidate-1'
+    assert read(manifest_path)['assignments'] == fixed_hashes
+    with db.transaction() as conn:
+        from ai_manager.assignment_workflow import update
+        update(db, conn, review_task['id'], 'owner_wait', 'Owner holds the audit')
+    with pytest.raises(ValueError, match='held'):
+        scheduler.intents.dispatch(project, params, intent['id'], 'candidate-1')
+    with db.transaction() as conn:
+        update(db, conn, review_task['id'], 'complete', 'Owner released the hold')
+    receipt = scheduler.intents.dispatch(project, params, intent['id'], 'candidate-1')
+    assert receipt['phase'] == 'waiting_idle'
+    assert receipt['origin']['owner_message_id'] == intent['source_message_id']
