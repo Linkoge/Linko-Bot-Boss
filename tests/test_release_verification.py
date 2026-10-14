@@ -145,7 +145,7 @@ def test_review_selection_uses_full_per_file_diff_and_ignores_test_context():
     assert not review_reasons(['tests/test_db.py', 'ai_manager/tasks.py'], diff=diff)
     diff += 'diff --git a/ai_manager/workers.py b/ai_manager/workers.py\n' + '+padding\n' * 10000 + '+await gather()\n'
     assert review_reasons(['ai_manager/tasks.py', 'ai_manager/workers.py'], diff=diff) == [
-        'sensitive actual path ai_manager/workers.py']
+        'sensitive worker concurrency/recovery diff ai_manager/workers.py']
     assert not review_reasons(['docs/security.md'], 'Explain authentication')
 
 
@@ -175,3 +175,64 @@ def test_small_changed_test_helpers_select_consumers_and_root_tests(tmp_path, mo
     assert [sys.executable, '-m', 'pytest', '-q', 'tests/test_consumer.py'] in checks(Path(sys.executable), policy)
     monkeypatch.setattr('scripts.prepare_deployment.run', lambda *args: 'test_root.py')
     assert selected_policy(repo, 'base', 'candidate', tmp_path, [])['target_tests'] == ['test_root.py']
+
+
+@pytest.mark.parametrize('path,changed,category', [
+    ('ai_manager/routes.py', '-if not require_owner(request):\n-    raise HTTPException(401)\n+return result', 'auth/security'),
+    ('ai_manager/manager.py', '+if session.token_hash != supplied_hash:\n+    return False', 'auth/security'),
+    ('ai_manager/helpers.py', '+value = request.headers["Authorization"]', 'auth/security'),
+    ('ai_manager/routes.py', '+conn.execute("ALTER TABLE tasks ADD COLUMN lease TEXT")', 'database migration'),
+    ('ai_manager/manager.py', '+SCHEMA_VERSION = 14', 'database migration'),
+    ('ai_manager/helpers.py', '+subprocess.run(["systemctl", "restart", unit])', 'deployment/rollback'),
+    ('ai_manager/routes.py', '+rollback(candidate)', 'deployment/rollback'),
+    ('ai_manager/manager.py', '+asyncio.create_task(run_worker(task))', 'worker concurrency/recovery'),
+    ('ai_manager/routes.py', '-await lock.acquire()\n+await proceed()', 'worker concurrency/recovery'),
+    ('ai_manager/helpers.py', '+task.lease_owner = execution_id', 'worker concurrency/recovery'),
+    ('ai_manager/manager.py', '+recover_assignment(task)', 'worker concurrency/recovery'),
+])
+def test_actual_sensitive_code_selects_review_without_sensitive_filename_or_request(path, changed, category):
+    diff = f'diff --git a/{path} b/{path}\n@@ -1,2 +1,2 @@ def update():\n{changed}\n'
+    assert 'sensitive ' + category + ' diff ' + path in review_reasons([path], 'Tidy output', diff)
+
+
+@pytest.mark.parametrize('changed', [
+    '+label = "Security settings"', '+label = "Authorization"',
+    '+# Fix auth and worker lease recovery later',
+    '+async def refresh():\n+    return await api.get("/api/portfolio")',
+    '+total_tokens = usage.total_tokens + 1', '+count = len(items)',
+    '+author = record.author', '+count = len(items) # "systemctl restart"',
+])
+def test_ordinary_code_still_skips_review_in_ordinary_risky_filename(changed):
+    path = 'ai_manager/manager.py'
+    diff = f'diff --git a/{path} b/{path}\n@@ -1 +1 @@ def render():\n{changed}\n'
+    assert not review_reasons([path], 'Tidy output', diff)
+
+
+def test_sensitive_enclosing_scope_and_permission_decision_context():
+    path = 'ai_manager/routes.py'
+    scope = f'diff --git a/{path} b/{path}\n@@ -3 +3 @@ def require_owner(request):\n-return False\n+return True\n'
+    assert review_reasons([path], 'Tidy output', scope)
+    context = f'diff --git a/{path} b/{path}\n@@ -3,3 +3,3 @@ def endpoint():\n if not session.valid:\n-    return 401\n+    return 200\n'
+    assert review_reasons([path], 'Tidy output', context)
+    unrelated = f'diff --git a/{path} b/{path}\n@@ -3,3 +3,3 @@ def endpoint():\n require_owner(request)\n-label = "Before"\n+label = "After"\n'
+    assert not review_reasons([path], 'Tidy output', unrelated)
+
+
+
+def test_sensitive_untracked_code_is_in_actual_diff_before_review_bounding(tmp_path):
+    import subprocess
+
+    from ai_manager.verification import changes
+    def git(*args):
+        return subprocess.check_output(['git', '-C', str(tmp_path), *args], text=True).strip()
+    git('init', '-b', 'main')
+    git('config', 'user.email', 'test@example.invalid')
+    git('config', 'user.name', 'Fixture')
+    (tmp_path / 'README.md').write_text('base')
+    git('add', '.')
+    git('commit', '-m', 'base')
+    base = git('rev-parse', 'HEAD')
+    (tmp_path / 'routes.py').write_text('if not require_owner(request):\n    raise HTTPException(401)\n')
+    paths, diff, truncated = changes(tmp_path, base)
+    assert paths == ['routes.py'] and not truncated
+    assert 'sensitive auth/security diff routes.py' in review_reasons(paths, 'Tidy output', diff)

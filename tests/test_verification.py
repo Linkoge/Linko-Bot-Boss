@@ -392,3 +392,24 @@ async def test_review_uses_final_message_without_losing_raw_commentary(system, v
     assert result['status'] == 'completed' and result['findings'] == verdict
     assert result['transcript'].startswith('No blocking findings so far.')
     assert (result['findings'].startswith('No blocking findings')) == (verdict == 'No blocking findings.')
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('sensitive', [True, False])
+async def test_post_check_reviews_sensitive_code_in_ordinary_manager_filename(system, sensitive):
+    db, registry, server, chat, workers, scheduler = system
+    project = registry.list()[0]['id']
+    automatic(db, server)
+    def edit(cwd):
+        code = 'asyncio.create_task(run_worker(task))\n' if sensitive else 'label = "Done"\n'
+        (cwd / 'manager.py').write_text(code)
+        git(cwd, 'add', '.')
+        git(cwd, 'commit', '-m', 'Tidy output')
+    TierServer.edit = edit
+    await delegate(scheduler, chat, project, 'actual-diff', objective='Tidy output', change_paths=['manager.py'],
+                   worker_route={'model': MODELS['Sol'], 'effort': 'high'})
+    task = Tasks(db).claim(2)
+    await workers._run(task)
+    record = json.loads(db.one("SELECT payload FROM events WHERE kind='task.verification'")['payload'])
+    assert record['effective'] == 'risky' and record['review_required'] is sensitive
+    assert len(TierServer.reviews) == int(sensitive)

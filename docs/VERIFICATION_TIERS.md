@@ -35,9 +35,13 @@ existing Risky floor remains. Declared Small work cannot conceal an actual risky
 
 Tier and review eligibility are separate. Review reasons come from actual runtime paths and changed diff lines,
 plus sensitive requested behavior: auth/security, database migrations/schema, deployment/rollback/backup and worker
-concurrency/recovery. Ordinary manager/backend/provider/chat filenames alone no longer purchase a review. For
-DB/worker/task/scheduler/orchestration/assignment paths, changed migration/concurrency/recovery indicators select
-review rather than the broad filename alone. Docs/tests alone do not select a path review. The existing cheapest
+concurrency/recovery. Ordinary manager/backend/provider/chat filenames alone no longer purchase a review. Every runtime filename is checked for sensitive added/removed code and enclosing hunk scope, including ordinary
+`routes.py`, `manager.py` and helpers with innocuous requests. Deterministic rules recognize permission/session/
+credential operations, migration identifiers and SQL DDL, deployment/rollback commands, and worker locking,
+scheduling, leases and recovery operations. Snake/camel identifiers are normalized; removed guards and changed
+boolean/status decisions in guard context count too. Bare async/await, usage-token counters, display literals,
+comments and unrelated hunks do not select review. New untracked code is included before review-input bounding.
+Sensitive path/request floors remain conservative; broad backend filenames alone still do not select review. Docs/tests alone do not select a path review. The existing cheapest
 permitted read-only process, bounded input/time and interruption behavior remain. Findings remain substantive;
 unavailability never changes worker completion, but required unavailable/failed review prevents automatic deployment.
 The event records `review_required` and reasons. Old events without that field retain their prior Risky review rule.

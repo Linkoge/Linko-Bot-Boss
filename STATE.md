@@ -1,3 +1,19 @@
+# Sensitive review finding correction — retained assignment, 2026-10-14
+
+Continuation of `e684e6b33ca14b778ef7769dfc92a0fc` resolves the actual automatic review finding from
+execution `35bd55845c2c41f9a97a2099326dad77`. Added/removed runtime code, enclosing guard scope and relevant
+control-decision context now select agreed sensitive review categories independently of filenames/request words.
+Ordinary manager/backend changes retain the reduced policy. Untracked runtime code is included in actual diff.
+The policy is deterministic and uses the existing independent review process; no new stage, planning call,
+reviewer or approval. Recovery investigation is deferred and no recovery behavior is changed.
+
+The existing report/evidence directory `.data/verification-reductions/` retains all prior failed/pre-correction
+attempts. Its REPORT.md and manager-summary.json identify the final candidate, exact preparation status, command
+results/hashes, justified reuse and normal automatic-policy handoff. A manifest with matching bundle/log/index
+and this task's current scope binding establishes preparation; only an actual succeeded receipt establishes
+activation. No shared checkout/data write, service restart, helper installation, publication, activation or push
+is performed by this worker. Current policy remains docs/VERIFICATION_TIERS.md and docs/AUTO_DEPLOY.md.
+
 # Approved verification reductions — implemented candidate, 2026-10-14
 
 Assignment `e684e6b33ca14b778ef7769dfc92a0fc` implements the owner's complete reduced Option B policy.

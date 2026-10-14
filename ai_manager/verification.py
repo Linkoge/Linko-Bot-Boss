@@ -154,8 +154,15 @@ def git(root, *args):
 def changes(root, base):
     """Actual paths and full diff for classification; only the AI review input is bounded."""
     paths = set(git(root, 'diff', '--name-only', base).splitlines())
-    paths |= set(git(root, 'ls-files', '--others', '--exclude-standard').splitlines())
+    untracked = set(git(root, 'ls-files', '--others', '--exclude-standard').splitlines())
+    paths |= untracked
     diff = git(root, 'diff', '--stat', base) + '\n' + git(root, 'diff', base)
+    for value in sorted(untracked):
+        result = subprocess.run(['git', 'diff', '--no-index', '--', '/dev/null', value], cwd=root,
+                                capture_output=True, text=True, timeout=60)
+        if result.returncode not in (0, 1):
+            raise ValueError('Cannot inspect untracked diff: ' + value)
+        diff += '\n' + result.stdout
     return sorted(p for p in paths if p), diff, len(diff) > DIFF_LIMIT
 
 
@@ -172,26 +179,96 @@ REVIEW_TEXT = re.compile(r'\b(auth\w*|security|encrypt\w*|crypto\w*|permissions?
                          r'recovery|leases?)\b', re.I)
 
 
+
+# Explicit operations/identifiers, not generic backend vocabulary such as async,
+# await, server or manager. Quoted display text and comments are not code signals.
+DIFF_AUTH = re.compile(r'\b(auth|authentication|authorization|authenticate|authorize|authorized|authz|login|logout|signin|signout|csrf|passwords?|credentials?|secrets?|permissions?|'
+                       r'sessions?|cookies?|jwt|bcrypt|token hash|access token|refresh token|bearer|allowed|require owner|compare digest|encrypt\w*|crypto\w*)\b', re.I)
+DIFF_MIGRATION = re.compile(r'\b(schema|migrat\w*)\b', re.I)
+DIFF_DEPLOYMENT = re.compile(r'\b(deploy\w*|rollback|backup|restore|snapshot|systemctl)\b', re.I)
+DIFF_CONCURRENCY = re.compile(
+    r'\b(lease\w*|heartbeat|recover\w*|claim\w*|stop requested|retry at|lease owner)\b|'
+    r'\b(start|stop|pause|resume|cancel|spawn|restart) (worker|assignment)\b|'
+    r'\b(asyncio|threading|multiprocessing|concurrent)\s*\.\s*'
+    r'(create task|gather|wait|wait for|task group|lock|semaphore|queue|thread|process|futures)\b|'
+    r'\b(acquire|release|gather|create task|task group|lock|semaphore)\s*\(|\b(lock|semaphore|queue)\s*\.\s*'
+    r'(acquire|release|put|get|join)\b|\b(process|worker|workers)\s*\.\s*'
+    r'(terminate|kill|start|stop|pause|resume|cancel)\b', re.I)
+QUOTED = re.compile(r"'(?:(?:\\.)|[^'\\])*'|\"(?:(?:\\.)|[^\"\\])*\"")
+
+
+def code_signals(lines):
+    """Deterministic sensitive-operation categories for changed code / enclosing hunk scope."""
+    code, literals = [], []
+    for line in lines:
+        if line.lstrip().startswith(('#', '//', '/*', '*')):
+            continue
+        masked = QUOTED.sub(lambda match: ' ' * len(match.group()), line)
+        ends = [masked.find(marker) for marker in ('#', '//') if marker in masked]
+        if ends:
+            line = line[:min(ends)]
+        literals.extend(QUOTED.findall(line))
+        line = QUOTED.sub(' ', line)
+        # Normalize snake_case and camelCase identifiers while retaining operation punctuation.
+        line = re.sub(r'([a-z0-9])([A-Z])', r'\1 \2', line).replace('_', ' ')
+        code.append(line)
+    identifiers = '\n'.join(code)
+    strings = '\n'.join(literals)
+    categories = [name for name, pattern in (('auth/security', DIFF_AUTH),
+                  ('database migration', DIFF_MIGRATION), ('deployment/rollback', DIFF_DEPLOYMENT),
+                  ('worker concurrency/recovery', DIFF_CONCURRENCY)) if pattern.search(identifiers)]
+    # SQL and HTTP/command declarations carry behavior in strings, not identifiers.
+    if re.search(r'\b(create|alter|drop)\s+(table|index|trigger|view)\b', strings, re.I) and re.search(
+            r'\b(execute|executescript|sql|op)\b', identifiers, re.I):
+        categories.append('database migration')
+    if (re.search(r'[\"\'](?:authorization|cookie|set-cookie|x-csrf-token)[\"\']', strings, re.I)
+            and re.search(r'\b(headers?|cookies?|request|response|csrf)\b', identifiers, re.I)):
+        categories.append('auth/security')
+    if re.search(r'\bsystemctl\b|\bgit\b.*\b(checkout|reset)\b', strings, re.I):
+        categories.append('deployment/rollback')
+    return sorted(set(categories))
+
+
 def review_reasons(paths, text='', diff=''):
     reasons = []
+    blocks = diff.split('diff --git ')
     for value in paths:
         path = PurePosixPath(value)
-        if kind(path) in {'doc', 'test'}:
+        if kind(path) in {'doc', 'test'} or (path.parts and path.parts[0] == '.data'):
             continue
         words = set(re.split(r'[^a-z0-9]+', path.stem.lower())) | {p.lower() for p in path.parts[:-1]}
         direct = REVIEW_WORDS - {'db', 'database', 'worker', 'workers', 'parallel', 'recovery',
                                  'lease', 'scheduler', 'tasks', 'orchestration', 'assignment'}
-        blocks = diff.split('diff --git ')
         scoped = ''.join(block for block in blocks[1:] if block.splitlines()[0].endswith(' b/' + value))
         source = scoped if len(blocks) > 1 else diff
-        changed = '\n'.join(line[1:] for line in source.splitlines()
-                            if line.startswith(('+', '-')) and not line.startswith(('+++', '---')))
-        behavioral = re.search(r'\b(schema|migrat\w*|alter|create|lease\w*|concurren\w*|lock\w*|'
-                               r'recover\w*|claim\w*|heartbeat|parallel|cancel\w*|resume\w*|await|async|asyncio|gather|semaphore|queue|transaction|retry|reconnect|executor|thread|spawn|stop_requested)\b', changed, re.I)
-        if (words & direct or path.suffix.lower() in RISKY_SUFFIXES
-                or (words & REVIEW_WORDS and behavioral)):
+        if words & direct or path.suffix.lower() in RISKY_SUFFIXES:
             reasons.append('sensitive actual path ' + value)
-    if any(kind(PurePosixPath(p)) not in {'doc', 'test'} for p in paths) and REVIEW_TEXT.search(text):
+            continue
+        # Added AND removed code matter. A removed permission gate is still security
+        # work. Enclosing function context catches e.g. `return True` in require_owner.
+        # Inspect each hunk separately so another unchanged sensitive function in the
+        # file cannot make an ordinary edit buy a blanket review.
+        hunks = re.split(r'(?m)^@@[^\n]*@@', source)
+        headers = re.findall(r'(?m)^@@[^\n]*@@([^\n]*)', source)
+        for index, hunk in enumerate(hunks):
+            changed = [line[1:] for line in hunk.splitlines() if line.startswith(('+', '-'))
+                       and not line.startswith(('+++', '---'))]
+            if not changed or not any(line.strip() and not line.lstrip().startswith(('#', '//', '/*', '*'))
+                                      for line in changed):
+                continue
+            scope = [headers[index - 1]] if index else []
+            # Context matters for changed boolean/status/control decisions in an
+            # existing guard. Display literals do not inherit nearby guards.
+            effects = QUOTED.sub(' ', '\n'.join(changed))
+            if re.search(r'\breturn\s+(True|False|None|[0-9]+)|\bstatus(?:_code)?\s*=|'
+                         r'\b(if|elif|raise|assert|while)\b', effects):
+                scope += [line[1:] for line in hunk.splitlines() if line.startswith(' ')]
+            for category in code_signals(changed + scope):
+                reason = 'sensitive ' + category + ' diff ' + value
+                if reason not in reasons:
+                    reasons.append(reason)
+    if any(kind(PurePosixPath(p)) not in {'doc', 'test'} and PurePosixPath(p).parts[0] != '.data'
+           for p in paths) and REVIEW_TEXT.search(text):
         reasons.append('sensitive assignment behavior')
     return reasons
 
