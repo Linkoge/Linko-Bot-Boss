@@ -9,7 +9,9 @@ A private conversational manager for software projects:
 
 **User → AI Manager → native coding worker (Codex or Claude) → AI Manager → User**
 
-Use Conversation for discussion, Auto to delegate requested work, or Execute to send a work objective through the same manager path. Discuss work naturally in a project context. The manager delegates a complete objective when requested. Codex investigates, edits, installs dependencies, runs commands, builds, tests, debugs and uses Git in its durably owned assignment workspace (or the retained original cwd for historical/non-Git sequential work). Results return automatically to the originating conversation. Codex chooses its own validation; there is no planner, independent reviewer, verification controller, command registry or permission-profile setup.
+Use Conversation for discussion, Auto to delegate requested work, or Execute to send a work objective through the same manager path. Discuss work naturally in a project context. The manager delegates a complete objective when requested. Codex investigates, edits, installs dependencies, runs commands, builds, tests, debugs and uses Git in its durably owned assignment workspace (or the retained original cwd for historical/non-Git sequential work). Results return automatically to the originating conversation.
+
+New assignments use [Option B verification tiers](docs/VERIFICATION_TIERS.md): Small runs smoke, touched-file tests and build/lint; Normal adds the full backend suite once at the end; Risky adds one automatic cheap read-only diff review. Declared paths and request text set a deterministic floor, and actual changed paths are checked after completion. Risky paths cannot be downgraded to Small. Related Small requests can batch into one queued, unstarted task. Reports stay short; full evidence stays in internal execution records. Existing assignments retain their verification behavior. Release preparation runs the full backend and browser suites once; post-deploy health failure triggers automatic rollback.
 
 Different projects run concurrently with a global capacity default of two. Same-project coding is sequential by default; explicit current-request chat or ⇈ Send permission can admit isolated parallel work after dependency/conflict checks. See [parallel execution](docs/PARALLEL_EXECUTION.md). Projects participate automatically. Tasks, conversations, native thread references, questions and execution history persist in SQLite. Temporary network, process and account usage interruptions recover automatically with persisted backoff. Restart handling inspects native outcomes before resuming the same assignment and conversation. See [automatic recovery](docs/AUTOMATIC_RECOVERY.md) and [Pause/Cancel and bundled updates](docs/AGENT_CONTROLS.md).
 
@@ -31,6 +33,7 @@ Rich red chat theme candidate and truthful activation/evidence: [UI theme](docs/
 
 ```bash
 uv sync --locked
+uv run pytest -q -m smoke
 uv run pytest -q
 uv run ruff check ai_manager scripts tests
 node --check ai_manager/static/app.js
@@ -38,6 +41,6 @@ PYTHONPATH=. uv run python scripts/browser_smoke.py
 PYTHONPATH=. uv run python scripts/smoke_minimal.py
 ```
 
-The real Codex smoke uses a disposable calculator repository and database, fixes code, runs tests, commits locally and checks automatic manager delivery. It invokes the existing subscription. Browser acceptance uses an isolated local HTTP fixture. Neither script uses the production database.
+The fast pytest smoke suite covers 28 core-path tests (44 cases) with a 20-second budget. Run it on every tiered task; the full suite is the final Normal/Risky check and the release preparation gate. The real Codex smoke script uses a disposable calculator repository and database, fixes code, runs tests, commits locally and checks automatic manager delivery. It invokes the existing subscription. Browser acceptance uses an isolated local HTTP fixture. Neither script uses the production database.
 
 See [operations](docs/operations.md), [autonomy](docs/AUTONOMY_POLICY.md) and [cleanup/deployment evidence](docs/CODEBASE_CLEANUP.md). Historical reports link to their complete versions in Git.

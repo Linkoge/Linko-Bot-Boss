@@ -88,3 +88,13 @@ preservation checks. `systemctl` is simulated by a local server process, so the 
 unhealthy candidate ends `rolled_back`: detached base checkout, forward `main` preserved, base assets served, database
 untouched, one report. A healthy control ends `succeeded`. `LINKO_REAL_HEALTH_CLOCK=1` keeps the real 45 s deadline.
 It passed in 45.6 s on 2026-10-14.
+
+## Documentation follow-up evidence — 2026-10-14
+
+Implementation remains `e04548b53ea56a75b64481bcb06d42ac396c0771`; its final validation was recorded in
+`642511a0878e9df7a6937bb6af4dfdd65adacd80`. README, DECISIONS and STATE were brought into agreement
+with this contract in the same retained assignment branch. The fresh command
+`.venv/bin/python -m pytest -q -m smoke` passed all 44 cases (311 deselected) in 3.08 s, with one upstream
+Starlette/httpx deprecation warning. Full backend/browser and real-clock rollback results above are retained
+implementation evidence; documentation edits do not repeat those expensive suites. No application code changed
+in this follow-up. Nothing was prepared, deployed, pushed or restarted; no production data was accessed.

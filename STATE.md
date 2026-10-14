@@ -1,3 +1,28 @@
+# Option B verification — implemented and verified, not deployed — 2026-10-14
+
+Assignment `c3aebb4c76db45de81ccd8567c2ac259`, retained branch
+`linko/assignment-c3aebb4c76db45de81ccd8567c2ac259`, contains implementation commit
+`e04548b53ea56a75b64481bcb06d42ac396c0771` and validation record commit
+`642511a0878e9df7a6937bb6af4dfdd65adacd80`. Deterministic tier floors, actual-diff
+escalation, one cheap Risky diff review, Small batching, short reports and a 28-test
+smoke suite are implemented. Existing assignments retain their prior behavior.
+Automatic post-deploy rollback was already present and is verified by the new
+throwaway Git/SQLite/HTTP rehearsal; it restores code/assets and preserves runtime data.
+
+Recorded validation on the implementation: 355 backend cases passed in 64.6 s,
+all 19 browser scripts passed in 247 s, Ruff and JavaScript syntax checks passed,
+and real-deadline rollback rehearsal passed in 45.6 s. Documentation follow-up
+reran `.venv/bin/python -m pytest -q -m smoke`: 44 passed, 311 deselected in 3.08 s
+(one upstream Starlette/httpx deprecation warning). This is about 5% of the recorded
+full backend runtime. README and DECISIONS now describe the same tier contract.
+Full contract, checks and limitations: [verification tiers](docs/VERIFICATION_TIERS.md).
+
+Manager routine delivery facts: implemented and verified in the retained assignment;
+no release prepared, no deployment receipt for this feature, no push, live data mutation
+or shared service restart. Activation remains pending separate serialized integration,
+exact release preparation and a durable succeeded deployment receipt. Historical live
+and prepared-release facts below describe earlier work and were not rechecked here.
+
 # Helper installation succeeded; fresh manager deployment target — 2026-10-14
 
 Current target: `parallel-composer-integrated-v6-20261014`, checkout
