@@ -144,3 +144,10 @@ The corrective real reviewer also reproduced concatenated progress commentary be
 for eligibility and retains the raw transcript as evidence. A progress message declaring no
 findings cannot mask a blocking final message. Providers without completed-message events keep
 the existing stream fallback. This avoids another approval/review cycle caused by commentary.
+
+Corrective validation exposed the generic 180-second command cap interrupting the growing
+backend suite on the managed worker. The fixed full backend command now has a bounded
+600-second timeout; browser commands retain 180 seconds, and smoke retains its short gate.
+No check is skipped or retried automatically. Use a private short temporary directory for
+verification: the Claude test host's Unix-socket path cannot fit a deeply nested TMPDIR.
+The failed preparation is retained without a manifest; a corrected attempt gets a fresh ID.

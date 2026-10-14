@@ -113,7 +113,10 @@ def _prepare(repo, live, data, release_id, python, task_ids=(), auto_execution=N
                 if result.returncode:
                     raise ValueError('Required tier smoke verification failed')
             for argv in checks(python):
-                result = subprocess.run(argv, cwd=repo, stdout=log, stderr=log, timeout=180, env=env)
+                # The >400-test backend suite can exceed three minutes on a busy managed worker.
+                # Keep a bounded full gate; do not skip or retry individual checks automatically.
+                timeout = 600 if argv[1:3] == ['-m', 'pytest'] else 180
+                result = subprocess.run(argv, cwd=repo, stdout=log, stderr=log, timeout=timeout, env=env)
                 if result.returncode:
                     raise ValueError('Release validation failed; see private validation.log')
     finally:
