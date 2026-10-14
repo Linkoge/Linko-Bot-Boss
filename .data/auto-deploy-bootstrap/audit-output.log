@@ -1,0 +1,54 @@
+{
+  "observed_at": "2026-10-14T16:27:16.774444+00:00",
+  "release_id": "auto-deploy-standing-policy-v1-20261014",
+  "registered_path": "/home/codex/.local/share/linko-bot-manager/deployment-helper/releases/auto-deploy-standing-policy-v1-20261014",
+  "manifest_sha256": "5c31263dea6bfd2c19d3a1b9151c20db76a5ed33169467d7ad64324825fc39cd",
+  "index_sha256": "8a8c313e9db83c2817297556bd6b73b3d6a45073a805e63172dd3929e57898db",
+  "inventory_files": 82,
+  "inventory_indexed_files": 81,
+  "source_registered_byte_identity": true,
+  "bundle_heads": "0223c3493a6edf9b54b280fa5993fb6404e2d8ca HEAD",
+  "live_head": "bee8b088fa0eb2c20d963b95f109cbf3a87caaeb",
+  "live_status": "",
+  "source_head": "0223c3493a6edf9b54b280fa5993fb6404e2d8ca",
+  "source_git_status": "",
+  "cgroup": "0::/user.slice/user-1000.slice/user@1000.service/app.slice/linko-bot-manager.service\n",
+  "installed_helper_version": "v2",
+  "installed_helper_sha256": "e6d3c0c7200b749e32814f95ac5a8fc15552091b72bfb030f6c0345e084e60a3",
+  "unit_sha256": "0a6d8412eac9c665bbf022d3d0f0558fc0f51a54d43dc822c5ddd96f531396e4",
+  "v2_install_receipt": "/home/codex/.local/share/linko-bot-manager/deployment-helper/helper-v2-upgrade.json",
+  "v3_receipt_exists": false,
+  "v3_installed_exists": false,
+  "handoff_gated": false,
+  "live_succeeded_receipt": "/home/codex/.local/share/linko-bot-manager/deployment-helper/results/a41cc8ad77cb345f895c00b373dd3804.json",
+  "source_lifecycle": "completed",
+  "source_status": "pending",
+  "source_lease": null,
+  "native_verification_events": [
+    {
+      "seq": 201125,
+      "kind": "worker.finished",
+      "payload": "{\"status\": \"completed\", \"error\": \"\"}"
+    }
+  ],
+  "intent_status": "recorded",
+  "intent_assignment_hashes": {
+    "44097fd1a52c4f9096fcd901bd04d344": "44051737214630f1211289b4f6faf879eb67ca1b96bde180c9d994814ed5afae"
+  },
+  "manifest_scope_matches_recorded_intent": true,
+  "review_tasks": [
+    {
+      "id": "27b4bbb092704f739eb7b30b2bb4d308",
+      "lifecycle": "running",
+      "status": "pending",
+      "lease_owner": "a87e9d2099a74b7484034cddd4956513"
+    }
+  ],
+  "current_review_expected_assignments": {
+    "44097fd1a52c4f9096fcd901bd04d344": "44051737214630f1211289b4f6faf879eb67ca1b96bde180c9d994814ed5afae",
+    "27b4bbb092704f739eb7b30b2bb4d308": "c34b1436ca8aed80b89d944d0159c4fd0eba4a061c3d655ad53ae08595b42202"
+  },
+  "review_expected_matches_intent": false,
+  "review_expected_matches_manifest": false,
+  "runtime_database_access": "mode=ro; no initialization/migration or writes"
+}

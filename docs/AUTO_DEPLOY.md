@@ -153,3 +153,39 @@ backend suite on the managed worker. The fixed full backend command now has a bo
 No check is skipped or retried automatically. Use a private short temporary directory for
 verification: the Claude test host's Unix-socket path cannot fit a deeply nested TMPDIR.
 The failed preparation is retained without a manifest; a corrected attempt gets a fresh ID.
+
+## Historical registered release readiness audit — 2026-10-14
+
+The following records the original v1 audit, before the corrections above. Its helper installer
+and intent statements describe that audited revision; they do not override the corrected guards.
+
+`auto-deploy-standing-policy-v1-20261014` is registered (publication event 201759).
+The serialized audit verified all 82 registered files, pinned manifest/index, exact candidate
+`0223c3493a6edf9b54b280fa5993fb6404e2d8ca`, clean source and live base `bee8b088`.
+The existing 404-case backend, 20-browser and Ruff/JS gate remains valid and was reused.
+Missing separate risky review completed with findings; it is not a clean native post-check.
+The live manager also includes review tasks when comparing source-only intent/manifest hashes,
+which blocks exact intent review even after audit cleanup. Manager sequential review is required;
+this audit does not alter source, immutable release evidence or runtime intent records.
+
+Helper remains v2. This audit runs inside the manager cgroup and cannot safely install v3.
+The supported external installer delegates to v2 and has no installer cgroup check of its own;
+an authorized operator must enforce the documented outside-manager/helper precondition.
+No application activation or helper restart occurred. Full findings, identity assertions,
+coverage, precise external command and receipt requirements are retained in
+`assignment-workspaces/27b4bbb092704f739eb7b30b2bb4d308/.data/auto-deploy-bootstrap/REPORT.md`
+and `EXTERNAL_HANDOFF.md` under the manager data directory. Current recorded intent is
+`ba8ce92a3d406a98cdfc9fa81851c251`; this evidence does not create or expand authorization.
+
+## Serialized source integration — 2026-10-14
+
+The corrected source and the completed audit are reconciled in the original retained assignment
+workspace. The audit artifacts remain byte-for-byte historical evidence. Its source branch and
+the Option B branch are retained. The manager candidate previously contained the audit commit
+without the corrected source; pending-source admission therefore correctly blocked preparation.
+After successful combined validation and worker cleanup, the existing `retain_source` lifecycle
+checks every pinned ancestor and records the combined project candidate, then releases the
+integration reservation. Workers do not edit shared queue or intent records. Exact ancestry,
+combined checks and current publication/bootstrap limitations are recorded in this assignment’s
+`.data/auto-deploy-integration/REPORT.md`. The former intent was revoked by the manager after
+its scope check failed; integration does not restore it or authorize activation under stale scope.
