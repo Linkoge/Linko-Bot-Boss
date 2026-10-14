@@ -58,7 +58,9 @@ links that original manual provenance to a task-specific automatic intent and ma
 manual stage superseded. It returns the automatic intent ID. No extra manual evidence-review
 or owner-message refresh stage is needed. Cancelling the original intent also cancels its linked
 automatic intent. A different new-work deployment request does not revoke another assignment's
-standing automatic intent. OFF retains the existing manual flow.
+standing automatic intent. Replaying the same current owner's explicit new-work delegation returns
+the existing task/automatic intent without resealing the preserved manual mapping or retrying a
+failed/cancelled deployment. OFF retains the existing manual flow.
 
 A delegation explicitly auditing a fixed existing release or source assignment remains a
 readiness dependency of that fixed request. It cannot authorize deployment of the audit's own

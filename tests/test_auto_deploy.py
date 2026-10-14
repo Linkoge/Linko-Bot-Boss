@@ -82,6 +82,10 @@ async def complete(automatic, healthy=True, migration=True, deployment=None):
             deployment_args['intent_id'] = intent['id']
     task = await call(scheduler, project, params, 'delegate', objective='Implement requested improvement',
                       change_paths=['ai_manager/', 'server.py', 'test_candidate.py'], **deployment_args)
+    if deployment:
+        replay = await call(scheduler, project, params, 'delegate', objective='Implement requested improvement',
+                            change_paths=['ai_manager/', 'server.py', 'test_candidate.py'], **deployment_args)
+        assert replay['id'] == task['id'] and replay['deployment_intent_id'] == task['deployment_intent_id']
     finish_owner(db, params)
     claim = scheduler.tasks.claim(2)
     assert claim and claim['workspace']

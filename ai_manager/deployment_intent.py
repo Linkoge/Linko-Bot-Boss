@@ -158,6 +158,8 @@ class Intents:
             task = conn.execute('SELECT * FROM tasks WHERE id=?', (task_id,)).fetchone()
             if value['source_message_id'] != source['id'] or not task or task['request_key'] != source['execution_id']+':'+project_id:
                 raise ValueError('Deployment audit/preparation must belong to the recorded owner assignment')
+            if value['status'] == 'superseded':
+                return value  # Replay must not reseal the preserved manual source mapping.
             if value.get('task_request'):
                 value['assignment_hashes'] = {task_id: assignment_evidence(conn, task, value.get('evidence_version', 1))}
             else:

@@ -303,7 +303,14 @@ class Scheduler:
                 with self.db.transaction() as conn:
                     source = self.intents.owner(conn, params)
                     value = self.intents.get(conn, intent_id, project_id, params)
-                    if value['source_message_id'] != source['id'] or value['status'] != 'recorded':
+                    from .auto_deploy import enabled
+                    from .deployment_intent import rows
+                    automatic_retry = (value['status'] == 'superseded' and enabled(conn, project_id)
+                                       and value.get('task_request') == source['execution_id'] + ':' + project_id
+                                       and any(v['id'] == value.get('auto_intent_id') and v.get('kind') == 'auto'
+                                               and v.get('manual_intent_id') == value['id']
+                                               for v in rows(conn)))
+                    if value['source_message_id'] != source['id'] or (value['status'] != 'recorded' and not automatic_retry):
                         raise ValueError('Delegate preparation/audit from the original recorded owner turn')
             execution_policy = policy(self.db, params, args, project_id)
             execution_policy['verification'] = select(
