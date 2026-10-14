@@ -213,3 +213,14 @@ def test_intent_candidate_pins_complete_published_index(release):
     (target / 'validation.log').write_text('tampered')
     with pytest.raises(ValueError):
         Intents(db).candidate('candidate-1')
+
+
+def test_inventory_includes_nested_index_files(release):
+    _, _, source, _, _ = release
+    nested = source / 'provenance/evidence-index.json'
+    nested.parent.mkdir()
+    nested.write_text('nested baseline index')
+    index = json.loads((source / 'evidence-index.json').read_text())
+    index['files']['provenance/evidence-index.json'] = sha(nested)
+    atomic(source / 'evidence-index.json', index)
+    assert register(release)['phase'] == 'registered'

@@ -110,7 +110,7 @@ def _prepare(repo, live, data, release_id, python, task_ids=()):
     atomic(target / 'manifest.json', manifest)
     atomic(target / 'evidence-index.json', {'release_id': release_id, 'candidate': commit, 'base': base,
            'files': {p.relative_to(target).as_posix(): sha(p) for p in target.rglob('*')
-                     if p.is_file() and p.name != 'evidence-index.json'}})
+                     if p.is_file() and p != target / 'evidence-index.json'}})
     return manifest
 
 

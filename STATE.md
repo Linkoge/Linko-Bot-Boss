@@ -1,7 +1,7 @@
 # Option B lifecycle repair — implemented; no activation — 2026-10-14
 
 The owner authorized a close publication/binding correction in the retained Option B workspace.
-New release target: `option-b-lifecycle-v4-20261014`. `publish_release` manager action and
+New release target: `option-b-lifecycle-v5-20261014`. `publish_release` manager action and
 `scripts/publish_release.py` register immutable validated artifacts after normal worker cleanup,
 without tests, task continuation, source edits, intent creation or deployment. They respect
 preparation/protocol locks, SQLite serialization, reservations, leases, owner holds, current-base,

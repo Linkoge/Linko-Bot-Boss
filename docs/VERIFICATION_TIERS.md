@@ -153,7 +153,7 @@ The failed v2 release log remains immutable; full backend validation is not repe
 
 The owner authorized deploy/manager source correction after v3 publication/binding blockers. The supported
 import command and V2 binding strategy are documented in DEPLOYMENT_HELPER.md. No v3 evidence or old intent
-is rewritten. New corrected release target: option-b-lifecycle-v4-20261014. Its combined evidence reuses only
+is rewritten. New corrected release target: option-b-lifecycle-v5-20261014. Its combined evidence reuses only
 unchanged baseline checks and adds affected-path regressions, smoke, relevant browser checks and one scoped
 read-only diff review. Current exact results/commit/hashes and post-cleanup publication command are in the
 retained report; no blind full-suite repetition or worker activation.
