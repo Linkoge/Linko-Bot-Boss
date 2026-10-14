@@ -367,3 +367,28 @@ async def test_unexpected_post_check_error_never_changes_completed_outcome(syste
         assert expected in record
     assert 'timed out' in json.loads(db.one("SELECT payload FROM events WHERE kind='task.verification' ORDER BY seq")['payload'])['actual_error']
     assert chat.verification_notice(execution) == {'tier': 'small', 'post_check': 'failed: classifier bug'}
+
+
+@pytest.mark.parametrize('verdict', ['No blocking findings.', '- worker.py:1 — concrete blocker'])
+async def test_review_uses_final_message_without_losing_raw_commentary(system, verdict):
+    _, registry, server, _, workers, _ = system
+    class FinalReview(TierServer):
+        async def request(self, method, params, timeout=30):
+            assert method == 'turn/start'
+            queue = self.queues[params['threadId']]
+            commentary = 'No blocking findings so far. Reviewing the remaining diff.'
+            for event in (
+                {'method': 'item/agentMessage/delta', 'params': {'turnId': 'review-turn', 'delta': commentary}},
+                {'method': 'item/completed', 'params': {'turnId': 'review-turn', 'item': {'type': 'agentMessage', 'phase': 'commentary', 'text': commentary}}},
+                {'method': 'item/agentMessage/delta', 'params': {'turnId': 'review-turn', 'delta': verdict}},
+                {'method': 'item/completed', 'params': {'turnId': 'review-turn', 'item': {'type': 'agentMessage', 'phase': 'final_answer', 'text': verdict}}},
+                {'method': 'turn/completed', 'params': {'turn': {'id': 'review-turn', 'status': 'completed'}, 'reconciled_output': commentary + verdict}},
+            ):
+                queue.put_nowait(event)
+            return {'turn': {'id': 'review-turn'}}
+    workers.factory = FinalReview
+    task = {'description': 'Review this exact change', 'acceptance': 'No blockers'}
+    result = await workers.review(task, Path(registry.list()[0]['path']), server.route(), ['worker.py'], 'diff', False)
+    assert result['status'] == 'completed' and result['findings'] == verdict
+    assert result['transcript'].startswith('No blocking findings so far.')
+    assert (result['findings'].startswith('No blocking findings')) == (verdict == 'No blocking findings.')

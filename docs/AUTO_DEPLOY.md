@@ -138,3 +138,9 @@ intent mappings, drop review dependencies, fabricate a new owner request or requ
 through shell. This is a concrete bootstrap limitation, not a new owner deployment approval.
 Corrected exact artifacts, review and external commands are in the retained assignment's
 `.data/auto-deploy-corrections/REPORT.md` and `EXTERNAL_HANDOFF.md`.
+
+The corrective real reviewer also reproduced concatenated progress commentary before its final
+`No blocking findings.` verdict. The review collector now uses the completed final agent message
+for eligibility and retains the raw transcript as evidence. A progress message declaring no
+findings cannot mask a blocking final message. Providers without completed-message events keep
+the existing stream fallback. This avoids another approval/review cycle caused by commentary.

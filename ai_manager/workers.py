@@ -394,6 +394,7 @@ class Workers:
     async def review(self, task, root, route, paths, diff, truncated):
         from .model_settings import cheapest, provider_of
         server, output, usage, spent = self.factory(self.settings, native=False), "", TurnUsage(), {}
+        verdict = None
         try:
             async with asyncio.timeout(REVIEW_SECONDS):
                 await server.start()
@@ -416,12 +417,18 @@ class Workers:
                         continue
                     if method == "item/agentMessage/delta":
                         output = (output + params.get("delta", ""))[-20000:]
+                    if method == "item/completed":
+                        item = params.get("item") or {}
+                        if (item.get("type") == "agentMessage" and item.get("phase") != "commentary"
+                                and isinstance(item.get("text"), str)):
+                            verdict = item["text"]  # Final review message, not concatenated progress commentary.
                     if method == "thread/tokenUsage/updated":
                         spent = usage.record(params.get("tokenUsage", {}))
                     if method == "turn/completed":
                         output = params.get("reconciled_output", output)
                         status = "completed" if params["turn"]["status"] == "completed" else "failed"
-                        return {"status": status, **pair, "findings": output[-4000:], "usage": spent}
+                        return {"status": status, **pair, "findings": (verdict if verdict is not None else output)[-4000:],
+                                "transcript": output[-4000:], "usage": spent}
         except asyncio.CancelledError:
             raise
         except Exception as error:
