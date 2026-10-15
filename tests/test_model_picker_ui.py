@@ -1,8 +1,8 @@
 """The model picker is the layout deployed at 208554a4cd (Manager / Worker / Favorites, a model row and an effort row per
 provider, three families, Low/Medium/High) with one deliberate addition: the Manual | Automatic switch in the Worker heading
-row, drawn exactly like the one the earlier picker (81711bd) had in its Bot heading row. These tests pin markup, styles and
-client code to those revisions, so any other change to the picker's look or structure means changing a hash on purpose, with
-the owner's agreement. The rendered result is pinned by tests/test_model_picker_browser.py."""
+row, drawn exactly like the one the earlier picker (81711bd) had in its Bot heading row. Markup and styles stay pinned to
+those revisions. The client hash includes the requested per-project worker persistence and clear action; browser tests
+pin the original global geometry and exercise the project selections in tests/test_model_picker_browser.py."""
 import hashlib
 import re
 from pathlib import Path
@@ -36,21 +36,10 @@ def test_picker_styles_are_the_original_ones_and_the_switch_is_drawn_like_the_ol
     assert [line for line in css.splitlines() if 'worker-mode' in line] == ['#worker-mode{grid-template-columns:1fr 1fr;margin:0;flex:0 1 240px}']
 
 
-def test_client_code_is_the_original_except_the_documented_worker_switch_and_off_family_effort_row():
-    js = _js()
-    original = js.replace("const PICKER_LEVELS=['low','medium','high'];\n", '').replace(
-        "    const all=[...PICKER_LEVELS,...(selected?.levels||[]).filter(e=>!PICKER_LEVELS.includes(e))]; // Low/Medium/High; "
-        "only a selected off-family model adds its own\n    for(const e of all)",
-        "    for(const e of ['low','medium','high'])")
-    # Deviation 2: the worker is null while Automatic (nothing is pressed) and the Manual | Automatic switch.
-    mode = original[original.index('function renderMode()'):original.index('function renderPair(')]
-    original = original.replace(mode, '').replace('  renderMode();\n', '').replace(
-        " // the worker is null while automatic: the manager picks per task, nothing here is pressed", '').replace(
-        'pair?.model', 'pair.model')
-    original = original.replace(
-        "addModel(models,m,`${label} ${m.name}`,pair.model===m.model,\n      ()=>changeModels(c=>{c[role]??={...c.manual};selectModel(c[role],m);}),",
-        "addModel(models,m,`${label} ${m.name}`,pair.model===m.model,()=>changeModels(c=>selectModel(c[role],m)),")
-    assert digest(original) == '0f9636add8a325e38e941cd2cbd208cbe62166026b1cbd16653729746f5da106'
+def test_client_code_is_the_reviewed_picker_with_project_scoped_worker_persistence():
+    # Hash the whole client, including the added scope capture, persisted effective worker and reset action.
+    # The unchanged markup/style hashes above and rendered geometry checks retain the original design contract.
+    assert digest(_js()) == 'ff6a6439032fc742ab7201bbd3722bb5fb2fcc7d6600a0892708cc1418e72bcb'
 
 
 def test_automatic_exists_only_as_the_manual_automatic_switch():
@@ -59,3 +48,9 @@ def test_automatic_exists_only_as_the_manual_automatic_switch():
         assert 'worker-auto' not in text and 'Automatic' not in text, path.name  # no stray "Automatic" row or button
     js = _js()
     assert js.count("['manual','automatic']") == 1 and "`Worker ${titleLevel(value)}`" in js
+
+
+def test_no_overlapping_pin_global_or_permitted_pairs_controls():
+    js = _js().lower()
+    assert 'pin' not in js and 'permitted' not in js and 'allowed_pairs' not in js
+    assert "modelbutton('global'" not in js and "modelbutton('pin'" not in js

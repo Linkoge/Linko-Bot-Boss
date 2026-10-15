@@ -211,3 +211,83 @@ def test_picker_stays_compact_with_the_real_catalog_shape(page):
         assert page.locator(f'{section} button').count() == 12
     assert page.locator('#model-dialog button[data-choice]').count() == 12 * 2 + 2 + 2 * 2
     page.locator('#model-close').click()
+
+
+def test_project_picker_persists_its_effective_worker_and_clear_follows_default(page, browser_context):
+    _, _, root = browser_context
+    projects = []
+    for name in ('override-one', 'override-two'):
+        path = root / 'projects' / name
+        path.mkdir()
+        projects.append(page.evaluate("path=>api('/api/projects',{method:'POST',body:JSON.stringify({path})})", str(path))['id'])
+    one, two = projects
+    original = saved(page)
+    page.evaluate("choice=>api('/api/model-settings',{method:'PUT',body:JSON.stringify(choice)})",
+                  {**original, 'worker': {'model': SOL, 'effort': 'medium'}})
+
+    def select(project):
+        page.evaluate('id=>selectProject(id)', project)
+        open_panel(page)
+
+    def panel(project):
+        return page.evaluate("id=>api('/api/model-settings?project_id='+id)", project)
+
+    select(one)
+    assert pressed(page, '#worker-choices') == ['Sol', 'Medium', 'Following default worker']
+    assert page.locator('[data-choice="worker-default"]').is_disabled()
+    choose(page, 'worker-Luna')
+    choose(page, 'worker-codex-high')
+    assert panel(one)['worker_selection']['worker'] == {'model': LUNA, 'effort': 'high'}
+    assert saved(page)['worker'] == {'model': SOL, 'effort': 'medium'}
+    page.locator('#model-close').click()
+    # An unavailable project refresh must never enable the previous project's cached selection.
+    page.evaluate('id=>selectProject(id)', two)
+    failed_url = '**/api/model-settings?project_id=' + two
+    page.route(failed_url, lambda route: route.fulfill(status=503, json={'detail': 'Refresh unavailable'}))
+    open_panel(page)
+    assert page.locator('#worker-choices button').count() == 0
+    assert page.locator('#worker-mode button').count() == 0
+    assert panel(one)['worker_selection']['worker'] == {'model': LUNA, 'effort': 'high'}
+    page.locator('#model-close').click()
+    page.unroute(failed_url)
+    open_panel(page)
+    assert pressed(page, '#worker-choices') == ['Sol', 'Medium', 'Following default worker']
+    assert panel(two)['project_worker']['override'] is None
+    page.locator('#model-close').click()
+    page.reload()
+    page.wait_for_function('()=>state.ready&&!!state.history')
+    select(one)
+    assert pressed(page, '#worker-choices') == ['Luna', 'High']
+    # Editing and recalling a manager favorite stays global and preserves this project's worker and scope.
+    choose(page, 'manager-Sonnet')
+    choose(page, 'favorite-insert-1')
+    choose(page, 'manager-Sol')
+    choose(page, 'favorite-recall-1')
+    page.wait_for_function('()=>!modelSaving')
+    open_panel(page)
+    assert page.evaluate('()=>modelPanel.project_id') == one
+    assert pressed(page, '#worker-choices') == ['Luna', 'High']
+    assert saved(page)['manager']['model'] == SONNET
+    # Manual/Automatic stays independent in each scope; clearing is a separate operation from Automatic.
+    choose(page, 'worker-automatic')
+    assert pressed(page, '#worker-mode') == ['Automatic'] and pressed(page, '#worker-choices') == []
+    assert panel(one)['project_worker']['override']['worker'] is None
+    choose(page, 'worker-manual')
+    assert pressed(page, '#worker-choices') == ['Luna', 'High']
+    choose(page, 'worker-default')
+    assert pressed(page, '#worker-choices') == ['Sol', 'Medium', 'Following default worker']
+    page.locator('#model-close').click()
+    now = saved(page)
+    page.evaluate("choice=>api('/api/model-settings',{method:'PUT',body:JSON.stringify(choice)})",
+                  {**now, 'worker': {'model': 'gpt-6-astra', 'effort': 'low'}})
+    page.reload()
+    page.wait_for_function('()=>state.ready&&!!state.history')
+    for project in (one, two):
+        select(project)
+        assert pressed(page, '#worker-choices') == ['Astra', 'Low', 'Following default worker']
+        assert panel(project)['project_worker']['override'] is None
+        page.locator('#model-close').click()
+    # Leave the shared browser fixture in its original global context and settings.
+    now = saved(page)
+    page.evaluate("choice=>api('/api/model-settings',{method:'PUT',body:JSON.stringify(choice)})", {**original, 'revision': now['revision']})
+    page.evaluate('()=>selectProject(null)')

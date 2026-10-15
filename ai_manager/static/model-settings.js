@@ -1,6 +1,9 @@
 'use strict';
 let modelPanel=null,modelSaving=false,modelOpener=null,modelPending=0,modelOpenVersion=0,modelOpening=false;
 const modelDialog=$('model-dialog');
+function modelScope(project){return project?'?project_id='+encodeURIComponent(project):'';}
+function modelURL(project=modelPanel?.project_id){return '/api/model-settings'+modelScope(project);}
+function clearModels(){for(const id of ['manager-choices','worker-choices','worker-mode','manager-favorites'])$(id).replaceChildren();}
 const PROVIDER_LOGOS={
   codex:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>',
   claude:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z"/></svg>'};
@@ -15,6 +18,7 @@ function modelButton(text,label,selected,run,disabled=false){
   const b=element('button',text);b.type='button';b.setAttribute('aria-label',label);b.setAttribute('aria-pressed',String(selected));b.disabled=disabled||modelSaving||modelOpening;b.onclick=run;return b;
 }
 function modelMutation(run){
+  const project=modelPanel.project_id;
   modelPending++;modelSaving=true;$('model-save-status').textContent='Saving settings';
   modelDialog.querySelectorAll('button[data-choice]').forEach(b=>b.disabled=true);
   return orderModelIntent(async()=>{
@@ -23,7 +27,7 @@ function modelMutation(run){
     }catch(error){
       modelSelectionError='Model selection could not be confirmed: '+error.message;
       $('model-error').textContent=modelSelectionError;$('model-save-status').textContent='Selection not confirmed';notice(modelSelectionError);
-      try{modelPanel=await api('/api/model-settings');setProviderIcon(modelPanel.provider);}
+      try{modelPanel=await api(modelURL(project));setProviderIcon(modelPanel.provider);}
       catch{notice(modelSelectionError+' Saved settings could not be refreshed; reopen settings when connected.');}
     }finally{modelPending--;modelSaving=modelPending>0;if(modelPanel)renderModels();}
   });
@@ -31,14 +35,29 @@ function modelMutation(run){
 function recallManagerFavorite(slot){
   if(modelSaving||modelOpening||!modelPanel.favorites[slot]?.available)return;
   modelDialog.close();modelOpener?.focus({preventScroll:true}); // Close and restore focus in this click turn, before starting network work.
-  modelMutation(async()=>{const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);try{modelPanel=await api(`/api/manager-favorites/${slot}/recall`,{method:'POST',signal:controller.signal});}finally{clearTimeout(timeout);}});
+  const project=modelPanel.project_id;
+  modelMutation(async()=>{const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);try{modelPanel=await api(`/api/manager-favorites/${slot}/recall`+modelScope(project),{method:'POST',signal:controller.signal});}finally{clearTimeout(timeout);}});
 }
 async function changeModels(change){
+  const project=modelPanel.project_id;
   return modelMutation(async()=>{
     const next=structuredClone(modelPanel.settings);change(next);
-    modelPanel.settings=await api('/api/model-settings',{method:'PUT',body:JSON.stringify(next)});
-    modelPanel.provider=providerOf(modelPanel.settings.manager.model);
+    await api('/api/model-settings',{method:'PUT',body:JSON.stringify(next)});
+    modelPanel=await api(modelURL(project));
   });
+}
+function changeWorker(change){
+  if(!modelPanel.project_id)return changeModels(change);
+  const project=modelPanel.project_id,revision=modelPanel.project_worker.revision;
+  const next=structuredClone(modelPanel.worker_selection);change(next);
+  if(next.worker)next.manual=next.worker;
+  return modelMutation(async()=>{modelPanel=await api(`/api/projects/${encodeURIComponent(project)}/worker-model`,
+    {method:'PUT',body:JSON.stringify({revision,override:next})});});
+}
+function clearWorkerOverride(){
+  const project=modelPanel.project_id,revision=modelPanel.project_worker.revision;
+  return modelMutation(async()=>{modelPanel=await api(`/api/projects/${encodeURIComponent(project)}/worker-model`,
+    {method:'PUT',body:JSON.stringify({revision,override:null})});});
 }
 function providerOf(model){return /^claude-|^(Haiku|Sonnet|Opus)$/.test(model)?'claude':'codex';}
 function modelRow(label){const row=element('div',undefined,'model-choice-row');row.setAttribute('role','group');row.setAttribute('aria-label',label);return row;}
@@ -52,32 +71,40 @@ function addEffort(row,e,label,selected,run,disabled,key){
 function selectModel(pair,m){pair.model=m.model;if(!m.levels.includes(pair.effort))pair.effort=m.levels[0];}
 const PICKER_LEVELS=['low','medium','high'];
 function renderMode(){
-  const mode=$('worker-mode'),automatic=!modelPanel.settings.worker;mode.replaceChildren();
+  const mode=$('worker-mode'),automatic=!modelPanel.worker_selection.worker;mode.replaceChildren();
   for(const value of ['manual','automatic']){
     const b=addChoice(mode,modelButton(titleLevel(value),`Worker ${titleLevel(value)}`,automatic===(value==='automatic'),
-      ()=>{if(automatic!==(value==='automatic'))changeModels(c=>{c.worker=value==='automatic'?null:c.manual;});}),`worker-${value}`);
+      ()=>{if(automatic!==(value==='automatic'))changeWorker(c=>{c.worker=value==='automatic'?null:c.manual;});}),`worker-${value}`);
     b.classList.add('effort-choice');
   }
 }
 function renderPair(container,role,label){
   container.replaceChildren();
-  const pair=modelPanel.settings[role]; // the worker is null while automatic: the manager picks per task, nothing here is pressed
+  const pair=role==='worker'?modelPanel.worker_selection.worker:modelPanel.settings.manager;
+  const change=role==='worker'?changeWorker:changeModels;
   for(const provider of ['codex','claude']){
     const {choices}=modelPanel.providers[provider];
     const models=modelRow(`${label} ${PROVIDER_NAMES[provider]} model`),levels=modelRow(`${label} ${PROVIDER_NAMES[provider]} effort`);
     const selected=choices.find(m=>m.model===pair?.model);
     for(const m of choices)addModel(models,m,`${label} ${m.name}`,pair?.model===m.model,
-      ()=>changeModels(c=>{c[role]??={...c.manual};selectModel(c[role],m);}),!m.levels.length,`${role}-${m.name}`);
+      ()=>change(c=>{c[role]??={...c.manual};selectModel(c[role],m);}),!m.levels.length,`${role}-${m.name}`);
     const all=[...PICKER_LEVELS,...(selected?.levels||[]).filter(e=>!PICKER_LEVELS.includes(e))]; // Low/Medium/High; only a selected off-family model adds its own
     for(const e of all)addEffort(levels,e,`${label} ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,!!selected&&pair.effort===e,
-      ()=>changeModels(c=>{c[role].effort=e;}),!selected?.levels.includes(e),`${role}-${provider}-${e}`);
+      ()=>change(c=>{c[role].effort=e;}),!selected?.levels.includes(e),`${role}-${provider}-${e}`);
     container.append(models,levels);
   }
 }
 function renderModels(){
+  if(modelPanel.project_id!==state.project){clearModels();return;}
   const focused=modelDialog.contains(document.activeElement)?document.activeElement.dataset.choice:null;
   renderPair($('manager-choices'),'manager','Manager');
   renderPair($('worker-choices'),'worker','Worker');
+  if(modelPanel.project_id){
+    const inherited=modelPanel.project_worker.override===null;
+    const reset=modelButton(inherited?'Following default worker':'Use default worker','Use default worker',inherited,
+      clearWorkerOverride,inherited);
+    reset.dataset.choice='worker-default';$('worker-choices').append(reset);
+  }
   renderMode();
   const favorites=$('manager-favorites');favorites.replaceChildren();
   const managerPair=modelPanel.settings.manager,canInsert=Object.values(modelPanel.providers).some(v=>v.choices.some(m=>m.model===managerPair.model&&m.levels.includes(managerPair.effort)));
@@ -105,17 +132,23 @@ function renderModels(){
 }
 function titleLevel(value){return value[0].toUpperCase()+value.slice(1);}
 async function openModels(event){
+  const project=state.project;
   const version=++modelOpenVersion;modelOpening=true;
   modelOpener=event?.currentTarget||$('model-settings-button');closeChatMenu();closeProjectMenu();
-  if(modelPanel)renderModels();$('model-error').textContent=modelSelectionError||'';
+  if(modelPanel?.project_id===project)renderModels();
+  else clearModels();
+  $('model-error').textContent=modelSelectionError||'';
   $('model-save-status').textContent=modelSaving?'Saving settings':'Loading settings';
   if(!modelDialog.open)modelDialog.showModal();modelDialog.scrollTop=0;$('model-close').focus({preventScroll:true});
   try{
     await orderModelIntent(async()=>{
-      const panel=await api('/api/model-settings');
-      if(version!==modelOpenVersion||!modelDialog.open)return;
+      const panel=await api(modelURL(project));
+      if(version!==modelOpenVersion||!modelDialog.open||project!==state.project)return;
       modelPanel=panel;setProviderIcon(panel.provider);modelOpening=false;renderModels();
     });
+  }catch(error){
+    if(version===modelOpenVersion){modelPanel=null;clearModels();$('model-save-status').textContent='Settings unavailable';}
+    throw error;
   }finally{if(version===modelOpenVersion){modelOpening=false;if(modelPanel)renderModels();}}
 }
 $('model-settings-button').onclick=action(openModels);

@@ -210,19 +210,29 @@ probes, live database changes, service restarts or host installation are part of
 
 - Chat has no modes: the manager does what is asked. Composer with recording/transcription,
   Discard/Upload, arbitrary attachments (only verified raster images become native image input), drafts and sequential Send.
-- Model settings: one manager choice and one worker choice, independent of each other (a Claude manager can have a Codex
-  worker). The picker is the layout deployed at `208554a` (Manager, Worker, Favorites; per provider a model row and an effort
+- Model settings: one global manager choice and one default worker choice, independent of each other (a Claude manager can
+  have a Codex worker). Each project can optionally override the worker; an empty override follows the current global
+  `model_choice` worker. In a project, picking a worker saves only that project's override. **Use default worker** clears it;
+  **Following default worker** indicates inheritance. Manager edits and favorites remain global and leave worker overrides
+  alone. The picker is the layout deployed at `208554a` (Manager, Worker, Favorites; per provider a model row and an effort
   row; three families in fixed order - Codex Luna, Sol, Astra; Claude Haiku, Sonnet, Opus - each as its newest installed model,
   with Low/Medium/High; a family missing from the catalog shows disabled) plus the **Manual | Automatic** switch in the Worker
-  heading row, drawn exactly as the Bot switch of `81711bd` was. Automatic stores the worker as null (`model_choice.worker`);
-  the last fixed worker is kept as `manual` and returns when Manual is chosen. While Automatic, a new task runs on the pick the
+  heading row, drawn exactly as the Bot switch of `81711bd` was. Automatic stores the worker as null in the selected scope;
+  the last fixed worker is kept as `manual` and returns when Manual is chosen. Project settings use one revisioned
+  `project_worker:<project_id>` setting: `override: null` means inheritance; an explicit `{worker, manual}` selection can
+  itself be Automatic (`worker: null`). `GET /api/model-settings?project_id=...` returns the global `settings`, the persisted
+  `project_worker`, and the effective `worker_selection`. `PUT /api/projects/{id}/worker-model` saves `{revision, override}`;
+  `PUT /api/model-settings` continues to save global defaults. There are no Pin/Global controls or permitted-pair policies.
+  While Automatic, a new task runs on the pick the
   manager passes with `delegate` (`model`/`effort`, any catalog provider/model/effort; the provider default for what it leaves
   out) and the manager is told the available catalog; a fixed worker always wins. Dispatch accepts any model and effort the
   provider catalog offers (`PUT /api/model-settings`); what the panel shows is what is saved and dispatched. A saved or
   favorited model outside the families is added as one extra button (with its own efforts) while selected. A task keeps the
   pair it first ran on and each run records the model and effort actually used. Two manager favorites. Pinned by
-  `tests/test_model_picker_ui.py` (markup, styles and code against those revisions) and `tests/test_model_picker_browser.py`
-  (rendered geometry at 1200/393/320, persistence, independence, favorites, Send). Evidence and the comparison with
+  `tests/test_model_picker_ui.py` (original markup/styles and reviewed client code) and `tests/test_model_picker_browser.py`
+  (rendered geometry at 1200/393/320, persistence, project isolation/clearing, independence, favorites, Send).
+  `tests/test_project_worker_models.py` verifies reloads, inherited defaults, overrides, direct tasks, delegation and actual
+  thread/turn arguments plus execution/task route evidence for separate projects. Evidence and the comparison with
   `81711bd`, `208554a` and `db292c6`: `docs/evidence/model-picker/` (`FINDINGS.md`, `side-by-side-*.png`).
 - Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
   To-Do to a task); read-only project memory brief for the manager with owner-run review; chat clear/trash/archive/search.

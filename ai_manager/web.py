@@ -399,16 +399,28 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return await audio.transcribe(request)
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
-    async def model_settings():
-        from .model_settings import active, choices, current, favorites
+    async def model_settings(project_id: str | None = None):
+        from .model_settings import active, choices, current, favorites, project_worker
         try:
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
+        project_choice = project_worker(db, project_id) if project_id else None
         saved, marked = current(db, chat.server), favorites(db, chat.server)
-        keep = {pair["model"] for pair in (saved["manager"], saved["worker"], *(f["pair"] for f in marked if f)) if pair}
+        effective = current(db, chat.server, project_id)
+        keep = {pair.get("model") for pair in (saved["manager"], effective['worker'],
+                                               *(f["pair"] for f in marked if f)) if pair}
         return {"provider": active(db), "settings": saved, "favorites": marked,
+                "project_id": project_id, "project_worker": project_choice,
+                "worker_selection": {k: effective[k] for k in ('worker', 'manual')},
                 "providers": {p: {"choices": choices(chat.server, p, keep)} for p in ("codex", "claude")}}
+
+    @app.put("/api/projects/{project_id}/worker-model", dependencies=[Depends(require_owner)])
+    async def save_worker_override(project_id: str, body: dict):
+        from .model_settings import save_project_worker
+        await chat.server.start()
+        save_project_worker(db, chat.server, project_id, body)
+        return await model_settings(project_id)
 
     @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
     async def save_model_settings(body: dict):
@@ -425,12 +437,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return insert_favorite(db, chat.server, slot)
 
     @app.post("/api/manager-favorites/{slot}/recall", dependencies=[Depends(require_owner)])
-    async def recall_manager_favorite(slot: int):
+    async def recall_manager_favorite(slot: int, project_id: str | None = None):
         from .model_settings import recall_favorite
         await chat.server.start()
         recall_favorite(db, chat.server, slot)
         account_usage.invalidate()
-        return await model_settings()
+        return await model_settings(project_id)
 
     @app.put("/api/settings/instructions", dependencies=[Depends(require_owner)])
     def global_instructions(body: InstructionsBody):

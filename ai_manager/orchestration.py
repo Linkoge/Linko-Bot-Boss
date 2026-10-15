@@ -210,7 +210,7 @@ class Scheduler:
                 raise ValueError("Use continue to add instructions to an existing task")
             from .model_settings import delegation
             await self.chat.server.start()
-            route = delegation(self.db, self.chat.server, args.get("model"), args.get("effort"))
+            route = delegation(self.db, self.chat.server, args.get("model"), args.get("effort"), project_id)
             task = self.tasks.add(
                 project_id, args["objective"], params["conversation_id"],
                 f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",

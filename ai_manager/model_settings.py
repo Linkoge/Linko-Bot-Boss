@@ -1,7 +1,8 @@
 """One manager choice and one worker choice, any provider, model and effort the catalog offers, independent of each other.
 What the panel shows is what is saved and dispatched: manager turns use the saved manager pair; a new task runs on the saved
 worker pair or, when the worker is Automatic (null), on whatever the manager picks for it. `manual` remembers the last fixed
-worker so switching Automatic off restores it. A task keeps the pair it first ran on."""
+worker so switching Automatic off restores it. An optional project worker selection replaces only the worker choice;
+an empty override follows the global choice. A task keeps the pair it first ran on."""
 import copy
 import json
 import re
@@ -69,10 +70,21 @@ def choices(server, provider, extra=()):
     return result
 
 
-def current(db, server=None):
+def project_worker(db, project_id):
+    """One project's optional worker selection, never seeded from another project or a UI's last selection."""
+    if not db.one('SELECT id FROM projects WHERE id=?', (project_id,)):
+        raise ValueError('Unknown project')
+    return db.setting('project_worker:' + project_id, {'revision': 0, 'override': None})
+
+
+def current(db, server=None, project_id=None):
     """The saved choice; a role saved without a model shows the provider's default model. `manual` is the fixed worker
     Automatic is switched back to."""
     value = copy.deepcopy(saved(db))
+    if project_id:
+        override = project_worker(db, project_id)['override']
+        if override is not None:
+            value.update(copy.deepcopy(override))
     value['manual'] = value.get('manual') or value['worker'] or DEFAULT['worker']
     for role in ('manager', 'worker', 'manual'):
         if server and value[role] and not value[role].get('model'):
@@ -81,6 +93,28 @@ def current(db, server=None):
             except ValueError:
                 pass
     return value
+
+
+def save_project_worker(db, server, project_id, value):
+    """Null override inherits; an explicit selection uses the existing Manual/Automatic worker semantics."""
+    if (not isinstance(value, dict) or set(value) != {'revision', 'override'}
+            or type(value['revision']) is not int or value['revision'] < 0):
+        raise ValueError('Invalid project worker settings')
+    override = value['override']
+    if override is not None:
+        if not isinstance(override, dict) or set(override) != {'worker', 'manual'}:
+            raise ValueError('Invalid project worker override')
+        worker = None if override['worker'] is None else validate_pair(server, override['worker'])
+        override = {'worker': worker, 'manual': worker or validate_pair(server, override['manual'])}
+    with db.transaction() as conn:
+        before = project_worker(db, project_id)
+        if before['revision'] != value['revision']:
+            raise ValueError('Settings changed; reopen the panel before editing')
+        new = {'revision': value['revision'] + 1, 'override': override}
+        conn.execute('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                     ('project_worker:' + project_id, json.dumps(new)))
+        db.event(conn, 'models.project_worker_saved', new, project_id)
+    return new
 
 
 def validate_pair(server, pair):
@@ -113,17 +147,17 @@ def manager_route(db):
     return saved(db)['manager']
 
 
-def delegation(db, server, model=None, effort=None):
+def delegation(db, server, model=None, effort=None, project_id=None):
     """The pair a new task runs on: the saved worker, or, when the worker is Automatic, the manager's pick
     (the provider's default model and effort for whatever it leaves out)."""
-    if worker := saved(db)['worker']:
+    if worker := current(db, project_id=project_id)['worker']:
         model, effort = worker.get('model'), worker['effort']
     return server.route(model, effort)
 
 
-def worker_context(db, server):
+def worker_context(db, server, project_id=None):
     """What the manager is told about the worker: the fixed pair, or the catalog to pick from when Automatic."""
-    return current(db, server)['worker'] or {
+    return current(db, server, project_id)['worker'] or {
         'automatic': 'pass model and effort to delegate; leave them out for the provider default',
         'available': {m['model']: [e['reasoningEffort'] for e in m['supportedReasoningEfforts']]
                       for m in server.catalog if not m.get('hidden')}}
@@ -137,7 +171,7 @@ def assignment_route(db, server, task):
     else:
         prior = db.one("SELECT model,effort FROM executions WHERE task_id=? AND model IS NOT NULL ORDER BY started_at LIMIT 1", (task['id'],))
         try:
-            selected = prior or delegation(db, server)
+            selected = prior or delegation(db, server, project_id=task['project_id'])
         except ValueError as error:
             raise RouteBlocked(str(error)) from error
         with db.transaction() as conn:
