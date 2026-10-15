@@ -226,13 +226,7 @@ def test_watchdog_stuck_task_and_pending_owner_question(repair):
 
 
 def test_installed_snapshot_runs_with_no_application_or_venv(tmp_path):
-    spec = importlib.util.spec_from_file_location('install_repair', ROOT / 'scripts/install_repair.py')
-    module = importlib.util.module_from_spec(spec)
-    sys.path.insert(0, str(ROOT / 'scripts'))
-    try:
-        spec.loader.exec_module(module)
-    finally:
-        sys.path.pop(0)
+    module = load_installer()
     data, home = tmp_path / 'data', tmp_path / 'home'
     launcher = module.install(ROOT, data, home, 'origin', activate=False)
     config = json.loads((data / 'repair/installed.json').read_text())
@@ -249,6 +243,69 @@ def test_installed_snapshot_runs_with_no_application_or_venv(tmp_path):
     assert '.venv' not in service and 'Requires=' not in service and 'PartOf=' not in service
     assert 'ExecStart=/usr/bin/python3 ' in service or 'ExecStart=/usr/local/bin/python3 ' in service
     assert 'KillMode=control-group' in service
+
+
+def load_installer():
+    spec = importlib.util.spec_from_file_location('install_repair', ROOT / 'scripts/install_repair.py')
+    module = importlib.util.module_from_spec(spec)
+    sys.path.insert(0, str(ROOT / 'scripts'))
+    try:
+        spec.loader.exec_module(module)
+    finally:
+        sys.path.pop(0)
+    return module
+
+
+def test_install_status_uninstall_are_idempotent_and_independent(tmp_path, monkeypatch):
+    module = load_installer()
+    data, home = tmp_path / 'data', tmp_path / 'home'
+    calls = []
+    monkeypatch.setattr(module, 'systemctl', lambda *a, check=True: calls.append(a) or
+                        subprocess.CompletedProcess(a, 0, 'enabled', ''))
+    monkeypatch.setenv('AI_MANAGER_DATA', str(data))
+    monkeypatch.setattr(module.Path, 'home', classmethod(lambda cls: home))
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0))
+    units = home / '.config/systemd/user'
+
+    module.main(['install', '--conversation', 'origin', '--auto-detect'])
+    first = {p.name: p.read_text() for p in units.iterdir()}
+    assert set(first) == set(module.UNITS)
+    service, timer = first[module.UNITS[0]], first[module.UNITS[1]]
+    assert 'Requires=' not in service and 'PartOf=' not in service and 'After=linko-bot-manager.service' not in service
+    assert 'linko-bot-manager.service' not in timer and 'OnUnitInactiveSec=60' in timer and 'WantedBy=timers.target' in timer
+    assert ('enable', '--now', module.TIMER) in calls
+
+    module.main(['install'])  # reinstall keeps the stored conversation and rewrites identical units
+    assert {p.name: p.read_text() for p in units.iterdir()} == first
+    config = json.loads((data / 'repair/installed.json').read_text())
+    assert config['conversation_id'] == 'origin' and config['auto_detect'] is False
+
+    state = module.status(data, home)
+    assert state['installed'] and state['enabled'] == 'enabled' and state['conversation'] == 'origin'
+
+    (data / 'repair/requests').mkdir()
+    (data / 'repair/requests/keep.json').write_text('{}')
+    module.main(['uninstall'])
+    module.main(['uninstall'])
+    assert not list(units.iterdir()) and not (data / 'repair/launcher.py').exists()
+    assert (data / 'repair/requests/keep.json').exists()
+    assert not module.status(data, home)['installed']
+    with pytest.raises(SystemExit):
+        module.main(['install'])  # no stored or given conversation
+
+
+def test_installed_watchdog_requests_repair_while_main_service_is_down(tmp_path):
+    module = load_installer()
+    data, home = tmp_path / 'data', tmp_path / 'home'
+    launcher = module.install(ROOT, data, home, 'origin', auto_detect=True, activate=False)
+    config = json.loads((data / 'repair/installed.json').read_text())
+    config.update(url='http://127.0.0.1:9', stuck_seconds=1, codex_bin=fake_cli(tmp_path, 'print("Recovered")\n'))
+    atomic(data / 'repair/installed.json', config)
+    atomic(data / 'repair/monitor.json', {'down_since': time.time() - 5})
+    subprocess.run([sys.executable, '-I', str(launcher), '--data', str(data), 'tick'], check=True, timeout=30,
+                   capture_output=True)
+    rows = [json.loads(p.read_text()) for p in (data / 'repair/requests').glob('*.json')]
+    assert len(rows) == 1 and rows[0]['key'].startswith('watchdog:outage:')
 
 
 def test_inherited_lock_prevents_duplicate_after_parent_crash(repair, tmp_path):

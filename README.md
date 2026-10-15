@@ -71,17 +71,22 @@ not a sandbox; ordinary repairs/restarts are authorized by the repair request.
 **One-time operator bootstrap is required after this code is merged.** From the live checkout, as the service user:
 
 ```bash
-python3 scripts/install_repair.py --conversation EXACT_EXISTING_CHAT_ID --provider codex --auto-detect
+python3 scripts/install_repair.py install --conversation EXACT_EXISTING_CHAT_ID --auto-detect   # install / update
+python3 scripts/install_repair.py status                                                        # JSON state
+python3 scripts/install_repair.py uninstall                                                     # remove timer + launcher
 ```
 
-Omit `--auto-detect` for explicit requests only. An optional `--model` passes the exact model directly to the CLI;
-Claude uses `--provider claude`. The installer copies a standalone launcher to `DATA/repair/launcher.py` outside the
-checkout/venv and enables independent `linko-bot-manager-repair.service` and `.timer` user units. It does not deploy
-or restart the application. Re-run it to update that snapshot after launcher changes. It uses the same optional
+Omit `--auto-detect` for explicit requests only. Re-running `install` is idempotent: it rewrites the units, refreshes
+the launcher snapshot and reuses the stored chat ID if `--conversation` is omitted. An optional `--model` passes the
+exact model directly to the CLI; Claude uses `--provider claude`. `status` reports installed/enabled/active state and
+the stored settings. `uninstall` disables the timer and removes the units, launcher and config but keeps request
+receipts and logs. The installer copies a standalone launcher to `DATA/repair/launcher.py` outside the
+checkout/venv and enables independent `linko-bot-manager-repair.service` and `.timer` user units (no dependency on
+`linko-bot-manager.service`). It does not deploy or restart the application, and tries `loginctl enable-linger` (it
+prints a warning if the host refuses; run it yourself for operation after logout/reboot). It uses the same optional
 `~/.config/linko-bot-manager.env`; configure provider executable paths/login for that host user. The host needs
-Python 3, Linux flock/process groups, writable durable DATA, and a working user systemd manager. For unattended
-operation after logout/reboot, that user needs lingering enabled by the operator (`loginctl enable-linger USER`,
-subject to host permissions). Installation, lingering and real provider authorization are **not** activated or verified
+Python 3, Linux flock/process groups, writable durable DATA, and a working user systemd manager. Installation,
+lingering and real provider authorization are **not** activated or verified
 by repository tests or by the implementing worker. A dead host, lost storage, unavailable provider login or broken
 systemd cannot be repaired by a timer on that host. The launcher remains manually callable without systemd.
 
