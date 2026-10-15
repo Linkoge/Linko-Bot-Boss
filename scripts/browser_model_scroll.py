@@ -75,12 +75,17 @@ def main():
                 assert page.locator('#model-settings-button').count() == 1
                 page.locator('#model-settings-button').click()
                 page.locator('#model-dialog').wait_for(state='visible')
+                page.wait_for_function('()=>!!modelPanel&&!modelOpening')
                 assert page.locator('#manager-choices > div').count() == 4
                 assert page.locator('#model-dialog svg').count() == 0
                 assert page.locator('.favorite-row').count() == 2
                 def choice(key, error=None):
                     page.locator(f'[data-choice="{key}"]').click()
                     page.wait_for_function('()=>!modelSaving')
+                    if key.startswith('favorite-recall-'):
+                        assert not page.locator('#model-dialog').is_visible()
+                        page.locator('#model-settings-button').click()
+                        page.wait_for_function('()=>!modelOpening&&modelDialog.open')
                     message = page.locator('#model-error').inner_text()
                     assert (error in message) if error else message == '', message
                 def settings():

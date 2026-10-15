@@ -433,10 +433,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return insert_favorite(db, chat.server, slot)
 
     @app.post("/api/manager-favorites/{slot}/recall", dependencies=[Depends(require_owner)])
-    async def recall_manager_favorite(slot: int):
+    async def recall_manager_favorite(slot: int, body: dict | None = None):
         from .model_settings import recall_favorite
         await chat.server.start()
-        recall_favorite(db, chat.server, slot)
+        recall_favorite(db, chat.server, slot, expected=body)
         account_usage.invalidate()
         return await model_settings()
 

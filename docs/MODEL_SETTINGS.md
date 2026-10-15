@@ -48,9 +48,22 @@ but Insert remains usable. Favorites persist across reloads and restarts. Recogn
 resolve to the current supported model; missing families or unsupported saved efforts remain unavailable,
 with recall disabled until replaced through Insert. No silent cross-family or effort fallback on recall.
 
+A valid favorite click now closes the selector synchronously and restores opener focus, then saves
+in the background. Insert continues to keep the selector open. Settings writes, settings-open reads
+and owner chat acceptance use one browser intent order; fast Send waits for the pending selection.
+Ordinary Send, parallel Send, recording Send and To-Do Start use the same acceptance gate. The
+server still pins the Manager pair at chat acceptance. A failed/unconfirmed selection blocks Send,
+keeps its draft/attachments, shows a notice outside the closed modal and refreshes actual saved
+settings. An explicit confirmed settings choice clears that block. Reopening during a save displays
+disabled choices until its ordered refresh finishes; closing a pending open invalidates its response.
+Recall has a 15-second client deadline and sends the expected favorite provider/pair and provider
+revision. A late request cannot overwrite a newer confirmed settings change or a replaced slot.
+No automatic recall retry or duplicate save is introduced.
+
 Authenticated/CSRF-protected endpoints are GET/PUT `/api/model-settings`, PUT
 `/api/manager-favorites/{0|1}` (copy current Manager) and POST
-`/api/manager-favorites/{0|1}/recall`. Model-settings PUT accepts optional boolean `activate`;
+`/api/manager-favorites/{0|1}/recall` (optional expected `provider`, `pair`, `revision` body for
+late-request/conflict fencing; existing no-body API calls remain compatible). Model-settings PUT accepts optional boolean `activate`;
 revision validation and provider activation commit with the settings. PUT `/api/bot-mode` takes
 `mode` and both provider `revisions`, committing available providers together or rolling back on failure. Existing provider and role APIs remain.
 Responsive layouts keep controls within panel width; short viewports permit ordinary vertical modal scrolling.
