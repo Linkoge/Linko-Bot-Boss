@@ -43,6 +43,41 @@ Owner controls on a task: **Hold / Release** (queued), **Cancel** (queued or run
 **Continue** (failed or done task: appends instructions, re-queues at the end, counters stay). A worker may ask the owner a
 question; the task stays running and says so. Finished results return to the originating chat automatically.
 
+## Architecture design principles
+
+This section is included verbatim in the manager prompt. It is advisory only: briefly evaluate each new feature
+against it and warn of concrete complexity or reliability risks (extra states, conflicting settings, hidden routing,
+unbounded waits). Advice never blocks answering, delegation or delivery, requires no approval or review receipt,
+and adds no model or routing restrictions. Proceed with the owner's requested work.
+
+Prefer deletion and one clear path. Add no new gate without a concrete incident it prevents; speculative safeguards
+create their own failure modes. Keep one source per setting and **shown = saved = dispatched** across reload and execution.
+No feature should stall the global sequential queue; keep waits visible, bounded and recoverable.
+
+Deliberately removed machinery and its replacements:
+
+- **Model restrictions / permitted pairs; Pin/Global:** hidden pair policies and overlapping controls could reject or
+  misrepresent a saved choice. Manager and worker are independent; any installed catalog model/effort is valid.
+  One global manager and default worker remain, with one optional project worker override that can follow the default.
+  Manual fixes the worker; Automatic lets the manager choose from the catalog. A task retains its first execution pair.
+- **Auto-deploy toggle:** a second delivery policy could strand passing work. Passing Git branches always merge;
+  the manager's own project requests deployment automatically, other projects merge only. Explicit deploy remains available.
+- **Repair checkpoints:** extra stop/resume states obscured progress. Permanent checks return failures to the same
+  worker for at most five durable repair rounds; retry, restart and Continue never reset that counter.
+- **Delivery/brief bookkeeping:** manager-written delivery receipts and brief-upkeep actions duplicated application
+  state. The application records results and returns them to the originating chat. The project brief remains read-only
+  navigation for the manager, with owner-run review; it is not assignment authority or a delivery prerequisite.
+- **Chat modes; tiered/review machinery:** mode switches, helper/reviewer tiers and integration/follow-up paths
+  multiplied handoffs and waiting states. The manager answers, inspects or delegates as asked to one worker queue;
+  permanent checks and the existing secret check remain, with no separate architecture approval stage.
+- **Deploy blocking the queue:** checkout safety still pauses new tasks and merges while a deploy is pending.
+  Before backup, a 30-minute deadline withdraws a stuck request and releases the queue; after backup, deployment finishes
+  or rolls back. Queued, held and retry-delayed tasks do not block restart; active work does. Preserve this bounded behavior.
+
+Ship small rollouts: replace one path at a time and delete the old path in the same change, updating its tests and docs
+in place. Give a one-line before/after summary, for example: "Before: two worker selectors could disagree; after:
+one saved selection drives display and dispatch."
+
 ## GitHub backups and secret checks
 
 The owner has authorized automatic application pushes, including verified existing backlog. Every Git project uses its

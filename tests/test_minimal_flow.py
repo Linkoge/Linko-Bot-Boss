@@ -9,7 +9,7 @@ import pytest
 from fake_codex import FakeServer
 
 from ai_manager.chat import Chat
-from ai_manager.codex import MANAGER_INSTRUCTIONS, RULES, AppServer, safe_config
+from ai_manager.codex import ARCHITECTURE_GUIDE, MANAGER_INSTRUCTIONS, RULES, AppServer, safe_config
 from ai_manager.config import Settings
 from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
@@ -558,7 +558,8 @@ def test_manager_and_worker_instructions_describe_only_the_current_behaviour():
     properties = MANAGER_TOOL["inputSchema"]["properties"]
     assert not {"mode", "brief", "retained", "resolved", "entry", "evidence", "deployment_receipt", "revision"} & set(properties)
     assert properties["todos"]["items"] == {"type": "string"} and {"model", "effort"} <= set(properties)
-    text = MANAGER_INSTRUCTIONS + MANAGER_TOOL["description"]
+    # The advisory guide names removed machinery to explain it; operational instructions must not reintroduce it.
+    text = MANAGER_INSTRUCTIONS.removesuffix(ARCHITECTURE_GUIDE) + MANAGER_TOOL["description"]
     for gone in ("Auto-deploy", "checkpoint", "Execute", "Conversation mode", "record_delivery", "update_brief", "revision"):
         assert gone not in text, gone
     assert "at most 5 rounds" in RULES and "checkpoint" not in RULES and "hard cap" not in RULES.lower()

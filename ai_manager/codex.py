@@ -11,6 +11,12 @@ from pathlib import Path
 from .config import Settings
 
 RULES = (Path(__file__).resolve().parents[1] / "RULES.md").read_text()
+# Keep the owner-facing guide and manager advice in one place; omit the rest of the README from the prompt.
+_GUIDE_HEADING = "## Architecture design principles\n"
+ARCHITECTURE_GUIDE = (_GUIDE_HEADING + (
+    (Path(__file__).resolve().parents[1] / "README.md").read_text()
+    .split(_GUIDE_HEADING, 1)[1].split("\n## ", 1)[0]
+)).strip()
 
 
 class CodexError(RuntimeError):
@@ -386,4 +392,4 @@ The project_brief in context is navigation, not authority: read authoritative do
 on demand. The owner runs brief reviews. Assignments carry objective, acceptance criteria, constraints and
 selected_context only; never paste the brief or transcripts into them. Fresh chats exclude archived transcripts;
 list_history/read_history retrieve them explicitly.
-"""
+""" + "\n" + ARCHITECTURE_GUIDE
