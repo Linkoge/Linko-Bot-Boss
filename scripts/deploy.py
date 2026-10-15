@@ -28,6 +28,7 @@ from ai_manager import fence  # noqa: E402
 IDLE = {
     'unfinished_executions': 'SELECT count(*) FROM executions WHERE finished_at IS NULL',
     'leases': 'SELECT count(*) FROM tasks WHERE lease_owner IS NOT NULL',
+    'running_tasks': "SELECT count(*) FROM tasks WHERE state='running'",
     'streaming_messages': "SELECT count(*) FROM messages WHERE status IN ('queued','streaming')",
     'deliveries': "SELECT count(*) FROM executions WHERE delivery='running'",
 }
@@ -89,7 +90,7 @@ class Deploy:
             stream.write(line + '\n')
 
     def state(self, phase, **extra):
-        atomic(self.root / 'state.json', {'id': self.id, 'phase': phase, 'at': time.time(), **extra})
+        atomic(self.root / 'state.json', {'id': self.id, 'phase': phase, 'at': time.time(), 'pid': os.getpid(), **extra})
         self.log('phase ' + phase)
 
     def git(self, *args, check=True):
@@ -119,7 +120,24 @@ class Deploy:
             return conn.execute(sql, args).fetchone()
 
     def busy(self):
-        return {name: n for name, sql in IDLE.items() if (n := self.query(sql)[0])}
+        # One SQLite snapshot; queued/held/backoff tasks are durable, not active writers.
+        with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=10) as conn:
+            conn.execute('BEGIN')
+            return {name: n for name, sql in IDLE.items() if (n := conn.execute(sql).fetchone()[0])}
+
+    def blockers(self):
+        """Bounded identities only: never log task input, output or credentials."""
+        checks = {
+            'executions': "SELECT id,task_id,agent_id,status,pid,started_at,retry_at,delivery FROM executions "
+                          "WHERE finished_at IS NULL OR delivery='running' LIMIT 20",
+            'tasks': "SELECT id,state,lease_owner,updated_at FROM tasks "
+                     "WHERE lease_owner IS NOT NULL OR state='running' LIMIT 20",
+            'messages': "SELECT id,execution_id,status FROM messages WHERE status IN ('queued','streaming') LIMIT 20",
+        }
+        with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=10) as conn:
+            conn.row_factory = sqlite3.Row
+            conn.execute('BEGIN')
+            return {name: [dict(row) for row in conn.execute(sql)] for name, sql in checks.items()}
 
     def check_request(self, request):
         """Withdrawn request, owner OFF or paused project all stop the deploy before anything changes."""
@@ -254,6 +272,7 @@ class Deploy:
                     raise Stop('failed', 'full backend suite failed: ' + (result.stdout + result.stderr).strip()[-300:])
             self.state('waiting_idle', commit=target)
             deadline = time.monotonic() + self.config.get('idle_seconds', 6 * 3600)
+            last_busy, reported_at = None, 0.0
             while True:
                 self.check_request(request)
                 busy = self.busy()
@@ -267,6 +286,11 @@ class Deploy:
                         fenced.close()
                     except fence.Busy:
                         busy = {'checkout': 1}
+                if busy != last_busy or time.monotonic() - reported_at >= 30:
+                    self.state('waiting_idle', commit=target, busy=busy, blockers=self.blockers())
+                    self.log('waiting for idle: ' + json.dumps(busy, sort_keys=True)
+                             + '; blockers: ' + json.dumps(self.blockers(), sort_keys=True))
+                    last_busy, reported_at = busy, time.monotonic()
                 if time.monotonic() >= deadline:
                     raise Stop('failed', 'not idle after waiting: ' + json.dumps(busy))
                 self.sleep(self.config.get('poll_seconds', 5))
@@ -327,8 +351,12 @@ class Deploy:
             try:
                 fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except OSError:
-                print('another deploy is running')
-                return None
+                # A PathExists unit immediately retriggers while request.json remains.
+                # Exiting here hot-loops it into start-limit-hit, losing the durable
+                # consumer if the manual owner subsequently dies. Wait, then re-read
+                # the request: either the owner finished or we safely take over.
+                print('another deploy is running; waiting for its lock', flush=True)
+                fcntl.flock(lock, fcntl.LOCK_EX)
             request = read(self.root / 'request.json')
             if not request:
                 print('no deploy requested')

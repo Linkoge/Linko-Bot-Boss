@@ -71,6 +71,7 @@ class Runner:
     def startup(self):
         """The service just started: resume interrupted work without penalty and drop backoff that may be stale."""
         core = self.core
+        self.reconcile_leases()
         for task in core.db.all("SELECT * FROM tasks WHERE state='running'"):
             self.stop_orphan(task["lease_owner"])
             self.give_back(task, "Resumed after a restart", penalty=False)
@@ -116,10 +117,42 @@ class Runner:
         started = db.one("SELECT started_at FROM executions WHERE id=?", (eid,))
         return max(row["at"] or 0, started["started_at"] if started else 0)
 
+    def reconcile_leases(self):
+        """Repair inconsistent receipts only after both the runner and owned process are gone.
+
+        Normal completion/requeue is atomic. Legacy or damaged rows can still
+        refer to a missing/terminal execution, which end/release cannot consume.
+        Retain the workspace and stage; retry once instead of inventing success.
+        """
+        core = self.core
+        for task in core.db.all("SELECT * FROM tasks WHERE lease_owner IS NOT NULL"):
+            eid = task["lease_owner"]
+            job = core.jobs.get(eid)
+            if (job and not job.done()) or eid in core.servers:
+                continue
+            execution = core.db.one("SELECT * FROM executions WHERE id=?", (eid,))
+            if execution and (execution["finished_at"] is None or owned_alive(execution)):
+                continue
+            with core.db.transaction() as conn:
+                current = conn.execute("SELECT * FROM tasks WHERE id=? AND lease_owner=?", (task["id"], eid)).fetchone()
+                if not current:
+                    continue
+                state, retries = current["state"], current["requeues"]
+                reason = "Recovered abandoned lease with missing or terminal run; workspace retained"
+                if state == "running":
+                    state = "queued" if retries < 1 else "failed"
+                    retries += 1
+                conn.execute("UPDATE tasks SET state=?,lease_owner=NULL,requeues=?,"
+                             "blocker=?,revision=revision+1,updated_at=? WHERE id=? AND lease_owner=?",
+                             (state, retries, reason, time.time(), task["id"], eid))
+                conn.execute("UPDATE questions SET status='expired' WHERE execution_id=? AND status='pending'", (eid,))
+                core.db.event(conn, "task.lease_recovered", {"state": state}, task["project_id"], task["id"], eid)
+
     async def watchdog(self):
         """Nothing may stay stuck silently: a dead or hung worker, a stale deploy request, a removed project."""
         core = self.core
         core.pipeline.expire()
+        self.reconcile_leases()
         for task in core.db.all("SELECT * FROM tasks WHERE state='running'"):
             eid, job = task["lease_owner"], core.jobs.get(task["lease_owner"])
             if job and not job.done():

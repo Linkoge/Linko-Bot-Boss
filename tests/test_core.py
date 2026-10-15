@@ -715,3 +715,63 @@ async def test_manager_controls_hold_release_cancel_continue_and_deploy_now(worl
     done = await run_next(world)
     assert done["state"] == "done" and done["merge"]["state"] == "skipped"
     assert (await act("deploy", task_id=done["id"]))["merge"] == "requested"
+
+
+@pytest.mark.parametrize('receipt', ['missing', 'completed', 'failed'])
+def test_abandoned_lease_recovery_retains_stage_and_bounds_retries(world, receipt):
+    task = world.tasks.add(world.project['id'], 'retained work')
+    claimed = world.tasks.claim()
+    eid = claimed['lease_owner']
+    world.db.run("UPDATE tasks SET stage='merge',rounds=2 WHERE id=?", (task['id'],))
+    if receipt == 'missing':
+        world.db.run('DELETE FROM executions WHERE id=?', (eid,))
+    else:
+        world.db.run('UPDATE executions SET status=?,finished_at=? WHERE id=?', (receipt, time.time(), eid))
+    world.core.runner.reconcile_leases()
+    recovered = world.tasks.get(task['id'])
+    assert recovered['state'] == 'queued' and recovered['lease_owner'] is None
+    assert recovered['stage'] == 'merge' and recovered['rounds'] == 2 and recovered['requeues'] == 1
+    assert world.db.one("SELECT 1 FROM events WHERE kind='task.lease_recovered' AND task_id=?", (task['id'],))
+    next_run = world.tasks.claim()
+    world.db.run("UPDATE executions SET status='failed',finished_at=? WHERE id=?", (time.time(), next_run['lease_owner']))
+    world.core.runner.reconcile_leases()
+    final = world.tasks.get(task['id'])
+    assert final['state'] == 'failed' and final['lease_owner'] is None
+    assert final['rounds'] == 2 and len(world.tasks.list()) == 1
+
+
+def test_terminal_receipt_cannot_release_a_still_owned_runner_or_process(world, monkeypatch):
+    task = world.tasks.add(world.project['id'], 'finishing worker')
+    claimed = world.tasks.claim()
+    eid = claimed['lease_owner']
+    world.db.run("UPDATE executions SET status='completed',finished_at=? WHERE id=?", (time.time(), eid))
+    world.core.jobs[eid] = SimpleNamespace(done=lambda: False)
+    world.core.runner.reconcile_leases()
+    assert world.tasks.get(task['id'])['lease_owner'] == eid
+    world.core.jobs.clear()
+    world.core.servers[eid] = object()
+    world.core.runner.reconcile_leases()
+    assert world.tasks.get(task['id'])['lease_owner'] == eid
+    world.core.servers.clear()
+    monkeypatch.setattr(runner_module, 'owned_alive', lambda row: True)
+    world.core.runner.reconcile_leases()
+    assert world.tasks.get(task['id'])['lease_owner'] == eid
+    monkeypatch.setattr(runner_module, 'owned_alive', lambda row: False)
+    world.core.runner.reconcile_leases()
+    assert world.tasks.get(task['id'])['lease_owner'] is None
+
+
+def test_deployment_fence_preserves_concurrently_created_queued_work(world):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ai_manager import fence
+
+    with fence.hold(world.settings.data_dir, exclusive=True):
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            tasks = list(pool.map(lambda n: world.tasks.add(world.project['id'], f'Concurrent {n}'), range(4)))
+        assert len(tasks) == 4 and world.tasks.claim() is None
+        assert not world.db.all('SELECT * FROM executions')
+        assert all(task['state'] == 'queued' for task in world.tasks.list())
+    claimed = world.tasks.claim()
+    assert claimed and claimed['id'] in {task['id'] for task in tasks}
+    assert len(world.tasks.list()) == 4 and world.tasks.claim() is None

@@ -3,6 +3,7 @@
 The real application is started and restarted by a tiny service-control script, so the idle wait, backup, restart,
 health check and automatic code+database rollback paths run end to end. Nothing here touches the live service.
 """
+import fcntl
 import importlib.util
 import json
 import os
@@ -219,9 +220,9 @@ def test_waits_for_idle_and_never_restarts_while_work_runs(runtime):
     runtime.start()
     new = commit(runtime.repo, 'docs', **{'README.md': ('# Linko Bot Boss', '# Linko Bot Boss idle')})
     pid = (runtime.state / 'pid').read_text()
-    busy = {'now': True}
+    runtime.sql("INSERT INTO executions(id,agent_id,status,started_at) VALUES('active','execution','running',?)",
+                (time.time(),))
     deploy = deploy_script.Deploy(runtime.config)
-    deploy.busy = lambda: {'leases': 1} if busy['now'] else {}
     runtime.request()
     holder = {}
     thread = threading.Thread(target=lambda: holder.update(result=deploy.main()))
@@ -232,9 +233,13 @@ def test_waits_for_idle_and_never_restarts_while_work_runs(runtime):
             break
         time.sleep(.1)
     time.sleep(1)
-    assert deploy_script.read(state_file)['phase'] == 'waiting_idle'
+    waiting = deploy_script.read(state_file)
+    assert waiting['phase'] == 'waiting_idle'
+    assert waiting['busy'] == {'unfinished_executions': 1} and waiting['pid'] == os.getpid()
+    assert set(waiting['blockers']) == {'executions', 'tasks', 'messages'}
+    assert 'waiting for idle: {"unfinished_executions": 1}' in (runtime.data / 'deploy/deploy.log').read_text()
     assert (runtime.state / 'pid').read_text() == pid and runtime.running() == runtime.base
-    busy['now'] = False
+    runtime.sql("UPDATE executions SET status='completed',finished_at=? WHERE id='active'", (time.time(),))
     thread.join(60)
     assert holder['result']['status'] == 'success' and runtime.running() == new
 
@@ -398,3 +403,57 @@ def test_deploy_and_merge_agree_on_a_master_branch(runtime):
     runtime.request()
     result = runtime.run()
     assert result['status'] == 'success' and git(runtime.repo, 'symbolic-ref', '--short', 'HEAD') == 'master'
+
+
+@pytest.mark.parametrize('owner_finishes', [False, True])
+def test_competing_deploy_waits_then_resumes_or_observes_completion(tmp_path, owner_finishes):
+    root = tmp_path / 'deploy'
+    root.mkdir()
+    request = root / 'request.json'
+    deploy_script.atomic(request, {'id': 'pending', 'requested_at': 1})
+    # Model the manual owner; an actual process exit also releases this flock.
+    with (root / 'deploy.lock').open('a') as owner:
+        fcntl.flock(owner, fcntl.LOCK_EX)
+        code = """
+import sys
+from pathlib import Path
+sys.path.insert(0, sys.argv[1] + '/scripts')
+from deploy import Deploy
+class Consumer(Deploy):
+    def execute(self, request):
+        (self.root / 'consumed').write_text(request['id'])
+        (self.root / 'request.json').unlink()
+Consumer({'repo': sys.argv[1], 'data': sys.argv[2]}).main()
+"""
+        child = subprocess.Popen([sys.executable, '-c', code, str(ROOT), str(tmp_path)],
+                                 stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        try:
+            assert child.stdout.readline().strip() == 'another deploy is running; waiting for its lock'
+            assert child.poll() is None and not (root / 'consumed').exists()
+            if owner_finishes:
+                request.unlink()
+            fcntl.flock(owner, fcntl.LOCK_UN)
+            stdout, stderr = child.communicate(timeout=10)
+            assert child.returncode == 0, stderr
+            assert (root / 'consumed').exists() is not owner_finishes
+            if owner_finishes:
+                assert 'no deploy requested' in stdout
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait()
+
+
+def test_blocker_report_identifies_rows_without_task_content(tmp_path):
+    from ai_manager.db import Database
+    db = Database(tmp_path / 'manager.sqlite3')
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO projects(id,name,path,agent_id,created_at,updated_at) VALUES('p','p','/p','a',1,1)")
+        conn.execute("INSERT INTO tasks(id,project_id,description,state,created_at,updated_at) "
+                     "VALUES('t','p','private input','running',1,1)")
+        conn.execute("INSERT INTO executions(id,task_id,agent_id,status,started_at) VALUES('e','t','execution','running',1)")
+    deploy = deploy_script.Deploy({'repo': str(tmp_path), 'data': str(tmp_path)})
+    assert deploy.busy() == {'unfinished_executions': 1, 'running_tasks': 1}
+    report = deploy.blockers()
+    assert report['tasks'][0]['id'] == 't' and report['executions'][0]['id'] == 'e'
+    assert 'private input' not in json.dumps(report)

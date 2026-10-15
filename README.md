@@ -49,6 +49,13 @@ service on `main`, health check, and automatic rollback of code and database on 
 result is `DATA/deploy/last-deploy.txt`. No new work starts and nothing merges while a request is pending (the
 checkout fence, `ai_manager/fence.py`). One-time operator bootstrap, no sudo:
 `python3 scripts/install_deploy.py`. Manual deploy: `python3 scripts/deploy.py --now`.
+Concurrent consumers wait on the deployment lock and re-read the request after it is released; a systemd consumer can
+resume a request abandoned by a manual caller. During the idle wait, `DATA/deploy/state.json` records the deploy PID,
+blocker counts and bounded record identities, refreshed at least every 30 seconds (also in `deploy.log`). Queued,
+held and retry-delayed tasks remain durable and do not block restart; unfinished executions, task leases, running
+tasks, streaming messages and running deliveries do. Stale leases are reconciled by the queue runner only after
+both the runner and its recorded process are gone, preserving workspaces and limiting recovery retries.
+
 
 ## Product behaviour that is unchanged
 
