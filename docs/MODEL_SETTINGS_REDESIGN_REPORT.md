@@ -1,3 +1,128 @@
+# Immediate favorite recall / recording startup — 2026-10-15
+
+**RESULT: FAILED — `scripts/probe_recording_start.py --verify`: assertion
+`times['ui-recording'] >= times['recorder-start-event']`.** No normal merge/deployment is warranted
+for this candidate. The same assignment/workspace/branch/thread is retained; no replacement task,
+reviewer or parallel worker was created. Durable prior budget: **3 rounds used, 0 remaining**,
+preserved despite stale machine metadata. After the first failing new check, implementation repairs
+and remaining browser runs stopped. No further repair round was consumed or counter reset.
+
+Base: `f8f4d55` in retained branch `linko/assignment-4a985c35b51345ada354cd666acbf80e`.
+The owner describes that base as deployed. This worker did not inspect production or independently
+establish that receipt. No shared checkout/database/service write, native model inference, deployment,
+push, unrelated task resume/cancel, independent review or parallel work occurred. This failed candidate
+is committed only in its assigned branch for durable retention, not successful automatic delivery.
+
+## Implemented source and verified subset
+
+Inspected authoritative project/spec/security/model/audio docs, retained prior evidence, real current
+HTML/JS/CSS, provider/catalog validation, favorite endpoints, audio metadata/transcription code,
+chat submission/replay and existing browser fixtures. No applicable workspace AGENTS.md was present
+in the preceding inspections; all work stays in the same retained assignment scope.
+
+Favorite recall closes the dialog and focuses its opener in the synchronous click turn, before starting
+the network request. Insert remains open and copies the current Manager selection. One browser intent
+queue now orders model writes, settings reads and owner chat acceptance (ordinary/parallel/recording
+Send and To-Do Start). Fast Send captures its draft once and waits for pending selection, preventing
+silent prior-model submission. HTTP acceptance still pins the actual Manager pair in the backend.
+Duplicate clicks while pending are ignored. A failed/unconfirmed selection shows an external notice,
+refreshes actual saved settings and blocks Send until an explicit settings choice succeeds; blocked
+messages retain draft/attachments and do not remain as ambiguous submitted requests. Reopened settings
+stay disabled until their ordered read; closed pending opens invalidate late read responses.
+
+Recall uses a 15-second client deadline plus expected favorite provider/resolved pair/settings revision.
+The optional expected body is validated server-side, preventing a late recall from overwriting a newer
+confirmed settings selection or a replaced favorite. Existing bodyless recall API calls remain compatible.
+A successful mutation clears the selection barrier; a read alone never claims an uncertain save succeeded.
+
+**Passed browser subset:** synchronous close/opener focus, duplicate suppression, a deliberately held
+recall followed by fast Send and reopened modal, actual persisted execution using Luna/High despite a
+subsequent Astra selection, independent Bot settings preservation, simulated stale/unavailable/network
+recall errors, external notices, unsent retained drafts, reconciled saved choices, canceled delayed opens,
+and successful explicit recovery/send. No page errors. The temporary fixture's SQLite execution record
+was read to verify the actual accepted model/effort, not just a local pressed state.
+
+## Recording investigation and source change (acceptance incomplete)
+
+`startAudio` previously rendered a Starting message, **awaited GET `/api/audio`**, then invoked
+`getUserMedia`, constructed MediaRecorder and marked the UI Recording immediately after `start(250)`.
+Inspection of `Audio.status` shows only local settings checks and `shutil.which(ffprobe)`: no STT,
+provider inference, media upload or device initialization. The extra network gate was avoidable.
+
+A baseline local Chromium probe used the real MediaRecorder API with Chromium's fake audio device and
+permission auto-grant. It instrumented tap, Starting DOM mutation, permission request, stream resolution,
+recorder start call/event and first data. An injected 600ms delay applied only to `/api/audio`:
+
+| Baseline event after tap | Normal local response | Injected 600ms response delay |
+| --- | --- | --- |
+| Starting UI observation | 9.6ms | 1.7ms |
+| Permission request | 35.2ms | 629.9ms |
+| Stream ready | 72.4ms | 640.8ms |
+| Recorder start call | 72.6ms | 640.9ms |
+| UI Recording observation | 74.1ms | 643.7ms |
+| Recorder start event observation | 134.3ms | 704.0ms |
+| First recorded chunk | 379.5ms | 944.1ms |
+
+These are two local fixture samples, not a distribution, physical-phone timing, real permission UI timing
+or a device-speed claim. The injected delay demonstrates the serialized metadata roundtrip. The first
+chunk includes the configured 250ms recorder timeslice; that is not all microphone initialization time.
+Browser permission interaction, OS/device acquisition and encoder startup remain outside app control.
+
+The source now requests permission inside the tap gesture while fetching metadata alongside it. It
+starts the recorder immediately on stream acquisition and retains opening chunks while configuration
+is pending, rather than holding a live stream without recording. Starting feedback is immediate;
+Recording/timer begin inside the recorder's `onstart` handler. Configuration must succeed before STT.
+Existing configuration read timeout is 15 seconds; pending device/recorder startup is bounded at 30
+seconds. Audio Upload waits for metadata so its size/context checks never read an absent config.
+There is no prewarming or unsolicited capture. On an explicit tap, an unavailable provider may now
+briefly request permission before metadata rejection; failure stops acquired and late-arriving tracks.
+
+Starting-session Discard, auth/view change, hidden/pagehide/freeze invalidates capture; late permission
+results stop tracks. Existing recording interruption warnings, stop/Send/Upload, whole-file transcription,
+draft/context fencing, IndexedDB recovery and limits remain in the source. Physical Android/iOS,
+permission prompts, hardware startup, mobile keyboard and background suspension were not measured.
+
+**Candidate recording verification failed before completing its timing report.** The `--verify` probe
+asserted that its observed UI Recording timestamp must follow its observed recorder-start timestamp.
+The source does update UI in `onstart`; the probe registers its separate event listener from the patched
+`MediaRecorder.start` call, after that handler has already been installed. Listener/mutation-observer
+ordering may therefore affect the timestamps. This is an inference from source inspection, not a
+verified diagnosis or waiver. No instrumentation fix, assertion relaxation or failed-check rerun was
+performed because the durable repair budget is exhausted. No candidate timing improvement, complete
+recording lifecycle acceptance or physical-device performance claim is made.
+
+## Exact validation record
+
+All runs were sequential in the assigned workspace, with the existing development environment via
+`PATH=/home/codex/projects/Linko-Bot-Manager/.venv/bin:$PATH`. Disposable fixture data/projects and
+loopback ports were used. No full backend suite or network/paid provider inference was run.
+
+| Command | Recorded output/result |
+| --- | --- |
+| `python scripts/probe_recording_start.py --output .data/model-recording-ux/start-before.json` | Baseline investigation completed; full events/timings retained |
+| `python -m pytest -q -m smoke` | **37 passed, 283 deselected**, 2.88s; once |
+| `python -m pytest -q tests/test_model_settings.py tests/test_claude_provider.py tests/test_audio.py tests/test_chat_queue.py` | **73 passed**, 36.90s; once |
+| `ruff check ai_manager/model_settings.py ai_manager/web.py tests/test_model_settings.py scripts/browser_model_recall.py scripts/probe_recording_start.py scripts/browser_audio.py scripts/browser_model_scroll.py scripts/browser_smoke.py` | **All checks passed!** |
+| `node --check ai_manager/static/app.js` / `model-settings.js` / `audio.js` | **Exit 0**, no output (before final pre-probe Upload metadata guard) |
+| `LINKO_RECALL_EVIDENCE="$PWD/.data/model-recording-ux" python scripts/browser_model_recall.py` | **Passed**, immediate close/focus, ordered actual Send, failures/reconciliation/reopen races; once |
+| `python scripts/probe_recording_start.py --verify --output .data/model-recording-ux/start-after.json` | **FAILED**, UI/start-event timestamp assertion; no candidate JSON produced |
+| `scripts/browser_audio.py`, `scripts/browser_model_scroll.py`, `scripts/browser_smoke.py` | Not run this continuation after the failed probe; earlier passed runs remain historical |
+
+Before the failing probe, ordinary implementation inspection added the Upload metadata guard and a
+render when config arrives. This did not follow a failed check. No source fixes followed probe failure.
+Only status/evidence documentation was then updated and the failed candidate retained in Git.
+The preexisting FastAPI/Starlette httpx deprecation warning remains. The static app has no build step.
+
+Raw command outputs and test evidence are in the retained private directory:
+`/home/codex/.local/share/linko-bot-manager/assignment-workspaces/4a985c35b51345ada354cd666acbf80e/.data/model-recording-ux/`.
+Files: `probe-before.txt`, `start-before.json`, `smoke.txt`, `targeted.txt`, `lint.txt`,
+`recall-browser.txt`, `recall-results.json`, `closed-recall.png`, `probe-after.txt`.
+The latter preserves the exact failing assertion/traceback. Temporary fixture databases were removed
+on normal cleanup. A failed report must block normal automatic merge/deployment; no new deployment
+success is claimed. Feature docs describe source intent while this report controls acceptance status.
+
+---
+
 # Owner refinements — 2026-10-15
 
 **PASSED isolated candidate**, continuing the same assignment/workspace/branch/thread over
