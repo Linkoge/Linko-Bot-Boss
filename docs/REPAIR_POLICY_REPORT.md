@@ -1,3 +1,178 @@
+# Serialized integration update — 2026-10-15
+
+**PASSED combined candidate; activation pending normal application-managed merge/deploy.**
+In retained assignment `e01954965b8347b7abbb6d1d9d5a92cf`, merged exact source
+`37898cd556db919d24c184bfa9d1707d7cb9d1f8` into policy candidate `a0f9694` using
+`git merge --no-ff --no-edit 37898cd556db919d24c184bfa9d1707d7cb9d1f8`.
+Merge commit: `24fbe8e`; no conflicts. Both source histories remain intact. The merge brings
+`1e086d4` back as historical ancestry, now superseded by the source's current owner-revised
+acceptance, rather than treating its old failed status as a passing result. All historical evidence
+below and in [the source report](MODEL_SETTINGS_REDESIGN_REPORT.md) remains preserved.
+
+Source inspection: `37898cd` changes only the optional diagnostic and its docs relative to
+`e13b3b5`; that earlier commit corrects diagnostic event instrumentation without application changes.
+The source report records the owner's explicit removal of the optional startup probe as an acceptance
+gate and deletion of the hanging extra mock case. The diagnostic is not registered as a smoke/deploy
+test. Integration honors that acceptance scope; it does not rerun the optional diagnostic, claim the
+deleted case passed, or remove historical failures. Source records actual **five rounds used** despite
+stale machine four, following the earlier **three actual/two machine** discrepancy. Neither value was
+invented, reset, migrated or edited by this integration worker. No held source workspace was edited
+or resumed. No independent reviewer, parallel worker, shared runtime database/checkout write,
+service restart, deployment or push occurred.
+
+The integration prompt reports application limit five, machine usage one/remaining four, while its
+preserved objective says this worker must retain the earlier governing three-round ceiling. This
+worker conservatively retains that stricter ceiling and the reported one already consumed: at most
+two additional repair rounds; no new failed check or repair round occurred in this integration.
+No self-extension follows from changed policy code. Application counters count continuations, not
+individual test/fix cycles; actual evidence remains authoritative when higher.
+
+Sequential review of the clean merge: policy changes do not overlap model/recording runtime code;
+MASTER_SPEC merged both five-round policy and source UX requirements. Checked favorite expected
+revision validation and shared intent ordering, synchronous close/focus, recording permission/start
+handlers and late-stream release, source acceptance docs and probe deletion. Combined validation
+uses local disposable fixture databases/projects/ports, fake model/STT providers and Chromium fake
+media input. It does not establish physical device behavior, real model inference or live activation.
+
+Activation remains the application's normal finished-PASSED merge/deploy flow. Only its successful
+deployment result can establish activation. No extra source continuation is needed merely to activate
+this combined candidate; any future authorized unfinished work must retain the same assignment and
+cumulative/evidence budget through supported controls, never direct counter writes or replacement tasks.
+
+## Integration verification evidence
+
+Raw outputs/screenshots/JSON remain in `.data/policy-integration-evidence/` in this retained workspace.
+Full commands and stdout/stderr are appended below. Prior policy-only report follows as historical
+pre-integration evidence; statements there excluding `1e086d4` describe that earlier isolated tree.
+
+### Combined candidate results (all passed)
+
+Smoke **37 passed, 292 deselected** (once); focused backend **114 passed** (once), lint,
+JavaScript syntax, favorite recall browser, recording browser, model/mobile/scroll browser and
+chat browser smoke all passed. No repair loop was needed. The full backend suite remains the deploy
+script's responsibility. Physical Android/iOS and real provider inference are not claimed.
+
+Commands ran in this retained workspace with
+`PATH=/home/codex/projects/Linko-Bot-Manager/.venv/bin:$PATH` and
+`AI_MANAGER_ALLOWED_HOSTS=localhost,127.0.0.1,testserver`. Each command below exited 0;
+stdout/stderr follows verbatim. The only warning is the preexisting Starlette/httpx deprecation;
+the two empty-policy rejection logs are intentional passing checks.
+
+```bash
+python -m pytest -q -m smoke
+```
+
+```text
+.....................................                                    [100%]
+=============================== warnings summary ===============================
+../../../../../projects/Linko-Bot-Manager/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /home/codex/projects/Linko-Bot-Manager/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+37 passed, 292 deselected, 1 warning in 2.91s
+```
+
+```bash
+python -m pytest -q tests/test_task_rules.py tests/test_assignment_workflow.py tests/test_token_context.py tests/test_recovery.py::test_network_recovery_same_task_thread_history_no_waiting_inference tests/test_recovery.py::test_continue_replayed_with_new_call_id_does_not_restart_finished_assignment tests/test_model_settings.py tests/test_claude_provider.py tests/test_audio.py tests/test_chat_queue.py
+```
+
+```text
+........................................................................ [ 63%]
+..........................................                               [100%]
+=============================== warnings summary ===============================
+../../../../../projects/Linko-Bot-Manager/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1
+  /home/codex/projects/Linko-Bot-Manager/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+114 passed, 1 warning in 39.18s
+```
+
+```bash
+ruff check ai_manager/assignment_workflow.py ai_manager/verification.py ai_manager/workers.py ai_manager/codex.py ai_manager/model_settings.py ai_manager/web.py tests/test_task_rules.py tests/test_token_context.py tests/test_recovery.py tests/test_model_settings.py scripts/browser_audio.py scripts/browser_model_recall.py scripts/browser_model_scroll.py scripts/browser_smoke.py scripts/probe_recording_start.py
+```
+
+```text
+All checks passed!
+```
+
+```bash
+LINKO_RECALL_EVIDENCE="$PWD/.data/policy-integration-evidence/recall" python scripts/browser_model_recall.py
+```
+
+```text
+/home/codex/projects/Linko-Bot-Manager/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+Immediate recall close/focus, duplicate suppression, fast Send ordering, reopen races, stale/unavailable/network reconciliation and draft preservation passed
+```
+
+```bash
+LINKO_AUDIO_EVIDENCE="$PWD/.data/policy-integration-evidence/audio" python scripts/browser_audio.py
+```
+
+```text
+{"result": "passed", "real_capture": true, "provider": "fixture only", "uploads": 28, "chat_submissions": 6, "viewports": [1440, 393, 320]}
+```
+
+```bash
+LINKO_MODEL_EVIDENCE="$PWD/.data/policy-integration-evidence/models" python scripts/browser_model_scroll.py
+```
+
+```text
+/home/codex/projects/Linko-Bot-Manager/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+action.rejected path=/api/model-settings reason=Allow at least one supported model and level combination
+action.rejected path=/api/model-settings reason=Allow at least one supported model and level combination
+Settings persistence/policy/mobile/keyboard and manual scroll during sends/streams/polling passed
+```
+
+```bash
+LINKO_CHAT_EVIDENCE="$PWD/.data/policy-integration-evidence/chat" python scripts/browser_smoke.py
+```
+
+```text
+/home/codex/projects/Linko-Bot-Manager/.venv/lib/python3.12/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+  from starlette.testclient import TestClient as TestClient  # noqa
+Browser passed: login, chat, selection across refresh/streaming, copy all 425 messages, copy five, clipboard fallback, scroll preservation, archive/search, rename, model roles, recovery reasons/timing, desktop/mobile/narrow controls without JS errors or overflow.
+```
+
+JavaScript syntax commands each exited 0, no output:
+
+```bash
+node --check ai_manager/static/app.js
+node --check ai_manager/static/audio.js
+node --check ai_manager/static/model-settings.js
+```
+
+Exact ancestry/tree preservation checks (expected exit 0, no diff):
+
+```text
+$ git merge-base --is-ancestor a0f9694 HEAD
+exit 0
+
+$ git merge-base --is-ancestor 37898cd556db919d24c184bfa9d1707d7cb9d1f8 HEAD
+exit 0
+
+$ git diff --exit-code a0f9694 HEAD -- ai_manager/assignment_workflow.py ai_manager/verification.py ai_manager/workers.py ai_manager/codex.py tests/test_task_rules.py tests/test_recovery.py tests/test_token_context.py
+exit 0
+
+$ git diff --exit-code 37898cd556db919d24c184bfa9d1707d7cb9d1f8 HEAD -- ai_manager/model_settings.py ai_manager/web.py ai_manager/static/app.js ai_manager/static/audio.js ai_manager/static/model-settings.js docs/AUDIO.md docs/MODEL_SETTINGS.md docs/MODEL_SETTINGS_REDESIGN_REPORT.md scripts/browser_audio.py scripts/browser_model_recall.py scripts/browser_model_scroll.py scripts/browser_smoke.py scripts/probe_recording_start.py tests/test_model_settings.py
+exit 0
+
+$ git rev-parse linko/assignment-4a985c35b51345ada354cd666acbf80e
+37898cd556db919d24c184bfa9d1707d7cb9d1f8
+```
+
+`git diff --check`: exit 0, no output. Integration changes after the clean merge are documentation
+only. The exact pinned model/recording implementation and its evidence report remain unchanged;
+five-round policy implementation/tests remain identical to `a0f9694`.
+Screenshots and detailed browser results remain under the retained `audio/`, `models/`, `recall/`
+and `chat/` evidence subdirectories. Test databases/servers were disposable and cleaned up by fixtures.
+
+
+---
+
 # Permanent five-round policy evidence — 2026-10-15
 
 Assignment: `e01954965b8347b7abbb6d1d9d5a92cf`.

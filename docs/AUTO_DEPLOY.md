@@ -26,9 +26,20 @@ measure individual test/fix cycles inside a worker turn.
 
 Activation uses the normal PASSED-candidate merge/deploy pipeline below. Only a successful deployment
 status establishes activation; editing policy code does not extend the already-running worker's
-injected budget. This policy implementation worker remains governed by three rounds.
+injected budget. The initial policy implementation worker retained its injected three-round budget.
 
-Held model/recording assignment `4a985c35b51345ada354cd666acbf80e` remains separate. Its retained
+Current integration update: an explicit serialized integration instruction subsequently pinned source
+`37898cd556db919d24c184bfa9d1707d7cb9d1f8` from that same model/recording assignment. It is now
+merged into the retained policy branch. The source's owner-revised acceptance removes the optional
+startup diagnostic as a delivery gate; its hanging extra case is removed. Historical failures and
+actual five-used source budget remain in its report. This does not reset counters, authorize more
+source repairs or establish activation. The combined verified candidate uses the normal pipeline below.
+
+### Historical held-assignment snapshot and supported continuation
+
+The following procedure records the earlier three-actual/two-machine snapshot. The later source
+continuation and acceptance change supersede its held status, not its evidence or counter history.
+At that snapshot, held model/recording assignment `4a985c35b51345ada354cd666acbf80e` remained separate. Its retained
 `docs/MODEL_SETTINGS_REDESIGN_REPORT.md` (read with that task_id) records **three actually used**; supplied machine metadata
 is **repair_rounds=2**. Keep both facts, failed candidate `1e086d4`, and owner-reported live `f8f4d55`.
 This policy-only branch is based on `f8f4d55`, excluding failed `1e086d4` from its ancestry.
