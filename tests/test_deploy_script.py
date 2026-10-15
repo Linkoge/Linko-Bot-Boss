@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
+IDENTITY = "IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']"
 spec = importlib.util.spec_from_file_location('deploy_script', ROOT / 'scripts/deploy.py')
 deploy_script = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(deploy_script)
@@ -165,7 +166,7 @@ def test_unhealthy_release_rolls_back_code_and_database(runtime):
     runtime.sql("INSERT INTO settings VALUES('before-bad-deploy','kept')")
     bad = commit(runtime.repo, 'bad release', **{'ai_manager/web.py': (
         '"scheduler_running": bool(scheduler.job and not scheduler.job.done()),', '"scheduler_running": False,'),
-        'ai_manager/pipeline.py': ("SETTING = 'auto_deploy:'", "SETTING = 'auto_deploy:'\nimport sqlite3 as _s;"
+        'ai_manager/pipeline.py': (IDENTITY, IDENTITY + "\nimport sqlite3 as _s;"
                                    "_c=_s.connect(os.environ['AI_MANAGER_DATA']+'/manager.sqlite3');"
                                    "_c.execute(\"INSERT OR REPLACE INTO settings VALUES('bad-marker','1')\");_c.commit();open(os.environ['AI_MANAGER_DATA']+'/bad-ran','w').close()")})
     runtime.config['health_seconds'] = 6
@@ -244,6 +245,12 @@ def test_waits_for_idle_and_never_restarts_while_work_runs(runtime):
     assert holder['result']['status'] == 'success' and runtime.running() == new
 
 
+def test_the_idle_wait_is_bounded_to_the_time_the_app_lets_a_request_hold_the_queue():
+    from ai_manager.pipeline import DEPLOY_WAIT
+
+    assert deploy_script.IDLE_SECONDS <= DEPLOY_WAIT <= 3600  # never hours
+
+
 def test_not_idle_within_the_limit_fails_without_restart(runtime):
     runtime.start()
     commit(runtime.repo, 'docs', **{'README.md': ('# Linko Bot Boss', '# Linko Bot Boss never idle')})
@@ -262,13 +269,10 @@ def test_hold_and_withdrawal_stop_the_deploy_before_any_restart(runtime):
     runtime.sql("INSERT INTO projects(id,name,path,agent_id,created_at,updated_at) VALUES(?,?,?,?,1,1)",
                 (project_id, 'x', str(runtime.root / 'x'), 'project-x'))
     pid = (runtime.state / 'pid').read_text()
-    runtime.request(source='auto', project_id=project_id)  # Auto-deploy setting absent == OFF
-    result = runtime.run()
-    assert result['status'] == 'cancelled' and 'off' in result['reason']
-    runtime.sql("INSERT INTO settings VALUES(?,?)", ('auto_deploy:' + project_id, json.dumps({'enabled': True})))
     runtime.sql("UPDATE projects SET status='paused' WHERE id=?", (project_id,))
     runtime.request(source='auto', project_id=project_id)
-    assert 'paused' in runtime.run()['reason']
+    result = runtime.run()
+    assert result['status'] == 'cancelled' and 'paused' in result['reason']
     runtime.sql("UPDATE projects SET status='active' WHERE id=?", (project_id,))
     request = runtime.request(source='auto', project_id=project_id)
     deploy = deploy_script.Deploy(runtime.config)
@@ -514,13 +518,13 @@ def test_emergency_deploy_bypasses_stale_queue_preserving_backup_and_rollback(tm
         assert ('rollback',) in calls and ('health', 'old-commit') in calls
 
 
-def test_explicit_emergency_intent_bypasses_auto_deploy_settings_but_preserves_cancellation(tmp_path):
+def test_explicit_emergency_intent_bypasses_scheduling_gates_but_preserves_cancellation(tmp_path):
     deploy = deploy_script.Deploy({'repo': str(tmp_path), 'data': str(tmp_path)})
     deploy.id = 'repair'
     request = {'id': 'repair', 'source': 'auto', 'project_id': 'paused'}
     deploy_script.atomic(deploy.root / 'request.json', request)
     deploy_script.atomic(deploy.root / 'emergency.json', {'id': 'repair'})
-    # No settings/database is needed: explicit host intent overrides normal scheduling gates.
+    # No database is needed: explicit host intent overrides the paused-project gate.
     deploy.check_request(request)
     (deploy.root / 'request.json').unlink()
     with pytest.raises(deploy_script.Stop, match='withdrawn'):

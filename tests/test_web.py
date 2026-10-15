@@ -78,18 +78,17 @@ def test_bruteforce_throttle_and_expiration(client):
     assert browser.post("/api/login", json={"username": "owner", "password": "wrong"}).status_code == 429
 
 
-def test_chat_modes_stale_origin_and_history_without_supervision_tables(client):
+def test_chat_stale_origin_and_history_without_supervision_tables(client):
     browser, app, settings = client
     sign_in(browser, app, settings)
     project = app.state.registry.add(settings.project_roots[0] / "one")
     origin = app.state.chat.conversation(project["id"])["id"]
     response = browser.post(
         "/api/chat",
-        json={"project_id": project["id"], "content": "Discuss", "conversation_id": "stale", "mode": "conversation"},
+        json={"project_id": project["id"], "content": "Discuss", "conversation_id": "stale"},
     )
     assert response.status_code == 409
     assert not app.state.db.all("SELECT * FROM messages")
-    assert browser.post("/api/chat", json={"content": "Discuss", "mode": "planning"}).status_code == 422
     task = app.state.scheduler.tasks.add(project["id"], "History fixture", origin)
     response = browser.get(f"/api/tasks/{task['id']}/execution-records")
     assert response.status_code == 200
@@ -104,7 +103,7 @@ def test_chat_modes_stale_origin_and_history_without_supervision_tables(client):
 @pytest.mark.smoke
 def test_owner_request_receipt_replay_and_changed_payload_conflict(client):
     browser, app, settings = client
-    body = {"request_id": "http-owner-request-1", "content": "Discuss", "mode": "conversation"}
+    body = {"request_id": "http-owner-request-1", "content": "Discuss"}
     assert browser.post("/api/chat", json=body).status_code == 401
     sign_in(browser, app, settings)
     original = browser.post("/api/chat", json=body)
@@ -167,3 +166,13 @@ def test_emergency_owner_api_bypasses_task_queue_and_requires_auth_and_csrf(clie
     history = app.state.chat.history()
     assert history['messages'][-1]['content'].endswith('Application recovered')
     assert all(message['status'] == 'completed' for message in history['messages'])
+
+
+def test_removed_settings_and_endpoints_are_gone(client):
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    assert "auto_deploy" not in browser.get("/api/settings").json()
+    assert browser.put("/api/settings/auto-deploy", json={"project_id": "p", "enabled": True}).status_code in {404, 405}
+    assert browser.get("/api/models").status_code == 404
+    html = browser.get("/").text
+    assert "chat-mode" not in html and "auto-deploy-settings" not in html

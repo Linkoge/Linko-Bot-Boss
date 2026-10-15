@@ -17,7 +17,7 @@ from ai_manager import pipeline as pipeline_module
 from ai_manager import runner as runner_module
 from ai_manager.codex import CodexError
 from ai_manager.config import Settings
-from ai_manager.core import HARD_CAP, Core, Tasks, evaluate, outcome, run_gate, unresolved
+from ai_manager.core import REPAIR_ROUNDS, Core, Tasks, outcome, run_gate, unresolved
 from ai_manager.db import Database
 from ai_manager.pipeline import Pipeline
 from ai_manager.registry import Registry
@@ -30,10 +30,10 @@ def git(root, *args):
 
 def failing(count, sig="a", check="smoke"):
     return {"ok": False, "checks": [check], "failures": [f"{check}: tests/x.py::t{i} - boom" for i in range(count)],
-            "count": count, "sig": sig, "output": "pytest output"}
+            "count": count, "output": "pytest output"}
 
 
-PASS = {"ok": True, "checks": [], "failures": [], "count": 0, "sig": "", "output": ""}
+PASS = {"ok": True, "checks": [], "failures": [], "count": 0, "output": ""}
 
 
 class Lab:
@@ -103,11 +103,14 @@ def world(tmp_path, monkeypatch):
     project = registry.add(app)
     monkeypatch.setattr(pipeline_module, "ROOT", app.resolve())  # the manager's own project: deployable
     pipeline = Pipeline(db, registry)
-    pipeline.set(project["id"], True)
     lab = Lab()
     core = Core(db, registry, settings, pipeline, lab.factory, gate=lab.gate)
+
+    def deployable(flag):  # merging always happens; only the manager's own project also asks for a deploy
+        monkeypatch.setattr(pipeline_module, "ROOT", app.resolve() if flag else tmp_path.resolve())
+
     return SimpleNamespace(db=db, registry=registry, settings=settings, project=project, app=app, pipeline=pipeline,
-                           lab=lab, core=core, tasks=core.tasks)
+                           lab=lab, core=core, tasks=core.tasks, deployable=deployable)
 
 
 async def run_next(world):
@@ -158,7 +161,7 @@ def test_migration_closes_old_nonfinal_tasks_and_keeps_every_row_and_branch(tmp_
     # Their unfinished runs are closed so deploys and the queue are not blocked; the manager's own run is untouched.
     assert reopened.one("SELECT finished_at FROM executions WHERE id='x-running'")["finished_at"] is not None
     assert reopened.one("SELECT finished_at FROM executions WHERE id='x-manager'")["finished_at"] is None
-    assert reopened.one("SELECT max(version) AS v FROM schema_version")["v"] == 13
+    assert reopened.one("SELECT max(version) AS v FROM schema_version")["v"] == 14
     assert Tasks(reopened).claim() is None and Database(path).all("SELECT state FROM tasks WHERE state='queued'") == []
     assert reopened.one("PRAGMA integrity_check")["integrity_check"] == "ok"
     # Idempotent: a later start must not close new work again.
@@ -168,6 +171,24 @@ def test_migration_closes_old_nonfinal_tasks_and_keeps_every_row_and_branch(tmp_
         conn.execute("UPDATE tasks SET state='running' WHERE id='new'")
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO tasks(id,project_id,description,created_at,updated_at,queued_at,state) VALUES('b','p','n',1,1,1,'running')")
+
+
+def test_old_auto_deploy_values_are_dropped_and_old_unmerged_work_is_not_merged_retroactively(tmp_path):
+    path = tmp_path / "manager.sqlite3"
+    db = Database(path)
+    skipped = json.dumps({"state": "skipped", "reason": "Auto-deploy is off; branch kept"})
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO projects(id,name,path,agent_id,created_at,updated_at) VALUES('p','p','/p','a',1,1)")
+        conn.execute("INSERT INTO tasks(id,project_id,description,created_at,updated_at,queued_at,state,merge) "
+                     "VALUES('old','p','old work',1,1,1,'done',?)", (skipped,))
+        for key, value in (("auto_deploy:p", {"enabled": False}), ("auto_deploy_seed", {"projects": ["p"]}), ("keep", 1)):
+            conn.execute("INSERT INTO settings VALUES(?,?)", (key, json.dumps(value)))
+        conn.execute("DELETE FROM schema_version WHERE version=14")
+    reopened = Database(path)
+    assert [r["key"] for r in reopened.all("SELECT key FROM settings WHERE key LIKE 'auto_deploy%'")] == []
+    assert reopened.setting("keep") == 1  # unrelated settings are untouched
+    old = Tasks(reopened).get("old")
+    assert old["state"] == "done" and old["merge"]["state"] == "skipped" and reopened.one("SELECT 1 FROM tasks WHERE state='queued'") is None
 
 
 # ---- queue -----------------------------------------------------------------------------------------------------
@@ -195,11 +216,11 @@ def test_queue_is_ordered_hold_skips_release_restores_and_cancel_closes(world):
 def test_continue_appends_requeues_at_the_end_and_never_resets_the_counter(world):
     tasks, project = world.tasks, world.project["id"]
     a, b = tasks.add(project, "alpha"), tasks.add(project, "beta")
-    world.db.run("UPDATE tasks SET state='failed',blocker='x',rounds=5,round_limit=6,gate_history='[{\"ok\":false}]' WHERE id=?", (a["id"],))
+    world.db.run("UPDATE tasks SET state='failed',blocker='x',rounds=3,gate_history='[{\"ok\":false}]' WHERE id=?", (a["id"],))
     appended = tasks.control(b["id"], "continue", None, "also this")
     assert appended["state"] == "queued" and "also this" in appended["description"] and "beta" in appended["description"]
     again = tasks.control(a["id"], "continue", None, "more")
-    assert again["status"] == "queued" and again["rounds"] == 5 and again["round_limit"] == 6 and again["history"] == []
+    assert again["status"] == "queued" and again["rounds"] == 3 and again["history"] == []
     assert tasks.claim()["id"] == b["id"]  # the re-queued task goes behind the older queued one
 
 
@@ -230,25 +251,28 @@ async def test_worker_runs_in_isolated_branch_then_merges_and_requests_one_deplo
     assert execution["status"] == "completed" and execution["delivery"] == "pending"
     prompt = world.lab.turns[0]
     assert prompt["objective"] == "add a file" and prompt["acceptance_criteria"] == "file exists"
-    assert prompt["repair_rounds"] == {"used": 0, "limit": 3, "hard_cap": 9}
+    assert prompt["repair_rounds"] == {"used": 0, "limit": 5}
 
 
 @pytest.mark.asyncio
-async def test_auto_deploy_off_keeps_the_branch_unmerged_and_requests_nothing(world):
-    world.pipeline.set(world.project["id"], False)
-    world.tasks.add(world.project["id"], "stay on the branch")
-    before = git(world.app, "rev-parse", "main")
+async def test_passing_work_always_merges_and_a_project_without_deploy_wiring_is_merged_but_not_deployed(world):
+    world.deployable(False)  # not the manager's own project: no deploy script wiring
+    world.tasks.add(world.project["id"], "merge only")
     done = await run_next(world)
-    assert done["state"] == "done" and done["merge"]["state"] == "skipped" and "off" in done["merge"]["reason"]
-    assert git(world.app, "rev-parse", "main") == before and not world.pipeline.pending()
-    assert git(done["workspace"], "log", "--oneline", f"{before}..HEAD")  # the work is on its branch
+    assert done["state"] == "done" and done["merge"]["state"] == "merged" and done["merge"]["deploy"] is False
+    assert (world.app / "change-1.txt").exists() and not world.pipeline.pending()
+    assert "auto_deploy" not in json.dumps([dict(r) for r in world.db.all("SELECT key FROM settings")])
 
 
 @pytest.mark.asyncio
 async def test_owner_deploy_now_merges_a_finished_unmerged_task_without_another_model_turn(world):
-    world.pipeline.set(world.project["id"], False)
+    world.deployable(False)
     task = world.tasks.add(world.project["id"], "finished but unmerged")
+    before = git(world.app, "rev-parse", "main")
     await run_next(world)
+    git(world.app, "reset", "-q", "--hard", before)  # an older task whose branch never reached main
+    world.db.run("UPDATE tasks SET merge=? WHERE id=?", (json.dumps({"state": "skipped"}), task["id"]))
+    world.deployable(True)
     turns = len(world.lab.turns)
     queued = world.tasks.request_merge(task["id"])
     assert queued["state"] == "queued" and queued["stage"] == "merge"
@@ -273,44 +297,31 @@ async def test_worker_that_gives_up_fails_with_its_plain_reason_and_nothing_merg
 
 
 # ---- repair rounds ---------------------------------------------------------------------------------------------
-def test_checkpoint_rules_progress_loop_and_first_look():
-    first, same, fewer, changed = failing(4), failing(4), failing(2, "b"), failing(2, "c", "targeted")
-    h = lambda *items: [{"ok": False, **{k: v for k, v in i.items() if k != "ok"}} for i in items]  # noqa: E731
-    assert evaluate(h(first, fewer))[0] == "continue" and "fewer failures" in evaluate(h(first, fewer))[1]
-    assert evaluate(h(fewer, changed))[0] == "continue" and "check changed" in evaluate(h(fewer, changed))[1]
-    assert evaluate(h(first, failing(4, "other")))[0] == "continue"  # same count, no longer the same way
-    verdict, reason = evaluate(h(first, same))
-    assert verdict == "stop" and "same way" in reason and "No progress" in reason
-    assert evaluate(h(failing(2), failing(5, "z")))[0] == "stop"  # more failures is not progress
-    assert evaluate(h(first))[0] == "continue"  # nothing to compare yet
-    assert outcome([])["ok"] and outcome([{"check": "smoke", "failures": ["a"], "output": "o"}])["count"] == 1
+def test_outcome_summarises_failing_checks():
+    assert outcome([])["ok"]
+    result = outcome([{"check": "smoke", "failures": ["a"], "output": "o"}])
+    assert not result["ok"] and result["count"] == 1 and result["checks"] == ["smoke"]
 
 
 @pytest.mark.asyncio
-async def test_progress_grants_three_more_twice_then_the_hard_cap_of_nine_stops(world):
-    # Fewer failures every round -> progress at both checkpoints; still failing at round 9 -> hard cap.
-    world.lab.results = [failing(30 - i, str(i)) for i in range(12)]
-    world.tasks.add(world.project["id"], "never quite passes")
+@pytest.mark.parametrize("results", [[failing(30 - i, str(i)) for i in range(12)], [failing(3, "same") for _ in range(12)]],
+                         ids=["fewer failures every round", "the same failure every round"])
+async def test_five_repair_rounds_then_the_task_stops_whatever_the_progress(world, results):
+    world.lab.results = results
+    task = world.tasks.add(world.project["id"], "never quite passes")
     done = await run_next(world)
-    assert done["state"] == "failed" and "hard cap of 9" in done["blocker"]
-    assert done["rounds"] == HARD_CAP == 9 and done["round_limit"] == 9
-    assert [c["round"] for c in done["checkpoints"]] == [3, 6]
-    assert all(c["decision"] == "continue" and "fewer failures" in c["reason"] for c in done["checkpoints"])
-    assert len(world.lab.turns) == 10  # the implementation turn plus nine repair rounds
-    assert not world.pipeline.pending() and git(world.app, "log", "--oneline", "-1").endswith("initial")  # never merged
-    assert [t.get("repair", {}).get("round") for t in world.lab.turns[:4]] == [None, 1, 2, 3]
+    assert done["state"] == "failed" and "Stopped after 5 repair rounds" in done["blocker"]
+    assert done["rounds"] == REPAIR_ROUNDS == 5 and done["repair_limit"] == 5
+    assert len(world.lab.turns) == 6  # the implementation turn plus five repair rounds
+    assert [t.get("repair", {}).get("round") for t in world.lab.turns] == [None, 1, 2, 3, 4, 5]
     assert world.lab.turns[1]["repair"]["failed_checks"] == ["smoke"]
-
-
-@pytest.mark.asyncio
-async def test_same_failure_twice_in_a_row_is_a_loop_and_stops_at_the_checkpoint(world):
-    world.lab.results = [failing(3, "same") for _ in range(10)]
-    world.tasks.add(world.project["id"], "stuck")
-    done = await run_next(world)
-    assert done["state"] == "failed" and done["blocker"].startswith("No progress: smoke failed the same way")
-    assert done["rounds"] == 3 and done["round_limit"] == 3  # stopped at the 3rd-round checkpoint, no grant
-    assert done["checkpoints"][0]["decision"] == "stop" and done["checkpoints"][0]["round"] == 3
-    assert len(world.lab.turns) == 4
+    assert not world.pipeline.pending() and git(world.app, "log", "--oneline", "-1").endswith("initial")  # never merged
+    # The counter is durable: continuing the task does not buy new rounds.
+    world.lab.results = [failing(1, "again")]
+    world.tasks.control(task["id"], "continue", None, "try once more")
+    again = await run_next(world)
+    assert again["state"] == "failed" and again["rounds"] == 5 and "Stopped after 5 repair rounds" in again["blocker"]
+    assert len(world.lab.turns) == 7
 
 
 @pytest.mark.asyncio
@@ -319,7 +330,7 @@ async def test_recovery_after_repair_passes_and_merges_with_rounds_recorded(worl
     world.tasks.add(world.project["id"], "needs one repair")
     done = await run_next(world)
     assert done["state"] == "done" and done["rounds"] == 1 and done["merge"]["state"] == "merged"
-    assert done["checkpoints"] == [] and (world.app / "change-2.txt").exists()
+    assert (world.app / "change-2.txt").exists()
 
 
 @pytest.mark.asyncio
@@ -338,9 +349,9 @@ async def test_interrupted_repair_round_is_not_charged_twice_and_counter_survive
     world.core.launch(claimed)
     for _ in range(200):
         await asyncio.sleep(0.01)
-        if world.tasks.get(task["id"])["open_round"]:
+        if world.tasks.get(task["id"])["rounds"]:
             break
-    assert world.tasks.get(task["id"])["rounds"] == 1 and world.tasks.get(task["id"])["open_round"] == 1
+    assert world.tasks.get(task["id"])["rounds"] == 1
     job = world.core.jobs[claimed["lease_owner"]]
     job.cancel()  # the service stopped mid round
     await asyncio.gather(job, return_exceptions=True)
@@ -396,7 +407,7 @@ async def test_a_worker_that_leaves_the_conflict_unresolved_burns_rounds_and_fai
 
     world.lab.actions = [edit, *([ignore] * 12)]
     done = await run_next(world)
-    assert done["state"] == "failed" and done["rounds"] <= HARD_CAP and "conflict" in done["blocker"]
+    assert done["state"] == "failed" and done["rounds"] <= REPAIR_ROUNDS and "conflict" in done["blocker"]
     assert git(world.app, "status", "--porcelain") == "" and "MAIN" in (world.app / "shared.txt").read_text()
 
 
@@ -437,20 +448,34 @@ async def test_watchdog_stops_a_stalled_worker_and_fails_queued_work_of_a_remove
 
 
 @pytest.mark.asyncio
-async def test_stale_deploy_request_expires_so_the_queue_cannot_hang(world):
-    world.pipeline.request(world.project["id"], "auto", None, None, "stale")
-    assert world.pipeline.pending() and not world.pipeline.expire()
+async def test_a_pending_deploy_holds_new_work_only_for_a_bounded_time(world):
+    task = world.tasks.add(world.project["id"], "waits for the deploy")
+    world.pipeline.request(world.project["id"], "auto", None, None, "nobody consumes this")
+    await world.core.runner.tick()
+    assert world.pipeline.pending() and not world.core.jobs and world.tasks.get(task["id"])["state"] == "queued"
+    assert not world.pipeline.expire()  # a young request keeps holding the queue
     request = json.loads((world.pipeline.root / "request.json").read_text())
-    request["requested_at"] = time.time() - 8 * 3600
+    request["requested_at"] = time.time() - pipeline_module.DEPLOY_WAIT - 60
     (world.pipeline.root / "request.json").write_text(json.dumps(request))
     await world.core.runner.watchdog()
     assert not world.pipeline.pending()
     assert world.db.one("SELECT 1 FROM events WHERE kind='deployment.expired'")
+    done = await run_next(world)  # the queue is running again without any deploy having happened
+    assert done["id"] == task["id"] and done["state"] == "done"
+
+
+def test_a_deploy_past_its_backup_is_never_withdrawn(world):
+    world.pipeline.request(world.project["id"], "auto", None, None, "restarting")
+    request = json.loads((world.pipeline.root / "request.json").read_text())
+    request["requested_at"] = time.time() - 3 * pipeline_module.DEPLOY_WAIT
+    (world.pipeline.root / "request.json").write_text(json.dumps(request))
+    (world.pipeline.root / "state.json").write_text(json.dumps({"phase": "restarting"}))
+    assert not world.pipeline.expire() and world.pipeline.pending()  # it finishes or rolls back by itself
 
 
 @pytest.mark.asyncio
 async def test_usage_limit_waits_with_bounded_backoff_in_order_then_retries(world):
-    world.pipeline.set(world.project["id"], False)  # no deploy request between the two runs
+    world.deployable(False)  # no deploy request between the two runs
     first, second = world.tasks.add(world.project["id"], "first"), world.tasks.add(world.project["id"], "second")
 
     async def limited(root, prompt):
@@ -541,7 +566,7 @@ async def test_restart_mid_task_resumes_without_penalty_and_keeps_the_round_coun
     world.lab.release = asyncio.Event()
     world.core.launch(world.tasks.claim())
     await asyncio.sleep(0.05)
-    world.db.run("UPDATE tasks SET rounds=2,round_limit=3 WHERE id=?", (task["id"],))
+    world.db.run("UPDATE tasks SET rounds=2 WHERE id=?", (task["id"],))
     thread = world.tasks.get(task["id"])["native_thread"]
     await world.core.close()  # the service stops with the worker mid-turn
     assert world.tasks.get(task["id"])["state"] == "running"
@@ -557,7 +582,7 @@ async def test_restart_mid_task_resumes_without_penalty_and_keeps_the_round_coun
 @pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_tick_starts_the_oldest_eligible_task_one_at_a_time_and_skips_held(world):
-    world.pipeline.set(world.project["id"], False)  # a pending deploy request would (rightly) hold the queue
+    world.deployable(False)  # a pending deploy request would (rightly) hold the queue
     held, oldest, newest = (world.tasks.add(world.project["id"], name) for name in ("held", "oldest", "newest"))
     world.tasks.control(held["id"], "hold")
     world.lab.release = asyncio.Event()
@@ -636,7 +661,6 @@ def test_gate_runs_smoke_and_only_permanent_test_files_and_ignores_probes(tmp_pa
     (repo / "tests" / "test_smoke.py").write_text("import pytest\n\n@pytest.mark.smoke\ndef test_ok():\n    assert False\n")
     broken = run_gate(repo, base)
     assert not broken["ok"] and broken["checks"] == ["smoke", "targeted"]  # the edited smoke file is also targeted
-    assert outcome([{"check": "x", "failures": ["a 1"], "output": ""}])["sig"] == outcome([{"check": "x", "failures": ["a 2"], "output": ""}])["sig"]
 
 
 def test_every_check_has_a_timeout_and_a_hung_suite_is_a_failure_not_a_hang(tmp_path, monkeypatch):
@@ -688,7 +712,7 @@ async def test_manager_controls_hold_release_cancel_continue_and_deploy_now(worl
 
     async def act(action, **args):
         number = next(calls)
-        return await scheduler.manager_action(project, {"tool": "manager_action", "mode": "auto", "callId": f"c{number}",
+        return await scheduler.manager_action(project, {"tool": "manager_action", "callId": f"c{number}",
                                                         "manager_execution_id": f"m-{number}", "conversation_id": conversation,
                                                         "arguments": {"action": action, **args}})
 
@@ -700,20 +724,20 @@ async def test_manager_controls_hold_release_cancel_continue_and_deploy_now(worl
     assert (await act("continue", task_id=task["id"]))["status"] == "queued"
     for action in ("hold", "cancel", "continue", "delegate"):  # a worker-result notice may not start or change work
         with pytest.raises(ValueError, match="explicit owner"):
-            await scheduler.manager_action(project, {"tool": "manager_action", "mode": "auto", "internal": True, "callId": "x",
+            await scheduler.manager_action(project, {"tool": "manager_action", "internal": True, "callId": "x",
                                                      "manager_execution_id": "m-i", "conversation_id": conversation,
                                                      "arguments": {"action": action, "task_id": task["id"], "objective": "o"}})
-    with pytest.raises(ValueError, match="read-only"):
-        await scheduler.manager_action(project, {"tool": "manager_action", "mode": "conversation", "callId": "y",
-                                                 "manager_execution_id": "m-c", "conversation_id": conversation,
-                                                 "arguments": {"action": "hold", "task_id": task["id"]}})
     listed = await act("list_tasks")
     assert listed["assignments"][0]["status"] == "queued" and listed["assignments"][0]["rounds"] == 0
     read = await act("read_task", task_id=task["id"])
-    assert read["checkpoints"] == [] and "checks" in read
-    world.pipeline.set(project, False)
+    assert "checks" in read and "checkpoints" not in read
+    before = git(world.app, "rev-parse", "main")
     done = await run_next(world)
-    assert done["state"] == "done" and done["merge"]["state"] == "skipped"
+    assert done["state"] == "done" and done["merge"]["state"] == "merged"
+    with pytest.raises(ValueError, match="already merged"):
+        await act("deploy", task_id=done["id"])
+    git(world.app, "reset", "-q", "--hard", before)  # an older task whose branch never reached main
+    world.db.run("UPDATE tasks SET merge=? WHERE id=?", (json.dumps({"state": "skipped"}), done["id"]))
     assert (await act("deploy", task_id=done["id"]))["merge"] == "requested"
 
 

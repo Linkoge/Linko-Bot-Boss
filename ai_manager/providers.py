@@ -11,7 +11,7 @@ from .codex import AppServer
 
 
 def provider_of(model):
-    return 'claude' if str(model or '').startswith('claude-') or model in ('Haiku', 'Sonnet', 'Opus') else 'codex'
+    return 'claude' if str(model or '').startswith('claude-') else 'codex'
 
 
 class ClaudeServer(AppServer):

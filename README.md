@@ -18,24 +18,20 @@ both the manager and every worker read are [RULES.md](RULES.md).
    (`python -m pytest -q -m smoke`, 180 s) plus the test files the branch added or changed (600 s). Only permanent
    repository suites can block delivery; one-off probes are informational. Probes run under a 60 s timeout. Checks run
    with disposable data directories.
-3. **Repair rounds** (durable on the task row, never reset by retry, restart or continue). The first 3 failing rounds go
-   back to the same worker. When the 3rd round still fails the core compares it with the round before: the failing check
-   changed or there are fewer failures means progress and grants +3; the same check failing the same way means a loop
-   and the task fails with a plain reason. The same checkpoint runs at 6. The hard cap is 9. Every checkpoint decision
-   and reason is stored on the task (`checkpoints`).
-4. **Merge and deploy.** A passing branch merges into `main` under the checkout fence (one at a time). Main is first merged
-   into the branch; a conflict goes to the same worker as a repair round of the same task (no separate integration step).
-   With the project's **Auto-merge and deploy finished work** ON, the merge happens and, for the manager's own project,
-   the deploy script is requested automatically. OFF means no merge and no deploy; the manager's `deploy` action
-   (optionally with a `task_id`) merges a finished task and deploys on request.
+3. **Repair rounds** (a counter on the task row, never reset by retry, restart or continue). A failing check goes back to
+   the same worker as a repair round, at most 5 times; the task then stops with a plain reason and the manager reports it.
+4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one at a time); there is no
+   per-project switch. Main is first merged into the branch; a conflict goes to the same worker as a repair round of the
+   same task. For the manager's own project the deploy script is then requested automatically; other projects are merged
+   only. The manager's `deploy` action (optionally with a `task_id` of a finished, never-merged task) deploys on request.
 5. **Queue runner** (`ai_manager/runner.py`; independent of any open chat or owner message). A tick every second starts
    the oldest eligible queued task, one at a time. Not eligible: held, project paused, waiting for its retry time, or a
-   deploy request pending. On service start, whatever was running is resumed without penalty (same branch, same worker
+   deploy request pending (for at most 30 minutes, see Deploy). On service start, whatever was running is resumed without penalty (same branch, same worker
    thread, repair counters untouched) and stale retry times are forgotten, so a restart or reboot always retries at
    once. A provider usage limit or a lost connection puts the task back in the queue with a visible retry time: the
    provider's reset time when it gave one, else backoff (usage limit 5 min doubling to 1 h, connection 30 s doubling to
    10 min), 10 waits, then failed. The watchdog (every minute) requeues a dead or hung worker (30 min without activity)
-   once, then fails it; fails queued tasks of a removed project; expires an unconsumed deploy request after 7 h.
+   once, then fails it; fails queued tasks of a removed project; withdraws a deploy request that is still waiting after 30 min.
    Nothing stays blocked without a visible reason.
 
 Owner controls on a task: **Hold / Release** (queued), **Cancel** (queued or running; the branch is kept),
@@ -46,8 +42,10 @@ question; the task stays running and says so. Finished results return to the ori
 
 `scripts/deploy.py` is the only deploy mechanism: full backend suite once, wait for idle, back up SQLite, restart the
 service on `main`, health check, and automatic rollback of code and database on any failure after the stop. The short
-result is `DATA/deploy/last-deploy.txt`. No new work starts and nothing merges while a request is pending (the
-checkout fence, `ai_manager/fence.py`). One-time operator bootstrap, no sudo:
+result is `DATA/deploy/last-deploy.txt`. While a request is pending no new work starts and nothing merges (the
+checkout fence, `ai_manager/fence.py`), but never for more than 30 minutes: the watchdog withdraws a request that has not
+reached its backup by then (the wait for idle is bounded the same way), tells the originating chat, and the queue runs on.
+A request past its backup finishes or rolls back by itself. One-time operator bootstrap, no sudo:
 `python3 scripts/install_deploy.py`. Manual deploy: `python3 scripts/deploy.py --now`.
 Concurrent consumers wait on the deployment lock and re-read the request after it is released; a systemd consumer can
 resume a request abandoned by a manual caller. During the idle wait, `DATA/deploy/state.json` records the deploy PID,
@@ -101,7 +99,7 @@ python3 DATA/repair/launcher.py --data DATA tick
 
 `request` durably accepts only; the timer wakes within about a minute, or `tick` runs immediately. Do not launch that
 manual tick inside the application's service cgroup if you intend to restart it: use an independent terminal or the
-repair systemd unit. The manager's `emergency_repair` action accepts an `objective` in Auto/Execute and returns its
+repair systemd unit. The manager's `emergency_repair` action accepts an `objective` and returns its
 receipt; `repair_status` reads receipts. Authenticated owner endpoints `POST /api/repair` (request_id, instructions,
 conversation_id, optional provider/model) and `GET /api/repair` also bypass task checks, with existing CSRF protection.
 Those entry points need a responding app; the host launcher is the service-down entry point. The exact original
@@ -152,12 +150,14 @@ probes, live database changes, service restarts or host installation are part of
 
 ## Product behaviour that is unchanged
 
-- Chat with Conversation (read-only except To-Do), Auto and Execute modes; composer with recording/transcription,
+- Chat has no modes: the manager does what is asked. Composer with recording/transcription,
   Discard/Upload, arbitrary attachments (only verified raster images become native image input), drafts and sequential Send.
-- Model settings: one manager choice and one worker choice, each any Codex or Claude model and effort; what the panel shows
-  is what is saved (`model_choice`) and what is dispatched. A task pins its worker pair when it is created. Two manager favorites.
-- Project list with display names, visibility/stash, pause, discovery; To-Do backlog (never executes by itself; Start
-  hands exact revisions to a task); project memory brief with owner-run review; chat clear/trash/archive/search.
+- Model settings: one manager choice and one worker choice, each any model and effort the provider catalogs offer (no
+  restriction beyond the catalog); what the panel shows is what is saved (`model_choice`) and what is dispatched. The worker
+  can also be **Automatic**: the manager then picks the model and effort for each task (provider default if it names none).
+  A task keeps the pair it first ran on, and each run records the model and effort actually used. Two manager favorites.
+- Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
+  To-Do to a task); read-only project memory brief for the manager with owner-run review; chat clear/trash/archive/search.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
 - Security: Argon2 owner login, one-time setup token, revocable sessions, CSRF/origin/host checks, CSP, throttling.
   Workers run as the service user with broad access; the rules ask them to confirm before catastrophic destruction.
@@ -245,11 +245,14 @@ Configuration: `AI_MANAGER_DATA` (default `~/.local/share/linko-bot-manager`), `
 
 ## Data and history
 
-Existing projects, chats, To-Dos and task/execution history rows are preserved. Schema 13 (the task queue) added columns to
+Existing projects, chats, To-Dos (including their saved revisions and hand-off records) and task/execution history rows are preserved. Schema 13 (the task queue) added columns to
 `tasks` and closed every older non-final task once (failed, "Cancelled: closed when the task queue was rebuilt"; branches and
 workspaces untouched). Old columns (`lifecycle`, `legacy`, …) and old settings keys are ignored history; the old per-provider model
-settings (`model_settings`, `model_settings:claude`) are adopted once (the most recently edited one) into `model_choice`. The earlier
-release/helper/tier/reviewer/integration/follow-up machinery is gone; its history is in Git.
+settings (`model_settings`, `model_settings:claude`) are adopted once (the most recently edited one) into `model_choice`. Schema 14
+dropped the per-project Auto-deploy values unread (older tasks that were left unmerged keep their branches and are never merged
+retroactively; `deploy` with their `task_id` merges one on request); the repair-round limit/checkpoint columns, chat mode column
+and manager brief-upkeep records are ignored history. The earlier release/helper/tier/reviewer/integration/follow-up machinery is
+gone; its history is in Git.
 
 `ai_manager/static/icons/README.md` records the owner artwork provenance.
 

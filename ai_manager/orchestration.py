@@ -14,7 +14,7 @@ from .todos import Todos
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Record deferred ideas, delegate and control tasks and projects, or retrieve scoped evidence/history. Deploy only when the owner asks to deploy now (optionally with task_id of a finished task to merge first); Auto-deploy ON merges and deploys passing work by itself. Read actions support offset pagination.",
+    "description": "Record deferred ideas (To-Dos), delegate and control tasks and projects, or retrieve scoped evidence/history. Passing work is merged and deployed automatically; use deploy only when the owner asks to deploy now (optionally with task_id of a finished task whose branch was never merged). model and effort apply to delegate only when the worker setting is Automatic. Read actions support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -37,8 +37,6 @@ MANAGER_TOOL = {
                     "read_project",
                     "list_memory",
                     "list_history",
-                    "update_brief",
-                    "record_delivery",
                     "read_task",
                     "read_result",
                     "list_tasks",
@@ -53,23 +51,15 @@ MANAGER_TOOL = {
             "constraints": {"type": "array", "items": {"type": "string"}},
             "dependencies": {"type": "array", "items": {"type": "string"}},
             "selected_context": {"type": "array", "items": {"type": "string"}},
-            "brief": {"type": "object"},
-            "retained": {"type": "array", "items": {"type": "object"}},
-            "resolved": {"type": "array", "items": {"type": "object"}},
-            "entry": {"type": "object"},
-            "established": {"type": "array", "items": {"type": "string"}},
-            "evidence": {"type": "string"},
-            "deployment_receipt": {"type": "string"},
             "objective": {"type": "string"},
             "task_id": {"type": "string"},
             "execution_id": {"type": "string"},
             "todo_id": {"type": "string"},
-            "todos": {"type": "array", "minItems": 1, "maxItems": 200, "items": {
-                "type": "object", "properties": {"id": {"type": "string"}, "revision": {"type": "integer"}},
-                "required": ["id", "revision"], "additionalProperties": False}},
+            "todos": {"type": "array", "minItems": 1, "maxItems": 200, "items": {"type": "string"}},
+            "model": {"type": "string"},
+            "effort": {"type": "string"},
             "title": {"type": "string"},
             "details": {"type": "string"},
-            "revision": {"type": "integer", "minimum": 0},
             "path": {"type": "string"},
             "reason": {"type": "string"},
             "query": {"type": "string"},
@@ -111,22 +101,18 @@ class Scheduler:
         if internal and action in {'delegate', 'continue', 'hold', 'release', 'cancel', 'resume_project', 'deploy', 'emergency_repair'}:
             raise ValueError('Worker result notices are not explicit owner authorization; the owner decides what happens next')
         if args.get("todos") and action not in {"delegate", "continue"}:
-            raise ValueError("To-Do handoff requires explicit owner scheduling")
+            raise ValueError("To-Do ids go only with delegate or continue, when the owner asks to start them")
         if action in {'emergency_repair', 'repair_status'}:
             from scripts.emergency_repair import Repair
 
             repair = Repair(self.settings.data_dir)
             if action == 'repair_status':
                 return repair.records()
-            if params.get('mode') not in {'auto', 'execute'}:
-                raise ValueError('Use Auto or Execute to request emergency repair')
             return repair.submit('manager:' + str(params.get('manager_execution_id')), args.get('objective', ''),
                                  params['conversation_id'])
         if action == 'deployment_status':
             return self.pipeline.status()
         if action == 'deploy':
-            if params.get('mode') == 'conversation':
-                raise ValueError('Use Auto or Execute to request deployment')
             project_id = args.get('project_id') or selected_project
             if not project_id or (selected_project and project_id != selected_project):
                 raise ValueError('Select the manager project to deploy')
@@ -203,29 +189,13 @@ class Scheduler:
             raise ValueError("Select the intended project; cross-project work requires All Projects context")
         project = self.registry.get(project_id)
         if action == "save_todo":
-            # Deferred recording is allowed in every mode and never calls Tasks.add/control.
-            return Todos(self.db).save(project_id, args["title"], args.get("details", ""),
-                                       args.get("todo_id"), args.get("revision"))
-        if params.get("mode") == "conversation" and action not in {
-            "read_document",
-            "read_memory",
-            "read_project",
-            "list_memory",
-            "read_task",
-            "read_result",
-            "list_tasks",
-        }:
-            raise ValueError("Conversation mode is read-only; use Auto or Execute for work")
+            # Recording a To-Do never calls Tasks.add/control.
+            return Todos(self.db).save(project_id, args["title"], args.get("details", ""), args.get("todo_id"))
         if action == "list_memory":
             rows = self.db.all("SELECT name,updated_at FROM memory WHERE project_id=? AND instr(lower(name),lower(?))>0 ORDER BY name LIMIT 21 OFFSET ?", (project_id,args.get("query", ""),offset))
             return {"records":rows[:20], "next_offset":offset+20 if len(rows)>20 else None}
         if action == "read_project":
             return project
-        if action == "update_brief":
-            return ProjectMemory(self.db, self.registry).update(project_id, args["revision"], args["brief"], retained=args.get("retained"), resolved=args.get("resolved"))
-        if action == "record_delivery":
-            return ProjectMemory(self.db, self.registry).delivery(project_id, args["revision"], args["entry"],
-                       args.get("established", []), args["evidence"], args.get("deployment_receipt"))
         selected = {k: args[k] for k in ("constraints", "dependencies", "selected_context") if args.get(k)}
         if action in {'delegate', 'continue'}:
             attachments = self.db.setting('execution_attachments:' + params['manager_execution_id'], [])
@@ -238,7 +208,7 @@ class Scheduler:
                 raise ValueError("Use continue to add instructions to an existing task")
             from .model_settings import delegation
             await self.chat.server.start()
-            route = delegation(self.db, self.chat.server)
+            route = delegation(self.db, self.chat.server, args.get("model"), args.get("effort"))
             task = self.tasks.add(
                 project_id, args["objective"], params["conversation_id"],
                 f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",
@@ -265,10 +235,9 @@ class Scheduler:
                             context[key] = list(context.get(key, [])) + [v for v in values if v not in context.get(key, [])]
                         self.db.event(conn, "task.context", context, project_id, task["id"])
                     self.db.event(conn, "manager.continued", {"call_id": params["callId"]}, project_id, task["id"], params["manager_execution_id"])
-                task = await self.core.control(task["id"], "continue", args.get("revision", task["revision"]),
-                                               args.get("objective", ""), args.get("acceptance", ""))
+                task = await self.core.control(task["id"], "continue", None, args.get("objective", ""), args.get("acceptance", ""))
             else:
-                task = await self.core.control(task["id"], action, args.get("revision", task["revision"]))
+                task = await self.core.control(task["id"], action)
             return self.tasks.context(task)
         if action in {"pause_project", "resume_project"}:
             updated = self.registry.update(
@@ -346,7 +315,6 @@ class Scheduler:
 
     async def tick(self):
         async with self.lock:
-            self.pipeline.seed()
             self.pipeline.report()
             await self.core.runner.tick()  # first: no chat state can keep queued work from starting
             await self.observer.observe({key: self.chat.server for key in self.chat.jobs})

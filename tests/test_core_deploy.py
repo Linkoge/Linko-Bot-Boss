@@ -4,7 +4,6 @@ The task core runs in-process on a second database file in the runtime's data di
 request files as the service); the service and scripts/deploy.py are the real ones, running a private copy of this code.
 """
 import asyncio
-import json
 import sqlite3
 import time
 
@@ -35,12 +34,10 @@ class Flow:
         self.project = registry.add(runtime.repo)
         monkeypatch.setattr(pipeline_module, "ROOT", runtime.repo.resolve())
         self.pipeline = Pipeline(self.db, registry)
-        self.pipeline.set(self.project["id"], True)
-        # scripts/deploy.py reads the service database for the owner's Auto-deploy setting and the project status.
+        # scripts/deploy.py reads the service database for the project status.
         with sqlite3.connect(runtime.data / "manager.sqlite3") as conn:
             conn.execute("INSERT INTO projects(id,name,path,agent_id,created_at,updated_at) VALUES(?,?,?,?,1,1)",
                          (self.project["id"], "live", str(runtime.repo), "agent"))
-            conn.execute("INSERT INTO settings VALUES(?,?)", ("auto_deploy:" + self.project["id"], json.dumps({"enabled": True})))
         self.lab = Lab()
         self.core = Core(self.db, registry, settings, self.pipeline, self.lab.factory, gate=gate or self.lab.gate)
 

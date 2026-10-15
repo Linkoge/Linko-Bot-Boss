@@ -160,7 +160,7 @@ async def test_manager_lost_completed_reply_reconciles_without_second_model_call
     db, registry, chat, settings = system
     faults = Faults(["lost_completed"])
     chat.server = faults.factory(settings)
-    request = await chat.submit(registry.list()[0]["id"], "Authorized work", mode="conversation")
+    request = await chat.submit(registry.list()[0]["id"], "Authorized work")
     await settle(chat)
     eligible(db)
     await chat.recover()
@@ -275,7 +275,7 @@ async def test_graceful_manager_shutdown_and_startup_resume_original_request(sys
     db, registry, chat, settings = system
     faults = Faults(["hold", "success"])
     chat.server = faults.factory(settings)
-    request = await chat.submit(registry.list()[0]["id"], "Keep the original request", mode="execute")
+    request = await chat.submit(registry.list()[0]["id"], "Keep the original request")
     await asyncio.sleep(0.01)
     await chat.close()
     row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
@@ -286,7 +286,6 @@ async def test_graceful_manager_shutdown_and_startup_resume_original_request(sys
     await settle(restored)
     assert db.one("SELECT status FROM executions WHERE id=?", (request["execution_id"],))["status"] == "completed"
     assert faults.calls[-1]["message"] == "Keep the original request"
-    assert faults.calls[-1]["mode"] == "execute"
     assert len(db.all("SELECT * FROM messages WHERE role='user'")) == 1
     assert len(db.all("SELECT * FROM messages WHERE role='assistant'")) == 1
 
@@ -299,7 +298,7 @@ async def test_manager_failure_before_server_initialization_keeps_request_durabl
         raise TimeoutError("Connection timeout before model catalog")
 
     monkeypatch.setattr(chat.server, "start", offline)
-    request = await chat.submit(registry.list()[0]["id"], "Original request", mode="conversation")
+    request = await chat.submit(registry.list()[0]["id"], "Original request")
     await settle(chat)
     row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
     assert row["status"] == "recovering" and row["thread_id"] is None
@@ -313,15 +312,15 @@ async def test_manager_failure_before_server_initialization_keeps_request_durabl
 
 
 @pytest.mark.asyncio
-async def test_migration_reconciles_older_launch_and_preserves_read_only_mode(system):
+async def test_migration_reconciles_older_launch(system):
     db, registry, chat, settings = system
-    request = await chat.submit(registry.list()[0]["id"], "Discuss only", mode="conversation")
+    request = await chat.submit(registry.list()[0]["id"], "Discuss only")
     await settle(chat)
     row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
     with db.transaction() as conn:
         conn.execute("DELETE FROM schema_version WHERE version=9")
         conn.execute(
-            "UPDATE executions SET finished_at=NULL,status='starting',turn_id=NULL,launch_key=NULL,launch_input=NULL,mode='auto',pid=NULL WHERE id=?",
+            "UPDATE executions SET finished_at=NULL,status='starting',turn_id=NULL,launch_key=NULL,launch_input=NULL,pid=NULL WHERE id=?",
             (row["id"],),
         )
         conn.execute("UPDATE messages SET status='streaming' WHERE id=?", (request["message_id"],))
@@ -348,7 +347,7 @@ async def test_migration_reconciles_older_launch_and_preserves_read_only_mode(sy
     restored = Chat(restored_db, registry, faults.factory(settings))
     await restored.recover()
     migrated = restored_db.one("SELECT * FROM executions WHERE id=?", (row["id"],))
-    assert migrated["status"] == "completed" and migrated["mode"] == "conversation"
+    assert migrated["status"] == "completed"
     assert migrated["turn_id"] == "old-completed" and not faults.calls
 
 

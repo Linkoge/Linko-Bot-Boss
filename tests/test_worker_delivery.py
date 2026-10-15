@@ -34,19 +34,19 @@ async def test_historical_transport_hidden_without_rewriting_user_or_audit(syste
     reopened = Chat(Database(db.path), registry, chat.server)
     for rows in [reopened.history(project['id'])['messages'], reopened.saved_history(origin, project['id'])['messages']]:
         assert [m['id'] for m in rows] == ['owner-json', 'real-answer', 'unproven']
-    prompt, _ = reopened.prompt(reopened.conversation(project['id']), 'Hello', 'auto', 'fresh', 'fresh-thread', None)
+    prompt, _ = reopened.prompt(reopened.conversation(project['id']), 'Hello', 'fresh', 'fresh-thread', None)
     assert [m['id'] for m in prompt['conversation_history']] == ['owner-json', 'real-answer', 'unproven']
     assert 'secret bulk objective' not in json.dumps(prompt)
     assert db.all('SELECT * FROM messages ORDER BY rowid') == before
     scheduler = Scheduler(db, registry, settings, workers, reopened)
-    result = await scheduler.manager_action(project['id'], {'tool': 'manager_action', 'arguments': {'action': 'read_result', 'execution_id': claimed['lease_owner']}, 'mode': 'conversation'})
+    result = await scheduler.manager_action(project['id'], {'tool': 'manager_action', 'arguments': {'action': 'read_result', 'execution_id': claimed['lease_owner']}})
     assert result['next_offset'] == 12000
     second = await scheduler.manager_action(project['id'], {'tool': 'manager_action', 'arguments': {'action': 'read_result', 'execution_id': claimed['lease_owner'], 'offset': 12000}})
     assert second['output'] == ('internal report ' * 5000)[12000:24000]
     with pytest.raises(ValueError, match='another project'):
         await scheduler.manager_action(registry.list()[1]['id'], {'tool': 'manager_action', 'arguments': {'action': 'read_result', 'execution_id': claimed['lease_owner']}})
     archived = reopened.reset(project['id'], origin, 'unproven', True, archive=True)
-    fresh, _ = reopened.prompt(reopened.conversation(project['id']), 'New chat', 'auto', 'new', 'new-thread', None)
+    fresh, _ = reopened.prompt(reopened.conversation(project['id']), 'New chat', 'new', 'new-thread', None)
     assert fresh['conversation_history'] == []
     assert archived['conversation_id'] != origin
     assert db.all('SELECT * FROM messages ORDER BY rowid') == before
@@ -80,6 +80,6 @@ async def test_instruction_upgrade_rotates_native_thread_and_compact_failure_pre
     assert [m['role'] for m in chat.history(project['id'])['messages']] == ['assistant']
     reopened = Chat(Database(db.path), registry, FakeServer(settings))
     # New native session for the same conversation retains actual owner-facing content only.
-    fresh, _ = reopened.prompt(reopened.conversation(project['id']), 'Status', 'auto', 'next', 'next-thread', None)
+    fresh, _ = reopened.prompt(reopened.conversation(project['id']), 'Status', 'next', 'next-thread', None)
     assert all(m['role'] == 'assistant' for m in fresh['conversation_history'])
     assert 'large objective' not in json.dumps(fresh)

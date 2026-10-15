@@ -20,8 +20,7 @@ with db.transaction() as conn:
     conn.execute("UPDATE tasks SET state='running',lease_owner='lease' WHERE id=?", (t['running']['id'],))
     conn.execute("INSERT INTO executions(id,task_id,project_id,agent_id,status,started_at,turn_id) VALUES('lease',?,?,'execution','running',?,'turn')", (t['running']['id'], p['id'], time.time()))
     conn.execute("UPDATE tasks SET held=1 WHERE id=?", (t['held']['id'],))
-    conn.execute("UPDATE tasks SET state='failed',blocker='No progress: smoke failed the same way in consecutive rounds (2 failure(s))',rounds=3,round_limit=3,checkpoints=? WHERE id=?",
-                 ('[{"round":3,"decision":"stop","reason":"smoke failed the same way"}]', t['failed']['id']))
+    conn.execute("UPDATE tasks SET state='failed',blocker='Stopped after 5 repair rounds; still failing: [smoke]',rounds=5 WHERE id=?", (t['failed']['id'],))
     conn.execute("UPDATE tasks SET state='done' WHERE id=?", (t['done']['id'],))
     # Keep the fixture independent of dispatch: nothing may start while the browser looks at it.
     conn.execute("UPDATE tasks SET queued_at=queued_at+1e9 WHERE state='queued'")
@@ -89,7 +88,7 @@ uvicorn.run(app, host='127.0.0.1', port=PORT, log_level='error')
                     assert buttons('held') == ['Release', 'Cancel'] and 'Held' in row('held').inner_text()
                     assert buttons('failed') == ['Continue'] and buttons('done') == []
                     failed = row('failed').inner_text()
-                    assert 'No progress' in failed and 'Repair rounds 3 of 3' in failed and 'stop' in failed
+                    assert 'Stopped after 5 repair rounds' in failed and 'Repair rounds 5 of 5' in failed
                     assert page.locator('#task-count').inner_text() == '3'  # running, queued, held
                     if interact:
                         row('queued').get_by_role('button', name='Hold').click()
@@ -99,7 +98,7 @@ uvicorn.run(app, host='127.0.0.1', port=PORT, log_level='error')
                         row('held').get_by_role('button', name='Cancel').click()
                         page.wait_for_function("() => [...document.querySelectorAll('#task-list article')].some(a=>a.innerText.includes('held objective')&&a.innerText.includes('Cancelled by owner'))")
                         row('failed').get_by_role('button', name='Continue').click()
-                        page.wait_for_function("() => [...document.querySelectorAll('#task-list article')].some(a=>a.innerText.includes('failed objective')&&a.innerText.includes('Repair rounds 3 of 3')&&a.querySelector('.task-controls').innerText.includes('Hold'))")
+                        page.wait_for_function("() => [...document.querySelectorAll('#task-list article')].some(a=>a.innerText.includes('failed objective')&&a.innerText.includes('Repair rounds 5 of 5')&&a.querySelector('.task-controls').innerText.includes('Hold'))")
                     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
                     assert not errors, errors
                     page.close()

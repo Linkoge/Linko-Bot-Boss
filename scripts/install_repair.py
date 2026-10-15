@@ -69,7 +69,10 @@ WantedBy=timers.target
 def status(data, home):
     root, units = data / 'repair', home / '.config/systemd/user'
     config = read(root / 'installed.json', {})
-    unit = lambda *args: systemctl(*args, TIMER, check=False).stdout.strip()
+
+    def unit(*args):
+        return systemctl(*args, TIMER, check=False).stdout.strip()
+
     return {'installed': bool(config) and (root / 'launcher.py').is_file() and all((units / u).is_file() for u in UNITS),
             'enabled': unit('is-enabled'), 'active': unit('is-active'), 'conversation': config.get('conversation_id'),
             'auto_detect': config.get('auto_detect'), 'launcher': str(root / 'launcher.py'),

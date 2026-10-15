@@ -2,12 +2,11 @@
 
 States: queued -> running -> done | failed. `held` is a flag on a queued task (skipped until released); order is the
 only dependency. A worker implements on an isolated branch, the application runs the permanent checks (the fixed smoke
-suite plus the test files the branch added or changed), repairs happen in durable rounds (3, then +3 twice when the
-checkpoint sees progress, hard cap 9), and a passing branch is merged into main, which asks the deploy script to deploy.
+suite plus the test files the branch added or changed), repairs happen in durable rounds (at most 5, then the task stops
+and reports), and a passing branch is always merged into main, which asks the deploy script to deploy.
 """
 
 import asyncio
-import hashlib
 import json
 import logging
 import os
@@ -25,11 +24,11 @@ from .codex import RULES, AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
 from .fence import Busy, main_branch
 from .model_settings import RouteBlocked, assignment_route
-from .pipeline import IDENTITY, Conflict, enabled, git
+from .pipeline import IDENTITY, Conflict, git
 from .recovery import turn_error
 from .runner import Runner, plain
 
-FIRST_ROUNDS, GRANT, HARD_CAP = 3, 3, 9
+REPAIR_ROUNDS = 5
 SMOKE_SECONDS, SUITE_SECONDS, PROBE_SECONDS = 180, 600, 60
 WORKER_INSTRUCTIONS = RULES + "\nYou are a worker. The application runs the permanent checks and merges; you implement.\n"
 TEST_FILE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
@@ -89,7 +88,7 @@ def interpreter(root):
 
 
 def run_gate(root, base):
-    """Fixed smoke suite plus the branch's own test files. Returns {ok, checks, failures, count, sig, output}."""
+    """Fixed smoke suite plus the branch's own test files. Returns {ok, checks, failures, count, output}."""
     root = Path(root)
     env = {**os.environ, "PYTHONPATH": str(root), "AI_MANAGER_SECURE_COOKIE": "0"}
     failed = []
@@ -106,25 +105,8 @@ def run_gate(root, base):
 
 def outcome(failed):
     failures = [line for f in failed for line in f["failures"]]
-    normal = [re.sub(r"\d+", "#", line) for line in failures]
     return {"ok": not failed, "checks": [f["check"] for f in failed], "failures": failures[:30], "count": len(failures),
-            "sig": hashlib.sha256("\n".join(sorted(normal)).encode()).hexdigest()[:16],
             "output": "\n".join(f["output"] for f in failed)[-3000:]}
-
-
-def evaluate(history):
-    """Checkpoint: ('continue'|'stop', plain reason). Progress = failing check changed or fewer failures."""
-    now, before = history[-1], history[-2] if len(history) > 1 else None
-    if not before or before.get("ok"):
-        return "continue", "no earlier failing round to compare; granting 3 more rounds"
-    if now["checks"] != before["checks"]:
-        return "continue", f"the failing check changed from {'+'.join(before['checks'])} to {'+'.join(now['checks'])}"
-    if now["count"] < before["count"]:
-        return "continue", f"fewer failures ({before['count']} then {now['count']})"
-    if now["count"] == before["count"] and now["sig"] != before["sig"]:
-        return "continue", f"{'+'.join(now['checks'])} still fails but no longer the same way"
-    return "stop", (f"No progress: {'+'.join(now['checks'])} failed the same way in consecutive rounds "
-                    f"({now['count']} failure(s)); first: {now['failures'][0] if now['failures'] else 'unknown'}")
 
 
 # ---- the queue --------------------------------------------------------------------------------------------------
@@ -135,9 +117,9 @@ class Tasks:
     @staticmethod
     def record(row):
         row = dict(row)
-        row["checkpoints"] = json.loads(row["checkpoints"])
         row["merge"] = json.loads(row["merge"]) if row["merge"] else None
         row["history"] = json.loads(row.pop("gate_history"))
+        row["repair_limit"] = REPAIR_ROUNDS
         row["status"] = "held" if row["held"] and row["state"] == "queued" else row["state"]
         return row
 
@@ -150,8 +132,8 @@ class Tasks:
 
     @staticmethod
     def context(task):
-        keys = ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision", "rounds", "round_limit",
-                "workspace", "workspace_branch", "merge", "checkpoints", "retry_at")
+        keys = ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision", "rounds",
+                "workspace", "workspace_branch", "merge", "retry_at")
         return {k: task.get(k) for k in keys} | {"worker_route": task.get("worker_route")}
 
     def list(self, project_id=None):
@@ -245,7 +227,7 @@ class Tasks:
                 fields = {"description": text, "acceptance": extra, "held": 0}
                 if state in {"done", "failed"}:  # counters stay: repair rounds are never reset
                     fields |= {"state": "queued", "queued_at": now, "blocker": "", "stage": "work", "requeues": 0,
-                               "waits": 0, "retry_at": None, "gate_history": "[]", "open_round": 0}
+                               "waits": 0, "retry_at": None, "gate_history": "[]"}
             sets = ",".join(f"{k}=?" for k in fields)
             conn.execute(f"UPDATE tasks SET {sets},revision=revision+1,updated_at=? WHERE id=?", (*fields.values(), now, task_id))
             self.db.event(conn, "task." + action, {}, task["project_id"], task_id)
@@ -285,21 +267,18 @@ class Tasks:
         return self.get(claimed) if claimed else None
 
     def request_merge(self, task_id):
-        """Owner asked to deploy this task now even though Auto-deploy is off: merge it (a finished task goes round again
-        at the merge stage, without another AI turn)."""
+        """Owner asked to deploy a finished task whose branch never reached main: it goes round again at the merge stage,
+        without another AI turn."""
         with self.db.transaction() as conn:
             task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if not task or not task["workspace_branch"]:
                 raise ValueError("Task has no branch to merge")
             if (json.loads(task["merge"]) if task["merge"] else {}).get("state") == "merged":
                 raise ValueError("Task is already merged")
-            if task["state"] == "failed":
-                raise ValueError("A failed task is not merged; continue it first")
-            fields = {"merge_requested": 1}
-            if task["state"] == "done":
-                fields |= {"state": "queued", "stage": "merge", "queued_at": time.time(), "requeues": 0, "waits": 0, "blocker": ""}
-            sets = ",".join(f"{k}=?" for k in fields)
-            conn.execute(f"UPDATE tasks SET {sets},revision=revision+1,updated_at=? WHERE id=?", (*fields.values(), time.time(), task_id))
+            if task["state"] != "done":
+                raise ValueError("Only a finished task is merged on request; a failed task needs continue first")
+            conn.execute("UPDATE tasks SET state='queued',stage='merge',queued_at=?,requeues=0,waits=0,blocker='',"
+                         "revision=revision+1,updated_at=? WHERE id=?", (time.time(), time.time(), task_id))
             self.db.event(conn, "task.merge_requested", {}, task["project_id"], task_id)
         return self.get(task_id)
 
@@ -387,7 +366,6 @@ class Core:
             if task["stage"] == "work":
                 kind = "repair" if task["history"] and not task["history"][-1].get("ok") else "work"
                 prompt = self.prompt(task, project, root, kind)
-                route = assignment_route(self.db, server, task)  # policy may have changed since the last turn
                 text = await self.turn(eid, server, thread_id, queue, prompt, route, task)
                 if mark := re.search(r"^\W*RESULT:\s*FAILED\s*-?\s*(.*)$", text, re.I | re.M):
                     return self.end(eid, "failed", "Worker could not finish: " + (mark.group(1).strip() or "no reason given")[:400], text)
@@ -439,7 +417,7 @@ class Core:
 
     def prompt(self, task, project, root, kind):
         value = {"objective": task["description"],
-                 "repair_rounds": {"used": task["rounds"], "limit": task["round_limit"], "hard_cap": HARD_CAP}}
+                 "repair_rounds": {"used": task["rounds"], "limit": REPAIR_ROUNDS}}
         if kind == "repair":  # the retained thread already holds the project, context and workspace
             last = task["history"][-1]
             value["repair"] = {"round": task["rounds"], "failed_checks": last["checks"], "failures": last["failures"][:20],
@@ -524,29 +502,20 @@ class Core:
     def next_round(self, task_id, result):
         """Record a failing check and decide: None to run the next repair round, else the plain reason to stop.
 
-        The counter (rounds, round_limit, checkpoints) lives on the task row and is never reset. A repair that was
-        charged but interrupted (open_round) is resumed without charging again.
+        The counter lives on the task row and is never reset: after REPAIR_ROUNDS repairs the task stops and reports.
         """
         with self.db.transaction() as conn:
             task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
-            history = (json.loads(task["gate_history"]) + [{**{k: result[k] for k in ("ok", "checks", "failures", "count", "sig")},
+            history = (json.loads(task["gate_history"]) + [{**{k: result[k] for k in ("ok", "checks", "failures", "count")},
                                                            "output": result["output"][-2500:], "round": task["rounds"]}])[-8:]
-            rounds, limit, checkpoints, stop = task["rounds"], task["round_limit"], json.loads(task["checkpoints"]), None
-            if rounds >= HARD_CAP:
-                stop = f"Stopped at the hard cap of {HARD_CAP} repair rounds; still failing: {result['failures'][:1] or result['checks']}"
-            elif rounds >= limit:
-                decision, reason = evaluate(history)
-                checkpoints.append({"round": rounds, "decision": decision, "reason": reason, "at": time.time(),
-                                    "new_limit": limit + GRANT if decision == "continue" else limit})
-                if decision == "stop":
-                    stop = reason
-                else:
-                    limit += GRANT
-            if stop is None:
+            rounds, stop = task["rounds"], None
+            if rounds >= REPAIR_ROUNDS:
+                stop = f"Stopped after {REPAIR_ROUNDS} repair rounds; still failing: {result['failures'][:1] or result['checks']}"
+            else:
                 rounds += 1
-            conn.execute("UPDATE tasks SET gate_history=?,rounds=?,round_limit=?,checkpoints=?,open_round=?,stage='work',updated_at=? WHERE id=?",
-                         (json.dumps(history), rounds, limit, json.dumps(checkpoints), 0 if stop else 1, time.time(), task_id))
-            self.db.event(conn, "task.round", {"rounds": rounds, "limit": limit, "stop": stop, "checks": result["checks"]},
+            conn.execute("UPDATE tasks SET gate_history=?,rounds=?,stage='work',updated_at=? WHERE id=?",
+                         (json.dumps(history), rounds, time.time(), task_id))
+            self.db.event(conn, "task.round", {"rounds": rounds, "limit": REPAIR_ROUNDS, "stop": stop, "checks": result["checks"]},
                           task["project_id"], task_id)
         return stop
 
@@ -561,7 +530,7 @@ class Core:
         with self.db.transaction() as conn:
             task = conn.execute("SELECT gate_history FROM tasks WHERE id=?", (task_id,)).fetchone()
             history = (json.loads(task["gate_history"]) + [{"ok": True}])[-8:]
-            conn.execute("UPDATE tasks SET stage='merge',open_round=0,gate_history=? WHERE id=?", (json.dumps(history), task_id))
+            conn.execute("UPDATE tasks SET stage='merge',gate_history=? WHERE id=?", (json.dumps(history), task_id))
 
     # -- merge and deploy ------------------------------------------------------------------------------------------
     async def deliver(self, task, project, root, eid):
@@ -570,12 +539,8 @@ class Core:
         Returns {"reason": ..., "merge": ...} when finished, or {"outcome": failing-result} to go round again.
         """
         head = git(root, "rev-parse", "HEAD")
-        with self.db.connect() as conn:
-            wanted = enabled(conn, task["project_id"]) or bool(task["merge_requested"])
         if git(root, "rev-list", "--count", f"{task['workspace_base']}..HEAD") == "0":
             return {"reason": "", "merge": {"state": "none", "reason": "no changes"}}
-        if not wanted:
-            return {"reason": "", "merge": {"state": "skipped", "reason": f"Auto-deploy is off; branch {task['workspace_branch']} kept"}}
         shared = Path(self.registry.allowed_path(project["path"]))
         for _ in range(3):  # main can move while we sync; a few quick retries are not repair rounds
             branch = main_branch(shared)
@@ -621,7 +586,7 @@ class Core:
             conn.execute("""UPDATE executions SET status=?,output=COALESCE(?,output),error=?,finished_at=?,delivery='pending'
                 WHERE id=?""", ("completed" if state == "done" else "failed", output, reason, now, eid))
             conn.execute("""UPDATE tasks SET state=?,blocker=?,lease_owner=NULL,retry_at=NULL,merge=COALESCE(?,merge),
-                merge_requested=0,revision=revision+1,updated_at=? WHERE id=?""",
+                revision=revision+1,updated_at=? WHERE id=?""",
                          (state, reason, json.dumps(merge) if merge else None, now, task["id"]))
             conn.execute("UPDATE questions SET status='expired' WHERE execution_id=? AND status='pending'", (eid,))
             self.db.event(conn, "worker.finished", {"status": state, "error": reason}, task["project_id"], task["id"], eid)

@@ -41,7 +41,7 @@ async def test_context_updates_survive_restart_and_clear_removed_constraints(sys
     await asyncio.gather(*list(restored.jobs.values()))
     followup = json.loads(chat.server.prompts[-1])
     assert followup.pop('worker')['effort'] in {'low', 'medium', 'high'}
-    assert followup == {"mode": "auto", "message": "Keep talking"}
+    assert followup == {"message": "Keep talking"}
     db.set_setting("global_instructions", "")
     await restored.submit(project["id"], "The constraint changed")
     await asyncio.gather(*list(restored.jobs.values()))
@@ -49,7 +49,7 @@ async def test_context_updates_survive_restart_and_clear_removed_constraints(sys
 
 
 @pytest.mark.asyncio
-async def test_old_history_tasks_and_memory_are_retrievable_in_conversation_mode(system):
+async def test_old_history_tasks_and_memory_are_retrievable(system):
     db, registry, chat, settings = system
     project, other = registry.list()
     origin = chat.conversation(project["id"])["id"]
@@ -74,7 +74,7 @@ async def test_old_history_tasks_and_memory_are_retrievable_in_conversation_mode
                 ),
             )
     assert "assignments" not in chat.context(project["id"])
-    prompt, _ = chat.prompt(chat.conversation(project["id"]), "New result", "auto", "new", "new-thread", None)
+    prompt, _ = chat.prompt(chat.conversation(project["id"]), "New result", "new", "new-thread", None)
     assert prompt["conversation_history"][0]["content"] == "original authorized goal"
     scheduler = Scheduler(db, registry, settings, Core(db, registry, settings, Pipeline(db, registry), NativeFixture), chat)
 
@@ -85,7 +85,6 @@ async def test_old_history_tasks_and_memory_are_retrievable_in_conversation_mode
                 "tool": "manager_action",
                 "arguments": {"action": action, **args},
                 "conversation_id": origin,
-                "mode": "conversation",
             },
         )
 
@@ -133,7 +132,7 @@ async def test_manager_usage_is_persisted_with_native_events(system):
             return response
 
     chat.server = UsageServer(settings)
-    result = await chat.submit(registry.list()[0]["id"], "Conversation only", mode="conversation")
+    result = await chat.submit(registry.list()[0]["id"], "Conversation only")
     await asyncio.gather(*list(chat.jobs.values()))
     row = db.one("SELECT * FROM executions WHERE id=?", (result["execution_id"],))
     assert json.loads(row["usage"])["turn"]["inputTokens"] == 100
@@ -146,7 +145,7 @@ async def test_manager_usage_is_persisted_with_native_events(system):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("used", [0, 3, 4])
+@pytest.mark.parametrize("used", [0, 3, 5])
 async def test_worker_continuation_keeps_thread_and_the_durable_round_counter(system, used):
     db, registry, chat, settings = system
     project = registry.list()[0]
@@ -170,7 +169,7 @@ async def test_worker_continuation_keeps_thread_and_the_durable_round_counter(sy
     assert Tasks(db).get(task["id"])["native_thread"] == first_thread
     continued = json.loads(servers[-1].prompts[-1])
     assert "Also handle the edge case" in continued["objective"] and "First objective" in continued["objective"]
-    assert continued["repair_rounds"] == {"used": used, "limit": 3, "hard_cap": 9}
+    assert continued["repair_rounds"] == {"used": used, "limit": 5}
     assert "continuation" in continued
     assert (
         json.loads(

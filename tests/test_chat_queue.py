@@ -20,16 +20,16 @@ def complete(chat, faults, execution_id):
 
 @pytest.mark.smoke
 @pytest.mark.asyncio
-async def test_busy_fifo_modes_history_and_completion_race(system):
+async def test_busy_fifo_history_and_completion_race(system):
     db, registry, chat, settings = system
     faults = Faults(['hold', 'hold'])
     chat.server = faults.factory(settings)
     project = registry.list()[0]['id']
     conversation = chat.conversation(project)
-    first = await chat.submit(project, 'First', conversation['id'], mode='conversation', request_id='queue-first-00001')
+    first = await chat.submit(project, 'First', conversation['id'], request_id='queue-first-00001')
     await asyncio.sleep(.02)
-    requests = [dict(project_id=project, content=text, conversation_id=conversation['id'], mode=mode, request_id=key)
-                for text, mode, key in [('Second', 'auto', 'queue-second-0001'), ('Third', 'execute', 'queue-third-00001')]]
+    requests = [dict(project_id=project, content=text, conversation_id=conversation['id'], request_id=key)
+                for text, key in [('Second', 'queue-second-0001'), ('Third', 'queue-third-00001')]]
     second, third = [await chat.submit(**request) for request in requests]
     assert await chat.submit(**requests[0]) == second
     await asyncio.gather(chat.recover(), chat.recover())
@@ -37,7 +37,7 @@ async def test_busy_fifo_modes_history_and_completion_race(system):
     assert len(chat.jobs) == 1
     assert [m['status'] for m in chat.history(project)['messages'] if m['role'] == 'user'] == ['processing', 'queued', 'queued']
     # Cold history reconstruction must never reveal later owner requests.
-    prompt, _ = chat.prompt(conversation, 'First', 'conversation', first['execution_id'], 'fresh', None)
+    prompt, _ = chat.prompt(conversation, 'First', first['execution_id'], 'fresh', None)
     assert prompt['conversation_history'] == []
     complete(chat, faults, first['execution_id'])
     await settle(chat)
@@ -54,7 +54,6 @@ async def test_busy_fifo_modes_history_and_completion_race(system):
         await asyncio.gather(chat.recover(), chat.recover())
         await settle(chat)
     assert [p['message'] for p in faults.calls] == ['First', 'Second', 'Third', 'Fourth']
-    assert [p['mode'] for p in faults.calls] == ['conversation', 'auto', 'execute', 'auto']
     assert all(db.one('SELECT status FROM executions WHERE id=?', (r['execution_id'],))['status'] == 'completed'
                for r in [first, second, third, fourth])
     assert len(db.all("SELECT * FROM messages WHERE role='user'")) == 4
@@ -146,7 +145,7 @@ async def test_other_conversation_runs_independently_and_stop_tail_is_explicit(s
     first = await chat.submit(None, 'Global active')
     await asyncio.sleep(.02)
     second = await chat.submit(None, 'Global queued')
-    other = await chat.submit(project, 'Project active', mode='conversation')
+    other = await chat.submit(project, 'Project active')
     await asyncio.sleep(.02)
     assert len(faults.calls) == 2 and len(chat.jobs) == 2
     await chat.interrupt(second['execution_id'])
@@ -166,16 +165,16 @@ async def test_active_history_tool_cannot_consume_future_queued_request(system):
 
     db, registry, chat, settings = system
     chat.launch = lambda *args: None
-    first = await chat.submit(None, 'Current instruction', mode='conversation')
-    second = await chat.submit(None, 'Future instruction', mode='execute')
+    first = await chat.submit(None, 'Current instruction')
+    second = await chat.submit(None, 'Future instruction')
     scheduler = Scheduler(db, registry, settings, Core(db, registry, settings, Pipeline(db, registry)), chat)
     params = dict(tool='manager_action', manager_execution_id=first['execution_id'],
-                  conversation_id=chat.conversation()['id'], mode='conversation')
+                  conversation_id=chat.conversation()['id'])
     result = await scheduler.manager_action(None, params | {'arguments': {'action': 'read_history'}})
     assert [m['content'] for m in result['messages']] == ['Current instruction']
     future = db.one("SELECT id FROM messages WHERE execution_id=? AND role='user'", (second['execution_id'],))['id']
     with pytest.raises(ValueError, match='Unknown message'):
         await scheduler.manager_action(None, params | {'arguments': {'action': 'read_history', 'message_id': future}})
-    with pytest.raises(ValueError, match='Auto or Execute'):
+    with pytest.raises(ValueError, match='Select the manager project'):
         await scheduler.manager_action(None, params | {'arguments': {'action': 'deploy', 'project_id': None}})
     assert not scheduler.pipeline.pending()

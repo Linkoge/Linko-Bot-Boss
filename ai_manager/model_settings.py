@@ -1,9 +1,9 @@
-"""One manager choice and one worker choice, any provider/model/effort. What the panel shows is what is saved and
-dispatched: new tasks pin the saved worker pair, manager turns use the saved manager pair."""
+"""One manager choice and one worker choice, any provider, model and effort the catalog offers. What the panel shows is
+what is saved and dispatched: manager turns use the saved manager pair; a new task runs on the saved worker pair, or, when
+the worker is Automatic (null), on whatever the manager picks for it. A task keeps the pair it first ran on."""
 import copy
 import json
 
-from .model_families import PROVIDER_FAMILIES, family, latest, resolve
 from .providers import provider_of
 
 KEY = 'model_choice'
@@ -13,7 +13,6 @@ class RouteBlocked(ValueError):
     """No provider turn may start until the retained choice is usable."""
 
 
-LEVELS = ('low', 'medium', 'high')
 DEFAULT = {'manager': {'effort': 'low'}, 'worker': {'effort': 'medium'}}  # no model yet: the provider's default model
 
 
@@ -35,45 +34,28 @@ def saved(db):
 
 
 def choices(server, provider):
-    result = []
-    for name in PROVIDER_FAMILIES[provider]:
-        try:
-            model = latest(server, name)
-        except ValueError:
-            model = name  # Stable unavailable family label; never a version fallback.
-        levels = [e['reasoningEffort'] for e in next(
-            (m['supportedReasoningEfforts'] for m in server.catalog if m['model'] == model and not m.get('hidden')), [])
-            if e['reasoningEffort'] in LEVELS]
-        result.append({'name': name, 'model': model, 'levels': levels})
-    return result
+    """Every visible catalog model of the provider with the efforts it supports."""
+    return [{'name': m.get('displayName') or m['model'], 'model': m['model'],
+             'levels': [e['reasoningEffort'] for e in m['supportedReasoningEfforts']]}
+            for m in server.catalog if not m.get('hidden') and provider_of(m['model']) == provider]
 
 
 def current(db, server=None):
-    """The saved choice with families projected to the newest installed model (kept visible when unavailable)."""
+    """The saved choice; a role saved without a model shows the provider's default model."""
     value = copy.deepcopy(saved(db))
     for role in ('manager', 'worker'):
-        pair = value[role]
-        if not server:
-            continue
-        if not pair.get('model'):
+        if server and value[role] and not value[role].get('model'):
             try:
-                value[role] = server.route(None, pair['effort'])
+                value[role] = server.route(None, value[role]['effort'])
             except ValueError:
                 pass
-        elif name := family(pair['model']):
-            try:
-                pair['model'] = latest(server, name)
-            except ValueError:
-                pair['model'] = name
     return value
 
 
 def validate_pair(server, pair):
-    if not isinstance(pair, dict) or set(pair) != {'model', 'effort'}:
-        raise ValueError('Choose an exact model and reasoning pair')
-    if not isinstance(pair['model'], str) or not family(pair['model']) or pair['effort'] not in LEVELS:
-        raise ValueError('Choose a Codex or Claude model and Low, Medium or High')
-    return resolve(server, pair)
+    if not isinstance(pair, dict) or set(pair) != {'model', 'effort'} or not pair['model'] or not isinstance(pair['model'], str):
+        raise ValueError('Choose an exact model and reasoning effort')
+    return server.route(**pair)
 
 
 def save(db, server, value):
@@ -81,15 +63,11 @@ def save(db, server, value):
             or type(value['revision']) is not int or value['revision'] < 0):
         raise ValueError('Invalid model settings')
     new = {'revision': value['revision'] + 1, 'manager': validate_pair(server, value['manager']),
-           'worker': validate_pair(server, value['worker'])}
+           'worker': None if value['worker'] is None else validate_pair(server, value['worker'])}
     with db.transaction() as conn:
         if saved(db)['revision'] != value['revision']:
             raise ValueError('Settings changed; reopen the panel before editing')
         conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, json.dumps(new)))
-        # Other readers (chat routes, memory review) take the two roles from here.
-        routes = {'interactive': new['manager'], 'execution': new['worker']}
-        conn.execute("INSERT INTO settings VALUES('model_routes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                     (json.dumps(routes),))
         db.event(conn, 'models.saved', new)
     return new
 
@@ -98,20 +76,31 @@ def manager_route(db):
     return saved(db)['manager']
 
 
-def delegation(db, server):
-    """The worker pair a new task pins: exactly the saved worker."""
-    return {**resolve(server, saved(db)['worker']), 'mode': 'manual', 'settings_revision': saved(db)['revision']}
+def delegation(db, server, model=None, effort=None):
+    """The pair a new task runs on: the saved worker, or, when the worker is Automatic, the manager's pick
+    (the provider's default model and effort for whatever it leaves out)."""
+    if worker := saved(db)['worker']:
+        model, effort = worker.get('model'), worker['effort']
+    return server.route(model, effort)
+
+
+def worker_context(db, server):
+    """What the manager is told about the worker: the fixed pair, or the catalog to pick from when Automatic."""
+    return current(db, server)['worker'] or {
+        'automatic': 'pass model and effort to delegate; leave them out for the provider default',
+        'available': {m['model']: [e['reasoningEffort'] for e in m['supportedReasoningEfforts']]
+                      for m in server.catalog if not m.get('hidden')}}
 
 
 def assignment_route(db, server, task):
-    """The pair pinned to this task (its first dispatch decides); a continued task keeps it."""
+    """The pair this task runs on, recorded when it is first resolved; a continued task keeps it."""
     row = db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.model_selected' ORDER BY seq DESC LIMIT 1", (task['id'],))
     if row:
         selected = json.loads(row['payload'])
     else:
         prior = db.one("SELECT model,effort FROM executions WHERE task_id=? AND model IS NOT NULL ORDER BY started_at LIMIT 1", (task['id'],))
         try:
-            selected = {**prior, 'mode': 'manual', 'settings_revision': 0} if prior else delegation(db, server)
+            selected = prior or delegation(db, server)
         except ValueError as error:
             raise RouteBlocked(str(error)) from error
         with db.transaction() as conn:

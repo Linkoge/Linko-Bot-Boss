@@ -35,20 +35,13 @@ def ready(system):
         "decisions": ["SQLite: simple durable storage"],
         "pending": ["Open reboot acceptance"],
     }
-    snapshot = memory.update(project["id"], snapshot["revision"], brief)
-    return project["id"], memory, snapshot
+    return project["id"], memory, activate(memory, project["id"], brief)
 
 
-def entry(i, deployment="not_requested"):
-    return {
-        "id": str(i),
-        "date": "2026-10-12",
-        "change": "Feature " + str(i),
-        "effect": "Durable behavior",
-        "verification": "Tested",
-        "deployment": deployment,
-        "report": "docs/report.md",
-    }
+def activate(memory, project, brief, reason="test fixture"):
+    with memory.db.transaction() as conn:
+        memory.activate(conn, project, memory.control(conn, project), brief, reason)
+    return memory.snapshot(project)
 
 
 def test_fresh_chat_brief_retains_goals_state_global_preference_without_bulk_notes(system):
@@ -83,7 +76,7 @@ async def test_archive_excluded_from_fresh_prompt_and_explicitly_retrievable(sys
         )
     chat.reset(project, old["id"], "old", True, archive=True)
     fresh = chat.conversation(project)
-    prompt, _ = chat.prompt(fresh, "new question", "auto", "new", "new-thread", None)
+    prompt, _ = chat.prompt(fresh, "new question", "new", "new-thread", None)
     assert "archived project evidence" not in encode(prompt)
     assert prompt["context"]["project_brief"]["goals"] == before["brief"]["goals"]
     scheduler = Scheduler(db, registry, settings, Core(db, registry, settings, Pipeline(db, registry), NativeFixture), chat)
@@ -94,7 +87,6 @@ async def test_archive_excluded_from_fresh_prompt_and_explicitly_retrievable(sys
             {
                 "tool": "manager_action",
                 "conversation_id": fresh["id"],
-                "mode": "conversation",
                 "arguments": {"action": action, **extra},
             },
         )
@@ -109,105 +101,6 @@ async def test_archive_excluded_from_fresh_prompt_and_explicitly_retrievable(sys
     other_origin = chat.conversation(other)
     with pytest.raises(ValueError, match="Unknown conversation"):
         await read("read_history", conversation_id=other_origin["id"])
-
-
-def test_fourth_delivery_archives_full_evidence_retains_effects_and_blockers(system):
-    project, memory, snapshot = ready(system)
-    original = memory.get(project, snapshot["active"])
-    reports = []
-    for i in range(4):
-        snapshot = memory.delivery(
-            project,
-            snapshot["revision"],
-            entry(i),
-            ["Lasting effect " + str(i)],
-            "full evidence " + str(i) + "x" * 30000,
-        )
-        reports.append(snapshot["brief"]["recent"][0]["report"])
-    assert [e["id"] for e in snapshot["brief"]["recent"]] == ["3", "2", "1"]
-    assert all("Lasting effect " + str(i) in snapshot["brief"]["state"] for i in range(4))
-    assert "Open reboot acceptance" in snapshot["brief"]["pending"]
-    assert len(memory.get(project, reports[0])["evidence"]) > 30000
-    assert memory.get(project, reports[0])["external_report"] == "docs/report.md"
-    assert memory.get(project, snapshot["versions"][0])["brief"]
-    assert memory.get(project, snapshot["versions"][1]) == original
-
-
-def test_related_fixes_use_one_recent_entry_and_preserve_both_reports(system):
-    project, memory, snapshot = ready(system)
-    first = memory.delivery(project, snapshot["revision"], entry("same"), ["Feature"], "first detailed evidence")
-    ref = first["brief"]["recent"][0]["report"]
-    second = memory.delivery(project, first["revision"], entry("same"), ["Fix"], "second detailed evidence")
-    assert len(second["brief"]["recent"]) == 1
-    assert memory.get(project, ref)["evidence"] == "first detailed evidence"
-    assert "Feature" in second["brief"]["state"] and "Fix" in second["brief"]["state"]
-
-
-@pytest.mark.parametrize("status", ["pending", "failed"])
-def test_deployment_pending_failed_truth_and_durable_success_gate(system, status):
-    project, memory, snapshot = ready(system)
-    snapshot = memory.delivery(
-        project, snapshot["revision"], entry("release", status), ["Implemented, tested"], "evidence"
-    )
-    assert snapshot["brief"]["recent"][0]["deployment"] == status
-    assert "Delivery release activation " + status in snapshot["brief"]["pending"]
-    with pytest.raises(ValueError, match="durable succeeded"):
-        memory.delivery(project, snapshot["revision"], entry("release", "deployed"), [], "claim only")
-    results = memory.db.path.parent / "deploy" / "results"
-    receipt = "0123456789abcdef"
-    atomic(results / (receipt + ".json"), {"status": "failed", "project_id": project})
-    with pytest.raises(ValueError, match="not established"):
-        memory.delivery(project, snapshot["revision"], entry("release", "deployed"), [], "claim only", receipt)
-    atomic(results / (receipt + ".json"), {"status": "success", "project_id": "other"})
-    with pytest.raises(ValueError, match="not established"):
-        memory.delivery(project, snapshot["revision"], entry("release", "deployed"), [], "other project", receipt)
-    atomic(results / (receipt + ".json"), {"status": "success", "project_id": project})
-    applied = memory.delivery(
-        project, snapshot["revision"], entry("release", "deployed"), [], "actual receipt", receipt
-    )
-    assert applied["brief"]["recent"][0]["deployment"] == "deployed"
-    assert not any("Delivery release activation" in p for p in applied["brief"]["pending"])
-
-
-def test_budget_overflow_atomic_preserves_requirements_and_evidence(system):
-    project, memory, before = ready(system)
-    records = memory.db.all("SELECT * FROM memory WHERE project_id=?", (project,))
-    huge = {**before["brief"], "state": ["x" * MAXIMUM]}
-    with pytest.raises(ValueError, match="ceiling"):
-        memory.update(project, before["revision"], huge)
-    with pytest.raises(ValueError, match="ceiling"):
-        memory.delivery(project, before["revision"], entry("huge"), ["x" * MAXIMUM], "evidence")
-    assert memory.snapshot(project) == before
-    assert memory.db.all("SELECT * FROM memory WHERE project_id=?", (project,)) == records
-    with pytest.raises(ValueError, match="retain"):
-        memory.update(project, before["revision"], {**before["brief"], "goals": []})
-
-
-def test_many_deliveries_bound_default_context_with_explicit_state_condensation(system):
-    project, memory, snapshot = ready(system)
-    chat = system[2]
-    for i in range(30):
-        # Routine current-state representation can condense effects; history stays immutable.
-        brief = {**snapshot["brief"], "state": ["Verified feature set; detailed evolution in delivery reports."]}
-        snapshot = memory.update(
-            project,
-            snapshot["revision"],
-            brief,
-            retained=[
-                {"field": "state", "previous": value, "current": brief["state"][0], "reference": snapshot["active"]}
-                for value in snapshot["brief"]["state"]
-                if value != brief["state"][0]
-            ],
-        )
-        snapshot = memory.delivery(
-            project, snapshot["revision"], entry(i), ["Lasting effect " + str(i)], "full evidence " + str(i)
-        )
-        context = chat.context(project)
-        assert len(encode({k: v for k, v in context.items() if k != "instructions"}).encode()) <= 2000
-    assert len(snapshot["brief"]["recent"]) == 3
-    assert len(memory.db.all("SELECT name FROM memory WHERE project_id=? AND name LIKE 'delivery:%'", (project,))) == 30
-    assert snapshot["brief"]["goals"] == ["Persistent owner goals"]
-    assert "Open reboot acceptance" in snapshot["brief"]["pending"]
 
 
 @pytest.mark.smoke
@@ -231,7 +124,6 @@ async def test_workers_receive_focused_acceptance_and_selected_context_only(syst
         {
             "tool": "manager_action",
             "conversation_id": origin,
-            "mode": "auto",
             "manager_execution_id": "focused-execution",
             "arguments": {
                 "action": "delegate",
@@ -288,16 +180,6 @@ def test_candidate_diff_preservation_apply_rollback_and_ambiguous_keep(system):
     other = memory.registry.list()[1]["id"]
     with pytest.raises(ValueError, match="unavailable"):
         memory.rollback(other, old["active"], 0)
-
-
-def test_stale_candidate_cannot_overwrite_new_delivery(system):
-    project, memory, old = ready(system)
-    review = memory.begin(project)
-    memory.candidate(project, review, old["brief"], [], ["memory:base"])
-    latest = memory.delivery(project, old["revision"], entry("new"), ["Current delivery"], "full evidence")
-    with pytest.raises(ValueError, match="stale"):
-        memory.apply(project, review, latest["revision"], [])
-    assert memory.snapshot(project)["active"] == latest["active"]
 
 
 @pytest.mark.asyncio
@@ -408,39 +290,6 @@ def test_review_http_auth_scope_apply_rollback(client):
     assert not app.state.db.all("PRAGMA foreign_key_check")
 
 
-def test_condensation_and_completed_pending_require_explicit_scoped_provenance(system):
-    project, memory, before = ready(system)
-    compact = {**before["brief"], "goals": ["Durable owner goals"], "pending": []}
-    retained = [
-        {
-            "field": "goals",
-            "previous": "Persistent owner goals",
-            "current": "Durable owner goals",
-            "reference": before["active"],
-        }
-    ]
-    resolved = [
-        {
-            "pending": "Open reboot acceptance",
-            "reason": "Acceptance completed; source contains receipt",
-            "reference": before["active"],
-        }
-    ]
-    with pytest.raises(ValueError, match="retain"):
-        memory.update(project, before["revision"], compact)
-    other = memory.registry.list()[1]["id"]
-    other_ref = memory.snapshot(other)["active"]
-    with pytest.raises(ValueError, match="scoped"):
-        memory.update(
-            project, before["revision"], compact, retained=[{**retained[0], "reference": other_ref}], resolved=resolved
-        )
-    updated = memory.update(project, before["revision"], compact, retained=retained, resolved=resolved)
-    record = memory.get(project, updated["active"])
-    assert record["provenance"] == {"retained": retained, "resolved": resolved}
-    assert memory.get(project, before["active"])["brief"]["goals"] == ["Persistent owner goals"]
-    assert updated["brief"]["goals"] == ["Durable owner goals"] and not updated["brief"]["pending"]
-
-
 def test_oversized_initial_fields_preserved_with_explicit_retrieval_notice(system):
     _, registry, chat, _ = system
     project = registry.list()[0]
@@ -459,59 +308,34 @@ def test_oversized_initial_fields_preserved_with_explicit_retrieval_notice(syste
     assert not system[0].all("SELECT * FROM executions")
 
 
-def test_archive_metadata_and_envelope_exclude_bulk_deployment_receipt(system):
+def test_budget_overflow_is_atomic_and_leaves_the_active_brief_and_evidence(system):
     project, memory, before = ready(system)
-    snapshot = before
-    reports = []
-    for i in range(4):
-        snapshot = memory.delivery(project, snapshot["revision"], entry(i), [], str(i) + " detailed evidence")
-        reports.append(snapshot["brief"]["recent"][0]["report"])
-    assert reports[0] in memory.get(project, snapshot["active"])["delivery_archive"]
+    records = memory.db.all("SELECT * FROM memory WHERE project_id=?", (project,))
+    with pytest.raises(ValueError, match="ceiling"):
+        activate(memory, project, {**before["brief"], "state": ["x" * MAXIMUM]})
+    assert memory.snapshot(project) == before
+    assert memory.db.all("SELECT * FROM memory WHERE project_id=?", (project,)) == records
+
+
+def test_stale_candidate_cannot_overwrite_a_newer_version(system):
+    project, memory, old = ready(system)
+    review = memory.begin(project)
+    memory.candidate(project, review, old["brief"], [], ["memory:base"])
+    latest = activate(memory, project, {**old["brief"], "state": ["Newer fact"]})
+    with pytest.raises(ValueError, match="stale"):
+        memory.apply(project, review, latest["revision"], [])
+    assert memory.snapshot(project)["active"] == latest["active"]
+
+
+def test_long_deployment_result_is_summarised_in_the_manager_context(system):
+    project, _, _ = ready(system)
     atomic(
-        memory.db.path.parent / "deploy" / "result.json",
+        system[0].path.parent / "deploy" / "result.json",
         {"id": "0123456789abcdef", "status": "success", "reason": "historical bulk " * 10000},
     )
     chat = system[2]
-    prompt, _ = chat.prompt(chat.conversation(project), "hello", "auto", "execution", "new-thread", None)
+    prompt, _ = chat.prompt(chat.conversation(project), "hello", "execution", "new-thread", None)
     context = {k: v for k, v in prompt["context"].items() if k != "instructions"}
     assert context["deployment"].startswith("success: historical bulk")
     assert len(context["deployment"]) <= 200  # The long result is summarized, never embedded.
     assert len(encode(context).encode()) <= 2000
-
-
-def test_exact_release_and_other_project_scoped_receipt(system):
-    project, memory, snapshot = ready(system)
-    receipt = "deployment:fixture"
-    with memory.db.transaction() as conn:
-        memory.put(
-            conn,
-            project,
-            receipt,
-            {
-                "project_id": project,
-                "status": "succeeded",
-                "release_id": "old-release",
-                "finished_at": time.time(),
-                "verification": {"health": "passed"},
-            },
-        )
-    other = memory.registry.list()[1]["id"]
-    other_snapshot = memory.snapshot(other)
-    with pytest.raises(ValueError, match="Unknown project memory"):
-        memory.delivery(
-            other,
-            other_snapshot["revision"],
-            entry("old-release", "deployed"),
-            [],
-            "other evidence",
-            "memory:" + receipt,
-        )
-    applied = memory.delivery(
-        project,
-        snapshot["revision"],
-        entry("delivery-group", "deployed"),
-        [],
-        "precise existing deployment evidence",
-        "memory:" + receipt,
-    )
-    assert applied["brief"]["recent"][0]["deployment"] == "deployed"

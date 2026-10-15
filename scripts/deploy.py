@@ -33,6 +33,7 @@ IDLE = {
     'deliveries': "SELECT count(*) FROM executions WHERE delivery='running'",
 }
 KEEP_BACKUPS = 10
+IDLE_SECONDS = 1800  # the wait for idle is bounded; the app withdraws a request this old (pipeline.DEPLOY_WAIT)
 
 
 def atomic(path, value):
@@ -142,14 +143,11 @@ class Deploy:
             return {name: [dict(row) for row in conn.execute(sql)] for name, sql in checks.items()}
 
     def check_request(self, request):
-        """Withdrawn request, owner OFF or paused project all stop the deploy before anything changes."""
+        """A withdrawn request or a paused project stops the deploy before anything changes."""
         if not self.request():
             raise Stop('cancelled', 'request withdrawn before the restart')
         if (request.get('source') == 'auto' and request.get('project_id') and not request.get('emergency')
                 and (read(self.root / 'emergency.json') or {}).get('id') != self.id):
-            row = self.query('SELECT value FROM settings WHERE key=?', ('auto_deploy:' + request['project_id'],))
-            if not row or not json.loads(row[0]).get('enabled'):
-                raise Stop('cancelled', 'owner turned Auto-deploy off')
             status = self.query('SELECT status FROM projects WHERE id=?', (request['project_id'],))
             if not status or status[0] != 'active':
                 raise Stop('cancelled', 'project is paused or removed')
@@ -296,7 +294,7 @@ class Deploy:
             if request.get('emergency'):
                 emergency_stop()
             self.state('waiting_idle', commit=target)
-            deadline = time.monotonic() + self.config.get('idle_seconds', 6 * 3600)
+            deadline = time.monotonic() + self.config.get('idle_seconds', IDLE_SECONDS)
             last_busy, reported_at = None, 0.0
             while True:
                 self.check_request(request)

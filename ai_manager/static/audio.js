@@ -1,5 +1,5 @@
 'use strict';
-// A recording belongs to its originating project, conversation and mode for its entire lifetime.
+// A recording belongs to its originating project and conversation for its entire lifetime.
 const audioState={session:null};
 // Clone trusted repository markup only; uploaded SVG files never enter the DOM.
 const microphoneIcon=$('microphone').firstElementChild.cloneNode(true);
@@ -71,7 +71,7 @@ async function startAudio(){
   if(audioState.session||audioState.loading)return;
   if(!audioSupported()){notice(!window.isSecureContext?'Open this manager over HTTPS to use the microphone on mobile.':'This browser does not support microphone recording. Try a current browser.');return;}
   if(state.pending.has(state.project)||submissions.has(state.project)||!state.history||document.hidden||state.view!=='chat')return;
-  const session={id:crypto.randomUUID(),project:state.project,conversation:state.history.conversation.id,mode:$('chat-mode').value,label:projectName(state.project),phase:'starting',chunks:[],bytes:0,send:false};
+  const session={id:crypto.randomUUID(),project:state.project,conversation:state.history.conversation.id,label:projectName(state.project),phase:'starting',chunks:[],bytes:0,send:false};
   audioState.session=session;renderAudio();
   try{
     const mime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4'].find(type=>MediaRecorder.isTypeSupported(type));
@@ -161,7 +161,7 @@ async function transcribeAudio(session){
     audioState.session=null;clearAudioCheckpoint();renderAudio();
     if(send){
       submitting=true;
-      await sendSubmission({project_id:session.project,conversation_id:session.conversation,mode:session.mode,content});
+      await sendSubmission({project_id:session.project,conversation_id:session.conversation,content});
     }else if(state.project===session.project){$('message-input').focus();}
     else notice(`Transcript added to ${session.label}'s draft.`);
   }catch(error){
@@ -217,7 +217,7 @@ function checkpointAudio(session,force=false){
   if(audioState.session!==session||!session.config)return Promise.resolve();
   const blob=session.blob||new Blob(session.chunks,{type:session.recorder?.mimeType});
   if(!blob.size)return Promise.resolve();
-  const pending=audioStorageOperation('readwrite',store=>store.put({id:session.id,project:session.project,conversation:session.conversation,mode:session.mode,label:session.label,config:session.config,blob,filename:session.filename,transcript:session.transcript||null},audioTabKey));
+  const pending=audioStorageOperation('readwrite',store=>store.put({id:session.id,project:session.project,conversation:session.conversation,label:session.label,config:session.config,blob,filename:session.filename,transcript:session.transcript||null},audioTabKey));
   session.checkpointPending=pending;pending.finally(()=>{if(session.checkpointPending===pending)session.checkpointPending=null;});return pending;
 }
 function clearAudioCheckpoint(){return audioStorageOperation('readwrite',store=>store.delete(audioTabKey));}
@@ -254,6 +254,6 @@ $('audio-file-input').onchange=()=>{
   // from the microphone are fenced by session identity, including synchronous stop.
   discardAudio();
   if(!file.size||file.size>previous.config.max_bytes){notice('Audio file must contain data and be at most 32 MiB.');return;}
-  const session={id:crypto.randomUUID(),project:previous.project,conversation:previous.conversation,mode:previous.mode,label:previous.label,config:previous.config,blob:file,filename:file.name,chunks:[],phase:'stopping',send:false,changed:true};
+  const session={id:crypto.randomUUID(),project:previous.project,conversation:previous.conversation,label:previous.label,config:previous.config,blob:file,filename:file.name,chunks:[],phase:'stopping',send:false,changed:true};
   audioState.session=session;transcribeAudio(session);
 };

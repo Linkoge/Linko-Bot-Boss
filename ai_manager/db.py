@@ -111,7 +111,6 @@ class Database:
                 ("retry_at", "REAL"),
                 ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
                 ("recovery_reason", "TEXT NOT NULL DEFAULT ''"),
-                ("mode", "TEXT NOT NULL DEFAULT 'auto'"),
                 ("launch_input", "TEXT"),
                 ("launch_key", "TEXT"),
                 ("stop_requested", "INTEGER NOT NULL DEFAULT 0"),
@@ -120,8 +119,6 @@ class Database:
                     conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {definition}")
             if not conn.execute("SELECT 1 FROM schema_version WHERE version=9").fetchone():
                 conn.execute("""UPDATE executions SET
-                    mode=COALESCE((SELECT json_extract(payload,'$.prompt.mode') FROM events
-                        WHERE execution_id=executions.id AND kind='model.context' ORDER BY seq DESC LIMIT 1),'auto'),
                     launch_input=(SELECT json_extract(payload,'$.prompt') FROM events
                         WHERE execution_id=executions.id AND kind='model.context' ORDER BY seq DESC LIMIT 1)
                     WHERE finished_at IS NULL""")
@@ -136,18 +133,17 @@ class Database:
 
     @staticmethod
     def migrate_queue(conn, task_columns):
-        """Schema 13: the sequential task queue. Old columns (lifecycle, legacy, ...) stay as ignored history.
+        """Schema 13: the sequential task queue; 14: the Auto-deploy setting is retired. Old columns (lifecycle, legacy,
+        round_limit, checkpoints, ...) stay as ignored history.
 
         Old non-final tasks are closed once (failed, reason says cancelled); branches, workspaces and rows are kept.
         """
         added = {
             "state": "TEXT NOT NULL DEFAULT 'queued'", "held": "INTEGER NOT NULL DEFAULT 0",
             "queued_at": "REAL NOT NULL DEFAULT 0", "rounds": "INTEGER NOT NULL DEFAULT 0",
-            "round_limit": "INTEGER NOT NULL DEFAULT 3", "open_round": "INTEGER NOT NULL DEFAULT 0",
-            "stage": "TEXT NOT NULL DEFAULT 'work'", "merge_requested": "INTEGER NOT NULL DEFAULT 0",
+            "stage": "TEXT NOT NULL DEFAULT 'work'",
             "requeues": "INTEGER NOT NULL DEFAULT 0", "waits": "INTEGER NOT NULL DEFAULT 0", "retry_at": "REAL",
-            "checkpoints": "TEXT NOT NULL DEFAULT '[]'", "gate_history": "TEXT NOT NULL DEFAULT '[]'",
-            "merge": "TEXT",
+            "gate_history": "TEXT NOT NULL DEFAULT '[]'", "merge": "TEXT",
         }
         have = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
         for name, definition in added.items():
@@ -171,6 +167,11 @@ class Database:
             conn.execute("UPDATE questions SET status='expired' WHERE status='pending'")
             conn.execute("UPDATE tasks SET lease_owner=NULL WHERE state!='running'")
             conn.execute("INSERT INTO schema_version VALUES(13)")
+        if not conn.execute("SELECT 1 FROM schema_version WHERE version=14").fetchone():
+            # Schema 14: passing work always merges and deploys. The old per-project Auto-deploy values are dropped
+            # unread; earlier unmerged ('skipped') tasks keep their branches and are never merged retroactively.
+            conn.execute("DELETE FROM settings WHERE key LIKE 'auto_deploy:%' OR key='auto_deploy_seed'")
+            conn.execute("INSERT INTO schema_version VALUES(14)")
         conn.execute("UPDATE tasks SET lease_owner=NULL WHERE state IN ('done','failed')")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_running ON tasks(state) WHERE state='running'")
         conn.execute("CREATE INDEX IF NOT EXISTS task_queue ON tasks(state,held,queued_at)")

@@ -12,9 +12,8 @@ One short file, read by the manager and by every worker.
    with the one fixed smoke suite (`python -m pytest -q -m smoke`). Only permanent repository suites can block delivery;
    one-off probes are informational. Every command that can hang runs under a timeout: 60 seconds for probes, longer
    only for real suites. Use disposable data directories and ports.
-5. When checks fail the application sends the failure back as a repair round: 3 rounds, then 3 more at each of two
-   checkpoints while there is progress (the failing check changed or there are fewer failures), 9 at most. The same
-   check failing the same way twice in a row stops the task. Never weaken, skip or delete tests to pass.
+5. When checks fail the application sends the failure back as a repair round: at most 5 rounds, then the task stops
+   and reports. Never weaken, skip or delete tests to pass.
 6. Commit finished work on the branch. If you cannot finish, end your last line with `RESULT: FAILED - <reason>`;
    otherwise reply with a short summary. A merge conflict with main is resolved by the same worker in the same task.
 7. Update the relevant docs in place; do not duplicate them.

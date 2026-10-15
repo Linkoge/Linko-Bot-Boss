@@ -49,16 +49,24 @@ function addModel(row,m,label,selected,run,disabled,key){
 function addEffort(row,e,label,selected,run,disabled,key){
   const b=addChoice(row,modelButton(titleLevel(e),label,selected,run,disabled),key);b.classList.add('effort-choice');
 }
-function selectModel(pair,m){pair.model=m.model;if(!m.levels.includes(pair.effort))pair.effort=m.levels[0];}
+function selectModel(c,role,m){const pair=c[role]||{effort:'medium'};pair.model=m.model;if(!m.levels.includes(pair.effort))pair.effort=m.levels[0];c[role]=pair;}
+const LEVEL_RANK=['minimal','low','medium','high','xhigh','max','ultra'];
 function renderPair(container,role,label){
   container.replaceChildren();
   const pair=modelPanel.settings[role];
+  if(role==='worker'){ // Automatic: the manager picks the model and effort for each task
+    const row=modelRow(`${label} selection`);
+    addChoice(row,modelButton('Automatic',`${label} Automatic`,!pair,()=>changeModels(c=>{c.worker=null;})),'worker-auto');
+    container.append(row);
+  }
   for(const provider of ['codex','claude']){
     const {choices}=modelPanel.providers[provider];
+    if(!choices.length)continue;
     const models=modelRow(`${label} ${PROVIDER_NAMES[provider]} model`),levels=modelRow(`${label} ${PROVIDER_NAMES[provider]} effort`);
-    const selected=choices.find(m=>m.model===pair.model);
-    for(const m of choices)addModel(models,m,`${label} ${m.name}`,pair.model===m.model,()=>changeModels(c=>selectModel(c[role],m)),!m.levels.length,`${role}-${m.name}`);
-    for(const e of ['low','medium','high'])addEffort(levels,e,`${label} ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,!!selected&&pair.effort===e,
+    const selected=choices.find(m=>m.model===pair?.model);
+    for(const m of choices)addModel(models,m,`${label} ${m.name}`,pair?.model===m.model,()=>changeModels(c=>selectModel(c,role,m)),!m.levels.length,`${role}-${m.name}`);
+    const all=[...new Set(choices.flatMap(m=>m.levels))].sort((a,b)=>(LEVEL_RANK.indexOf(a)+1||99)-(LEVEL_RANK.indexOf(b)+1||99));
+    for(const e of all)addEffort(levels,e,`${label} ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,!!selected&&pair.effort===e,
       ()=>changeModels(c=>{c[role].effort=e;}),!selected?.levels.includes(e),`${role}-${provider}-${e}`);
     container.append(models,levels);
   }

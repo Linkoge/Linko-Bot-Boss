@@ -169,16 +169,7 @@ $('project-menu').onkeydown=event=>{
 $('project-menu').addEventListener('focusout',event=>{if(!renderingProjectMenu&&event.relatedTarget&&!$('project-menu').contains(event.relatedTarget)&&event.relatedTarget!==$('project-menu-button'))closeProjectMenu();});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#project-menu')&&!event.target.closest('#project-menu-button'))closeProjectMenu();});
 function closeChatMenu(focus=false){$('chat-menu').closest('.navigation').classList.remove('chat-menu-open');$('chat-menu').hidden=true;$('chat-menu-button').setAttribute('aria-expanded','false');if(focus)$('chat-menu-button').focus({preventScroll:true});}
-function renderChatModes(){
-  const choices=$('chat-mode-choices');choices.replaceChildren();
-  for(const option of $('chat-mode').options){
-    const selected=option.selected,button=element('button',option.text,selected?'selected':'');
-    button.type='button';button.dataset.mode=option.value;button.setAttribute('role','menuitemradio');button.setAttribute('aria-checked',String(selected));
-    button.onclick=()=>{$('chat-mode').value=option.value;renderChatModes();closeChatMenu(true);updateComposer();};choices.append(button);
-  }
-  $('chat-menu-button').setAttribute('aria-label',`Chat controls, mode ${$('chat-mode').selectedOptions[0].text}`);
-}
-function openChatMenu(last=false){closeProjectMenu();renderChatModes();$('chat-menu').hidden=false;$('chat-menu').closest('.navigation').classList.add('chat-menu-open');$('chat-menu-button').setAttribute('aria-expanded','true');const buttons=chatMenuButtons();buttons[last?buttons.length-1:0]?.focus();}
+function openChatMenu(last=false){closeProjectMenu();$('chat-menu').hidden=false;$('chat-menu').closest('.navigation').classList.add('chat-menu-open');$('chat-menu-button').setAttribute('aria-expanded','true');const buttons=chatMenuButtons();buttons[last?buttons.length-1:0]?.focus();}
 function chatMenuButtons(){return [...$('chat-menu').querySelectorAll('button:not(:disabled)')];}
 $('chat-menu-button').onclick=()=>{$('chat-menu').hidden?openChatMenu():closeChatMenu(true);};
 $('chat-menu-button').onkeydown=event=>{if(['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();openChatMenu(event.key==='ArrowUp');}};
@@ -190,8 +181,6 @@ $('chat-menu').onkeydown=event=>{
 };
 $('chat-menu').addEventListener('focusout',event=>{if(!$('chat-menu').contains(event.relatedTarget)&&event.relatedTarget!==$('chat-menu-button'))closeChatMenu();});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#chat-menu')&&!event.target.closest('#chat-menu-button'))closeChatMenu();});
-$('chat-mode').onchange=()=>{renderChatModes();updateComposer();};
-renderChatModes();
 async function selectProject(id){
   if(id&&state.portfolio?.projects.find(p=>p.id===id)?.visible===false)id=null;
   closeChatMenu();
@@ -199,7 +188,7 @@ async function selectProject(id){
   $('agent-list').replaceChildren();
   if(state.draftContextReady){state.drafts.set(state.project,$('message-input').value);saveDrafts();}
   const selection=++state.selection;
-  state.todoSelection=new Map();state.todos=[];renderTodos(true);
+  state.todoSelection=new Set();state.todos=[];renderTodos(true);
   state.project=id;state.detail=null;state.brief=null;clearTimeout(state.memoryTimer);renderMemory();renderMemoryReview();state.source?.close();state.source=null;
   state.execution=null;state.history=null;$('messages').replaceChildren();updateChatActions();
   $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';state.draftContextReady=true;
@@ -242,7 +231,7 @@ function renderTasks(){
   for(const t of tasks){
     const row=element('article',undefined,'panel');row.dataset.taskId=t.id;
     row.append(element('h3',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
-    if(t.rounds)row.append(element('small',`Repair rounds ${t.rounds} of ${t.round_limit}`+(t.checkpoints?.length?` · ${t.checkpoints.at(-1).decision}: ${t.checkpoints.at(-1).reason}`:'')));
+    if(t.rounds)row.append(element('small',`Repair rounds ${t.rounds} of ${t.repair_limit}`));
     const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));appendTaskControls(controls,t);
     const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});
     controls.append(records);row.append(controls);$('task-list').append(row);
@@ -515,7 +504,7 @@ async function openSavedHistory(id,older=false,search=''){
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
-function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')hiddenChatPosition=$('messages').scrollTop;const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='settings')loadAutoDeploySettings().catch(error=>notice(error.message));if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning)$('messages').scrollTop=hiddenChatPosition;}
+function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')hiddenChatPosition=$('messages').scrollTop;const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning)$('messages').scrollTop=hiddenChatPosition;}
 function editor(title,fields,onSave,reloadContext=true){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}
@@ -529,7 +518,7 @@ async function sendSubmission(bound=null){
   const project=bound?bound.project_id:state.project,selection=state.selection;
   if(state.pending.has(project))return;
   let submission=submissions.get(project);
-  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id)};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
+  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,attachment_ids:attachmentDraft(project).map(file=>file.id)};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
   state.pending.add(project);$('send').disabled=true;renderAttachments();
   let accepted=false;
   try{
@@ -660,13 +649,13 @@ window.visualViewport?.addEventListener('scroll',updateViewport);
 updateViewport();
 
 // Refresh keeps text selection, focus and unsaved edits intact; context switches clear selection.
-state.todoSelection=new Map();state.todos=[];
+state.todoSelection=new Set();state.todos=[];
 async function loadTodos(selection=state.selection){
   const request=state.todoRequest=(state.todoRequest||0)+1,project=state.project;
   const data=await api('/api/todos'+(project?'?project_id='+encodeURIComponent(project):''));
   if(selection!==state.selection||project!==state.project||request!==state.todoRequest)return;
   state.todos=data.entries;
-  for(const [id,revision] of state.todoSelection){if(!state.todos.some(t=>t.id===id&&t.revision===revision))state.todoSelection.delete(id);}
+  for(const id of state.todoSelection){if(!state.todos.some(t=>t.id===id))state.todoSelection.delete(id);}
   renderTodos();
 }
 function renderTodos(force=false){
@@ -682,7 +671,7 @@ function renderTodos(force=false){
       const row=element('article',undefined,'panel'),label=element('label'),checkbox=element('input');
       checkbox.type='checkbox';checkbox.dataset.todo=entry.id;checkbox.checked=state.todoSelection.has(entry.id);
       checkbox.setAttribute('aria-label','Select '+entry.title);
-      checkbox.onchange=()=>{if(checkbox.checked)state.todoSelection.set(entry.id,entry.revision);else state.todoSelection.delete(entry.id);renderTodos();};
+      checkbox.onchange=()=>{if(checkbox.checked)state.todoSelection.add(entry.id);else state.todoSelection.delete(entry.id);renderTodos();};
       label.append(checkbox,element('strong',entry.title));row.append(label,element('small',projectName(entry.project_id)),element('p',entry.details,'todo-details'));
       if(entry.source_task_id)row.append(element('small','Linked recording assignment: '+entry.source_task_id));
       const edit=element('button','Edit');edit.dataset.todo=entry.id;edit.type='button';edit.onclick=()=>editTodo(entry);row.append(edit);
@@ -697,12 +686,12 @@ function renderTodos(force=false){
 const todoStarts=new Map(JSON.parse(sessionStorage.getItem('linko-todo-starts-v1')||'[]'));
 function saveTodoStarts(){sessionStorage.setItem('linko-todo-starts-v1',JSON.stringify([...todoStarts]));}
 async function startTodo(entry){
-  const selection=state.selection,key=entry.id+':'+entry.revision;
+  const selection=state.selection,key=entry.id;
   let request=todoStarts.get(key);
   if(!request){
     const history=await api('/api/history?project_id='+encodeURIComponent(entry.project_id));
     if(selection!==state.selection)throw new Error('Context changed. Select the To-Do again.');
-    request={project_id:entry.project_id,conversation_id:history.conversation.id,mode:'auto',request_id:crypto.randomUUID(),todos:[{id:entry.id,revision:entry.revision}],content:`Explicitly start this To-Do as one assignment. Preserve its source and consume it only after successful task acceptance. To-Do ID: ${entry.id}; revision: ${entry.revision}.\n${entry.title}\n\n${entry.details}`};
+    request={project_id:entry.project_id,conversation_id:history.conversation.id,request_id:crypto.randomUUID(),todos:[entry.id],content:`Start this To-Do as one assignment. To-Do ID: ${entry.id}.\n${entry.title}\n\n${entry.details}`};
     todoStarts.set(key,request);saveTodoStarts();
   }
   try{
@@ -724,13 +713,13 @@ function editTodo(entry=null){
   if(!entry&&!project&&!fields[0].options.length){notice('Add a project before recording an idea.');return;}
   editor(entry?'Edit To-Do':'Add To-Do',fields,async values=>{
     if(selection!==state.selection||project!==state.project)throw new Error('Context changed. Close this editor and select the idea again.');
-    await api('/api/todos'+(entry?'/'+entry.id:''),{method:entry?'PATCH':'POST',body:JSON.stringify({...values,project_id:entry?.project_id||project||values.project_id,revision:entry?.revision})});
+    await api('/api/todos'+(entry?'/'+entry.id:''),{method:entry?'PATCH':'POST',body:JSON.stringify({...values,project_id:entry?.project_id||project||values.project_id})});
     await loadTodos(selection);
   },false);
 }
 $('todo-add').onclick=()=>editTodo();
 $('todo-delete').onclick=action(async()=>{
-  const project=state.project,selection=state.selection,selected=[...state.todoSelection].map(([id,revision])=>({id,revision}));
+  const project=state.project,selection=state.selection,selected=[...state.todoSelection];
   if(!selected.length)return;
   if(!confirm(`Delete ${selected.length} selected To-Do idea${selected.length===1?'':'s'}?`))return;
   if(selection!==state.selection||project!==state.project)return;
@@ -745,15 +734,3 @@ function deploymentText(result){
 async function deploymentStatus(){const result=await api('/api/deployment');$('deployment-status').textContent=deploymentText(result);$('deployment-cancel').hidden=!result.request;}
 $('deployment-check').onclick=action(deploymentStatus);
 $('deployment-cancel').onclick=action(async()=>{await api('/api/deployment/cancel',{method:'POST',body:'{}'});await deploymentStatus();});
-
-async function loadAutoDeploySettings(){
-  const result=await api('/api/settings');const container=$('auto-deploy-settings');container.replaceChildren();
-  for(const project of result.auto_deploy||[]){
-    const label=element('label');const input=document.createElement('input');input.type='checkbox';
-    input.checked=project.enabled;input.dataset.projectId=project.project_id;
-    input.setAttribute('aria-label',`${project.name}: Auto-merge and deploy finished work`);
-    input.onchange=action(async()=>{input.disabled=true;try{await api('/api/settings/auto-deploy',{method:'PUT',body:JSON.stringify({project_id:project.project_id,enabled:input.checked})});}finally{await loadAutoDeploySettings();}});
-    label.append(input,document.createTextNode(`${project.name}: Auto-merge and deploy finished work`));container.append(label);
-    if(!project.deployable)container.append(element('p','Only this manager project can be deployed; other projects are merged only.'));
-  }
-}

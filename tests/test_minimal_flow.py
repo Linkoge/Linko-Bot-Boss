@@ -9,11 +9,11 @@ import pytest
 from fake_codex import FakeServer
 
 from ai_manager.chat import Chat
-from ai_manager.codex import AppServer, safe_config
+from ai_manager.codex import MANAGER_INSTRUCTIONS, RULES, AppServer, safe_config
 from ai_manager.config import Settings
 from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
-from ai_manager.orchestration import Scheduler
+from ai_manager.orchestration import MANAGER_TOOL, Scheduler
 from ai_manager.pipeline import Pipeline
 from ai_manager.registry import Registry
 
@@ -373,7 +373,6 @@ async def test_result_notice_cannot_start_new_work_but_owner_can_continue(system
         async def request(self, method, params, timeout=30):
             if method == "turn/start":
                 prompt = json.loads(params["input"][0]["text"])
-                assert prompt["mode"] == "conversation"  # a failed result never runs in Auto
                 retained = await self.tool_handlers[params["threadId"]]({"tool": "manager_action", "arguments": {"action": "read_result", "execution_id": prompt["worker_result"]["execution_id"]}})
                 assert retained["output"] == "File creation needs another attempt"
                 for action in ("continue", "delegate"):
@@ -415,8 +414,7 @@ async def test_large_result_and_concurrent_delivery_claims(system):
 
 @pytest.mark.smoke
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["conversation", "auto", "execute"])
-async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
+async def test_manager_does_what_is_asked_with_no_chat_modes(system):
     db, registry, chat, settings = system
     project = registry.list()[0]
     (settings.project_roots[0] / project["name"] / "notes.txt").write_text("Project notes")
@@ -424,10 +422,10 @@ async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
 
-    class ModeServer(FakeServer):
+    class AskServer(FakeServer):
         async def request(self, method, params, timeout=30):
             if method == "turn/start":
-                assert json.loads(params["input"][0]["text"])["mode"] == mode
+                assert "mode" not in json.loads(params["input"][0]["text"])
                 handler = self.tool_handlers[params["threadId"]]
                 call = {"tool": "manager_action", "callId": "mode-call"}
                 assert await handler({**call, "arguments": {"action": "read_document", "path": "notes.txt"}}) == {
@@ -435,24 +433,14 @@ async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
                     "content": "Project notes",
                     "next_offset": None,
                 }
-                for action in (
-                    "delegate",
-                    "pause_project",
-                    "resume_project",
-                    *(["hold", "continue"] if mode == "conversation" else []),
-                ):
-                    mutation = {**call, "arguments": {"action": action, "objective": "Complete objective"}}
-                    if mode == "conversation":
-                        with pytest.raises(ValueError, match="read-only"):
-                            await handler(mutation)
-                    else:
-                        await handler(mutation)
+                for action in ("delegate", "pause_project", "resume_project"):
+                    await handler({**call, "arguments": {"action": action, "objective": "Complete objective"}})
             return await super().request(method, params, timeout)
 
-    chat.server = ModeServer(settings)
-    await chat.submit(project["id"], "Complete objective", mode=mode)
+    chat.server = AskServer(settings)
+    await chat.submit(project["id"], "Complete objective")
     await asyncio.gather(*list(chat.jobs.values()))
-    assert len(Tasks(db).list()) == (0 if mode == "conversation" else 1)
+    assert len(Tasks(db).list()) == 1
     assert len(chat.server.prompts) == 1
 
 
@@ -493,7 +481,8 @@ def test_fresh_schema_contains_only_current_storage(system):
         "lifecycle",
         "legacy",
     }
-    assert {"state", "held", "rounds", "round_limit", "checkpoints", "requeues", "retry_at"} <= columns
+    assert {"state", "held", "rounds", "requeues", "retry_at"} <= columns
+    assert not columns & {"round_limit", "checkpoints", "open_round", "merge_requested"}
 
 
 @pytest.mark.asyncio
@@ -560,3 +549,16 @@ async def test_uploaded_files_and_photos_reach_delegated_worker(system):
     assert len(captured[0]) == 2
     assert captured[0][1] == {'type': 'localImage', 'path': str(path)}
     assert json.loads(captured[0][0]['text'])['task_context']['attachments'] == refs
+
+
+def test_manager_and_worker_instructions_describe_only_the_current_behaviour():
+    actions = MANAGER_TOOL["inputSchema"]["properties"]["action"]["enum"]
+    assert not {"update_brief", "record_delivery"} & set(actions)
+    properties = MANAGER_TOOL["inputSchema"]["properties"]
+    assert not {"mode", "brief", "retained", "resolved", "entry", "evidence", "deployment_receipt", "revision"} & set(properties)
+    assert properties["todos"]["items"] == {"type": "string"} and {"model", "effort"} <= set(properties)
+    text = MANAGER_INSTRUCTIONS + MANAGER_TOOL["description"]
+    for gone in ("Auto-deploy", "checkpoint", "Execute", "Conversation mode", "record_delivery", "update_brief", "revision"):
+        assert gone not in text, gone
+    assert "at most 5 rounds" in RULES and "checkpoint" not in RULES and "hard cap" not in RULES.lower()
+    assert "automatically" in MANAGER_INSTRUCTIONS and "automatic" in MANAGER_INSTRUCTIONS

@@ -49,7 +49,7 @@ async def test_only_accepted_submissions_and_assignments_update_recency(system, 
         assert renamed[field] == project[field]
     with pytest.raises(ValueError):
         await chat.submit(None, ' ')
-    await chat.submit(None, 'Portfolio discussion', mode='conversation')
+    await chat.submit(None, 'Portfolio discussion')
     assert db.setting('global_last_used_at') == 1000
     assert db.one("SELECT project_id FROM executions WHERE agent_id='manager'")['project_id'] is None
     clock[0] = 1100

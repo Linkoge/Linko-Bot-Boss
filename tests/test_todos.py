@@ -26,40 +26,30 @@ def test_persistence_isolation_atomic_selection_archive_and_no_dispatch(client):
         assert response.status_code == 200
         entries.append(response.json())
     a, b = entries
-    assert (
-        browser.post(
-            "/api/todos/archive", json={"selected": [{"id": task["id"], "revision": task["revision"]}]}
-        ).status_code
-        == 409
-    )
+    assert browser.post("/api/todos/archive", json={"selected": [task["id"]]}).status_code == 409
     assert len(browser.get("/api/todos").json()["entries"]) == 2
     assert browser.get("/api/todos", params={"project_id": one}).json()["entries"] == [a]
     assert Todos(Database(settings.db_path)).list(two) == [b]
     assert (
         browser.patch(
-            "/api/todos/" + a["id"], json={"project_id": two, "title": "Wrong project", "revision": a["revision"]}
+            "/api/todos/" + a["id"], json={"project_id": two, "title": "Wrong project"}
         ).status_code
         == 409
     )
     updated = browser.patch(
         "/api/todos/" + a["id"],
-        json={"project_id": one, "title": "Updated", "details": "Retained", "revision": a["revision"]},
+        json={"project_id": one, "title": "Updated", "details": "Retained"},
     ).json()
     assert updated["revision"] == a["revision"] + 1
     import json
 
     audit = json.loads(app.state.db.one("SELECT payload FROM events WHERE kind='todo.updated'")["payload"])
     assert audit["previous"]["details"] == a["details"]
-    selected = [{"id": b["id"], "revision": b["revision"]}, {"id": a["id"], "revision": a["revision"]}]
+    selected = [b["id"], "missing"]
     assert browser.post("/api/todos/archive", json={"selected": selected}).status_code == 409
     assert len(Todos(app.state.db).list()) == 2  # failed batch rolls back earlier entries
     assert browser.post("/api/todos/archive", json={"project_id": one, "selected": [selected[0]]}).status_code == 409
-    assert (
-        browser.post(
-            "/api/todos/archive", json={"selected": [{"id": updated["id"], "revision": updated["revision"]}]}
-        ).status_code
-        == 200
-    )
+    assert browser.post("/api/todos/archive", json={"selected": [updated["id"]]}).status_code == 200
     assert Todos(Database(settings.db_path)).list() == [b]
     archived = app.state.db.one("SELECT * FROM todos WHERE id=?", (a["id"],))
     assert archived["archived_at"] and archived["details"] == "Retained"
@@ -77,20 +67,19 @@ def test_persistence_isolation_atomic_selection_archive_and_no_dispatch(client):
 
 
 @pytest.mark.asyncio
-async def test_manager_future_recording_in_every_mode_without_task_or_queue(client):
+async def test_manager_future_recording_without_task_or_queue(client):
     _, app, settings = client
     project = app.state.registry.add(settings.project_roots[0] / "one")["id"]
     scheduler = app.state.scheduler
-    for mode in ("conversation", "auto", "execute"):
+    for name in ("first", "second", "third"):
         params = {
             "tool": "manager_action",
-            "arguments": {"action": "save_todo", "title": "Later " + mode, "details": "Deferred"},
-            "mode": mode,
+            "arguments": {"action": "save_todo", "title": "Later " + name, "details": "Deferred"},
         }
         entry = await scheduler.manager_action(project, params)
         assert entry["project_id"] == project
-        params["arguments"].update(todo_id=entry["id"], revision=entry["revision"], details="Revised")
-        await scheduler.manager_action(project, params)
+        params["arguments"].update(todo_id=entry["id"], details="Revised")
+        assert (await scheduler.manager_action(project, params))["details"] == "Revised"
     assert not app.state.db.all("SELECT * FROM tasks")
     assert not app.state.db.all("SELECT * FROM executions")
     assert scheduler.tasks.claim() is None
@@ -127,7 +116,7 @@ def test_deferred_note_migrates_once_preserving_original_assignment_and_audit(cl
     assert migrated.one("SELECT * FROM tasks WHERE id=?", (DEFERRED_ASSIGNMENT,)) == before
     assert migrated.all("SELECT * FROM events")[: len(original_events)] == original_events
     assert len(Todos(Database(settings.db_path)).list(project)) == 1
-    Todos(migrated).archive([{"id": entry["id"], "revision": entry["revision"]}])
+    Todos(migrated).archive([entry["id"]])
     assert Todos(Database(settings.db_path)).list(project) == []  # no resurrection
 
 
@@ -138,9 +127,9 @@ def test_handoff_atomic_replay_failure_and_retained_source(client, monkeypatch):
     todos, tasks, db = Todos(app.state.db), app.state.scheduler.tasks, app.state.db
     a = todos.save(project, "Start explicitly", "Original details and source")
     b = todos.save(project, "Other idea", "Leave active")
-    selected = [{"id": a["id"], "revision": a["revision"]}]
-    with pytest.raises(ValueError, match="changed"):
-        tasks.add(project, "Invalid start", todos=selected + [{"id": b["id"], "revision": 999}])
+    selected = [a["id"]]
+    with pytest.raises(ValueError, match="not found"):
+        tasks.add(project, "Invalid start", todos=selected + ["missing"])
     assert not db.all("SELECT * FROM tasks")
     assert todos.list(project) == [a, b]
     original_event = db.event
@@ -178,14 +167,14 @@ async def test_manager_delegate_and_bundled_continue_handoff(client):
     a, b = [todos.save(project, title) for title in ("First", "Bundle")]
     conversation = app.state.chat.conversation(project)["id"]
     params = {"tool": "manager_action", "manager_execution_id": "fixture-manager", "callId": "fixture",
-              "conversation_id": conversation, "mode": "auto", "arguments": {
-                  "action": "delegate", "objective": "Explicit schedule", "todos": [{"id": a["id"], "revision": 0}]}}
+              "conversation_id": conversation, "arguments": {
+                  "action": "delegate", "objective": "Explicit schedule", "todos": [a["id"]]}}
     task = await scheduler.manager_action(project, params)
     assert todos.list(project) == [b]
     with db.transaction() as conn:
         conn.execute("UPDATE tasks SET held=1 WHERE id=?", (task["id"],))
     params["arguments"] = {"action": "continue", "task_id": task["id"], "objective": "Bundle owner addition",
-                           "todos": [{"id": b["id"], "revision": 0}]}
+                           "todos": [b["id"]]}
     params["manager_execution_id"] = "fixture-resume"
     continued = await scheduler.manager_action(project, params)
     assert continued["id"] == task["id"] and continued["status"] == "queued"
@@ -193,7 +182,7 @@ async def test_manager_delegate_and_bundled_continue_handoff(client):
     assert (await scheduler.manager_action(project, params))["id"] == task["id"]
     assert len(db.all("SELECT * FROM tasks")) == 1
     c = todos.save(project, "Still deferred")
-    params["arguments"]["todos"] = [{"id": c["id"], "revision": 0}]
+    params["arguments"]["todos"] = [c["id"]]
     params["internal"] = True
     with pytest.raises(ValueError, match="explicit owner"):
         await scheduler.manager_action(project, params)
@@ -205,9 +194,9 @@ async def test_archived_handoff_read_is_scoped_and_failed_manager_dispatch_retai
     _, app, settings = client
     one, two = [app.state.registry.add(settings.project_roots[0] / name)["id"] for name in ("one", "two")]
     todo = Todos(app.state.db).save(one, "Explicit start", "Original content")
-    params = {"tool": "manager_action", "manager_execution_id": "failed-manager", "mode": "auto",
+    params = {"tool": "manager_action", "manager_execution_id": "failed-manager",
               "conversation_id": app.state.chat.conversation(one)["id"], "arguments": {
-                  "action": "delegate", "objective": "Start", "todos": [{"id": todo["id"], "revision": 0}]}}
+                  "action": "delegate", "objective": "Start", "todos": [todo["id"]]}}
     async def fail():
         raise RuntimeError("Catalog unavailable")
     with monkeypatch.context() as m:
@@ -217,7 +206,7 @@ async def test_archived_handoff_read_is_scoped_and_failed_manager_dispatch_retai
     assert Todos(app.state.db).list(one) == [todo]
     assert not app.state.db.all("SELECT * FROM tasks")
     task = await app.state.scheduler.manager_action(one, params)
-    read = {"tool": "manager_action", "arguments": {"action": "list_todos", "todo_id": todo["id"]}, "mode": "conversation"}
+    read = {"tool": "manager_action", "arguments": {"action": "list_todos", "todo_id": todo["id"]}}
     receipt = await app.state.scheduler.manager_action(one, read)
     assert receipt["entry"]["archived_at"] and receipt["handoff"]["source"] == todo
     assert receipt["handoff"]["task_id"] == task["id"]
@@ -230,19 +219,19 @@ async def test_ui_start_binds_source_before_dispatch_and_replays_after_consumpti
     _, app, settings = client
     project = app.state.registry.add(settings.project_roots[0] / "one")["id"]
     todo = Todos(app.state.db).save(project, "Start me", "Source survives")
-    selected = [{"id": todo["id"], "revision": 0}]
+    selected = [todo["id"]]
     conversation = app.state.chat.conversation(project)["id"]
-    with pytest.raises(ValueError, match="Auto/Execute"):
-        await app.state.chat.submit(project, "Start", conversation, mode="conversation", todos=selected)
+    with pytest.raises(ValueError, match="requires an owner message"):
+        await app.state.chat.submit(None, "Start", conversation, todos=selected)
     with pytest.raises(ValueError, match="changed"):
-        await app.state.chat.submit(project, "Start", conversation, todos=[{"id": todo["id"], "revision": 9}])
+        await app.state.chat.submit(project, "Start", conversation, todos=["missing"])
     assert not app.state.db.all("SELECT * FROM executions")
     receipt = await app.state.chat.submit(project, "Explicit start", conversation, request_id="bound-start-000001", todos=selected)
     assert Todos(app.state.db).list(project) == [todo]
     assert not app.state.db.all("SELECT * FROM tasks")
     assert app.state.db.setting("execution_todo_sources:" + receipt["execution_id"]) == selected
     # The UI source is deterministic even if delegate omits the optional todos field.
-    task = await app.state.scheduler.manager_action(project, {"tool": "manager_action", "mode": "auto",
+    task = await app.state.scheduler.manager_action(project, {"tool": "manager_action",
         "conversation_id": conversation, "manager_execution_id": receipt["execution_id"],
         "arguments": {"action": "delegate", "objective": "Execute source objective"}})
     assert not Todos(app.state.db).list(project)

@@ -123,15 +123,10 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert page.locator('#usage-button').evaluate('(n)=>n===document.activeElement')
                     assert page.evaluate('state.project') == selected
                     assert page.locator('#task-count').is_hidden()
-                    # Real touch dispatch opens all utilities and individually listed modes.
+                    # Real touch dispatch opens and closes the chat utilities.
                     page.locator('#chat-menu-button').tap()
                     assert page.locator('#chat-menu').is_visible()
-                    assert page.locator('#chat-mode-choices button').count() == 3
-                    page.locator('[data-mode=execute]').tap()
-                    assert page.evaluate("$('chat-mode').value") == 'execute'
                     page.locator('#chat-menu-button').tap()
-                    assert page.locator('[data-mode=execute]').get_attribute('aria-checked') == 'true'
-                    page.locator('[data-mode=auto]').tap()
                     assert page.locator('#chat-menu').is_hidden()
                     page.screenshot(path=str(evidence/f'{width}x{height}-navigation.png'))
                     receipts.append({'width':width,'height':height,'top':top,'bottom':bottom,'navigation':nav,'send':send})

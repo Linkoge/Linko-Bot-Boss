@@ -44,7 +44,7 @@ def test_private_scoped_upload_receipt_and_native_image(client):
         return await original(method, params, timeout)
     app.state.chat.server.request = record
     payload = {'request_id': 'attachment-request-0001', 'conversation_id': conversation,
-               'content': '', 'attachment_ids': [text['id'], photo['id']], 'mode': 'conversation'}
+               'content': '', 'attachment_ids': [text['id'], photo['id']]}
     first = c.post('/api/chat', json=payload)
     assert first.status_code == 200, first.text
     assert c.post('/api/chat', json=payload).json() == first.json()
@@ -119,7 +119,7 @@ def test_any_format_download_and_honest_manager_routing(client):
         return await original(method, params, timeout)
     app.state.chat.server.request = record
     response = c.post('/api/chat', json={'conversation_id': conversation, 'content': 'inspect as data',
-                      'attachment_ids': uploaded[:4], 'mode': 'conversation'})
+                      'attachment_ids': uploaded[:4]})
     assert response.status_code == 200, response.text
     for _ in range(100):
         if captured:

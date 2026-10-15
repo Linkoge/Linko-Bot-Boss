@@ -1,9 +1,9 @@
 """Merge into main and the deploy request/result protocol. Contract: README.md.
 
 The worker (core.py) merges a passed branch into main one at a time, then asks the single deploy script
-(scripts/deploy.py) to deploy main. Per-project "Auto-deploy" ON means merge and deploy; OFF means neither.
-The deploy script itself waits for idle, backs up, restarts, health-checks and rolls back; this module only
-writes its request file and reports its short result. No AI call decides anything here.
+(scripts/deploy.py) to deploy main; passing work always does both. The deploy script itself waits for idle, backs up,
+restarts, health-checks and rolls back; this module only writes its request file and reports its short result. A pending
+request holds new work and merges for at most DEPLOY_WAIT seconds. No AI call decides anything here.
 """
 import hashlib
 import json
@@ -15,8 +15,7 @@ from pathlib import Path
 from . import fence
 from .fence import Busy, main_branch
 
-SETTING = 'auto_deploy:'
-SEED = 'auto_deploy_seed'
+DEPLOY_WAIT = 1800  # a pending deploy request holds the queue at most this long, then it is withdrawn
 ROOT = Path(os.getenv('AI_MANAGER_REPO') or Path(__file__).resolve().parents[1]).resolve()  # live code checkout
 IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
 
@@ -38,16 +37,6 @@ def read(path):
         return json.loads(Path(path).read_text())
     except (OSError, ValueError):
         return None
-
-
-def enabled(conn, project_id):
-    row = conn.execute('SELECT value FROM settings WHERE key=?', (SETTING + project_id,)).fetchone()
-    return bool(row and json.loads(row[0]).get('enabled'))
-
-
-def put(conn, project_id, value):
-    conn.execute('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                 (SETTING + project_id, json.dumps(value)))
 
 
 def git(root, *args, check=True):
@@ -79,47 +68,9 @@ class Pipeline:
         self.db, self.registry, self.job = db, registry, None
         self.root = db.path.parent / 'deploy'
 
-    # ---- settings -------------------------------------------------------------------------------------------
     def deployable(self, path):
         # Only the manager's own repository has the deploy script wiring.
         return Path(path).resolve() == ROOT
-
-    def settings(self):
-        with self.db.connect() as conn:
-            return [{'project_id': p['id'], 'name': p['display_name'] or p['name'], 'enabled': enabled(conn, p['id']),
-                     'deployable': self.deployable(p['path'])} for p in self.registry.list()]
-
-    def set(self, project_id, value, source='Settings'):
-        if not isinstance(project_id, str):
-            raise ValueError('Choose a project')
-        if not isinstance(value, bool):
-            raise ValueError('Auto-deploy setting must be a boolean')
-        with self.db.transaction() as conn:
-            project = conn.execute("SELECT status FROM projects WHERE id=?", (project_id,)).fetchone()
-            if not project or project['status'] == 'removed':
-                raise ValueError('Unknown or removed project')
-            setting = {'enabled': value, 'updated_at': time.time(), 'source': source}
-            put(conn, project_id, setting)
-            self.db.event(conn, 'auto_deploy.setting', setting, project_id)
-        if not value:
-            self.cancel(project_id)
-        return setting
-
-    def seed(self):
-        """Owner request of 2026-10-14: ON for the manager's own project, once; later toggles always persist."""
-        with self.db.transaction() as conn:
-            if conn.execute('SELECT 1 FROM settings WHERE key=?', (SEED,)).fetchone():
-                return
-            seeded = []
-            for project in conn.execute("SELECT id,path FROM projects WHERE status!='removed'").fetchall():
-                if self.deployable(project['path']) and not conn.execute(
-                        'SELECT 1 FROM settings WHERE key=?', (SETTING + project['id'],)).fetchone():
-                    setting = {'enabled': True, 'updated_at': time.time(), 'source': 'Owner request 2026-10-14'}
-                    put(conn, project['id'], setting)
-                    self.db.event(conn, 'auto_deploy.setting', setting, project['id'])
-                    seeded.append(project['id'])
-            if seeded:
-                conn.execute('INSERT INTO settings VALUES(?,?)', (SEED, json.dumps({'at': time.time(), 'projects': seeded})))
 
     # ---- deploy protocol (files shared with scripts/deploy.py) ---------------------------------------------
     def installed(self):
@@ -195,15 +146,19 @@ class Pipeline:
                 raise Busy('a deploy is pending')
             return merge_into_main(project_path, commit)
 
-    def expire(self, max_age=7 * 3600):
-        """A deploy request nobody consumed (script not installed, stuck unit) must not hold the queue forever."""
+    def expire(self, max_age=DEPLOY_WAIT):
+        """A deploy request that has not finished in time (script not installed, stuck unit, endless idle wait) must not
+        hold the queue: withdraw it while that is still safe. Past the backup it finishes or rolls back by itself."""
         request = read(self.root / 'request.json')
-        if request and time.time() - request.get('requested_at', time.time()) > max_age:
-            (self.root / 'request.json').unlink(missing_ok=True)
-            (self.root / 'state.json').unlink(missing_ok=True)
-            with self.db.transaction() as conn:
-                self.db.event(conn, 'deployment.expired', {'id': request.get('id')}, request.get('project_id'))
-                self.post(conn, request.get('conversation_id'), 'expired:' + str(request.get('id')),
-                          'Deploy request expired without being processed (is the deploy unit installed?). Nothing changed.')
-            return True
-        return False
+        if not request or time.time() - request.get('requested_at', time.time()) <= max_age:
+            return False
+        if (read(self.root / 'state.json') or {}).get('phase') not in {None, 'testing', 'waiting_idle'}:
+            return False
+        (self.root / 'request.json').unlink(missing_ok=True)
+        (self.root / 'state.json').unlink(missing_ok=True)
+        with self.db.transaction() as conn:
+            self.db.event(conn, 'deployment.expired', {'id': request.get('id')}, request.get('project_id'))
+            self.post(conn, request.get('conversation_id'), 'expired:' + str(request.get('id')),
+                      f'Deploy request withdrawn after {max_age // 60} minutes without finishing so it cannot hold the queue '
+                      '(is the deploy unit installed?). Nothing changed; merged work stays on main. Ask again to deploy.')
+        return True

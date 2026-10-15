@@ -74,7 +74,7 @@ async def main():
                 if result:
                     assert len(tasks) == 1
                     assert tasks[0]["status"] == "done", tasks[0]
-                    # Auto-deploy is off for this fixture: the work stays on the task's own branch, main is untouched.
+                    # The fixture project is not the manager's own: it is merged into main but never deployed.
                     work = Path(tasks[0]["workspace"])
                     assert (work / "calculator.py").read_text().find("a + b") >= 0
                     check = subprocess.run(
@@ -83,7 +83,8 @@ async def main():
                     assert check.returncode == 0, check.stderr
                     assert int(subprocess.check_output(["git", "-C", str(work), "rev-list", "--count", "HEAD"])) == 2
                     assert (work / "hello.txt").read_text() == "Hello World\n"
-                    assert (source / "calculator.py").read_text().find("a - b") >= 0
+                    assert (source / "calculator.py").read_text().find("a + b") >= 0  # merged into main
+                    assert (source / "hello.txt").read_text() == "Hello World\n"
                     reply = db.one("SELECT * FROM executions WHERE id=?", (result["delivery_execution"],))
                     assert reply["conversation_id"] == origin and reply["output"].strip()
                     workers.end(result["id"], "done", "", "Repeated event")

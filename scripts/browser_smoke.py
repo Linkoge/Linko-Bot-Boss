@@ -113,7 +113,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("#model-dialog").wait_for(state="visible")
                 page.wait_for_function("()=>!!modelPanel&&!modelOpening")
                 assert page.locator("#manager-choices > div").count() == 4
-                assert page.locator("#worker-choices .model-choice-row").count() == 4
+                assert page.locator("#worker-choices .model-choice-row").count() == 5  # Automatic plus two rows per provider
                 assert page.locator(".favorite-row").count() == 2
                 page.keyboard.press("Escape")
                 page.locator("#rename-project").click()
@@ -195,7 +195,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                     page.keyboard.press('ArrowDown')
                     assert page.locator('#clear-chat').evaluate('(n)=>n===document.activeElement')
                     page.keyboard.press('End')
-                    assert page.locator('[data-mode=execute]').evaluate('(n)=>n===document.activeElement')
+                    assert page.evaluate("[...document.querySelectorAll('#chat-menu button:not(:disabled)')].at(-1)===document.activeElement")
                     page.keyboard.press('Home')
                     page.keyboard.press('ArrowDown')
                     assert page.locator('#archive-chat').evaluate('(n)=>n===document.activeElement')
@@ -210,19 +210,13 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                             return n.contains(document.elementFromPoint(r.x+r.width/2,r.y+r.height/2));
                         }''')
                     assert page.locator('#copy-five').inner_text() == 'Copy 5'
-                    assert page.locator('#chat-mode-choices button').all_text_contents() == ['Conversation','Auto','Execute']
                     page.screenshot(path=str(evidence/f'{label}-menu.png'), full_page=True)
                     page.keyboard.press('Escape')
                     assert page.locator('#chat-menu-button').evaluate('(n)=>n===document.activeElement')
-                    for mode in ('conversation','execute','auto'):
-                        chat_control(f'[data-mode={mode}]')
-                        assert page.evaluate("$('chat-mode').value") == mode
-                        page.locator('#chat-menu-button').click()
-                        assert page.locator(f'[data-mode={mode}]').get_attribute('aria-checked') == 'true'
-                        assert page.locator('#chat-mode-choices [aria-checked=true]').count() == 1
-                        page.keyboard.press('Tab')
-                        assert page.locator('#chat-menu').is_hidden()
-                        assert page.locator('#usage-button').evaluate('(n)=>n===document.activeElement')
+                    page.locator('#chat-menu-button').click()
+                    page.keyboard.press('Tab')
+                    assert page.locator('#chat-menu').is_hidden()
+                    assert page.locator('#usage-button').evaluate('(n)=>n===document.activeElement')
                     # Desktop activation exposes a muted caret; native editing remains intact.
                     field = page.locator('#message-input')
                     field.fill('abc')
@@ -245,7 +239,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                     assert page.locator('#chat-menu').is_hidden()
                     page.screenshot(path=str(evidence/f'{label}-chat.png'), full_page=True)
                 assert not errors, errors
-                assert page.locator("#chat-mode option").count() == 3
+                assert page.locator("#chat-mode,#chat-mode-choices").count() == 0
                 assert not page.locator("#configure-verification,#configure-scheduler").count()
                 page.set_viewport_size({"width": 1440, "height": 1000})
                 page.locator("#projects button").filter(has_text="Recovery Fixture").click()

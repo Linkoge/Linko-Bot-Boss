@@ -64,7 +64,7 @@ class Todos:
             raise ValueError("To-Do details must be at most 24000 characters")
         return title.strip(), details
 
-    def save(self, project_id, title, details="", entry_id=None, revision=None):
+    def save(self, project_id, title, details="", entry_id=None):
         title, details = self.validate(title, details)
         now = time.time()
         with self.db.transaction() as conn:
@@ -74,15 +74,12 @@ class Todos:
             updating = bool(entry_id)
             if entry_id:
                 previous = conn.execute(
-                    "SELECT * FROM todos WHERE id=? AND project_id=?", (entry_id, project_id)
+                    "SELECT * FROM todos WHERE id=? AND project_id=? AND archived_at IS NULL", (entry_id, project_id)
                 ).fetchone()
-                changed = conn.execute(
-                    """UPDATE todos SET title=?,details=?,revision=revision+1,updated_at=?
-                    WHERE id=? AND project_id=? AND revision=? AND archived_at IS NULL""",
-                    (title, details, now, entry_id, project_id, revision),
-                )
-                if changed.rowcount != 1:
-                    raise ValueError("To-Do changed or belongs to another project; refresh before editing")
+                if not previous:
+                    raise ValueError("To-Do not found in this project (it may be archived)")
+                conn.execute("UPDATE todos SET title=?,details=?,revision=revision+1,updated_at=? WHERE id=?",
+                             (title, details, now, entry_id))
             else:
                 entry_id = new_id()
                 conn.execute(
@@ -102,15 +99,12 @@ class Todos:
             )
         return self.db.one("SELECT * FROM todos WHERE id=?", (entry_id,))
 
-    def archive(self, selected, project_id=None):
-        if not selected or len(selected) > 200 or len({e["id"] for e in selected}) != len(selected):
+    def archive(self, ids, project_id=None):
+        if not ids or len(ids) > 200 or len(set(ids)) != len(ids):
             raise ValueError("Select 1–200 distinct To-Do entries")
         with self.db.transaction() as conn:
-            for entry in selected:
-                row = conn.execute(
-                    "SELECT * FROM todos WHERE id=? AND revision=? AND archived_at IS NULL",
-                    (entry["id"], entry["revision"]),
-                ).fetchone()
+            for entry_id in ids:
+                row = conn.execute("SELECT * FROM todos WHERE id=? AND archived_at IS NULL", (entry_id,)).fetchone()
                 if not row or (project_id and row["project_id"] != project_id):
                     raise ValueError("Selection changed or belongs to another project; refresh and select again")
                 conn.execute(
@@ -118,27 +112,25 @@ class Todos:
                     (time.time(), time.time(), row["id"]),
                 )
                 self.db.event(conn, "todo.archived", {"todo_id": row["id"]}, row["project_id"])
-        return {"archived": len(selected)}
+        return {"archived": len(ids)}
 
-    def consume(self, conn, selected, project_id, task_id, reason="Explicit owner scheduling"):
-        """Archive exact source revisions only inside the accepting task transaction."""
-        if not selected or len(selected) > 200 or len({e["id"] for e in selected}) != len(selected):
+    def consume(self, conn, ids, project_id, task_id, reason="Started on owner request"):
+        """Archive the started To-Dos inside the accepting task transaction; a replayed start is a no-op."""
+        if not ids or len(ids) > 200 or len(set(ids)) != len(ids):
             raise ValueError("Select 1–200 distinct To-Do entries")
         task = conn.execute("SELECT project_id FROM tasks WHERE id=?", (task_id,)).fetchone()
         if not task or task["project_id"] != project_id:
             raise ValueError("To-Do handoff needs an accepted assignment in the same project")
-        for entry in selected:
-            key = "todo_handoff:" + entry["id"]
+        for entry_id in ids:
+            key = "todo_handoff:" + entry_id
             prior = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
             if prior:
-                handoff = json.loads(prior["value"])
-                if handoff["task_id"] == task_id and handoff["source"]["revision"] == entry["revision"]:
+                if json.loads(prior["value"])["task_id"] == task_id:
                     continue
                 raise ValueError("To-Do already started in another assignment; continue that assignment")
-            row = conn.execute("SELECT * FROM todos WHERE id=? AND revision=? AND archived_at IS NULL",
-                               (entry["id"], entry["revision"])).fetchone()
+            row = conn.execute("SELECT * FROM todos WHERE id=? AND archived_at IS NULL", (entry_id,)).fetchone()
             if not row or row["project_id"] != project_id:
-                raise ValueError("To-Do changed or belongs to another project; refresh before starting")
+                raise ValueError("To-Do not found in this project (it may be archived); refresh before starting")
             record = {"task_id": task_id, "source": dict(row), "reason": reason, "at": time.time()}
             conn.execute("INSERT INTO settings VALUES(?,?)", (key, json.dumps(record)))
             conn.execute("UPDATE todos SET archived_at=?,updated_at=?,revision=revision+1 WHERE id=?",

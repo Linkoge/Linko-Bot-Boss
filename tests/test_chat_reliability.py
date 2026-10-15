@@ -41,7 +41,6 @@ async def test_lost_acceptance_retry_after_completion_restart_and_clear(system):
             {
                 "manager_execution_id": db.one("SELECT id FROM executions WHERE agent_id='manager'")["id"],
                 "conversation_id": conversation["id"],
-                "mode": "auto",
                 "arguments": json.dumps({"action": "delegate", "objective": "Do this once"}),
                 "callId": "call-one",
                 "tool": "manager_action",
@@ -64,7 +63,6 @@ async def test_lost_acceptance_retry_after_completion_restart_and_clear(system):
     assert len(db.all("SELECT * FROM tasks")) == 1
     for changed in (
         {"content": "Different"},
-        {"mode": "conversation"},
         {"project_id": None},
         {"conversation_id": None},
     ):
@@ -204,7 +202,7 @@ def test_schema10_additive_migration_preserves_all_existing_rows(system):
     before = {table: db.all(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
     migrated = Database(settings.db_path)
     assert before == {table: migrated.all(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
-    assert migrated.one("SELECT max(version) AS version FROM schema_version")["version"] == 13
+    assert migrated.one("SELECT max(version) AS version FROM schema_version")["version"] == 14
     assert migrated.one("PRAGMA integrity_check")["integrity_check"] == "ok"
     assert not migrated.all("PRAGMA foreign_key_check")
 

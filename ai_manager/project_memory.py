@@ -11,6 +11,7 @@ import time
 
 from .codex import AppServer, CodexError, TurnUsage
 from .db import new_id
+from .model_settings import manager_route
 
 FIELDS = ("purpose", "goals", "constraints", "state", "decisions", "pending", "sources", "recent")
 PROTECTED = ("goals", "constraints", "decisions", "pending")
@@ -35,7 +36,7 @@ def validate(brief):
         if key != "recent" and any(not isinstance(v, str) or not v.strip() for v in brief[key]):
             raise ValueError(f"{key} entries must be nonempty text")
     if len(brief["recent"]) > 3:
-        raise ValueError("Only three recent deliveries; use record_delivery to archive the oldest")
+        raise ValueError("Only three recent deliveries")
     for delivery in brief["recent"]:
         if (
             not isinstance(delivery, dict)
@@ -161,14 +162,6 @@ class ProjectMemory:
                 "created_at": time.time(),
                 "parent": control["active"],
                 "provenance": provenance,
-                "delivery_archive": [
-                    r["name"]
-                    for r in conn.execute(
-                        "SELECT name FROM memory WHERE project_id=? AND name LIKE 'delivery:%' ORDER BY updated_at DESC",
-                        (project_id,),
-                    )
-                    if r["name"] not in {e["report"] for e in brief["recent"]}
-                ],
             },
         )
         control["active"] = version
@@ -177,133 +170,6 @@ class ProjectMemory:
         self.store_control(conn, project_id, control)
         self.db.event(conn, "memory.activated", {"version": version, "reason": reason}, project_id)
         return version
-
-    def update(
-        self, project_id, revision, brief, reason="routine established-fact update", retained=None, resolved=None
-    ):
-        self.seed(project_id)
-        validate(brief)
-        with self.db.transaction() as conn:
-            control = self.control(conn, project_id)
-            if control["revision"] != revision:
-                raise ValueError("Memory changed; retrieve current version before editing")
-            old = json.loads(
-                conn.execute(
-                    "SELECT content FROM memory WHERE project_id=? AND name=?", (project_id, control["active"])
-                ).fetchone()[0]
-            )["brief"]
-            retained, resolved = retained or [], resolved or []
-            for record in [*retained, *resolved]:
-                reference = record.get("reference") if isinstance(record, dict) else None
-                if (
-                    not reference
-                    or not conn.execute(
-                        "SELECT 1 FROM memory WHERE project_id=? AND name=?", (project_id, reference)
-                    ).fetchone()
-                ):
-                    raise ValueError("Routine condensation/resolution needs existing scoped memory evidence")
-            for field in (*PROTECTED, "state"):
-                for value in old[field]:
-                    if field == "state" and value.startswith("Capabilities not reconciled"):
-                        continue
-                    if value in brief.get(field, []):
-                        continue
-                    condensed = any(
-                        r.get("field") == field
-                        and r.get("previous") == value
-                        and r.get("current") in brief.get(field, [])
-                        for r in retained
-                    )
-                    completed = field == "pending" and any(
-                        r.get("pending") == value and isinstance(r.get("reason"), str) and r["reason"].strip()
-                        for r in resolved
-                    )
-                    if not condensed and not completed:
-                        raise ValueError(
-                            "Routine updates must retain goals/constraints/state/decisions/pending; "
-                            "provide explicit condensation/resolution provenance or owner review"
-                        )
-            if brief.get("recent") != old["recent"]:
-                raise ValueError("Use record_delivery for recent changes")
-            self.activate(conn, project_id, control, brief, reason, {"retained": retained, "resolved": resolved})
-        return self.snapshot(project_id)
-
-    def delivery(self, project_id, revision, entry, established, evidence, deployment_receipt=None):
-        """One delivery ID groups related fixes; evidence is immutable and never truncated."""
-        self.seed(project_id)
-        if not isinstance(evidence, str) or not evidence.strip():
-            raise ValueError("Detailed evidence is required")
-        if entry.get("deployment") == "deployed":
-            # Require the deploy script's durable success record (DATA/deploy/results/<id>.json).
-            import re
-
-            from .pipeline import read
-
-            if not isinstance(deployment_receipt, str):
-                raise ValueError("Deployed requires a durable succeeded deployment receipt")
-            if deployment_receipt.startswith("memory:"):
-                result = self.get(project_id, deployment_receipt.removeprefix("memory:"))
-                scoped = (
-                    result.get("project_id") == project_id
-                    and bool(result.get("verification"))
-                    and bool(result.get("finished_at"))
-                )
-            else:
-                if not re.fullmatch(r"[0-9a-f]{16}", deployment_receipt):
-                    raise ValueError("Deployed requires a durable succeeded deployment receipt")
-                result = read(self.db.path.parent / "deploy" / "results" / (deployment_receipt + ".json"))
-                scoped = bool(result and result.get("project_id") == project_id)
-            if not result or result.get("status") not in {"success", "succeeded"} or not scoped:
-                raise ValueError("Deployment success is not established for this project")
-        with self.db.transaction() as conn:
-            control = self.control(conn, project_id)
-            if control["revision"] != revision:
-                raise ValueError("Memory changed; retrieve current version before editing")
-            old = json.loads(
-                conn.execute(
-                    "SELECT content FROM memory WHERE project_id=? AND name=?", (project_id, control["active"])
-                ).fetchone()[0]
-            )["brief"]
-            brief = {**old, "state": list(old["state"]), "recent": list(old["recent"])}
-            if not isinstance(established, list) or any(not isinstance(f, str) or not f.strip() for f in established):
-                raise ValueError("Established effects must be text entries")
-            brief["state"] += [f for f in established if f not in brief["state"]]
-            report = "delivery:" + new_id()
-            external_report = entry.get("report")
-            entry = {**entry, "report": report}
-            brief["recent"] = [e for e in brief["recent"] if e["id"] != entry["id"]]
-            brief["recent"].insert(0, entry)
-            brief["recent"] = brief["recent"][:3]
-            if entry["deployment"] in {"pending", "failed"}:
-                blocker = "Delivery " + entry["id"] + " activation " + entry["deployment"]
-                if blocker not in brief["pending"]:
-                    brief["pending"] = [*brief["pending"], blocker]
-            elif entry["deployment"] == "deployed":
-                brief["pending"] = [
-                    p
-                    for p in brief["pending"]
-                    if p
-                    not in {
-                        "Delivery " + entry["id"] + " activation pending",
-                        "Delivery " + entry["id"] + " activation failed",
-                    }
-                ]
-            validate(brief)  # On overflow, neither evidence nor active version changes.
-            self.put(
-                conn,
-                project_id,
-                report,
-                {
-                    "entry": entry,
-                    "evidence": evidence,
-                    "external_report": external_report,
-                    "deployment_receipt": deployment_receipt,
-                    "established": established,
-                    "created_at": time.time(),
-                },
-            )
-            self.activate(conn, project_id, control, brief, "delivery " + entry["id"])
-        return self.snapshot(project_id)
 
     def begin(self, project_id):
         self.seed(project_id)
@@ -643,7 +509,7 @@ class MemoryReviews:
         observed, usage, output = [], TurnUsage(), ""
         try:
             await server.start()
-            route = server.route(**self.memory.db.setting("model_routes", {}).get("interactive", {"effort": "low"}))
+            route = server.route(**manager_route(self.memory.db))
             thread = await server.thread(
                 self.workspace, REVIEW_INSTRUCTIONS, model=route["model"], dynamic_tools=[REVIEW_TOOL]
             )

@@ -63,19 +63,13 @@ class ProjectUpdate(BaseModel):
     status: str | None = None
 
 
-class TodoSelection(BaseModel):
-    id: str
-    revision: int
-
-
 class MessageBody(BaseModel):
     request_id: str | None = Field(default=None, min_length=16, max_length=100, pattern=r"^[A-Za-z0-9_-]+$")
     project_id: str | None = None
     content: str = Field(default='', max_length=64000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
-    todos: list[TodoSelection] = Field(default_factory=list, max_length=200)
+    todos: list[str] = Field(default_factory=list, max_length=200)
     conversation_id: str | None = None
-    mode: Literal["conversation", "auto", "execute"] = "auto"
 
 
 class ChatResetBody(BaseModel):
@@ -109,12 +103,11 @@ class TodoBody(BaseModel):
     project_id: str
     title: str = Field(min_length=1, max_length=200)
     details: str = Field(default="", max_length=24000)
-    revision: int | None = None
 
 
 class TodoArchive(BaseModel):
     project_id: str | None = None
-    selected: list[TodoSelection] = Field(min_length=1, max_length=200)
+    selected: list[str] = Field(min_length=1, max_length=200)
 
 
 class MemoryStart(BaseModel):
@@ -405,25 +398,15 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def transcribe_audio(request: Request):
         return await audio.transcribe(request)
 
-    @app.get("/api/models", dependencies=[Depends(require_owner)])
-    async def models():
-        routes = await chat.routes()
-        return {
-            "models": chat.server.catalog,
-            "routes": routes,
-            "account_type": chat.server.account_type,
-            "catalog_at": chat.server.catalog_at, "catalog_error": chat.server.catalog_error,
-        }
-
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings():
-        from .model_settings import PROVIDER_FAMILIES, active, choices, current, favorites
+        from .model_settings import active, choices, current, favorites
         try:
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
         return {"provider": active(db), "settings": current(db, chat.server), "favorites": favorites(db, chat.server),
-                "providers": {p: {"choices": choices(chat.server, p)} for p in PROVIDER_FAMILIES}}
+                "providers": {p: {"choices": choices(chat.server, p)} for p in ("codex", "claude")}}
 
     @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
     async def save_model_settings(body: dict):
@@ -468,11 +451,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.patch("/api/todos/{entry_id}", dependencies=[Depends(require_owner)])
     def todo_update(entry_id: str, body: TodoBody):
-        return Todos(db).save(body.project_id, body.title, body.details, entry_id, body.revision)
+        return Todos(db).save(body.project_id, body.title, body.details, entry_id)
 
     @app.post("/api/todos/archive", dependencies=[Depends(require_owner)])
     def todo_archive(body: TodoArchive):
-        return Todos(db).archive([e.model_dump() for e in body.selected], body.project_id)
+        return Todos(db).archive(body.selected, body.project_id)
 
     @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
     def portfolio(project_id: str | None = None):
@@ -551,8 +534,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
         return await chat.submit(
-            body.project_id, body.content, body.conversation_id, mode=body.mode, request_id=body.request_id,
-            attachment_ids=body.attachment_ids, todos=[entry.model_dump() for entry in body.todos]
+            body.project_id, body.content, body.conversation_id, request_id=body.request_id,
+            attachment_ids=body.attachment_ids, todos=body.todos
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
@@ -614,18 +597,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             db.event(conn, "question.answered", {"question_id": question_id}, execution_id=question["execution_id"])
         return {"result": "accepted"}
 
-    @app.put('/api/settings/auto-deploy', dependencies=[Depends(require_owner)])
-    def auto_deploy_setting(body: dict):
-        try:
-            return scheduler.pipeline.set(body.get('project_id'), body.get('enabled'))
-        except ValueError as error:
-            raise HTTPException(400, str(error)) from error
-
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():
         from .model_settings import active
         return {"global_instructions": db.setting("global_instructions", ""), "max_workers": 1,
-                "model_provider": active(db), "auto_deploy": scheduler.pipeline.settings()}
+                "model_provider": active(db)}
 
     static = Path(__file__).parent / "static"
     # Pin content and URLs to this process/release; never cache mutable aliases.

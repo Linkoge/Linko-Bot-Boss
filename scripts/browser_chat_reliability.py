@@ -232,8 +232,6 @@ def main():
                 page.locator("#send").click()
                 page.wait_for_function("() => !state.pending.size && state.execution")
                 assert page.locator("#send").is_enabled()
-                page.locator('#chat-menu-button').click()
-                page.locator('[data-mode=conversation]').click()
                 page.locator("#message-input").fill("Queued while busy")
                 page.locator('#message-input').focus()
                 page.locator("#send").dblclick()

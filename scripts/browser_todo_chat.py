@@ -35,9 +35,9 @@ for name in ('Alpha','Beta'):app.state.registry.add(s.project_roots[0]/name)
 async def handoff():
  entry=Todos(app.state.db).list()[0]
  return await app.state.scheduler.manager_action(entry['project_id'],{{'tool':'manager_action',
- 'mode':'auto','manager_execution_id':'fixture-accepted','conversation_id':app.state.chat.conversation(entry['project_id'])['id'],
+ 'manager_execution_id':'fixture-accepted','conversation_id':app.state.chat.conversation(entry['project_id'])['id'],
  'arguments':{{'action':'delegate','objective':entry['title']+' '+entry['details'],
- 'todos':[{{'id':entry['id'],'revision':entry['revision']}}]}}}})
+ 'todos':[entry['id']]}}}})
 uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')'''
         env = {**os.environ, 'AI_MANAGER_DATA': str(root / 'data'),
                'AI_MANAGER_PROJECT_ROOTS': str(root / 'projects'), 'AI_MANAGER_SECURE_COOKIE': '0'}
