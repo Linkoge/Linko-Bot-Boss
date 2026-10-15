@@ -27,12 +27,15 @@ both the manager and every worker read are [RULES.md](RULES.md).
 5. **Queue runner** (`ai_manager/runner.py`; independent of any open chat or owner message). A tick every second starts
    the oldest eligible queued task, one at a time. Not eligible: held, project paused, waiting for its retry time, or a
    deploy request pending (for at most 30 minutes, see Deploy). On service start, whatever was running is resumed without penalty (same branch, same worker
-   thread, repair counters untouched) and stale retry times are forgotten, so a restart or reboot always retries at
-   once. A provider usage limit or a lost connection puts the task back in the queue with a visible retry time: the
-   provider's reset time when it gave one, else backoff (usage limit 5 min doubling to 1 h, connection 30 s doubling to
-   10 min), 10 waits, then failed. The watchdog (every minute) requeues a dead or hung worker (30 min without activity)
-   once, then fails it; fails queued tasks of a removed project; withdraws a deploy request that is still waiting after 30 min.
-   Nothing stays blocked without a visible reason.
+   thread, repair counters untouched) and retry times are forgotten, so a restart or reboot always retries at
+   once. A provider usage limit or a lost connection never fails a task: it goes back in the queue with a visible retry
+   time and is tried again every 5 minutes, indefinitely (no backoff, no wait counter, the provider's reset time is not
+   consulted, so a limit that resets early is picked up by the next try). Only real errors fail a task. The watchdog (every
+   minute) requeues a dead or hung worker (30 min without activity) once, then fails it; fails queued tasks of a removed
+   project; withdraws a deploy request that is still waiting after 30 min; and reports an idle-queue stall: eligible work
+   (not held, project active, retry time passed, no deploy pending) that nothing has started for 5 minutes gets a
+   `queue.stalled` event and a visible reason on the task (for example a deploy or merge holding the live checkout), once per
+   stall. Held, paused, retry-waiting and deploy-waiting work is never a stall. Nothing stays blocked without a visible reason.
 
 Owner controls on a task: **Hold / Release** (queued), **Cancel** (queued or running; the branch is kept),
 **Continue** (failed or done task: appends instructions, re-queues at the end, counters stay). A worker may ask the owner a
@@ -230,6 +233,7 @@ reload, saved-reader removal, keyboard and narrow layouts). Historical source an
 ```bash
 uv sync --locked
 uv run playwright install chromium               # required by audio browser regression tests
+# browser_pwa.py opens a headed Chromium app window: on a display-less host run it as `xvfb-run -a uv run python scripts/browser_pwa.py`
 uv run python -m ai_manager.cli setup-owner     # first time only
 uv run pytest -q -m smoke                       # the fixed smoke suite, every task
 uv run pytest -q                                # full suite: run by the deploy script
@@ -240,18 +244,20 @@ PYTHONPATH=. uv run python scripts/browser_smoke.py   # also browser_tasks.py an
 
 Configuration: `AI_MANAGER_DATA` (default `~/.local/share/linko-bot-manager`), `AI_MANAGER_PORT` (8787),
 `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE`, `AI_MANAGER_CODEX`,
-`AI_MANAGER_CLAUDE`, `AI_MANAGER_REPO` (live checkout, tests only). Daily database backup: `scripts/backup_daily.py`
+`AI_MANAGER_CLAUDE`, `AI_MANAGER_CLAUDE_MODELS` (comma-separated Claude model ids offered in the picker, default
+`claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5`; any id the installed `claude` accepts), `AI_MANAGER_REPO` (live checkout, tests only). Daily database backup: `scripts/backup_daily.py`
 (restore only to a fresh path with the service stopped; native thread storage and project files are backed up separately).
 
 ## Data and history
 
-Existing projects, chats, To-Dos (including their saved revisions and hand-off records) and task/execution history rows are preserved. Schema 13 (the task queue) added columns to
+Existing projects, chats, To-Dos (including their hand-off records) and task/execution history rows are preserved. Schema 13 (the task queue) added columns to
 `tasks` and closed every older non-final task once (failed, "Cancelled: closed when the task queue was rebuilt"; branches and
 workspaces untouched). Old columns (`lifecycle`, `legacy`, …) and old settings keys are ignored history; the old per-provider model
 settings (`model_settings`, `model_settings:claude`) are adopted once (the most recently edited one) into `model_choice`. Schema 14
 dropped the per-project Auto-deploy values unread (older tasks that were left unmerged keep their branches and are never merged
-retroactively; `deploy` with their `task_id` merges one on request); the repair-round limit/checkpoint columns, chat mode column
-and manager brief-upkeep records are ignored history. The earlier release/helper/tier/reviewer/integration/follow-up machinery is
+retroactively; `deploy` with their `task_id` merges one on request); the chat mode column and manager brief-upkeep records
+are ignored history. Schema 15 drops the unused columns `tasks.round_limit`, `open_round`, `checkpoints`, `merge_requested`
+and `waits` and the stored `todos.revision`; no data is read from them. The earlier release/helper/tier/reviewer/integration/follow-up machinery is
 gone; its history is in Git.
 
 `ai_manager/static/icons/README.md` records the owner artwork provenance.

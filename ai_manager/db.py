@@ -48,7 +48,7 @@ CREATE TABLE IF NOT EXISTS chat_requests(
  receipt TEXT NOT NULL, created_at REAL NOT NULL, PRIMARY KEY(owner_id,request_id));
 CREATE TABLE IF NOT EXISTS todos(
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL,
- details TEXT NOT NULL DEFAULT '', revision INTEGER NOT NULL DEFAULT 0,
+ details TEXT NOT NULL DEFAULT '',
  source_task_id TEXT UNIQUE REFERENCES tasks(id), created_at REAL NOT NULL, updated_at REAL NOT NULL,
  archived_at REAL);
 CREATE INDEX IF NOT EXISTS todos_project ON todos(project_id,archived_at);
@@ -133,8 +133,8 @@ class Database:
 
     @staticmethod
     def migrate_queue(conn, task_columns):
-        """Schema 13: the sequential task queue; 14: the Auto-deploy setting is retired. Old columns (lifecycle, legacy,
-        round_limit, checkpoints, ...) stay as ignored history.
+        """Schema 13: the sequential task queue; 14: the Auto-deploy setting is retired; 15: unused columns are dropped.
+        Old columns (lifecycle, legacy, ...) stay as ignored history.
 
         Old non-final tasks are closed once (failed, reason says cancelled); branches, workspaces and rows are kept.
         """
@@ -142,7 +142,7 @@ class Database:
             "state": "TEXT NOT NULL DEFAULT 'queued'", "held": "INTEGER NOT NULL DEFAULT 0",
             "queued_at": "REAL NOT NULL DEFAULT 0", "rounds": "INTEGER NOT NULL DEFAULT 0",
             "stage": "TEXT NOT NULL DEFAULT 'work'",
-            "requeues": "INTEGER NOT NULL DEFAULT 0", "waits": "INTEGER NOT NULL DEFAULT 0", "retry_at": "REAL",
+            "requeues": "INTEGER NOT NULL DEFAULT 0", "retry_at": "REAL",
             "gate_history": "TEXT NOT NULL DEFAULT '[]'", "merge": "TEXT",
         }
         have = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
@@ -172,6 +172,15 @@ class Database:
             # unread; earlier unmerged ('skipped') tasks keep their branches and are never merged retroactively.
             conn.execute("DELETE FROM settings WHERE key LIKE 'auto_deploy:%' OR key='auto_deploy_seed'")
             conn.execute("INSERT INTO schema_version VALUES(14)")
+        if not conn.execute("SELECT 1 FROM schema_version WHERE version=15").fetchone():
+            # Schema 15: retries are plain (every 5 minutes, no counter), rounds have one fixed cap, a To-Do has no revision.
+            for table, names in (("tasks", ("round_limit", "open_round", "checkpoints", "merge_requested", "waits")),
+                                 ("todos", ("revision",))):
+                present = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+                for name in names:
+                    if name in present:
+                        conn.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
+            conn.execute("INSERT INTO schema_version VALUES(15)")
         conn.execute("UPDATE tasks SET lease_owner=NULL WHERE state IN ('done','failed')")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_running ON tasks(state) WHERE state='running'")
         conn.execute("CREATE INDEX IF NOT EXISTS task_queue ON tasks(state,held,queued_at)")

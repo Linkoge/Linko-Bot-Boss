@@ -482,7 +482,7 @@ def test_fresh_schema_contains_only_current_storage(system):
         "legacy",
     }
     assert {"state", "held", "rounds", "requeues", "retry_at"} <= columns
-    assert not columns & {"round_limit", "checkpoints", "open_round", "merge_requested"}
+    assert not columns & {"round_limit", "checkpoints", "open_round", "merge_requested", "waits"}
 
 
 @pytest.mark.asyncio

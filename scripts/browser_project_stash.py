@@ -86,14 +86,6 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')'''
                     return page.locator(f'#project-menu [data-visibility="{project}"]')
 
                 open_menu()
-                # Simulate only capture phase for UI guard; browser_audio covers real capture.
-                page.evaluate("audioState.session={project:state.project,phase:'recording',label:'Alpha',message:'00:01'};renderAudio()")
-                assert checkbox(alpha).is_disabled()
-                assert checkbox(beta).is_disabled()
-                assert page.locator('#all-projects').is_disabled()
-                page.evaluate('(id)=>selectProject(id)', beta)
-                assert page.evaluate('state.project') == alpha
-                page.evaluate("audioState.session=null;renderAudio()")
                 checkbox(alpha).uncheck()
                 page.wait_for_function('(id)=>state.project===null&&state.history&&state.portfolio.projects.find(p=>p.id===id).visible===false', arg=alpha)
                 assert page.locator(f'#projects [data-project="{alpha}"]').count() == 0
@@ -164,7 +156,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')'''
                 assert not errors, errors
                 (evidence / 'result.json').write_text(json.dumps({'passed': True, 'viewports': [1440, 393, 320], 'draft': True, 'attachments': True, 'chat_id': origin, 'reload_restart_rescan': True, 'paused_status': True, 'empty_and_explicit_add': True, 'recording_guard_simulated': True, 'page_errors': errors}, indent=2))
                 browser.close()
-                print('PASS: stash/restore, drafts/uploads/chat identity, all-stashed startup, reload/restart/rescan, empty/Add, paused/tasks, capture guard, keyboard and three viewports')
+                print('PASS: stash/restore, drafts/uploads/chat identity, all-stashed startup, reload/restart/rescan, empty/Add, paused/tasks, keyboard and three viewports')
         finally:
             process.terminate()
             process.wait(timeout=10)

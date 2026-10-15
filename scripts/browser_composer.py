@@ -249,14 +249,14 @@ def main():
                 stop()
                 assert page.locator('#message-input').input_value() == 'typed\n\nrecording 1\n\nrecording 2'
                 assert not chats
-                # Background visibility does not force Stop. Suspension does preserve recovery audio.
+                # Background visibility does not force Stop. A browser freeze does preserve recovery audio.
                 start()
                 page.evaluate("Object.defineProperty(document,'hidden',{get:()=>true,configurable:true});document.dispatchEvent(new Event('visibilitychange'))")
                 page.wait_for_timeout(500)
                 assert page.evaluate("audioState.session.phase==='recording'")
-                page.evaluate("Object.defineProperty(document,'hidden',{get:()=>false,configurable:true});audioState.session.lastTick=Date.now()-10000;document.dispatchEvent(new Event('visibilitychange'))")
+                page.evaluate("Object.defineProperty(document,'hidden',{get:()=>false,configurable:true});document.dispatchEvent(new Event('visibilitychange'));document.dispatchEvent(new Event('freeze'))")
                 page.wait_for_function("()=>audioState.session?.phase==='error'&&audioState.session.blob.size>0")
-                assert 'uncertain' in page.locator('#audio-status').inner_text()
+                assert 'froze' in page.locator('#audio-status').inner_text()
                 assert not chats
                 page.evaluate('()=>audioStorageQueue')
                 page.reload()
@@ -376,15 +376,12 @@ def main():
                     composer = page.locator('#chat-form').bounding_box()
                     assert composer['height'] <= 202 and composer['y']+composer['height'] <= height
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-                    assert page.locator('#audio-stop').count() == 0 and page.locator('#audio-cancel').is_visible()
+                    assert page.locator('#audio-stop').is_visible() and page.locator('#audio-cancel').is_visible()
                     assert page.locator('#microphone').get_attribute('aria-label') == 'Stop recording and transcribe'
                     recording_controls=[page.locator('#'+id).bounding_box() for id in ('audio-upload','audio-cancel')]
-                    input_box=page.locator('.composer-input').bounding_box()
                     assert all(box['height']>=44 and box['width']>=44 for box in recording_controls)
-                    timer=page.locator('#audio-status').bounding_box()
-                    assert timer['x']==input_box['x']
-                    assert timer['x']+timer['width']<=recording_controls[0]['x']
-                    assert recording_controls[0]['x']+recording_controls[0]['width']<=recording_controls[1]['x']
+                    panel=page.locator('#audio-panel').bounding_box()  # session controls live in the navigation shell
+                    assert panel['x'] >= 0 and panel['x']+panel['width'] <= width and panel['y'] < composer['y']
                     assert all(page.evaluate('(id)=>{const b=$(id).getBoundingClientRect();return document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===$(id)}',id) for id in ('audio-cancel','audio-upload','attach','send','microphone'))
                     page.screenshot(path=f'/tmp/linko-compact-composer-{width}.png')
                     geometry.append({'viewport': [width,height], 'composer': composer, 'controls': boxes, 'recording_controls': recording_controls})

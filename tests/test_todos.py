@@ -40,7 +40,7 @@ def test_persistence_isolation_atomic_selection_archive_and_no_dispatch(client):
         "/api/todos/" + a["id"],
         json={"project_id": one, "title": "Updated", "details": "Retained"},
     ).json()
-    assert updated["revision"] == a["revision"] + 1
+    assert updated["title"] == "Updated" and "revision" not in updated
     import json
 
     audit = json.loads(app.state.db.one("SELECT payload FROM events WHERE kind='todo.updated'")["payload"])

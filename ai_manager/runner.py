@@ -2,22 +2,24 @@
 
 It needs no chat and no owner message. A tick (once a second, from the scheduler loop) does three things:
   1. once after startup: whatever was running when the service stopped is resumed (nothing we started is still alive),
-     and stale backoff times are forgotten, so a restart or reboot always retries at once;
-  2. every minute: the watchdog fails or requeues a dead or hung worker, expires a stale deploy request, and fails queued
-     work of a removed project;
+     and retry times are forgotten, so a restart or reboot always retries at once;
+  2. every minute: the watchdog fails or requeues a dead or hung worker, expires a stale deploy request, fails queued
+     work of a removed project, and reports an idle queue that has eligible work but does not start it;
   3. starts the oldest eligible queued task (not held, not waiting for its retry time, project active), one at a time.
-A provider usage limit or a lost connection puts the task back in the queue with a retry time: the provider's reset time
-when known, else bounded exponential backoff. Repair-round counters live on the task row and are never touched here.
+A provider usage limit or a lost connection never fails a task: it goes back in the queue and is tried again every
+5 minutes, indefinitely (a limit that resets early is picked up by the next try). Repair-round counters live on the task
+row and are never touched here.
 """
 import asyncio
 import logging
 import time
 from datetime import datetime, timezone
 
+from . import fence
 from .codex import CodexError
-from .recovery import Failure, classify, owned_alive, reap_orphan, reset_time
+from .recovery import classify, owned_alive, reap_orphan
 
-WATCHDOG_SECONDS, STALL_SECONDS, MAX_WAITS = 60, 1800, 10
+WATCHDOG_SECONDS, STALL_SECONDS, RETRY_SECONDS, IDLE_STALL_SECONDS = 60, 1800, 300, 300
 USAGE_LIMITS = {"usageLimitExceeded", "rateLimitExceeded", "usage_limit_exceeded", "rate_limit_exceeded",
                 "insufficient_quota", "slow_down"}
 log = logging.getLogger(__name__)
@@ -28,7 +30,7 @@ def plain(error):
 
 
 def usage_limit(error):
-    """Failure('usage', provider reset time or None) when the provider reported a usage/rate limit, else None."""
+    """True when the provider reported a usage or rate limit."""
     details = error.details if isinstance(error, CodexError) else error if isinstance(error, dict) else {}
     data = details.get("data") if isinstance(details.get("data"), dict) else {}
     info = details.get("codexErrorInfo") or data.get("codexErrorInfo") or data.get("code") or details.get("code")
@@ -39,23 +41,15 @@ def usage_limit(error):
         status = value.get("httpStatusCode") if isinstance(value, dict) else status
         info = name
     message = str(details.get("message", str(error))).lower()
-    if (info in USAGE_LIMITS or status == 429
-            or (not info or info in {"other", -32000}) and any(s in message for s in ("usage limit", "rate limit", "quota exceeded"))):
-        return Failure("usage", reset_time({**data, **details}))
-    return None
-
-
-def backoff(kind, waits, reset):
-    """Seconds to wait: until the provider's reset time when known, else bounded exponential backoff."""
-    if reset:
-        return min(12 * 3600, max(60, reset - time.time() + 30))
-    return min(3600, 300 * 2 ** waits) if kind == "usage" else min(600, 30 * 2 ** waits)
+    return (info in USAGE_LIMITS or status == 429
+            or (not info or info in {"other", -32000}) and any(s in message for s in ("usage limit", "rate limit", "quota exceeded")))
 
 
 class Runner:
     def __init__(self, core, stall=STALL_SECONDS):
         self.core, self.stall = core, stall
         self.started, self.watchdog_at = False, 0.0
+        self.idle_since, self.reported = None, False  # monotonic time the queue first sat idle with eligible work
 
     async def tick(self):
         core = self.core
@@ -67,9 +61,20 @@ class Runner:
             await self.watchdog()
         while not core.pipeline.pending() and (task := core.tasks.claim()):
             core.launch(task)
+        self.idle_since = (self.idle_since or time.monotonic()) if self.starved() else None
+        self.reported &= self.idle_since is not None
+
+    def starved(self):
+        """Eligible queued work and nothing running or holding the queue (a held or paused task or a deploy is a reason)."""
+        core = self.core
+        if core.jobs or core.pipeline.pending() or core.db.one("SELECT 1 FROM tasks WHERE state='running'"):
+            return None
+        return core.db.one("""SELECT t.* FROM tasks t JOIN projects p ON p.id=t.project_id
+            WHERE t.state='queued' AND t.held=0 AND p.status='active' AND COALESCE(t.retry_at,0)<=?
+            ORDER BY t.queued_at,t.rowid LIMIT 1""", (time.time(),))
 
     def startup(self):
-        """The service just started: resume interrupted work without penalty and drop backoff that may be stale."""
+        """The service just started: resume interrupted work without penalty and forget retry times that may be stale."""
         core = self.core
         self.reconcile_leases()
         for task in core.db.all("SELECT * FROM tasks WHERE state='running'"):
@@ -96,20 +101,15 @@ class Runner:
             core.end(eid, "failed", why + " a second time; stopped")
 
     def failed(self, task, eid, error):
-        """A run ended with an error: wait in the queue for a usage limit or a lost connection, else fail plainly."""
+        """A run ended with an error: a usage limit or lost connection waits in the queue, anything else fails plainly."""
         limit = usage_limit(error)
-        failure = None if limit else classify(error)
-        if not (limit or failure):
+        if not (limit or classify(error)):
             log.warning("task %s failed: %s", task["id"], error)
             return self.core.end(eid, "failed", plain(error))
-        kind, reset = ("usage", limit.retry_at) if limit else ("network", failure.retry_at)
-        waits = self.core.tasks.get(task["id"])["waits"]
-        label = "provider usage limit" if kind == "usage" else "connection"
-        if waits >= MAX_WAITS:
-            return self.core.end(eid, "failed", f"The {label} did not clear after {waits} waits; stopped. Last error: {plain(error)[:200]}")
-        retry_at = time.time() + backoff(kind, waits, reset)
+        retry_at = time.time() + RETRY_SECONDS
         when = datetime.fromtimestamp(retry_at, timezone.utc).strftime("%H:%M UTC")
-        self.core.requeue(eid, f"Waiting for the {label}; retrying at {when}", retry_at, waits=waits + 1)
+        label = "provider usage limit" if limit else "connection"
+        self.core.requeue(eid, f"Waiting for the {label}; retrying at {when}", retry_at)
 
     def activity(self, eid):
         db = self.core.db
@@ -148,11 +148,31 @@ class Runner:
                 conn.execute("UPDATE questions SET status='expired' WHERE execution_id=? AND status='pending'", (eid,))
                 core.db.event(conn, "task.lease_recovered", {"state": state}, task["project_id"], task["id"], eid)
 
+    def report_idle_stall(self):
+        """The queue sat idle with eligible work for too long: say why, on the task and in the events, once per stall."""
+        if self.reported or self.idle_since is None or time.monotonic() - self.idle_since < IDLE_STALL_SECONDS:
+            return
+        core, task = self.core, self.starved()
+        if not task:
+            return
+        try:
+            with fence.hold(core.db.path.parent, exclusive=False):
+                why = "the queue runner has not started it"
+        except fence.Busy:
+            why = "a deploy or merge holds the live checkout"
+        self.reported = True
+        reason = f"Queue idle for over {IDLE_STALL_SECONDS // 60} minutes with this task eligible: {why}"
+        log.error("task %s: %s", task["id"], reason)
+        with core.db.transaction() as conn:
+            conn.execute("UPDATE tasks SET blocker=? WHERE id=? AND state='queued'", (reason, task["id"]))
+            core.db.event(conn, "queue.stalled", {"reason": why}, task["project_id"], task["id"])
+
     async def watchdog(self):
-        """Nothing may stay stuck silently: a dead or hung worker, a stale deploy request, a removed project."""
+        """Nothing may stay stuck silently: a dead or hung worker, a stale deploy request, a removed project, an idle queue."""
         core = self.core
         core.pipeline.expire()
         self.reconcile_leases()
+        self.report_idle_stall()
         for task in core.db.all("SELECT * FROM tasks WHERE state='running'"):
             eid, job = task["lease_owner"], core.jobs.get(task["lease_owner"])
             if job and not job.done():

@@ -123,7 +123,7 @@ class Deploy:
             return conn.execute(sql, args).fetchone()
 
     def busy(self):
-        # One SQLite snapshot; queued/held/backoff tasks are durable, not active writers.
+        # One SQLite snapshot; queued/held/retry-waiting tasks are durable, not active writers.
         with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=10) as conn:
             conn.execute('BEGIN')
             return {name: n for name, sql in IDLE.items() if (n := conn.execute(sql).fetchone()[0])}

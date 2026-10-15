@@ -19,10 +19,13 @@ import uuid
 from pathlib import Path
 
 LEVELS = ('low', 'medium', 'high')
+# Comma-separated Claude model ids; any id the installed `claude` accepts works. Names come from the id.
+MODELS = os.environ.get('AI_MANAGER_CLAUDE_MODELS', 'claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5').split(',')
 CATALOG = [
-    {'model': model, 'displayName': name, 'isDefault': name == 'Sonnet', 'inputModalities': ['text', 'image'],
-     'supportedReasoningEfforts': [{'reasoningEffort': e} for e in LEVELS], 'defaultReasoningEffort': 'medium'}
-    for name, model in (('Haiku', 'claude-haiku-5-5'), ('Sonnet', 'claude-sonnet-5-5'), ('Opus', 'claude-opus-5-5'))
+    {'model': model, 'displayName': model.removeprefix('claude-').split('-')[0].title(), 'isDefault': 'sonnet' in model,
+     'inputModalities': ['text', 'image'], 'supportedReasoningEfforts': [{'reasoningEffort': e} for e in LEVELS],
+     'defaultReasoningEffort': 'medium'}
+    for model in MODELS
 ]
 MCP_SERVER = 'linko'
 

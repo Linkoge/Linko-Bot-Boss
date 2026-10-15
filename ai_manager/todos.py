@@ -78,7 +78,7 @@ class Todos:
                 ).fetchone()
                 if not previous:
                     raise ValueError("To-Do not found in this project (it may be archived)")
-                conn.execute("UPDATE todos SET title=?,details=?,revision=revision+1,updated_at=? WHERE id=?",
+                conn.execute("UPDATE todos SET title=?,details=?,updated_at=? WHERE id=?",
                              (title, details, now, entry_id))
             else:
                 entry_id = new_id()
@@ -108,7 +108,7 @@ class Todos:
                 if not row or (project_id and row["project_id"] != project_id):
                     raise ValueError("Selection changed or belongs to another project; refresh and select again")
                 conn.execute(
-                    "UPDATE todos SET archived_at=?,updated_at=?,revision=revision+1 WHERE id=?",
+                    "UPDATE todos SET archived_at=?,updated_at=? WHERE id=?",
                     (time.time(), time.time(), row["id"]),
                 )
                 self.db.event(conn, "todo.archived", {"todo_id": row["id"]}, row["project_id"])
@@ -133,6 +133,6 @@ class Todos:
                 raise ValueError("To-Do not found in this project (it may be archived); refresh before starting")
             record = {"task_id": task_id, "source": dict(row), "reason": reason, "at": time.time()}
             conn.execute("INSERT INTO settings VALUES(?,?)", (key, json.dumps(record)))
-            conn.execute("UPDATE todos SET archived_at=?,updated_at=?,revision=revision+1 WHERE id=?",
+            conn.execute("UPDATE todos SET archived_at=?,updated_at=? WHERE id=?",
                          (record["at"], record["at"], row["id"]))
             self.db.event(conn, "todo.consumed", record, project_id, task_id)

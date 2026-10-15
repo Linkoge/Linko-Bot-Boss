@@ -161,7 +161,7 @@ def test_migration_closes_old_nonfinal_tasks_and_keeps_every_row_and_branch(tmp_
     # Their unfinished runs are closed so deploys and the queue are not blocked; the manager's own run is untouched.
     assert reopened.one("SELECT finished_at FROM executions WHERE id='x-running'")["finished_at"] is not None
     assert reopened.one("SELECT finished_at FROM executions WHERE id='x-manager'")["finished_at"] is None
-    assert reopened.one("SELECT max(version) AS v FROM schema_version")["v"] == 14
+    assert reopened.one("SELECT max(version) AS v FROM schema_version")["v"] == 15
     assert Tasks(reopened).claim() is None and Database(path).all("SELECT state FROM tasks WHERE state='queued'") == []
     assert reopened.one("PRAGMA integrity_check")["integrity_check"] == "ok"
     # Idempotent: a later start must not close new work again.
@@ -171,6 +171,27 @@ def test_migration_closes_old_nonfinal_tasks_and_keeps_every_row_and_branch(tmp_
         conn.execute("UPDATE tasks SET state='running' WHERE id='new'")
         with pytest.raises(sqlite3.IntegrityError):
             conn.execute("INSERT INTO tasks(id,project_id,description,created_at,updated_at,queued_at,state) VALUES('b','p','n',1,1,1,'running')")
+
+
+def test_unused_columns_are_dropped_and_their_neighbours_keep_their_data(tmp_path):
+    path = tmp_path / "manager.sqlite3"
+    db = Database(path)
+    with db.transaction() as conn:
+        conn.execute("INSERT INTO projects(id,name,path,agent_id,created_at,updated_at) VALUES('p','p','/p','a',1,1)")
+        for name, definition in (("round_limit", "INTEGER NOT NULL DEFAULT 3"), ("open_round", "INTEGER NOT NULL DEFAULT 0"),
+                                 ("checkpoints", "TEXT NOT NULL DEFAULT '[]'"), ("merge_requested", "INTEGER NOT NULL DEFAULT 0"),
+                                 ("waits", "INTEGER NOT NULL DEFAULT 0")):
+            conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+        conn.execute("ALTER TABLE todos ADD COLUMN revision INTEGER NOT NULL DEFAULT 0")
+        conn.execute("INSERT INTO tasks(id,project_id,description,created_at,updated_at,queued_at,rounds) VALUES('t','p','d',1,1,1,2)")
+        conn.execute("INSERT INTO todos(id,project_id,title,created_at,updated_at) VALUES('o','p','keep',1,1)")
+        conn.execute("DELETE FROM schema_version WHERE version=15")
+    reopened = Database(path)
+    gone = {"round_limit", "open_round", "checkpoints", "merge_requested", "waits"}
+    assert not gone & {r["name"] for r in reopened.all("PRAGMA table_info(tasks)")}
+    assert "revision" not in {r["name"] for r in reopened.all("PRAGMA table_info(todos)")}
+    assert reopened.one("SELECT rounds FROM tasks WHERE id='t'")["rounds"] == 2 and reopened.one("SELECT title FROM todos")["title"] == "keep"
+    Database(path)  # idempotent
 
 
 def test_old_auto_deploy_values_are_dropped_and_old_unmerged_work_is_not_merged_retroactively(tmp_path):
@@ -473,90 +494,117 @@ def test_a_deploy_past_its_backup_is_never_withdrawn(world):
     assert not world.pipeline.expire() and world.pipeline.pending()  # it finishes or rolls back by itself
 
 
-@pytest.mark.asyncio
-async def test_usage_limit_waits_with_bounded_backoff_in_order_then_retries(world):
-    world.deployable(False)  # no deploy request between the two runs
-    first, second = world.tasks.add(world.project["id"], "first"), world.tasks.add(world.project["id"], "second")
-
+def limited_by(details):
     async def limited(root, prompt):
-        raise CodexError("limit", {"codexErrorInfo": "usageLimitExceeded", "retryAfter": 120})
+        raise CodexError("limit", details)
+    return limited
 
-    world.lab.actions = [limited]
-    waiting = await run_next(world)
-    assert waiting["id"] == first["id"] and waiting["state"] == "queued" and waiting["waits"] == 1
-    assert 100 < waiting["retry_at"] - time.time() <= 160 and "usage limit" in waiting["blocker"]
-    assert world.tasks.get(second["id"])["state"] == "queued"
+
+@pytest.mark.asyncio
+async def test_usage_limit_waits_five_minutes_in_order_and_never_fails_the_task(world):
+    world.deployable(False)  # no deploy request between the runs
+    first, second = world.tasks.add(world.project["id"], "first"), world.tasks.add(world.project["id"], "second")
+    # A long limit (the provider says "in 10 hours") is no reason to wait longer than 5 minutes: it may reset early.
+    long_limit = {"codexErrorInfo": "usageLimitExceeded", "retryAfter": 36000, "resetsAt": time.time() + 36000}
+    for attempt in range(25):
+        world.lab.actions = [limited_by(long_limit)]
+        world.db.run("UPDATE tasks SET retry_at=NULL WHERE id=?", (first["id"],))
+        waiting = await run_next(world)
+        assert waiting["id"] == first["id"] and waiting["state"] == "queued" and "usage limit" in waiting["blocker"]
+        assert 290 < waiting["retry_at"] - time.time() <= 300
+        assert "waits" not in waiting and waiting["rounds"] == 0 and waiting["requeues"] == 0
     assert world.db.one("SELECT delivery FROM executions WHERE task_id=?", (first["id"],))["delivery"] is None  # not a result
     ran = await run_next(world)  # a task waiting for its retry time is skipped like a hold: the next one runs
     assert ran["id"] == second["id"] and ran["state"] == "done"
-    world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, first["id"]))
+    assert world.tasks.claim() is None
+    world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, first["id"]))  # the limit reset early
     done = await run_next(world)
-    assert done["id"] == first["id"] and done["state"] == "done"
-
-
-@pytest.mark.asyncio
-async def test_usage_limit_without_a_reset_time_backs_off_exponentially_then_gives_up(world):
-    task = world.tasks.add(world.project["id"], "always limited")
-
-    async def limited(root, prompt):
-        raise CodexError("limit", {"codexErrorInfo": "rateLimitExceeded"})
-
-    delays = []
-    for attempt in range(runner_module.MAX_WAITS):
-        world.lab.actions = [limited]
-        world.db.run("UPDATE tasks SET retry_at=NULL WHERE id=?", (task["id"],))
-        row = await run_next(world)
-        assert row["state"] == "queued" and row["waits"] == attempt + 1
-        delays.append(round(row["retry_at"] - time.time()))
-    assert delays[0] in range(295, 301) and delays[1] in range(595, 601) and max(delays) <= 3600
-    world.lab.actions = [limited]
-    world.db.run("UPDATE tasks SET retry_at=NULL WHERE id=?", (task["id"],))
-    final = await run_next(world)
-    assert final["state"] == "failed" and f"did not clear after {runner_module.MAX_WAITS} waits" in final["blocker"]
+    assert done["id"] == first["id"] and done["state"] == "done" and done["retry_at"] is None
 
 
 @pytest.mark.smoke
 @pytest.mark.asyncio
-async def test_network_loss_waits_in_the_queue_with_bounded_backoff_then_resumes_the_same_thread(world):
-    async def dropped(root, prompt):
-        raise CodexError("lost", {"codexErrorInfo": "transportLost"})
-
+async def test_connection_loss_retries_every_five_minutes_forever_and_resumes_the_same_thread(world):
+    dropped = limited_by({"codexErrorInfo": "transportLost"})
     task = world.tasks.add(world.project["id"], "flaky network")
     world.lab.actions = [dropped]
     waiting = await run_next(world)
-    assert waiting["state"] == "queued" and waiting["waits"] == 1 and "connection" in waiting["blocker"]
-    assert 20 < waiting["retry_at"] - time.time() <= 40 and waiting["rounds"] == 0 and waiting["requeues"] == 0
+    assert waiting["state"] == "queued" and "connection" in waiting["blocker"] and 290 < waiting["retry_at"] - time.time() <= 300
+    assert waiting["rounds"] == 0 and waiting["requeues"] == 0
     assert world.tasks.claim() is None  # not eligible before its retry time
-    world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, task["id"]))
-    done = await run_next(world)
-    assert done["state"] == "done" and done["rounds"] == 0 and len(world.lab.turns) == 2
-    assert done["native_thread"] == waiting["native_thread"]
-    world.tasks.add(world.project["id"], "dead network")
-    for attempt in range(runner_module.MAX_WAITS):
+    for _ in range(25):  # far past any former wait cap
+        world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, task["id"]))
         world.lab.actions = [dropped]
         row = await run_next(world)
-        assert row["state"] == "queued" and row["waits"] == attempt + 1 and row["retry_at"] - time.time() <= 600
-        world.db.run("UPDATE tasks SET retry_at=NULL WHERE id=?", (row["id"],))
-    world.lab.actions = [dropped]
-    failed = await run_next(world)
-    assert failed["state"] == "failed" and "connection did not clear" in failed["blocker"]
+        assert row["state"] == "queued" and 290 < row["retry_at"] - time.time() <= 300
+    world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, task["id"]))
+    done = await run_next(world)
+    assert done["state"] == "done" and done["rounds"] == 0 and done["native_thread"] == waiting["native_thread"]
 
 
 @pytest.mark.asyncio
-async def test_usage_limit_with_a_reset_time_waits_until_it_and_a_restart_forgets_stale_backoff(world):
+async def test_a_restart_forgets_the_retry_time_and_a_real_error_still_fails(world):
     task = world.tasks.add(world.project["id"], "limited")
-    reset = time.time() + 5400
-
-    async def limited(root, prompt):
-        raise CodexError("limit", {"codexErrorInfo": "usageLimitExceeded", "resetsAt": reset})
-
-    world.lab.actions = [limited]
+    world.lab.actions = [limited_by({"codexErrorInfo": "usageLimitExceeded", "resetsAt": time.time() + 5400})]
     waiting = await run_next(world)
-    assert reset + 20 < waiting["retry_at"] < reset + 40  # the provider's reset time, not the 5 minute backoff
+    assert waiting["state"] == "queued" and waiting["retry_at"] < time.time() + 301
     core = Core(world.db, world.registry, world.settings, world.pipeline, world.lab.factory, gate=world.lab.gate)
     await core.runner.tick()  # first tick after a service restart: limits may have reset meanwhile
     await asyncio.gather(*list(core.jobs.values()))
     assert world.tasks.get(task["id"])["state"] == "done"
+    bad = world.tasks.add(world.project["id"], "unauthorized")
+    world.lab.actions = [limited_by({"codexErrorInfo": "unauthorized", "message": "login required"})]
+    failed = await run_next(world)
+    assert failed["id"] == bad["id"] and failed["state"] == "failed" and failed["retry_at"] is None
+
+
+# ---- idle-queue stall --------------------------------------------------------------------------------------------
+async def idle_for_a_while(world, monkeypatch):
+    monkeypatch.setattr(runner_module, "IDLE_STALL_SECONDS", 0)
+    await world.core.runner.tick()
+    await world.core.runner.watchdog()
+
+
+@pytest.mark.smoke
+@pytest.mark.asyncio
+async def test_watchdog_reports_an_idle_queue_that_has_eligible_work_it_cannot_start(world, monkeypatch):
+    from ai_manager import fence
+
+    task = world.tasks.add(world.project["id"], "should be running")
+    with fence.hold(world.db.path.parent):  # something keeps the live checkout locked while the queue sits idle
+        await idle_for_a_while(world, monkeypatch)
+        stalled = world.tasks.get(task["id"])
+        assert stalled["state"] == "queued" and "Queue idle" in stalled["blocker"] and "live checkout" in stalled["blocker"]
+        assert len(world.db.all("SELECT 1 FROM events WHERE kind='queue.stalled'")) == 1
+        await world.core.runner.watchdog()  # reported once per stall, not every minute
+        assert len(world.db.all("SELECT 1 FROM events WHERE kind='queue.stalled'")) == 1
+    await world.core.runner.tick()  # the lock is gone: the task starts and the stall is over
+    await asyncio.gather(*list(world.core.jobs.values()))
+    done = world.tasks.get(task["id"])
+    assert done["state"] == "done" and world.core.runner.idle_since is None
+
+
+@pytest.mark.asyncio
+async def test_held_paused_retrying_running_and_deploy_waiting_work_is_not_a_stall(world, monkeypatch):
+    project = world.project["id"]
+    held, waiting = world.tasks.add(project, "held"), world.tasks.add(project, "retrying")
+    world.tasks.control(held["id"], "hold")
+    world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() + 300, waiting["id"]))
+    await idle_for_a_while(world, monkeypatch)
+    world.db.run("UPDATE tasks SET retry_at=NULL WHERE id=?", (waiting["id"],))
+    world.db.run("UPDATE projects SET status='paused' WHERE id=?", (project,))
+    await idle_for_a_while(world, monkeypatch)
+    world.db.run("UPDATE projects SET status='active' WHERE id=?", (project,))
+    world.pipeline.request(project, "auto", None, None, "a deploy is pending")
+    await idle_for_a_while(world, monkeypatch)
+    assert world.core.runner.idle_since is None
+    (world.pipeline.root / "request.json").unlink()
+    world.lab.release = asyncio.Event()
+    await world.core.runner.tick()  # one task is now running; the other waits its turn
+    await world.core.runner.watchdog()
+    assert world.core.runner.idle_since is None and not world.db.one("SELECT 1 FROM events WHERE kind='queue.stalled'")
+    world.lab.release.set()
+    await asyncio.gather(*list(world.core.jobs.values()))
 
 
 @pytest.mark.smoke

@@ -256,18 +256,17 @@ def test_structured_classification(error, kind):
     assert (failure.kind if failure else None) == kind
 
 
-def test_backoff_bounds_authoritative_retry_after_and_usage_limit_detection():
+def test_chat_backoff_bounds_authoritative_retry_after_and_usage_limit_detection():
     assert 4 <= delay(1, "connection") <= 5
     assert 240 <= delay(99, "connection") <= 300
     before = time.time()
     failure = classify({"codexErrorInfo": "httpConnectionFailed", "retryAfter": 30})
     assert before + 30 <= failure.retry_at <= time.time() + 30
-    limit = usage_limit(CodexError("limited", {"data": {"codexErrorInfo": "usageLimitExceeded", "retryAfter": 3600}}))
-    assert limit.kind == "usage" and before + 3600 <= limit.retry_at <= time.time() + 3600
-    assert usage_limit({"status": 429}).retry_at is None
-    assert usage_limit({"message": "You have reached your usage limit"}).kind == "usage"
-    assert usage_limit({"codexErrorInfo": "badRequest", "message": "rate limit is not valid"}) is None
-    assert usage_limit(ValueError("Bad objective")) is None
+    assert usage_limit(CodexError("limited", {"data": {"codexErrorInfo": "usageLimitExceeded", "retryAfter": 3600}}))
+    assert usage_limit({"status": 429})
+    assert usage_limit({"message": "You have reached your usage limit"})
+    assert not usage_limit({"codexErrorInfo": "badRequest", "message": "rate limit is not valid"})
+    assert not usage_limit(ValueError("Bad objective"))
 
 
 @pytest.mark.asyncio

@@ -138,17 +138,13 @@ def main():
                 # Keep the original scenario's independent request-count assertions.
                 del chats[-2:]
 
-                # Blank text field still permits explicit recording Send, in the original mode.
+                # Blank text field still permits explicit recording Send.
                 page.locator('#message-input').fill('')
-                page.locator('#chat-menu-button').click()
-                page.locator('[data-mode=conversation]').click()
                 start()
-                page.locator('#chat-menu-button').click()
-                page.locator('[data-mode=auto]').click()
                 page.locator('#send').click()
                 page.wait_for_function("()=>!audioState.session&&!state.pending.size&&!state.execution&&$('message-input').value===''")
                 assert len(chats) == 1 and chats[-1]['content'] == 'spoken transcript'
-                assert chats[-1]['project_id'] == alpha and chats[-1]['mode'] == 'conversation'
+                assert chats[-1]['project_id'] == alpha
                 assert len(chats[-1]['request_id']) >= 16
 
                 # Switch while transcribing: result writes the original draft and never sends.
@@ -247,8 +243,6 @@ def main():
                     route.abort('failed')
                 page.route('**/api/chat', lose_receipt)
                 page.locator('#message-input').fill('')
-                page.locator('#chat-menu-button').click()
-                page.locator('[data-mode=conversation]').click()
                 start()
                 page.locator('#send').click()
                 page.wait_for_function('()=>!audioState.session&&!state.pending.size&&submissions.size===1')

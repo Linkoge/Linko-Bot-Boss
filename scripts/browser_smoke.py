@@ -38,7 +38,7 @@ recovery_chat=app.state.chat.conversation(recovery['id'])
 app.state.scheduler.tasks.add(recovery['id'],'Retain partial development during outage',recovery_chat['id'])
 recovery_task=app.state.scheduler.tasks.claim()
 with app.state.db.transaction() as conn:
-    conn.execute("UPDATE tasks SET state='queued',held=1,lease_owner=NULL,retry_at=?,waits=1,blocker='Waiting for the provider usage limit; retrying at 23:59 UTC' WHERE id=?",(time.time()+3600,recovery_task['id']))
+    conn.execute("UPDATE tasks SET state='queued',held=1,lease_owner=NULL,retry_at=?,blocker='Waiting for the provider usage limit; retrying at 23:59 UTC' WHERE id=?",(time.time()+3600,recovery_task['id']))
     conn.execute("UPDATE executions SET status='waiting',finished_at=? WHERE id=?",(time.time(),recovery_task['lease_owner']))
     conn.execute("INSERT INTO executions(id,agent_id,status,started_at,conversation_id,retry_at,recovery_reason) VALUES('recovery-reply','manager','recovering',?,?,?,'connection')",(time.time(),recovery_chat['id'],time.time()+3600))
     conn.execute("INSERT INTO messages VALUES('recovery-message',?,'assistant','Partial response is preserved','waiting','recovery-reply',?)",(recovery_chat['id'],time.time()))

@@ -1,5 +1,8 @@
 import asyncio
+import json
+import os
 import stat
+import subprocess
 import sys
 from types import SimpleNamespace
 
@@ -158,3 +161,15 @@ async def test_claude_host_translates_turns_resume_interrupt_and_limits(tmp_path
         assert event['params']['turn']['status'] == 'interrupted'
     finally:
         await server.close()
+
+
+def test_claude_model_list_comes_from_the_environment_with_names_derived_from_ids():
+    def catalog(**env):
+        out = subprocess.run([sys.executable, '-c', 'import json,ai_manager.claude_host as h;print(json.dumps(h.CATALOG))'],
+                             capture_output=True, text=True, check=True, env={**os.environ, **env}).stdout
+        return json.loads(out)
+
+    default = catalog(AI_MANAGER_CLAUDE_MODELS='claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5')
+    assert [(m['displayName'], m['isDefault']) for m in default] == [('Haiku', False), ('Sonnet', True), ('Opus', False)]
+    custom = catalog(AI_MANAGER_CLAUDE_MODELS='claude-fable-5-1,claude-opus-5-5')
+    assert [m['model'] for m in custom] == ['claude-fable-5-1', 'claude-opus-5-5'] and custom[0]['displayName'] == 'Fable'

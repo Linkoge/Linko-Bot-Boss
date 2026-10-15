@@ -227,7 +227,7 @@ class Tasks:
                 fields = {"description": text, "acceptance": extra, "held": 0}
                 if state in {"done", "failed"}:  # counters stay: repair rounds are never reset
                     fields |= {"state": "queued", "queued_at": now, "blocker": "", "stage": "work", "requeues": 0,
-                               "waits": 0, "retry_at": None, "gate_history": "[]"}
+                               "retry_at": None, "gate_history": "[]"}
             sets = ",".join(f"{k}=?" for k in fields)
             conn.execute(f"UPDATE tasks SET {sets},revision=revision+1,updated_at=? WHERE id=?", (*fields.values(), now, task_id))
             self.db.event(conn, "task." + action, {}, task["project_id"], task_id)
@@ -277,7 +277,7 @@ class Tasks:
                 raise ValueError("Task is already merged")
             if task["state"] != "done":
                 raise ValueError("Only a finished task is merged on request; a failed task needs continue first")
-            conn.execute("UPDATE tasks SET state='queued',stage='merge',queued_at=?,requeues=0,waits=0,blocker='',"
+            conn.execute("UPDATE tasks SET state='queued',stage='merge',queued_at=?,requeues=0,blocker='',"
                          "revision=revision+1,updated_at=? WHERE id=?", (time.time(), time.time(), task_id))
             self.db.event(conn, "task.merge_requested", {}, task["project_id"], task_id)
         return self.get(task_id)
