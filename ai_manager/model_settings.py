@@ -122,7 +122,7 @@ def guidelines(provider):
             'Existing assignments retain their selected pair on continue.')
 
 
-def save(db, server, value):
+def save(db, server, value, activate=False):
     value = dict(value)
     provider = value.pop('provider', 'codex')
     if provider not in PROVIDERS:
@@ -157,6 +157,10 @@ def save(db, server, value):
             routes = {'interactive': value['manager'], 'execution': value['bot']['manual']}
             conn.execute("INSERT INTO settings VALUES('model_routes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                          (json.dumps(routes),))
+        if activate:
+            conn.execute("INSERT INTO settings VALUES('model_provider',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                         (json.dumps(provider),))
+            db.event(conn, 'models.provider', {'provider': provider})
         db.event(conn, 'models.saved', {**value, 'provider': provider})
     return value
 
@@ -206,3 +210,48 @@ def assignment_route(db, server, task):
         if not item['allowed'] or not item['levels'].get(pair['effort'], False):
             raise RouteBlocked('Saved bot pair is now denied or unavailable; enable it before resuming this assignment')
     return pair
+
+
+def favorites(db, server):
+    """Project saved families to the current catalog without silently replacing unavailable pairs."""
+    slots = db.setting('manager_favorites', [None, None])
+    result = []
+    for slot in slots[:2]:
+        if slot is None:
+            result.append(None)
+            continue
+        item = copy.deepcopy(slot)
+        try:
+            item['pair'] = validate_pair(server, item['pair'], item['provider'])
+            item['available'] = True
+        except (ValueError, KeyError):
+            item['available'] = False
+        result.append(item)
+    return (result + [None, None])[:2]
+
+
+def insert_favorite(db, server, slot):
+    if slot not in (0, 1):
+        raise ValueError('Choose favorite slot 1 or 2')
+    provider = active(db)
+    pair = validate_pair(server, current(db, server, provider)['manager'], provider)
+    with db.transaction() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key='manager_favorites'").fetchone()
+        slots = json.loads(row[0]) if row else [None, None]
+        slots[slot] = {'provider': provider, 'pair': pair}
+        conn.execute("INSERT INTO settings VALUES('manager_favorites',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (json.dumps(slots),))
+        db.event(conn, 'models.favorite_inserted', {'slot': slot, **slots[slot]})
+    return favorites(db, server)
+
+
+def recall_favorite(db, server, slot):
+    if slot not in (0, 1):
+        raise ValueError('Choose favorite slot 1 or 2')
+    item = favorites(db, server)[slot]
+    if not item or not item['available']:
+        raise ValueError('Favorite unavailable; insert a supported Manager selection to replace it')
+    provider = item['provider']
+    config = current(db, server, provider)
+    config['manager'] = item['pair']
+    return save(db, server, {**config, 'provider': provider}, activate=True)

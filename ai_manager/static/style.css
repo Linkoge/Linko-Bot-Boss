@@ -139,31 +139,30 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .messages,.messages *{overflow-anchor:none;scroll-behavior:auto}
 .chat-layout .composer-area{position:static}
 #model-settings-button{width:44px;height:44px;min-height:44px;flex:none;padding:4px;font-size:20px}
-#model-dialog{max-width:480px;padding:16px;max-height:calc(var(--app-height,100dvh) - 24px);overflow:auto}
-#model-dialog h2{margin:0 0 8px;font-size:16px}
-#model-close{position:absolute;top:8px;right:8px;min-height:36px;width:36px;padding:0;font-size:22px}
+#model-dialog{max-width:420px;padding:12px 14px;max-height:calc(var(--app-height,100dvh) - 16px);overflow:auto}
+#model-dialog h2{margin:0;color:var(--muted);font-size:13px;font-weight:600;letter-spacing:0;user-select:none}
+.model-section-head{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:32px}
+#model-close{min-height:32px;width:32px;padding:0;font-size:22px;background:transparent;border-color:transparent;color:var(--muted)}
 .model-choice-row{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;margin:5px 0}
-.model-choice-row button{min-width:0;padding:6px 3px;min-height:38px;background:#202734;color:var(--muted);font-size:13px}
+.model-choice-row button{min-width:0;padding:4px 3px;min-height:32px;background:#202734;color:var(--muted);font-size:13px}
 .model-choice-row button[aria-pressed=true]{background:var(--accent-bg);border-color:var(--accent-border);color:var(--accent);font-weight:700;box-shadow:inset 0 0 0 1px var(--accent-border)}
-.bot-settings{border-top:1px solid var(--border);margin-top:14px;padding-top:12px}
-#bot-mode{grid-template-columns:1fr 1fr;margin-bottom:12px}
-.bot-model-section{margin-top:10px}
-.bot-model-section .model-choice-row{grid-template-columns:repeat(4,minmax(0,1fr))}
-.policy-cell{display:flex;gap:3px;min-width:0}
-.policy-cell button{flex:1;font-size:17px;min-height:32px;padding:0}
-.policy-row{margin-top:2px}
-.manual-disabled button{opacity:.48}
-.manual-disabled button[aria-pressed=true]{opacity:.65}
-.policy-disabled{opacity:.4}
+/* Effort selection changes only text; keyboard focus keeps its independent outline. */
+.model-choice-row button.effort-choice,.model-choice-row button.effort-choice[aria-pressed=true],.model-choice-row button.effort-choice:hover{background:#202734;border-color:var(--border);box-shadow:none;font-weight:400}
+.model-choice-row button.effort-choice[aria-pressed=true]{color:var(--accent)}
+.bot-settings,.model-favorites{margin-top:10px}
+#bot-mode{grid-template-columns:1fr 1fr;margin:0;flex:0 1 240px}
+.model-policy-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
+.model-policy-grid .policy-efforts{grid-template-columns:minmax(0,1fr);margin:0}
+.favorite-row{display:flex;gap:5px;margin-top:5px;min-width:0}
+.favorite-row button{min-height:32px;padding:4px 10px;font-size:13px;color:var(--muted)}
+.favorite-entry{display:flex;align-items:center;gap:12px;flex:1;min-width:0;text-align:left}
+.favorite-entry span{overflow-wrap:anywhere}
+.favorite-entry .favorite-effort{color:var(--muted);font-size:12px}
 #model-error{color:#f2a7a7;font-size:12px;margin:6px 0 0}
 #model-settings-button svg{width:22px;height:22px;display:block;margin:auto}
 #model-settings-button[data-provider=claude]{color:#e8a387}
-.provider-row{grid-template-columns:repeat(2,minmax(0,1fr));margin:0 44px 14px 0}
-.model-choice-row button.provider-choice{display:flex;align-items:center;justify-content:center;gap:8px;min-height:42px;font-size:14px}
-.provider-choice svg{width:18px;height:18px;flex:none}
-@media(max-width:380px){.provider-row{margin-bottom:6px}.model-choice-row button.provider-choice{min-height:34px}}
 #model-error:empty{display:none}
-@media(max-width:380px){#model-dialog{padding:12px;width:calc(100% - 16px)}.model-choice-row{gap:4px}.model-choice-row button{font-size:12px}.policy-cell{gap:2px}}
+@media(max-width:380px){#model-dialog{padding:10px;width:calc(100% - 16px)}.model-choice-row{gap:4px}.model-choice-row button{font-size:12px}}
 
 #audio-file-input{padding:0;border:0}
 

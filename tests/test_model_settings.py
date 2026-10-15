@@ -321,3 +321,85 @@ async def test_catalog_refresh_ttl_atomic_pages_bounded_failure_and_empty_cache(
     pages.append({'data':[]})
     with pytest.raises(ValueError, match='empty'):
         await empty.refresh_catalog()
+
+
+def test_manager_favorites_persist_recall_across_providers_without_bot_changes(tmp_path):
+    from test_claude_provider import BothServer
+
+    settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
+    server = BothServer(settings)
+    app = create_app(settings, server, BothServer)
+    with TestClient(app, base_url='http://localhost') as client:
+        assert client.put('/api/manager-favorites/0').status_code == 401
+        assert client.post('/api/manager-favorites/0/recall').status_code == 401
+        sign_in(client, app, settings)
+        panel = client.get('/api/model-settings').json()
+        assert panel['favorites'] == [None, None]
+        bots = {p: v['settings']['bot'] for p, v in panel['providers'].items()}
+        pair = {'model': MODELS['Astra'], 'effort': 'high'}
+        config = panel['settings']
+        config['manager'] = pair
+        client.put('/api/model-settings', json=config).raise_for_status()
+        assert client.put('/api/manager-favorites/0', headers={'X-CSRF-Token': 'bad'}).status_code == 403
+        first = client.put('/api/manager-favorites/0').json()
+        assert first[0]['pair'] == pair and first[1] is None
+        claude = panel['providers']['claude']['settings']
+        claude['manager'] = {'model': 'claude-haiku-5-5', 'effort': 'medium'}
+        client.put('/api/model-settings', json={**claude, 'provider': 'claude', 'activate': True}).raise_for_status()
+        second = client.put('/api/manager-favorites/1').json()
+        assert second[0] == first[0] and second[1]['pair'] == claude['manager']
+        recalled = client.post('/api/manager-favorites/0/recall').json()
+        assert recalled['provider'] == 'codex' and recalled['settings']['manager'] == pair
+        assert {p: v['settings']['bot'] for p, v in recalled['providers'].items()} == bots
+        recalled = client.post('/api/manager-favorites/1/recall').json()
+        assert recalled['provider'] == 'claude' and recalled['settings']['manager'] == claude['manager']
+        assert {p: v['settings']['bot'] for p, v in recalled['providers'].items()} == bots
+        # Insert replaces immediately, including a slot originally saved on another provider.
+        replaced = client.put('/api/manager-favorites/0').json()
+        assert replaced[0] == replaced[1]
+        assert len(Database(settings.db_path).setting('manager_favorites')) == 2
+        assert client.put('/api/manager-favorites/2').status_code == 409
+
+
+def test_favorites_follow_family_but_never_substitute_unsupported_effort(system):
+    from ai_manager.model_settings import active, favorites, insert_favorite, recall_favorite
+
+    db, _, _, server, *_ = system
+    config = current(db, server)
+    config['manager'] = {'model': MODELS['Sol'], 'effort': 'high'}
+    save(db, server, config)
+    insert_favorite(db, server, 0)
+    newer = copy.deepcopy(next(m for m in server.catalog if m['model'] == MODELS['Sol']))
+    newer['model'] = 'gpt-6.2-sol'
+    server.catalog.append(newer)
+    assert favorites(db, server)[0]['pair'] == {'model': 'gpt-6.2-sol', 'effort': 'high'}
+    recall_favorite(db, server, 0)
+    assert current(db, server)['manager']['model'] == 'gpt-6.2-sol'
+    newer['supportedReasoningEfforts'] = [{'reasoningEffort': 'low'}]
+    before = db.setting('model_settings')
+    assert favorites(db, server)[0]['available'] is False
+    with pytest.raises(ValueError, match='unavailable'):
+        recall_favorite(db, server, 0)
+    assert db.setting('model_settings') == before and active(db) == 'codex'
+    server.catalog = [m for m in server.catalog if 'sol' not in m['model']]
+    assert favorites(db, server)[0]['available'] is False
+    with pytest.raises(ValueError, match='unavailable'):
+        recall_favorite(db, server, 1)
+
+
+def test_provider_activation_rejects_stale_or_invalid_pair_atomically(system):
+    from test_claude_provider import BothServer
+
+    from ai_manager.model_settings import active
+
+    db, _, settings, *_ = system
+    server = BothServer(settings)
+    config = current(db, server, 'claude')
+    saved = save(db, server, {**config, 'provider': 'claude'})
+    with pytest.raises(ValueError, match='Settings changed'):
+        save(db, server, {**config, 'provider': 'claude'}, activate=True)
+    assert active(db) == 'codex'
+    saved['manager']['effort'] = 'ultra'
+    with pytest.raises(ValueError):
+        save(db, server, {**saved, 'provider': 'claude'}, activate=True)
+    assert active(db) == 'codex'

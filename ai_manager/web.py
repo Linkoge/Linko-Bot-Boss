@@ -398,20 +398,40 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings():
-        from .model_settings import PROVIDERS, active, choices, current
+        from .model_settings import PROVIDERS, active, choices, current, favorites
         try:
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
         provider = active(db)
         providers = {p: {"choices": choices(chat.server, p), "settings": current(db, chat.server, p)} for p in PROVIDERS}
-        return {"provider": provider, "providers": providers, **providers[provider]}
+        return {"provider": provider, "providers": providers, "favorites": favorites(db, chat.server), **providers[provider]}
 
     @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
     async def save_model_settings(body: dict):
         from .model_settings import save
         await chat.server.start()
-        return save(db, chat.server, body)
+        activate = body.pop('activate', False)
+        if type(activate) is not bool:
+            raise ValueError('Invalid provider activation')
+        result = save(db, chat.server, body, activate=activate)
+        if activate:
+            account_usage.invalidate()
+        return result
+
+    @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
+    async def insert_manager_favorite(slot: int):
+        from .model_settings import insert_favorite
+        await chat.server.start()
+        return insert_favorite(db, chat.server, slot)
+
+    @app.post("/api/manager-favorites/{slot}/recall", dependencies=[Depends(require_owner)])
+    async def recall_manager_favorite(slot: int):
+        from .model_settings import recall_favorite
+        await chat.server.start()
+        recall_favorite(db, chat.server, slot)
+        account_usage.invalidate()
+        return await model_settings()
 
     @app.put("/api/model-provider", dependencies=[Depends(require_owner)])
     async def save_model_provider(body: dict):

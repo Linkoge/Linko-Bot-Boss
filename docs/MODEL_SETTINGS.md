@@ -1,10 +1,53 @@
+# Compact model settings — 2026-10-15
+
+Implemented candidate; normal automatic delivery is handled by the application. This document does
+not assert a deployment result. Detailed verification and limits: [redesign report](MODEL_SETTINGS_REDESIGN_REPORT.md).
+Earlier dated release/deployment notes below are historical.
+
+Manager shares its top line with Close. Its model/effort rows always show Codex Luna/Sol/Astra then
+Claude Haiku/Sonnet/Opus, with equal compact spacing and no provider logos inside the panel.
+Names and supported efforts come from the existing provider family/catalog resolver; unavailable choices
+are disabled. Clicking a Manager model or effort saves that provider's Manager pair and activates its
+provider atomically. Choosing a model that lacks the retained effort explicitly selects its first supported
+Low/Medium/High effort. The navigation opener retains the active provider icon.
+
+Bot shares a line with Manual/Automatic and shows the active provider's independent settings. Manual
+has plain model and effort names in two rows. Automatic model buttons toggle model allowance directly;
+selected models light up. The three effort columns directly below the corresponding model buttons retain
+independent per-model effort allowances, including allowances on disabled models. There is no checkmark/X
+row. Both modes retain the saved manual pair. Backend validation rejects removing the last usable allowed
+pair and the UI restores the saved state with an accessible error. Existing delegation, pinned assignments,
+provider/thread ownership and execution behavior are unchanged.
+
+Every effort control keeps the same background, border, weight and shadow when selected; only text changes
+to the existing reddish accent. Keyboard focus uses its own visible outline. Model buttons retain their
+selected gradient. Manager, Bot and Favorites use identical subtle, non-editable headings.
+
+Favorites is a separate bottom section with exactly two global **Manager-only** slots in existing SQLite
+settings (`manager_favorites`, no schema change). Each row begins at the far left with Insert. Insert
+immediately replaces the slot with the currently saved active Manager provider/model/effort; no dialog or
+additional selector. The recall entry shows effort as plain text before model. Clicking it saves that Manager
+pair and activates its provider without altering either provider's Bot settings. Empty entries are disabled
+but Insert remains usable. Favorites persist across reloads and restarts. Recognized saved family versions
+resolve to the current supported model; missing families or unsupported saved efforts remain unavailable,
+with recall disabled until replaced through Insert. No silent cross-family or effort fallback on recall.
+
+Authenticated/CSRF-protected endpoints are GET/PUT `/api/model-settings`, PUT
+`/api/manager-favorites/{0|1}` (copy current Manager) and POST
+`/api/manager-favorites/{0|1}/recall`. Model-settings PUT accepts optional boolean `activate`;
+revision validation and provider activation commit with the settings. Existing provider and role APIs remain.
+Responsive layouts keep controls within panel width; short viewports permit ordinary vertical modal scrolling.
+Native Enter/Space, arrow navigation, contained Tab/Shift+Tab, Escape and opener focus restoration remain.
+
+---
+
 # Codex / Claude provider switch — succeeded live, 2026-10-14
 
 Live receipt `deployment-helper/results/5ad868944ca0bfef14d430c5eb04566d.json` establishes
 provider activation at `b0f0c8d`; the current integrated parallel/composer candidate preserves
 these settings and behavior. [Current preparation/status](../STATE.md).
 
-The settings dialog has a Codex | Claude toggle on top; the gear button shows the active provider's
+Before the compact redesign, the settings dialog had a Codex | Claude toggle on top; the gear button shows the active provider's
 logo (OpenAI or Anthropic). The active provider (`model_provider` setting) applies to **new** manager
 turns and new assignments. Claude mirrors the Codex panel with Haiku/Sonnet/Opus
 (`claude-haiku-5-5`, `claude-sonnet-5-5`, `claude-opus-5-5`) and Low/Medium/High effort. Its settings are stored

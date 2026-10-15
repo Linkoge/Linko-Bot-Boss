@@ -11,63 +11,87 @@ function setProviderIcon(provider){
   b.setAttribute('aria-label',`Manager and bot settings, ${PROVIDER_NAMES[provider]} selected`);b.title=`${PROVIDER_NAMES[provider]} settings`;
 }
 function providerView(){return modelPanel.providers[modelPanel.provider];}
-async function changeProvider(provider){
-  if(modelSaving||provider===modelPanel.provider)return;
-  modelSaving=true;$('model-save-status').textContent='Switching provider';
-  try{await api('/api/model-provider',{method:'PUT',body:JSON.stringify({provider})});modelPanel.provider=provider;setProviderIcon(provider);$('model-error').textContent='';$('model-save-status').textContent=`${PROVIDER_NAMES[provider]} selected`;}
-  catch(error){$('model-error').textContent=error.message;$('model-save-status').textContent='Provider unchanged';}
-  finally{modelSaving=false;renderModels();}
-}
 function modelButton(text,label,selected,run,disabled=false){
   const b=element('button',text);b.type='button';b.setAttribute('aria-label',label);b.setAttribute('aria-pressed',String(selected));b.disabled=disabled||modelSaving;b.onclick=run;return b;
 }
-async function changeModels(change){
+async function modelMutation(run){
   if(modelSaving)return;
-  const view=providerView(),next=structuredClone(view.settings);change(next);modelSaving=true;$('model-save-status').textContent='Saving settings';
+  modelSaving=true;$('model-save-status').textContent='Saving settings';
   modelDialog.querySelectorAll('button[data-choice]').forEach(b=>b.disabled=true);
-  try{view.settings=await api('/api/model-settings',{method:'PUT',body:JSON.stringify({...next,provider:modelPanel.provider})});$('model-error').textContent='';$('model-save-status').textContent='Settings saved';}
+  try{await run();$('model-error').textContent='';$('model-save-status').textContent='Settings saved';setProviderIcon(modelPanel.provider);}
   catch(error){$('model-error').textContent=error.message;$('model-save-status').textContent='Settings unchanged';}
   finally{modelSaving=false;renderModels();}
 }
+async function changeModels(change,provider=modelPanel.provider,activate=false){
+  return modelMutation(async()=>{
+    const view=modelPanel.providers[provider],next=structuredClone(view.settings);change(next);
+    view.settings=await api('/api/model-settings',{method:'PUT',body:JSON.stringify({...next,provider,activate})});
+    if(activate)modelPanel.provider=provider;
+  });
+}
 function modelRow(label){const row=element('div',undefined,'model-choice-row');row.setAttribute('role','group');row.setAttribute('aria-label',label);return row;}
-function addChoice(row,b,key){b.dataset.choice=key;if(/^(manager|manual)-(Luna|Sol|Astra|Haiku|Sonnet|Opus)$/.test(key))b.classList.add('model-family');row.append(b);}
+function addChoice(row,b,key){b.dataset.choice=key;row.append(b);return b;}
+function addModel(row,m,label,selected,run,disabled,key){
+  const b=addChoice(row,modelButton(m.name,label,selected,run,disabled),key);b.classList.add('model-family');
+}
+function addEffort(row,e,label,selected,run,disabled,key){
+  const b=addChoice(row,modelButton(titleLevel(e),label,selected,run,disabled),key);b.classList.add('effort-choice');
+}
+function selectModel(pair,m){pair.model=m.model;if(!m.levels.includes(pair.effort))pair.effort=m.levels[0];}
 function renderModels(){
   const focused=modelDialog.contains(document.activeElement)?document.activeElement.dataset.choice:null;
-  const {settings,choices}=providerView(),bot=settings.bot,automatic=bot.mode==='automatic';
-  const providers=$('provider-choices');providers.replaceChildren();
-  for(const p of ['codex','claude']){
-    const b=modelButton('',`Use ${PROVIDER_NAMES[p]}`,modelPanel.provider===p,()=>changeProvider(p));
-    b.innerHTML=PROVIDER_LOGOS[p];b.append(element('span',PROVIDER_NAMES[p]));b.classList.add('provider-choice');addChoice(providers,b,`provider-${p}`);
-  }
   const manager=$('manager-choices');manager.replaceChildren();
-  const models=modelRow('Manager model'),levels=modelRow('Manager reasoning');
-  for(const m of choices)addChoice(models,modelButton(m.name,`Manager ${m.name}`,settings.manager.model===m.model,
-    ()=>changeModels(c=>{c.manager.model=m.model;}),!m.levels.includes(settings.manager.effort)),`manager-${m.name}`);
-  const managerModel=choices.find(m=>m.model===settings.manager.model);
-  for(const e of ['low','medium','high'])addChoice(levels,modelButton(titleLevel(e),`Manager ${titleLevel(e)}`,settings.manager.effort===e,
-    ()=>changeModels(c=>{c.manager.effort=e;}),!managerModel?.levels.includes(e)),`manager-${e}`);
-  manager.append(models,levels);
+  for(const provider of ['codex','claude']){
+    const {settings,choices}=modelPanel.providers[provider],pair=settings.manager;
+    const models=modelRow(`Manager ${PROVIDER_NAMES[provider]} model`),levels=modelRow(`Manager ${PROVIDER_NAMES[provider]} effort`);
+    for(const m of choices)addModel(models,m,`Manager ${m.name}`,modelPanel.provider===provider&&pair.model===m.model,
+      ()=>changeModels(c=>selectModel(c.manager,m),provider,true),!m.levels.length,`manager-${m.name}`);
+    const selected=choices.find(m=>m.model===pair.model);
+    for(const e of ['low','medium','high'])addEffort(levels,e,`Manager ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,pair.effort===e,
+      ()=>changeModels(c=>{c.manager.effort=e;},provider,true),!selected?.levels.includes(e),`manager-${provider}-${e}`);
+    manager.append(models,levels);
+  }
+  const {settings,choices}=providerView(),bot=settings.bot,automatic=bot.mode==='automatic';
   const mode=$('bot-mode');mode.replaceChildren();
   for(const value of ['manual','automatic'])addChoice(mode,modelButton(titleLevel(value),`Bot ${titleLevel(value)}`,bot.mode===value,
     ()=>changeModels(c=>{c.bot.mode=value;})),`bot-${value}`);
   const sections=$('bot-choices');sections.replaceChildren();
-  for(const m of choices){
-    const section=element('div',undefined,'bot-model-section'),manual=modelRow(`Bot manual selection ${m.name}`);
-    manual.classList.toggle('manual-disabled',automatic);
-    const supported=m.levels.includes(bot.manual.effort);
-    addChoice(manual,modelButton(m.name,`Bot manual ${m.name}`,bot.manual.model===m.model,
-      ()=>changeModels(c=>{c.bot.manual.model=m.model;}),automatic||!supported),`manual-${m.name}`);
-    for(const e of ['low','medium','high'])addChoice(manual,modelButton(titleLevel(e),`Bot manual ${m.name} ${titleLevel(e)}`,
-      bot.manual.model===m.model&&bot.manual.effort===e,()=>changeModels(c=>{c.bot.manual={model:m.model,effort:e};}),automatic||!m.levels.includes(e)),`manual-${m.name}-${e}`);
-    const policy=modelRow(`Automatic policy ${m.name}`);policy.classList.add('policy-row');policy.classList.toggle('policy-disabled',!automatic);
-    for(const e of [null,'low','medium','high']){
-      const cell=element('div',undefined,'policy-cell');cell.setAttribute('role','group');cell.setAttribute('aria-label',`Automatic ${m.name} ${e?titleLevel(e):'model'} policy`);
-      const allowed=e?bot.policy[m.model].levels[e]:bot.policy[m.model].allowed;
-      for(const [value,glyph,word] of [[true,'✓','Allow'],[false,'×','Deny']])addChoice(cell,modelButton(glyph,`${word} automatic ${m.name}${e?' '+titleLevel(e):''}`,allowed===value,
-        ()=>changeModels(c=>{if(e)c.bot.policy[m.model].levels[e]=value;else c.bot.policy[m.model].allowed=value;}),!automatic||(!!e&&!m.levels.includes(e))),`policy-${m.name}-${e||'model'}-${word}`);
-      policy.append(cell);
+  const models=modelRow(`Bot ${PROVIDER_NAMES[modelPanel.provider]} ${automatic?'allowed models':'model'}`);
+  for(const m of choices)addModel(models,m,`Bot ${automatic?'allow':'manual'} ${m.name}`,automatic?bot.policy[m.model].allowed:bot.manual.model===m.model,
+    ()=>changeModels(c=>{if(automatic)c.bot.policy[m.model].allowed=!c.bot.policy[m.model].allowed;else selectModel(c.bot.manual,m);}),!m.levels.length,`bot-model-${m.name}`);
+  sections.append(models);
+  if(automatic){
+    const policies=element('div',undefined,'model-policy-grid');
+    for(const m of choices){
+      const levels=modelRow(`Automatic ${m.name} effort allowances`);levels.classList.add('policy-efforts');
+      for(const e of ['low','medium','high'])addEffort(levels,e,`Automatic ${m.name} ${titleLevel(e)}`,bot.policy[m.model].levels[e],
+        ()=>changeModels(c=>{c.bot.policy[m.model].levels[e]=!c.bot.policy[m.model].levels[e];}),!m.levels.includes(e),`policy-${m.name}-${e}`);
+      policies.append(levels);
     }
-    section.append(manual,policy);sections.append(section);
+    sections.append(policies);
+  }else{
+    const levels=modelRow('Bot manual effort'),selected=choices.find(m=>m.model===bot.manual.model);
+    for(const e of ['low','medium','high'])addEffort(levels,e,`Bot manual ${titleLevel(e)}`,bot.manual.effort===e,
+      ()=>changeModels(c=>{c.bot.manual.effort=e;}),!selected?.levels.includes(e),`bot-manual-${e}`);
+    sections.append(levels);
+  }
+  const favorites=$('manager-favorites');favorites.replaceChildren();
+  const managerPair=providerView().settings.manager,canInsert=choices.some(m=>m.model===managerPair.model&&m.levels.includes(managerPair.effort));
+  for(let slot=0;slot<2;slot++){
+    const item=modelPanel.favorites[slot],row=element('div',undefined,'favorite-row');
+    const insert=addChoice(row,modelButton('Insert',`Insert current Manager into favorite ${slot+1}`,false,
+      ()=>modelMutation(async()=>{modelPanel.favorites=await api(`/api/manager-favorites/${slot}`,{method:'PUT'});}),!canInsert),`favorite-insert-${slot}`);
+    insert.removeAttribute('aria-pressed');
+    const entry=addChoice(row,modelButton('',item?`Recall Manager favorite ${slot+1}`:`Empty Manager favorite ${slot+1}`,false,
+      ()=>modelMutation(async()=>{modelPanel=await api(`/api/manager-favorites/${slot}/recall`,{method:'POST'});}),!item?.available),`favorite-recall-${slot}`);
+    entry.removeAttribute('aria-pressed');entry.classList.add('favorite-entry');
+    if(item){
+      entry.append(element('span',titleLevel(item.pair.effort),'favorite-effort'));
+      const model=modelPanel.providers[item.provider]?.choices.find(m=>m.model===item.pair.model);
+      entry.append(element('span',model?.name||item.pair.model));
+      if(!item.available)entry.append(element('span','Unavailable','favorite-effort'));
+    }else entry.append(element('span','Empty','favorite-effort'));
+    favorites.append(row);
   }
   if(focused)modelDialog.querySelector(`[data-choice="${focused}"]`)?.focus({preventScroll:true});
 }
