@@ -57,6 +57,46 @@ checkout fence, `ai_manager/fence.py`). One-time operator bootstrap, no sudo:
   Workers run as the service user with broad access; the rules ask them to confirm before catastrophic destruction.
   That is an agent convention, not a sandbox.
 
+## Whole-session audio recording
+
+Microphone capture requires a secure context (HTTPS, or localhost for development),
+MediaRecorder, microphone permission and a supported recording format. One app-level
+session retains its original project, conversation and mode across internal views,
+project switches and stashing. The persistent bar names that destination and exposes
+Stop, Discard, and (after interruption) Download/Retry. Stop transcribes the whole
+recording once into the original draft; explicit composer Send retains the existing
+whole-recording send flow. Navigation suppresses automatic Send. Before insertion,
+the original conversation is checked; a replacement chat never receives its transcript.
+
+Changing browser tabs/apps or document visibility does not stop capture. Delayed timers
+are not evidence that the microphone stopped. Where available, a screen wake lock is
+requested during visible recording, released on hide/stop/discard, and requested again
+on return. Denial, low-power policy and missing wake-lock support leave capture usable;
+the bar shows whether the screen is being kept awake. This API keeps a visible screen
+awake; it does not grant background execution. See the
+[Screen Wake Lock specification](https://w3c.github.io/screen-wake-lock/).
+
+Recorder errors/stops, ended tracks and page freeze/departure retain captured audio
+for the existing review/retry flow and remove the active indicator. A muted microphone
+shows a pause warning, continues the same recorder where possible, and requires review
+on Stop because audio may be missing. All MediaRecorder data events are assembled into
+one Blob and one transcription request after capture ends: no separately transcribed
+segments or partial transcript insertion. Existing IndexedDB recovery checkpoints are
+best effort; final data may never arrive if the browser/process is killed. Download
+important interrupted recordings before leaving. Stop/Discard releases microphone,
+timers and screen lock, including a lock granted after the session has ended.
+
+Permanent regression coverage: `tests/test_audio_continuity.py` uses real headless
+Chromium capture with a fake microphone and transcription provider, internal navigation,
+a second browser tab, visibility events, recorder/track interruption, and simulated denied/unsupported wake
+locks. `scripts/browser_audio.py` additionally covers the existing upload, Send, retry,
+recovery and narrow-layout flows. Visibility simulation does not establish mobile OS
+background support. Mobile app switching, screen lock, browser freezing, calls,
+permission revocation and power policy can pause or terminate microphone capture.
+Physical iOS/Android locked-screen behavior has not been verified here. Neither a PWA
+nor screen wake lock bypasses OS/browser suspension; keep the app visible for the best
+chance of continuity. Existing 20-minute/32-MiB limits still apply.
+
 ## Whole-message Copy and Delete
 
 Each whole owner/assistant message in Chat and saved/archive history has one small, low-opacity
@@ -83,6 +123,7 @@ reload, saved-reader removal, keyboard and narrow layouts). Historical source an
 
 ```bash
 uv sync --locked
+uv run playwright install chromium               # required by audio browser regression tests
 uv run python -m ai_manager.cli setup-owner     # first time only
 uv run pytest -q -m smoke                       # the fixed smoke suite, every task
 uv run pytest -q                                # full suite: run by the deploy script

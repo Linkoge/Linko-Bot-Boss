@@ -93,8 +93,8 @@ def main():
                 def start():
                     page.locator('#microphone').click()
                     page.wait_for_function("()=>audioState.session?.phase==='recording'")
-                    assert page.locator('#audio-status').inner_text() == '00:00'
-                    page.wait_for_function("()=>$('audio-status').textContent==='00:01'")
+                    assert 'Recording · 00:00' in page.locator('#audio-status').inner_text()
+                    page.wait_for_function("()=>audioState.session?.message==='00:01'")
                     assert page.locator('#send').is_visible()
                     assert page.locator('#chat-form').evaluate("node=>node.classList.contains('composer-active')")
                     # Capture actual browser audio, not a synthetic MediaRecorder implementation.
@@ -123,7 +123,7 @@ def main():
                 assert page.locator('#microphone').is_enabled()
                 start()
                 assert page.evaluate('!!state.execution')
-                assert page.locator('#audio-stop').count() == 0
+                assert page.locator('#audio-stop').is_visible()
                 before_chats = len(chats)
                 with page.expect_file_chooser():
                     page.locator('#audio-upload').click()
@@ -169,12 +169,12 @@ def main():
                 assert page.locator('#message-input').input_value() == 'Alpha draft\n\nlate Alpha text'
                 page.unroute('**/api/audio/transcribe')
 
-                # Switching during capture is blocked; explicit stop retains the transcript.
+                # Switching during capture retains one session and the original transcript destination.
                 start()
-                page.evaluate('(id)=>selectProject(id)', beta)
-                assert page.evaluate('state.project') == alpha
+                switch(beta)
+                assert page.evaluate('state.project') == beta
                 assert page.evaluate('audioState.session.phase') == 'recording'
-                assert page.locator('#all-projects').is_disabled()
+                assert page.locator('#all-projects').is_enabled()
                 finish_stop()
                 switch(beta)
                 page.wait_for_function('()=>!audioState.session')
@@ -421,7 +421,7 @@ def main():
                 page.evaluate('audioState.session.started=performance.now()-1199000')
                 page.wait_for_function("()=>audioState.session?.message==='19:59'")
                 assert len(uploads) == before_uploads
-                assert page.locator('#audio-status').inner_text() == '19:59'
+                assert '19:59' in page.locator('#audio-status').inner_text()
                 complete = []
                 def check_full_upload(route):
                     # Actual final MediaRecorder chunk is included, one whole Blob after stop.
@@ -449,7 +449,7 @@ def main():
                     assert page.locator('#message-input').get_attribute('placeholder') is None
                     assert page.locator('#context-hint').count() == 0
                     assert page.locator('.composer-note').count() == 0
-                    assert page.locator('#audio-status').inner_text() == '00:01'
+                    assert '00:01' in page.locator('#audio-status').inner_text()
                     for control in ['microphone', 'audio-cancel', 'audio-upload', 'send']:
                         assert page.locator('#'+control).is_visible()
                     assert page.locator('#messages').inner_text().strip()
@@ -531,7 +531,7 @@ def main():
                 assert len(chats)==before and page.locator('#message-input').input_value()=='retain me\n\nretry for editing'
                 page.unroute('**/api/audio/transcribe')
                 assert not interrupts, interrupts
-                assert page.locator("#audio-stop").count() == 0
+                assert page.locator("#audio-stop").is_hidden()
                 assert not errors, errors
                 print(json.dumps({'result': 'passed', 'real_capture': True, 'provider': 'fixture only', 'uploads': len(uploads), 'chat_submissions': len(chats), 'viewports': [1440, 393, 320]}))
                 browser.close()

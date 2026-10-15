@@ -222,3 +222,8 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .message-action-buttons{display:flex;justify-content:flex-end;gap:4px}
 .message-actions:not([open])>.message-action-buttons{display:none}
 .message-action-buttons button{font-size:11px;padding:3px 9px;min-height:32px;color:var(--muted)}
+
+/* Session controls stay in the navigation shell, outside transient views. */
+.navigation > .audio-panel{background:var(--panel);padding:6px 10px;max-height:none;flex-wrap:wrap;border-bottom:1px solid var(--border)}
+.navigation > .audio-panel #audio-status{flex:1 1 160px;max-width:none}
+.navigation > .audio-panel .audio-actions{flex-wrap:wrap}

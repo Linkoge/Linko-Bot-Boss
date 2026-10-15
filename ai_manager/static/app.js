@@ -76,7 +76,7 @@ async function refresh(loadChat=true){
   const portfolio=await api('/api/portfolio'+(project?'?project_id='+encodeURIComponent(project):''));
   if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return false;
   preserveChatPosition(()=>{state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();});
-  if(state.project&&portfolio.projects.find(p=>p.id===state.project)?.visible===false&&!projectSwitchLocked()){await selectProject(null);return false;}
+  if(state.project&&portfolio.projects.find(p=>p.id===state.project)?.visible===false){await selectProject(null);return false;}
   if(portfolio.queue_error)notice(portfolio.queue_error);
   if(state.view==='todo')await loadTodos(selection);
   if(loadChat&&!state.source&&!state.pending.has(project))await loadHistory(selection);
@@ -113,15 +113,14 @@ function renderProjects(){
 function closeProjectMenu(focus=false){$('project-menu').closest('.navigation').classList.remove('project-menu-open');$('project-menu').hidden=true;$('project-menu-button').setAttribute('aria-expanded','false');if(focus)$('project-menu-button').focus();}
 let stashedProjectsOpen=false,renderingProjectMenu=false;
 const visibilityPending=new Set();
-function projectSwitchLocked(){return typeof audioState!=='undefined'&&!!audioState.session&&['starting','recording','stopping'].includes(audioState.session.phase);}
 function renderProjectAvailability(){
-  const locked=projectSwitchLocked();
-  for(const b of $('projects').querySelectorAll('button'))b.disabled=locked&&b.dataset.project!==(state.project||'');
-  for(const b of $('project-menu').querySelectorAll('button[data-project]'))b.disabled=locked&&b.dataset.project!==(state.project||'')&&b.dataset.project!=='rename';
-  for(const c of $('project-menu').querySelectorAll('input'))c.disabled=locked||visibilityPending.has(c.dataset.visibility);
+  for(const c of $('project-menu').querySelectorAll('input'))c.disabled=visibilityPending.has(c.dataset.visibility);
 }
+// Recording controls can expand the sticky navigation; keep notices below it.
+if(window.ResizeObserver)new ResizeObserver(entries=>{
+  document.documentElement.style.setProperty('--nav-height',`${entries[0].target.getBoundingClientRect().height}px`);
+}).observe(document.querySelector('.navigation'));
 async function setProjectVisibility(p,visible){
-  if(projectSwitchLocked()){notice('Stop recording before switching or stashing projects.');renderProjectMenu();return;}
   const restoreFocus=$('project-menu').contains(document.activeElement);
   visibilityPending.add(p.id);renderProjectAvailability();renderAudio();
   try{
@@ -139,14 +138,14 @@ function renderProjectMenu(){
   const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;menu.replaceChildren();
   const global=element('button','◈ All Projects · global context',!state.project?'selected':'');
   global.dataset.project='';global.setAttribute('aria-pressed',String(!state.project));
-  global.onclick=action(async()=>{if(projectSwitchLocked()){notice('Stop recording before switching projects.');return;}closeProjectMenu(true);await selectProject(null);});
+  global.onclick=action(async()=>{closeProjectMenu(true);await selectProject(null);});
   const addRow=(p,parent,stashed)=>{
     const row=element('div',undefined,'project-menu-row'),checkbox=element('input');checkbox.type='checkbox';checkbox.checked=!stashed;
     checkbox.dataset.visibility=p.id;checkbox.setAttribute('aria-label',`Show ${projectLabel(p)} in navigation`);
     checkbox.onchange=action(()=>setProjectVisibility(p,checkbox.checked));row.append(checkbox);
     if(stashed)row.append(element('span',projectLabel(p)));
     else{const button=element('button',projectLabel(p),state.project===p.id?'selected':'');button.dataset.project=p.id;button.setAttribute('aria-pressed',String(state.project===p.id));
-      button.onclick=action(async()=>{if(projectSwitchLocked()){notice('Stop recording before switching projects.');return;}closeProjectMenu(true);await selectProject(p.id);});row.append(button);}
+      button.onclick=action(async()=>{closeProjectMenu(true);await selectProject(p.id);});row.append(button);}
     parent.append(row);
   };
   const sorted=[...state.portfolio.projects].sort(compareContexts);
@@ -194,7 +193,6 @@ document.addEventListener('pointerdown',event=>{if(!event.target.closest('#chat-
 $('chat-mode').onchange=()=>{renderChatModes();updateComposer();};
 renderChatModes();
 async function selectProject(id){
-  if(id!==state.project&&projectSwitchLocked()){notice('Stop recording before switching projects.');return;}
   if(id&&state.portfolio?.projects.find(p=>p.id===id)?.visible===false)id=null;
   closeChatMenu();
   if(id!==state.project)audioChanged();
@@ -554,12 +552,12 @@ $('message-input').addEventListener('input',()=>{state.drafts.set(state.project,
 // in particular file-picker activation must stay synchronous inside its trusted click.
 function preserveDraftFocus(event){
   if(event.button!==0||!event.isPrimary||document.activeElement!==$('message-input'))return;
-  if(event.target.closest('#microphone,#attach,#audio-cancel,#audio-download,#audio-upload'))event.preventDefault();
+  if(event.target.closest('#microphone,#attach,#audio-stop,#audio-retry,#audio-cancel,#audio-download,#audio-upload'))event.preventDefault();
 }
-$('chat-form').addEventListener('pointerdown',preserveDraftFocus);
+$('app').addEventListener('pointerdown',preserveDraftFocus);
 // Older mouse browsers without Pointer Events still get the same focus protection.
-if(!window.PointerEvent)$('chat-form').addEventListener('mousedown',event=>{
-  if(event.button===0&&document.activeElement===$('message-input')&&event.target.closest('#microphone,#attach,#audio-cancel,#audio-download,#audio-upload'))event.preventDefault();
+if(!window.PointerEvent)$('app').addEventListener('mousedown',event=>{
+  if(event.button===0&&document.activeElement===$('message-input')&&event.target.closest('#microphone,#attach,#audio-stop,#audio-retry,#audio-cancel,#audio-download,#audio-upload'))event.preventDefault();
 });
 
 // Textarea Enter (including IME composition) keeps the browser's native multiline editing.
