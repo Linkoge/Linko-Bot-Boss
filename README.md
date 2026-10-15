@@ -24,6 +24,8 @@ both the manager and every worker read are [RULES.md](RULES.md).
    per-project switch. Main is first merged into the branch; a conflict goes to the same worker as a repair round of the
    same task. For the manager's own project the deploy script is then requested automatically; other projects are merged
    only. The manager's `deploy` action (optionally with a `task_id` of a finished, never-merged task) deploys on request.
+   After every passing merge the application schedules a GitHub backup push for that project. This runs independently
+   of the queue and deployment; workers never push. See GitHub backups and secret checks below.
 5. **Queue runner** (`ai_manager/runner.py`; independent of any open chat or owner message). A tick every second starts
    the oldest eligible queued task, one at a time. Not eligible: held, project paused, waiting for its retry time, or a
    deploy request pending (for at most 30 minutes, see Deploy). On service start, whatever was running is resumed without penalty (same branch, same worker
@@ -40,6 +42,59 @@ both the manager and every worker read are [RULES.md](RULES.md).
 Owner controls on a task: **Hold / Release** (queued), **Cancel** (queued or running; the branch is kept),
 **Continue** (failed or done task: appends instructions, re-queues at the end, counters stay). A worker may ask the owner a
 question; the task stays running and says so. Finished results return to the originating chat automatically.
+
+## GitHub backups and secret checks
+
+The owner has authorized automatic application pushes, including verified existing backlog. Every Git project uses its
+single `origin` push URL on `github.com` (SSH or HTTPS), with the service user's existing Git credentials. The application
+pushes local `main` (legacy `master` where that is the project's main branch) to the same remote branch. It never forces,
+resets local commits, rewrites history, creates repositories, or changes remote configuration. Non-Git projects keep
+their in-place workflow. Missing/unsupported origins or authentication failures need attention, without holding work.
+
+`ai_manager/github_backup.py` runs network work in a background thread without the checkout fence. A merge requests an
+attempt; failures retain all local commits and retry every five minutes, and a later merge requests another attempt.
+Startup also schedules repositories without a backup receipt, so safe existing backlog does not require another task.
+Durable per-project receipts in SQLite settings (`github_backup:<project-id>`) preserve pending work and retry times
+across restarts. Project tabs show **GitHub needs attention** on failure; project API/manager records include the reason,
+retry timestamp and safe findings. Backup failures do not fail tasks, consume repair rounds, or prevent merge/deploy.
+A later successful push includes all retained commits. Each Git command has a 60-second timeout and no interactive
+credential prompt. Raw Git/SSH/hook output is discarded, since it can contain credentials.
+
+Before the first push, and every subsequent attempt, the application queries the actual remote branch and scans every
+unpushed commit, including intermediate secrets deleted later. An empty remote requires scanning all local history;
+shallow history, unavailable history or a diverged remote refuses only the backup. The verified commit ID is pushed
+explicitly, so changes arriving during a push stay pending for another attempt. Local and remote commits remain intact
+on rejection. A secret in existing backlog stays needs-attention for owner remediation; the application never rewrites
+that backlog or bypasses GitHub protection.
+
+Delivery also checks **only `main..branch` commits**, after committing worker changes and syncing main, before merging.
+The built-in scanner (`ai_manager/secret_check.py`) checks added lines for obvious GitHub/OpenAI tokens, AWS access-key
+IDs, private-key headers and long literal credential assignments. It flags changed `.env`/`.env.*` files, `*.pem`, `*.key` and
+`id_rsa*` filenames at any depth (`.env.example` is permitted). Unchanged historical lines are outside the delivery
+scope; merge resolutions are checked without treating inherited main changes as task additions. Findings enter the
+existing five-round repair loop; each finding contains only **file, line, rule** (line 0 for filenames). The worker must
+remove the credential from every affected unmerged task commit, including intermediate commits. There is no owner
+approval gate. This is a small obvious-secret check, not comprehensive credential discovery. Gitleaks may be used by an
+operator separately; the application needs no optional scanner, installation, download or external service to check.
+
+Reviewed synthetic fixtures can use a committed `.linko-secret-allowlist.json` in each repository. Its JSON array has
+exact entries like `{"path":"tests/fixtures/token.txt","line":1,"rule":"github-token","reason":"synthetic fixture"}`.
+Use line 0 with rule `sensitive-filename` for fixture names. Paths are repository-relative; no globs, regex exclusions,
+wildcards or whole-file content bypasses. The delivered tree's policy applies to its history, so an approved fixture
+can be added together with its exact entry. Entries require a nonempty reason; malformed policy fails with a safe rule.
+Review allowlist edits as code: this mechanism is for fixtures, never live credentials. It applies to both delivery and
+backup, and never to another repository.
+
+Enable GitHub's server-side protection as well: repository **Settings → Advanced Security** (under Security and quality)
+→ enable **Secret Protection**, then enable **Push protection** in that section. Availability depends on repository and
+plan; an organization may manage this setting. Follow the current
+[GitHub setup instructions](https://docs.github.com/en/code-security/how-tos/secure-your-secrets/prevent-future-leaks/enable-push-protection).
+Provision the service user's normal write access to each origin separately. A protected push rejection stays
+needs-attention and retries; no bypass URL or secret value is exposed or acted on automatically.
+
+Permanent synthetic regression coverage is in `tests/test_github_backup.py`: detection and exact allowlists, safe
+diagnostics, optional scanner absence, commit scope and intermediate history, bounded repairs, first-push backlog,
+rejected pushes and later catch-up, diverged history, and queue/merge/deploy progress during backup failure or latency.
 
 ## Deploy
 

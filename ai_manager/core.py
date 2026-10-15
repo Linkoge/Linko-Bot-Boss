@@ -27,6 +27,8 @@ from .model_settings import RouteBlocked, assignment_route
 from .pipeline import IDENTITY, Conflict, git
 from .recovery import turn_error
 from .runner import Runner, plain
+from .secret_check import failures as secret_failures
+from .secret_check import scan as scan_secrets
 
 REPAIR_ROUNDS = 5
 SMOKE_SECONDS, SUITE_SECONDS, PROBE_SECONDS = 180, 600, 60
@@ -424,6 +426,10 @@ class Core:
                                "output_tail": last.get("output", "")[-2500:],
                                "instruction": ("Merge conflicts: resolve every conflict marker keeping both sides' intent, "
                                                "git add, and commit the merge." if "merge" in last["checks"] else
+                                               "Remove credentials from every delivered commit, including intermediate commits. "
+                                               "Amend/rebuild only this task's unmerged commits; preserve main. "
+                                               "Allowlist only reviewed synthetic fixtures with exact file/line/rule entries."
+                                               if "secrets" in last["checks"] else
                                                "Fix the cause. Do not weaken, skip or delete tests to make them pass.")}
             return value
         value |= {"acceptance_criteria": task["acceptance"],
@@ -559,6 +565,9 @@ class Core:
                 if not result["ok"]:
                     return {"outcome": result}
             try:
+                hits = await asyncio.to_thread(scan_secrets, root, branch, head)
+                if hits:
+                    return {"outcome": outcome([{"check": "secrets", "failures": secret_failures(hits), "output": ""}])}
                 main_head, changed = await asyncio.to_thread(self.pipeline.merge, project["path"], head)
             except Conflict:
                 continue
@@ -613,3 +622,4 @@ class Core:
         for job in list(self.jobs.values()):
             job.cancel()
         await asyncio.gather(*list(self.jobs.values()), return_exceptions=True)
+        await self.pipeline.backups.close()

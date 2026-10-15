@@ -61,6 +61,7 @@ class Runner:
             await self.watchdog()
         while not core.pipeline.pending() and (task := core.tasks.claim()):
             core.launch(task)
+        core.pipeline.backups.tick()
         self.idle_since = (self.idle_since or time.monotonic()) if self.starved() else None
         self.reported &= self.idle_since is not None
 

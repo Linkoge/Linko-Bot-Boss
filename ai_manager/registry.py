@@ -109,6 +109,7 @@ class Registry:
         )
         for project in projects:
             project["visible"] = json.loads(project.pop("visibility"))
+            project["github_backup"] = self.db.setting("github_backup:" + project["id"], {})
         return projects
 
     def get(self, project_id):
@@ -116,6 +117,7 @@ class Registry:
         if not project:
             raise ValueError("Unknown project")
         project["visible"] = self.db.setting("project_visible:" + project_id, True)
+        project["github_backup"] = self.db.setting("github_backup:" + project_id, {})
         return project
 
     def set_visibility(self, project_id: str, visible: bool):

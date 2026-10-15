@@ -14,6 +14,7 @@ from pathlib import Path
 
 from . import fence
 from .fence import Busy, main_branch
+from .github_backup import GitHubBackup
 
 DEPLOY_WAIT = 1800  # a pending deploy request holds the queue at most this long, then it is withdrawn
 ROOT = Path(os.getenv('AI_MANAGER_REPO') or Path(__file__).resolve().parents[1]).resolve()  # live code checkout
@@ -67,6 +68,7 @@ class Pipeline:
     def __init__(self, db, registry):
         self.db, self.registry, self.job = db, registry, None
         self.root = db.path.parent / 'deploy'
+        self.backups = GitHubBackup(db, registry)
 
     def deployable(self, path):
         # Only the manager's own repository has the deploy script wiring.
@@ -144,7 +146,11 @@ class Pipeline:
         with fence.hold(self.db.path.parent, exclusive=True):
             if self.pending():
                 raise Busy('a deploy is pending')
-            return merge_into_main(project_path, commit)
+            result = merge_into_main(project_path, commit)
+            project = self.db.one('SELECT id FROM projects WHERE path=?', (str(project_path),))
+            if project:
+                self.backups.request(project['id'])
+            return result
 
     def expire(self, max_age=DEPLOY_WAIT):
         """A deploy request that has not finished in time (script not installed, stuck unit, endless idle wait) must not

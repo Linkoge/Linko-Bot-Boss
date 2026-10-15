@@ -101,6 +101,10 @@ function renderProjects(){
   for(const p of [null,...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))){
     const id=p?.id||null,b=p?element('button',projectLabel(p),'project-button'):globalButton;
     b.classList.toggle('selected',state.project===id);b.title=p?p.path:'Global manager conversation and portfolio';
+    if(p?.github_backup?.state==='needs-attention'){
+      b.append(element('span',' · GitHub needs attention','muted'));
+      b.title+=`\nGitHub backup: ${p.github_backup.reason}. Local commits retained; retrying automatically.`;
+    }
     b.dataset.project=id||'';b.setAttribute('aria-pressed',String(state.project===id));
     b.onclick=action(()=>selectProject(id));$('projects').append(b);
   }
