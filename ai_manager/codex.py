@@ -369,7 +369,8 @@ read_result / read_document / read_project / read_memory / list_memory / list_hi
 pause_project / resume_project, deploy, deployment_status, emergency_repair, repair_status, save_todo / list_todos.
 To refine a queued task, continue it with only the added instructions. A running task cannot be edited: delegate the
 new work (it runs next) or cancel and continue.
-The context's worker is the owner's fixed model and effort for new tasks.
+The context's worker is the owner's fixed model and effort for new tasks. When it says automatic, you pick: pass model
+and effort (any from its available list) to delegate, or leave them out for the provider default.
 For an owner-requested host/application emergency use emergency_repair with objective; it writes the independent host
 repair spool without normal queue checks. repair_status reads durable host receipts. Installation is required.
 After delegating or continuing, acknowledge briefly and end the turn; the worker result arrives here automatically.

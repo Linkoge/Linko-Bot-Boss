@@ -556,9 +556,9 @@ def test_manager_and_worker_instructions_describe_only_the_current_behaviour():
     assert not {"update_brief", "record_delivery"} & set(actions)
     properties = MANAGER_TOOL["inputSchema"]["properties"]
     assert not {"mode", "brief", "retained", "resolved", "entry", "evidence", "deployment_receipt", "revision"} & set(properties)
-    assert properties["todos"]["items"] == {"type": "string"} and not {"model", "effort"} & set(properties)
+    assert properties["todos"]["items"] == {"type": "string"} and {"model", "effort"} <= set(properties)
     text = MANAGER_INSTRUCTIONS + MANAGER_TOOL["description"]
     for gone in ("Auto-deploy", "checkpoint", "Execute", "Conversation mode", "record_delivery", "update_brief", "revision"):
         assert gone not in text, gone
     assert "at most 5 rounds" in RULES and "checkpoint" not in RULES and "hard cap" not in RULES.lower()
-    assert "automatically" in MANAGER_INSTRUCTIONS and "When it says automatic" not in MANAGER_INSTRUCTIONS
+    assert "automatically" in MANAGER_INSTRUCTIONS and "automatic" in MANAGER_INSTRUCTIONS

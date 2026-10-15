@@ -14,7 +14,7 @@ from .todos import Todos
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Record deferred ideas (To-Dos), delegate and control tasks and projects, or retrieve scoped evidence/history. Passing work is merged and deployed automatically; use deploy only when the owner asks to deploy now (optionally with task_id of a finished task whose branch was never merged). Read actions support offset pagination.",
+    "description": "Record deferred ideas (To-Dos), delegate and control tasks and projects, or retrieve scoped evidence/history. Passing work is merged and deployed automatically; use deploy only when the owner asks to deploy now (optionally with task_id of a finished task whose branch was never merged). model and effort apply to delegate only when the worker setting is Automatic. Read actions support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -56,6 +56,8 @@ MANAGER_TOOL = {
             "execution_id": {"type": "string"},
             "todo_id": {"type": "string"},
             "todos": {"type": "array", "minItems": 1, "maxItems": 200, "items": {"type": "string"}},
+            "model": {"type": "string"},
+            "effort": {"type": "string"},
             "title": {"type": "string"},
             "details": {"type": "string"},
             "path": {"type": "string"},
@@ -206,7 +208,7 @@ class Scheduler:
                 raise ValueError("Use continue to add instructions to an existing task")
             from .model_settings import delegation
             await self.chat.server.start()
-            route = delegation(self.db, self.chat.server)
+            route = delegation(self.db, self.chat.server, args.get("model"), args.get("effort"))
             task = self.tasks.add(
                 project_id, args["objective"], params["conversation_id"],
                 f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",

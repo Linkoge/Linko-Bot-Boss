@@ -97,7 +97,7 @@ async def test_sol_worker_is_what_is_saved_and_what_is_dispatched_even_with_a_cl
 def test_one_global_choice_any_provider_validation_and_revisions(system):
     db, _, _, server, *_ = system
     config = current(db, server)
-    assert set(config) == {'revision', 'manager', 'worker'} and config['revision'] == 0
+    assert set(config) == {'revision', 'manager', 'worker', 'manual'} and config['revision'] == 0
     first = save(db, server, {**config, 'manager': {'model': 'claude-opus-5-5', 'effort': 'low'},
                               'worker': {'model': MODELS['Luna'], 'effort': 'high'}})
     assert first['revision'] == 1 and manager_route(db) == first['manager']
@@ -151,16 +151,20 @@ def test_a_newer_family_version_replaces_the_older_one_numerically(system):
 
 
 @pytest.mark.asyncio
-async def test_there_is_no_automatic_worker_a_fixed_pair_runs_every_task_and_the_manager_cannot_override_it(system):
+async def test_automatic_worker_lets_the_manager_pick_any_model_and_the_task_records_what_ran(system):
     db, registry, _, server, chat, workers, scheduler = system
     project = registry.list()[0]['id']
-    # A worker saved as null while Automatic briefly existed reads, shows and runs as the default worker pair.
-    db.set_setting('model_choice', {'revision': 3, 'manager': {'model': SOL, 'effort': 'low'}, 'worker': None})
-    assert current(db, server)['worker'] == {'model': SOL, 'effort': 'medium'}
-    assert worker_context(db, server) == {'model': SOL, 'effort': 'medium'}
-    with pytest.raises(ValueError, match='Invalid|exact'):
-        save(db, server, {**current(db, server), 'worker': None})
-    save(db, server, {**current(db, server), 'worker': {'model': SONNET, 'effort': 'low'}})
+    server.catalog.append({'model': 'custom-model-x', 'displayName': 'Custom X', 'isDefault': False,
+                           'supportedReasoningEfforts': [{'reasoningEffort': e} for e in ('minimal', 'ultra')],
+                           'defaultReasoningEffort': 'minimal'})
+    save(db, server, {**current(db, server), 'manager': {'model': SONNET, 'effort': 'low'},
+                      'worker': {'model': MODELS['Luna'], 'effort': 'low'}})
+    auto = save(db, server, {**current(db, server), 'worker': None})
+    assert auto['worker'] is None and current(db, server)['worker'] is None
+    assert auto['manual'] == {'model': MODELS['Luna'], 'effort': 'low'}  # remembered for switching Automatic off
+    assert auto['manager'] == {'model': SONNET, 'effort': 'low'}  # the manager choice is independent of the worker
+    context = worker_context(db, server)
+    assert 'automatic' in context and set(context['available']) == {m['model'] for m in server.catalog}
 
     async def delegate(objective, **picks):
         params = {'tool': 'manager_action', 'callId': objective, 'manager_execution_id': 'm-' + objective,
@@ -168,12 +172,36 @@ async def test_there_is_no_automatic_worker_a_fixed_pair_runs_every_task_and_the
                   'arguments': {'action': 'delegate', 'objective': objective, **picks}}
         return await scheduler.manager_action(project, params)
 
-    assert (await delegate('fixed', model=MODELS['Luna'], effort='high'))['worker_route'] == {'model': SONNET, 'effort': 'low'}
+    # Unrestricted: any provider, any model, any effort the catalog offers, regardless of the manager's provider.
+    assert (await delegate('luna', model=MODELS['Luna'], effort='high'))['worker_route'] == {'model': MODELS['Luna'], 'effort': 'high'}
+    assert (await delegate('claude', model=SONNET, effort='medium'))['worker_route'] == {'model': SONNET, 'effort': 'medium'}
+    assert (await delegate('default'))['worker_route']['model'] == SOL  # nothing asked for: the provider default
+    assert (await delegate('custom', model='custom-model-x', effort='ultra'))['worker_route'] == {'model': 'custom-model-x', 'effort': 'ultra'}
+    with pytest.raises(ValueError, match='not in the installed'):
+        await delegate('bad pick', model='nope')
+    with pytest.raises(ValueError, match='not supported'):
+        await delegate('bad effort', model=SOL, effort='ultra')
     CatalogServer.turns.clear()
-    task = Tasks(db).claim()
-    await workers._run(task)
-    execution = db.one('SELECT * FROM executions WHERE id=?', (task['lease_owner'],))
-    assert execution['model'] == SONNET and CatalogServer.turns[-1]['model'] == SONNET  # what actually ran
+    for expected in (MODELS['Luna'], SONNET, SOL):  # the custom model's task stays queued (the worker fixture has no such model)
+        task = Tasks(db).claim()
+        await workers._run(task)
+        execution = db.one('SELECT * FROM executions WHERE id=?', (task['lease_owner'],))
+        assert execution['model'] == expected and CatalogServer.turns[-1]['model'] == expected  # what actually ran
+        assert Tasks(db).get(task['id'])['worker_route']['model'] == expected
+    # Switching Automatic off restores the remembered fixed worker, which then wins over the manager's pick.
+    back = save(db, server, {**current(db, server), 'worker': current(db, server)['manual']})
+    assert back['worker'] == {'model': MODELS['Luna'], 'effort': 'low'} and worker_context(db, server) == back['worker']
+    assert (await delegate('fixed', model=SONNET, effort='high'))['worker_route'] == {'model': MODELS['Luna'], 'effort': 'low'}
+
+
+def test_a_worker_saved_null_stays_automatic_and_a_fresh_install_is_a_fixed_default_worker(system):
+    db, _, _, server, *_ = system
+    assert current(db, server)['worker'] == {'model': SOL, 'effort': 'medium'}  # default: fixed, provider default model
+    db.set_setting('model_choice', {'revision': 3, 'manager': {'model': SOL, 'effort': 'low'}, 'worker': None})  # no `manual` yet
+    config = current(db, server)
+    assert config['worker'] is None and config['manual'] == {'model': SOL, 'effort': 'medium'}
+    assert delegation(db, server, MODELS['Astra'], 'high') == {'model': MODELS['Astra'], 'effort': 'high'}
+    assert save(db, server, {**config, 'manager': {'model': SONNET, 'effort': 'low'}})['worker'] is None  # manager edit keeps it
 
 
 def test_old_per_provider_settings_migrate_to_the_most_recently_edited_choice(system):
@@ -212,7 +240,7 @@ def test_api_saves_exactly_what_the_panel_sent(tmp_path):
         assert client.get('/api/model-settings').status_code == 401
         sign_in(client, app, settings)
         panel = client.get('/api/model-settings').json()
-        assert set(panel['providers']) == {'codex', 'claude'} and set(panel['settings']) == {'revision', 'manager', 'worker'}
+        assert set(panel['providers']) == {'codex', 'claude'} and set(panel['settings']) == {'revision', 'manager', 'worker', 'manual'}
         assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra']
         assert [c['name'] for c in panel['providers']['claude']['choices']] == ['Haiku', 'Sonnet', 'Opus']
         choice = {**panel['settings'], 'manager': {'model': SONNET, 'effort': 'high'}, 'worker': {'model': SOL, 'effort': 'medium'}}
@@ -222,7 +250,11 @@ def test_api_saves_exactly_what_the_panel_sent(tmp_path):
         assert panel['provider'] == 'claude' and panel['settings']['worker'] == {'model': SOL, 'effort': 'medium'}
         assert client.put('/api/model-settings', json=choice).status_code == 409  # stale revision
         auto = {**client.get('/api/model-settings').json()['settings'], 'worker': None}
-        assert client.put('/api/model-settings', json=auto).status_code == 409  # no Automatic worker: a pair is required
+        assert client.put('/api/model-settings', json=auto).json()['worker'] is None  # Automatic worker
+        assert client.get('/api/model-settings').json()['settings']['worker'] is None
+        now = client.get('/api/model-settings').json()['settings']
+        assert client.put('/api/model-settings', json={**now, 'worker': {'model': SOL}}).status_code == 409  # a half pair is refused
+        assert client.get('/api/model-settings').json()['settings']['worker'] is None
         assert client.get('/api/models').status_code == 404  # the unused models endpoint is gone
         # A saved or favorited model outside the three families stays visible; nothing else is added to the picker.
         now = client.get('/api/model-settings').json()

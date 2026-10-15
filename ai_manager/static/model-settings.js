@@ -51,14 +51,23 @@ function addEffort(row,e,label,selected,run,disabled,key){
 }
 function selectModel(pair,m){pair.model=m.model;if(!m.levels.includes(pair.effort))pair.effort=m.levels[0];}
 const PICKER_LEVELS=['low','medium','high'];
+function renderMode(){
+  const mode=$('worker-mode'),automatic=!modelPanel.settings.worker;mode.replaceChildren();
+  for(const value of ['manual','automatic']){
+    const b=addChoice(mode,modelButton(titleLevel(value),`Worker ${titleLevel(value)}`,automatic===(value==='automatic'),
+      ()=>{if(automatic!==(value==='automatic'))changeModels(c=>{c.worker=value==='automatic'?null:c.manual;});}),`worker-${value}`);
+    b.classList.add('effort-choice');
+  }
+}
 function renderPair(container,role,label){
   container.replaceChildren();
-  const pair=modelPanel.settings[role];
+  const pair=modelPanel.settings[role]; // the worker is null while automatic: the manager picks per task, nothing here is pressed
   for(const provider of ['codex','claude']){
     const {choices}=modelPanel.providers[provider];
     const models=modelRow(`${label} ${PROVIDER_NAMES[provider]} model`),levels=modelRow(`${label} ${PROVIDER_NAMES[provider]} effort`);
-    const selected=choices.find(m=>m.model===pair.model);
-    for(const m of choices)addModel(models,m,`${label} ${m.name}`,pair.model===m.model,()=>changeModels(c=>selectModel(c[role],m)),!m.levels.length,`${role}-${m.name}`);
+    const selected=choices.find(m=>m.model===pair?.model);
+    for(const m of choices)addModel(models,m,`${label} ${m.name}`,pair?.model===m.model,
+      ()=>changeModels(c=>{c[role]??={...c.manual};selectModel(c[role],m);}),!m.levels.length,`${role}-${m.name}`);
     const all=[...PICKER_LEVELS,...(selected?.levels||[]).filter(e=>!PICKER_LEVELS.includes(e))]; // Low/Medium/High; only a selected off-family model adds its own
     for(const e of all)addEffort(levels,e,`${label} ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,!!selected&&pair.effort===e,
       ()=>changeModels(c=>{c[role].effort=e;}),!selected?.levels.includes(e),`${role}-${provider}-${e}`);
@@ -69,6 +78,7 @@ function renderModels(){
   const focused=modelDialog.contains(document.activeElement)?document.activeElement.dataset.choice:null;
   renderPair($('manager-choices'),'manager','Manager');
   renderPair($('worker-choices'),'worker','Worker');
+  renderMode();
   const favorites=$('manager-favorites');favorites.replaceChildren();
   const managerPair=modelPanel.settings.manager,canInsert=Object.values(modelPanel.providers).some(v=>v.choices.some(m=>m.model===managerPair.model&&m.levels.includes(managerPair.effort)));
   for(let slot=0;slot<2;slot++){
