@@ -325,6 +325,43 @@ are ignored history. Schema 15 drops the unused columns `tasks.round_limit`, `op
 and `waits` and the stored `todos.revision`; no data is read from them. The earlier release/helper/tier/reviewer/integration/follow-up machinery is
 gone; its history is in Git.
 
+History retention uses lossless compression only; there is no 90-day purge. The current chat and
+saved-chat pages load the last **50 messages**, with **Load older messages** / **Load earlier messages**
+retrieving preceding pages in original insertion order. New manager threads receive the last 50 context
+messages (plus the latest owner request if it falls outside that window); native thread continuity and
+explicit historical search/read actions remain available. Hidden transport rows and display tombstones
+keep their existing behavior.
+
+Task and worker history opens with the last **20 events** and up to **20 execution references** per page.
+The Agents view retains the latest 20 completed executions per worker/project plus unfinished work,
+within its existing 100-row presentation cap. **Browse older executions**, task **History**, and worker
+**History and full output** retrieve older records and full output on demand. Routine portfolio refreshes
+include only a short result tail (at most 1,200 characters), execution metadata and task summaries;
+they do not load historical prompts or inflate compressed results. Task records, full final reports,
+deployment receipts, report paths, attachments and delivery/execution references remain permanent.
+
+A single maintenance loop starts with the existing scheduler, runs outside the sequential assignment
+queue, and retries once per minute. Each atomic transaction handles at most 250 messages, 250 events
+and 250 executions. Inactive content outside the hot windows or older than seven days moves to the
+`history_archive` table in the existing SQLite database as deduplicated zlib-compressed UTF-8 payloads.
+Original rows keep their IDs, order, timestamps, scope and references. Unfinished executions and pending
+result deliveries remain hot. Selected content is restored transparently through `Database` connections;
+SQL content-search/JSON predicates use `history_text(...)`. Archive digests are verified on retrieval.
+Short output previews are stored separately, so default result lists need no decompression.
+
+Archive insertion and reference replacement share one SQLite transaction: interruption either commits
+both or rolls both back, and repeat runs/restarts are idempotent. Existing SQLite backup/restore includes
+the cold archive automatically; back up through the application's SQLite backup path rather than copying
+a running database without its WAL. No separate cron job, service, deletion schedule or manual archive
+file management is needed. Maintenance failure is logged and retried without stopping queue progress.
+Compression reuses free SQLite pages; it does not promise an immediate reduction in the database file's
+allocated size, and retention does not remove referenced files from disk.
+
+Permanent regressions: `tests/test_retention.py` covers windows, bounded default reads, chronological
+cold retrieval, scoped HTTP paging, restart/small-batch idempotency, atomic rollback, active/delivery
+exemptions, backup/restore and permanent references. `tests/test_retention_browser.py` exercises the
+actual chat, event and full-output controls in Chromium with disposable data and a disposable server.
+
 `ai_manager/static/icons/README.md` records the owner artwork provenance.
 
 ## Account usage

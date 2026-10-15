@@ -26,7 +26,7 @@ from .codex import CodexError
 from .config import Settings
 from .core import Core, Tasks
 from .db import Database
-from .execution_ui import execution_summary
+from .execution_ui import event_page, execution_page, execution_summary
 from .orchestration import Scheduler
 from .pipeline import Pipeline
 from .project_memory import MemoryReviews, ProjectMemory
@@ -306,8 +306,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return {"revoked": True}
 
     @app.get("/api/history", dependencies=[Depends(require_owner)])
-    def history(project_id: str | None = None, search: str = ""):
-        return chat.history(project_id, search)
+    def history(project_id: str | None = None, search: str = "", before: str | None = None):
+        return chat.history(project_id, search, before)
 
     @app.get("/api/chat-history", dependencies=[Depends(require_owner)])
     def search_history(
@@ -545,7 +545,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return await core.control(task_id, body.action, body.revision)
 
     @app.get("/api/tasks/{task_id}/execution-records", dependencies=[Depends(require_owner)])
-    def records(task_id: str):
+    def records(task_id: str, offset: int = 0, before_event: int | None = None, before_execution: str | None = None):
         # Tables and events from earlier eras stay readable; nothing writes them any more.
         historical = {
             "historical_" + label: db.all(f"SELECT * FROM {table} WHERE task_id=?", (task_id,))
@@ -563,9 +563,28 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 "SELECT payload,created_at FROM events WHERE task_id=? AND kind='task.evidence' ORDER BY seq DESC LIMIT 5",
                 (task_id,),
             ),
-            "executions": db.all("SELECT * FROM executions WHERE task_id=? ORDER BY started_at", (task_id,)),
+            **execution_page(db, task_id=task_id, offset=offset, before=before_execution),
+            **event_page(db, task_id=task_id, before=before_event),
             **historical,
         }
+
+    @app.get('/api/execution-history', dependencies=[Depends(require_owner)])
+    def execution_history(project_id: str | None = None, offset: int = 0, before_execution: str | None = None):
+        return execution_page(db, project_id=project_id, offset=offset, before=before_execution)
+
+    @app.get('/api/executions/{execution_id}/history', dependencies=[Depends(require_owner)])
+    def worker_history(execution_id: str, before_event: int | None = None, output_offset: int | None = None):
+        row = db.one('SELECT id,history_preview(output) AS result_summary FROM executions WHERE id=?', (execution_id,))
+        if not row:
+            raise ValueError('Unknown execution')
+        result = {**row, **event_page(db, execution_id=execution_id, before=before_event)}
+        if output_offset is not None:
+            if output_offset < 0:
+                raise ValueError('Offset must be nonnegative')
+            full = db.one('SELECT output FROM executions WHERE id=?', (execution_id,))['output']
+            result.update(output=full[output_offset:output_offset + 12000],
+                          next_output_offset=output_offset + 12000 if len(full) > output_offset + 12000 else None)
+        return result
 
     @app.post("/api/executions/{execution_id}/interrupt", dependencies=[Depends(require_owner)])
     async def interrupt(execution_id: str):

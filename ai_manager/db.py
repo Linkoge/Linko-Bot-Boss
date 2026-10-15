@@ -6,6 +6,9 @@ import uuid
 from contextlib import closing, contextmanager
 from pathlib import Path
 
+from .history import SCHEMA as HISTORY_SCHEMA
+from .history import install as install_history
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
 CREATE TABLE IF NOT EXISTS projects(
@@ -69,6 +72,7 @@ class Database:
         with closing(self.connect()) as conn:
             conn.execute("PRAGMA journal_mode=WAL")
             conn.executescript(SCHEMA)
+            conn.executescript(HISTORY_SCHEMA)
             columns = {r[1] for r in conn.execute("PRAGMA table_info(projects)")}
             for name, definition in (("display_name", "TEXT"), ("last_used_at", "REAL NOT NULL DEFAULT 0")):
                 if name not in columns:
@@ -119,7 +123,7 @@ class Database:
                     conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {definition}")
             if not conn.execute("SELECT 1 FROM schema_version WHERE version=9").fetchone():
                 conn.execute("""UPDATE executions SET
-                    launch_input=(SELECT json_extract(payload,'$.prompt') FROM events
+                    launch_input=(SELECT json_extract(history_text(payload),'$.prompt') FROM events
                         WHERE execution_id=executions.id AND kind='model.context' ORDER BY seq DESC LIMIT 1)
                     WHERE finished_at IS NULL""")
                 conn.execute("INSERT INTO schema_version VALUES(9)")
@@ -187,7 +191,7 @@ class Database:
 
     def connect(self):
         conn = sqlite3.connect(self.path, timeout=10)
-        conn.row_factory = sqlite3.Row
+        install_history(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=10000")
         conn.execute("PRAGMA synchronous=FULL")

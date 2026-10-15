@@ -462,6 +462,7 @@ def test_fresh_schema_contains_only_current_storage(system):
         "conversations",
         "messages",
         "chat_archives",
+        "history_archive",
         "chat_requests",
         "todos",
         "questions",

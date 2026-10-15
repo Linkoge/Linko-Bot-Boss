@@ -67,7 +67,7 @@ async function api(path, options={}){
 }
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
-function showAuth(){$('agent-list').replaceChildren();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
+function showAuth(){$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
 let refreshVersion=0;
@@ -237,7 +237,8 @@ function renderTasks(){
     row.append(element('h3',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
     if(t.rounds)row.append(element('small',`Repair rounds ${t.rounds} of ${t.repair_limit}`));
     const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));appendTaskControls(controls,t);
-    const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});
+    if(t.result_summary)row.append(element('p',t.result_summary,'result-summary'));
+    const records=element('button','History');records.onclick=action(()=>readHistory('task',t.id));
     controls.append(records);row.append(controls);$('task-list').append(row);
   }
   updateComposer();
@@ -262,6 +263,7 @@ function renderAgents(){
     const output=row.querySelector('pre'),text=[e.output,e.error,e.thread_id,e.turn_id].filter(Boolean).join('\n');
     if(chatHasSelection(output))output._pendingAgentOutput=text;
     else if(output.textContent!==text){const scroll=output.scrollTop,left=output.scrollLeft;output.textContent=text;output.scrollTop=scroll;output.scrollLeft=left;delete output._pendingAgentOutput;}
+    const history=element('button','History and full output');history.onclick=action(()=>readHistory('worker',e.id));controls.append(history);
     const task=state.portfolio.tasks.find(t=>t.id===e.task_id&&t.lease_owner===e.id);
     if(!e.finished_at&&task){const controls=element('div',undefined,'task-controls');appendTaskControls(controls,task);row.querySelector('.agent-controls').append(controls);}
     else if(!e.finished_at&&!e.task_id){const selection=state.selection,b=element('button','Stop reply');b.onclick=action(async()=>{if(selection!==state.selection)return;await api(`/api/executions/${e.id}/interrupt`,{method:'POST'});if(selection===state.selection)await refresh();});controls.append(b);}
@@ -279,25 +281,30 @@ function renderAgents(){
 document.addEventListener('selectionchange',()=>{for(const output of document.querySelectorAll('.agent-output')){if(output._pendingAgentOutput!==undefined&&!chatHasSelection(output)){const top=output.scrollTop,left=output.scrollLeft;output.textContent=output._pendingAgentOutput;delete output._pendingAgentOutput;output.scrollTop=top;output.scrollLeft=left;}}});
 
 function renderQuestions(){$('questions').replaceChildren();for(const q of state.portfolio.questions.filter(q=>!state.project||q.project_id===state.project)){const request=JSON.parse(q.request),form=element('form',undefined,'panel');form.append(element('h3','Codex needs your answer · '+projectName(q.project_id)));if(q.kind==='item/tool/requestUserInput'){for(const question of request.questions){const label=element('label',question.question),input=element('input');input.name=question.id;input.required=true;if(question.options)label.append(element('small',question.options.map(x=>x.label).join(' / ')));label.append(input);form.append(label);}form.append(element('button','Send answer','primary'));form.onsubmit=action(async event=>{event.preventDefault();await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:Object.fromEntries(new FormData(form))})});await refresh();});}else{form.append(element('pre',JSON.stringify(request,null,2)));for(const [label,approve] of [['Confirm exact action',true],['Decline',false]]){const b=element('button',label);b.type='button';b.onclick=action(async()=>{await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:{approve}})});await refresh();});form.append(b);}}$('questions').append(form);}}
-async function loadHistory(selection=state.selection){
+async function loadHistory(selection=state.selection,before=null){
   if(selection!==state.selection)return;
-  const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);
-  state.source?.close();state.source=null;
+  const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);if(before)query.set('before',before);
+  if(!before){state.source?.close();state.source=null;}
   const request=state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
   const history=await api(`/api/history?${query}`);if(selection!==state.selection||request!==state.loadHistoryRequest)return;
   const messages=$('messages'),fresh=state.history?.conversation.id!==history.conversation.id;
   const previousTop=messages.scrollTop;
   history.messages=history.messages.filter(m=>!history.deleted_message_ids?.includes(m.id));
-  state.history=history;updateChatActions();
-  if(fresh||!history.messages.length)messages.replaceChildren();
+  if(!before)state.history=history;
+  if(fresh||before||!state.olderLoaded)state.olderHasMore=history.has_more;
+  if(fresh)state.olderLoaded=false;
+  if(before)state.olderLoaded=true;
+  $('chat-older').hidden=!state.olderHasMore;updateChatActions();
+  if(fresh||(!before&&!history.messages.length))messages.replaceChildren();
+  const olderAnchor=before?messages.firstElementChild:null;
   const rows=new Map([...messages.querySelectorAll('[data-message]')].map(row=>[row.dataset.message,row]));
   const ids=new Set(history.messages.map(m=>m.id));
-  // /api/history is a rolling 200-message tail, not a deletion list. Keep
+  // /api/history is a rolling 50-message tail, not a deletion list. Keep
   // already loaded older rows until the conversation changes or is cleared.
   for(const [id,row] of rows)if((fresh&&!ids.has(id))||history.deleted_message_ids?.includes(id))row.remove();
   for(const m of history.messages){
     let row=rows.get(m.id);
-    if(!row){row=element('article',undefined,`message ${m.role}`);row.setAttribute('aria-label',messageAuthor(m));const body=element('div'),label=element('div',undefined,'message-label');label.append(element('span',undefined,'badge'));body.append(label,element('div',messageText(m),'message-content'));row.append(body);row.dataset.message=m.id;messages.append(row);}
+    if(!row){row=element('article',undefined,`message ${m.role}`);row.setAttribute('aria-label',messageAuthor(m));const body=element('div'),label=element('div',undefined,'message-label');label.append(element('span',undefined,'badge'));body.append(label,element('div',messageText(m),'message-content'));row.append(body);row.dataset.message=m.id;messages.insertBefore(row,olderAnchor);}
     // Reply/stream completion does not establish requested-task acceptance or deployment.
     const badge=row.querySelector('.badge'),label=row.querySelector('.message-label');
     label.hidden=m.status==='completed';
@@ -307,6 +314,7 @@ async function loadHistory(selection=state.selection){
 
   }
   if(!fresh)messages.scrollTop=previousTop;
+  if(before)return;
   const active=history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
   state.execution=active?.execution_id||null;
   $('stop-chat').hidden=!active;$('send').disabled=state.pending.has(state.project);
@@ -505,6 +513,32 @@ async function openSavedHistory(id,older=false,search=''){
   $('history-older').hidden=!data.has_more;$('history-detail').hidden=false;
   if(!older)$('history-detail').scrollIntoView({block:'start'});
 }
+$('chat-older').onclick=action(()=>loadHistory(state.selection,$('messages').querySelector('[data-message]')?.dataset.message));
+let readerRequest=0;
+async function readHistory(kind,id){
+  const request=++readerRequest,selection=state.selection,query=historyQuery();
+  const path=kind==='task'?`/api/tasks/${id}/execution-records`:kind==='worker'?`/api/executions/${id}/history`:'/api/execution-history';
+  const data=await api(path+'?'+query);if(selection!==state.selection||request!==readerRequest)return;
+  $('reader-title').textContent=kind==='task'?'Task history':kind==='worker'?'Worker history':'Execution history';
+  $('reader-content').replaceChildren();$('reader-controls').replaceChildren();
+  const append=page=>{
+    const content=element('pre',JSON.stringify(page,null,2));$('reader-content').append(content);
+    for(const execution of page.executions||[]){const button=element('button','Read execution '+execution.id);button.onclick=action(()=>readHistory('worker',execution.id));$('reader-content').append(button);}
+  };
+  append(data);
+  const more=(label,key,cursor)=>{
+    if(cursor===null||cursor===undefined)return;
+    const button=element('button',label);button.type='button';let next=cursor;
+    button.onclick=action(async()=>{query.set(key,next);const page=await api(path+'?'+query);if(request!==readerRequest||selection!==state.selection)return;append(page);next=key==='before_execution'?page.before_execution:key==='output_offset'?page.next_output_offset:page.before_event;button.hidden=next===null||next===undefined;});$('reader-controls').append(button);
+  };
+  more('Load older events','before_event',data.before_event);
+  more('Load older executions','before_execution',data.before_execution);
+  if(kind==='worker')more('Read full output','output_offset',0);
+  if(!$('history-reader').open)$('history-reader').showModal();
+}
+$('reader-close').onclick=()=>$('history-reader').close();
+$('history-reader').addEventListener('close',()=>readerRequest++);
+$('execution-history').onclick=action(()=>readHistory('executions'));
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));

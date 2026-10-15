@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from .attachments import native_image
 from .codex import MANAGER_INSTRUCTIONS, AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
+from .history import CHAT_WINDOW
 from .model_settings import manager_route, worker_context
 from .providers import owns_pid
 from .recovery import (
@@ -58,8 +59,14 @@ class Chat:
             )
             return dict(conn.execute("SELECT * FROM conversations WHERE context=?", (context,)).fetchone())
 
-    def history(self, project_id=None, search=""):
+    def history(self, project_id=None, search="", before=None):
         conversation = self.conversation(project_id)
+        boundary = None
+        if before:
+            boundary = self.db.one('SELECT rowid AS position FROM messages WHERE id=? AND conversation_id=?',
+                                   (before, conversation['id']))
+            if not boundary:
+                raise ValueError('Message was not found in this chat')
         rows = self.db.all(
             """SELECT m.*,CASE WHEN m.role='user' AND e.id IS NOT NULL THEN
             CASE WHEN e.finished_at IS NOT NULL THEN CASE WHEN e.status='completed' THEN 'completed' ELSE e.status END
@@ -67,13 +74,16 @@ class Chat:
             WHEN m.role!='assistant' OR e.id IS NULL THEN m.status
             WHEN e.finished_at IS NOT NULL THEN e.status WHEN e.status='recovering' THEN 'waiting'
             WHEN e.status='running' THEN 'streaming' ELSE 'queued' END AS authoritative_status,e.status AS execution_status,
-            e.finished_at,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND NOT """ + hidden_message("m") + """ AND instr(lower(m.content),lower(?))>0 ORDER BY m.rowid DESC LIMIT 200""",
-            (conversation["id"], search),
+            e.finished_at,e.retry_at,e.recovery_reason,history_preview(e.error) AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND NOT """ + hidden_message("m") + """ AND (?='' OR instr(lower(history_text(m.content)),lower(?))>0) AND (? IS NULL OR m.rowid<?) ORDER BY m.rowid DESC LIMIT ?""",
+            (conversation["id"], search, search, boundary["position"] if boundary else None,
+             boundary["position"] if boundary else None, CHAT_WINDOW + 1),
         )
+        has_more = len(rows) > CHAT_WINDOW
+        rows = rows[:CHAT_WINDOW]
         for row in rows:
             row["status"] = row.pop("authoritative_status")
             row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
-        return {"conversation": conversation, "messages": list(reversed(rows)),
+        return {"conversation": conversation, "messages": list(reversed(rows)), "has_more": has_more,
                 "deleted_message_ids": [r["id"] for r in self.db.all(
                     "SELECT id FROM messages WHERE conversation_id=? AND EXISTS(SELECT 1 FROM settings "
                     "WHERE key='chat_deleted_message:' || messages.id)", (conversation["id"],))],
@@ -238,13 +248,13 @@ class Chat:
             """SELECT c.id, c.project_id, c.created_at, a.title, a.archived_at,
             (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id AND NOT """ + hidden_message("m") + """ ) AS message_count,
             (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id AND NOT """ + hidden_message("m") + """
-             AND instr(lower(m.content),lower(?))>0) AS match_count
+             AND (?='' OR instr(lower(history_text(m.content)),lower(?))>0)) AS match_count
             FROM conversations c LEFT JOIN chat_archives a ON a.conversation_id=c.id
             WHERE c.project_id IS ? AND (c.context=? OR a.conversation_id IS NOT NULL)
             AND (instr(lower(COALESCE(a.title,'Current chat')),lower(?))>0 OR EXISTS
-              (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND NOT """ + hidden_message("m") + """ AND instr(lower(m.content),lower(?))>0))
+              (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND NOT """ + hidden_message("m") + """ AND (?='' OR instr(lower(history_text(m.content)),lower(?))>0)))
             ORDER BY COALESCE(a.archived_at,c.created_at) DESC,c.id LIMIT 101 OFFSET ?""",
-            (search, project_id, project_id or "global", search, search, offset),
+            (search, search, project_id, project_id or "global", search, search, search, offset),
         )
         return {"conversations": rows[:100], "has_more": len(rows) > 100}
 
@@ -266,20 +276,20 @@ class Chat:
                 raise ValueError("Message was not found in this chat")
         rows = self.db.all(
             """SELECT * FROM messages WHERE NOT """ + hidden_message() + """ AND conversation_id=? AND (? IS NULL OR rowid<?)
-            AND instr(lower(content),lower(?))>0 ORDER BY rowid DESC LIMIT 201""",
+            AND (?='' OR instr(lower(history_text(content)),lower(?))>0) ORDER BY rowid DESC LIMIT ?""",
             (
                 conversation_id,
                 boundary["position"] if boundary else None,
                 boundary["position"] if boundary else None,
-                search,
+                search, search, CHAT_WINDOW + 1,
             ),
         )
         for row in rows:
             row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
         return {
             "conversation": conversation,
-            "messages": list(reversed(rows[:200])),
-            "has_more": len(rows) > 200,
+            "messages": list(reversed(rows[:CHAT_WINDOW])),
+            "has_more": len(rows) > CHAT_WINDOW,
             "search": search,
         }
 
@@ -328,7 +338,7 @@ class Chat:
                 """SELECT id,role,content,execution_id FROM messages WHERE NOT """ + internal_result() + """ AND conversation_id=? AND execution_id IS NOT ?
                 AND (execution_id IS NULL OR execution_id IN
                     (SELECT id FROM executions WHERE rowid<(SELECT rowid FROM executions WHERE id=?)))
-                ORDER BY created_at DESC,rowid DESC LIMIT 16""",
+                ORDER BY created_at DESC,rowid DESC LIMIT 50""",
                 (conversation["id"], execution_id, execution_id),
             )
             # Keep the latest owner request even across a long automatic worker chain.

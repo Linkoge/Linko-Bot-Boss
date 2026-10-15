@@ -224,3 +224,9 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .navigation > .audio-panel{background:var(--panel);padding:6px 10px;max-height:none;flex-wrap:wrap;border-bottom:1px solid var(--border)}
 .navigation > .audio-panel #audio-status{flex:1 1 160px;max-width:none}
 .navigation > .audio-panel .audio-actions{flex-wrap:wrap}
+
+#history-reader{width:min(90vw,70rem);max-height:85vh;overflow:auto}
+#reader-content pre{white-space:pre-wrap;overflow-wrap:anywhere}
+#reader-controls{display:flex;gap:.5rem;flex-wrap:wrap;margin-block:1rem}
+#chat-older{align-self:center;flex-shrink:0}
+.result-summary{white-space:pre-wrap;overflow-wrap:anywhere}

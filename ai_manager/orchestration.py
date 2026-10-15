@@ -7,6 +7,7 @@ import logging
 
 from .chat import internal_result
 from .core import Tasks
+from .history import Maintenance
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
 from .todos import Todos
@@ -76,6 +77,7 @@ class Scheduler:
     def __init__(self, db, registry, settings, core, chat, pipeline=None):
         self.db, self.registry, self.settings, self.core, self.chat = db, registry, settings, core, chat
         self.observer = SilentObserver(db)
+        self.maintenance = Maintenance(db)
         self.tasks, self.job = Tasks(db), None
         self.lock = asyncio.Lock()
         self.error = ""
@@ -162,8 +164,8 @@ class Scheduler:
                 }
             rows = self.db.all(
                 """SELECT id,role,content FROM messages WHERE NOT """ + internal_result() + """ AND conversation_id=? AND status='completed'
-                AND instr(lower(content),lower(?))>0""" + visible + " ORDER BY rowid DESC LIMIT 6 OFFSET ?",
-                (conversation["id"], args.get("query", ""), cutoff, cutoff, offset),
+                AND (?='' OR instr(lower(history_text(content)),lower(?))>0)""" + visible + " ORDER BY rowid DESC LIMIT 6 OFFSET ?",
+                (conversation["id"], args.get("query", ""), args.get("query", ""), cutoff, cutoff, offset),
             )
             return {
                 "messages": [
@@ -332,9 +334,11 @@ class Scheduler:
             await asyncio.sleep(1)
 
     def start(self):
+        self.maintenance.start()
         self.job = asyncio.create_task(self.run())
 
     async def close(self):
+        await self.maintenance.close()
         if self.job:
             self.job.cancel()
             await asyncio.gather(self.job, return_exceptions=True)

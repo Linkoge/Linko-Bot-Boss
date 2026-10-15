@@ -486,8 +486,8 @@ class MemoryReviews:
             data = db.all(
                 "SELECT m.id,m.role,m.content,c.id AS conversation_id FROM messages m "
                 "JOIN conversations c ON c.id=m.conversation_id WHERE c.project_id=? "
-                "AND instr(lower(m.content),lower(?))>0 ORDER BY m.created_at DESC LIMIT 5 OFFSET ?",
-                (project_id, query, offset),
+                "AND (?='' OR instr(lower(history_text(m.content)),lower(?))>0) ORDER BY m.created_at DESC LIMIT 5 OFFSET ?",
+                (project_id, query, query, offset),
             )
             data = [{**r, "content": r["content"][:4000], "truncated": len(r["content"]) > 4000} for r in data]
         elif kind == "evidence":

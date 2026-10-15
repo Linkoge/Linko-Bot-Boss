@@ -100,5 +100,6 @@ def test_status_group_order_is_stable_and_history_remains(records):
         with db.transaction() as conn:
             conn.execute('UPDATE executions SET finished_at=500 WHERE id=?', (f'history-{i}',))
     rows = execution_summary(db, one)['executions']
-    assert rows[0]['id'] == 'old-active' and len(rows) == 100
+    assert rows[0]['id'] == 'old-active' and len(rows) == 21
+    assert {r['id'] for r in rows[1:]} == {f'history-{i}' for i in range(85,105)}
     assert execution_summary(db, one)['executions'] == rows

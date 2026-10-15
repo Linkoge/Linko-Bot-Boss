@@ -140,7 +140,9 @@ class Tasks:
 
     def list(self, project_id=None):
         rows = self.db.all(
-            "SELECT * FROM tasks" + (" WHERE project_id=?" if project_id else "")
+            """SELECT tasks.*,(SELECT history_preview(output) FROM executions e
+                WHERE e.task_id=tasks.id ORDER BY e.rowid DESC LIMIT 1) AS result_summary FROM tasks"""
+            + (" WHERE project_id=?" if project_id else "")
             + """ ORDER BY CASE state WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END,
             CASE WHEN state='queued' THEN queued_at END,created_at DESC,id""",
             (project_id,) if project_id else (),
@@ -161,7 +163,7 @@ class Tasks:
         with self.db.transaction() as conn:
             previous = conn.execute(
                 """SELECT id,project_id FROM tasks WHERE request_key=? OR id=(
-                    SELECT task_id FROM events WHERE kind='task.reused' AND json_extract(payload,'$.request_key')=?
+                    SELECT task_id FROM events WHERE kind='task.reused' AND json_extract(history_text(payload),'$.request_key')=?
                     ORDER BY seq DESC LIMIT 1)""", (request_key, request_key)).fetchone() if request_key else None
             if not previous:
                 previous = conn.execute(

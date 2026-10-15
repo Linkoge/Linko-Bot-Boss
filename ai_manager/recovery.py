@@ -238,7 +238,7 @@ def turn_error(db, execution_id, turn):
     # durable in events, so recover the exact turn's last error without inference.
     row = db.one(
         """SELECT payload FROM events WHERE execution_id=? AND kind='error'
-        AND json_extract(payload,'$.turnId')=? ORDER BY seq DESC LIMIT 1""",
+        AND json_extract(history_text(payload),'$.turnId')=? ORDER BY seq DESC LIMIT 1""",
         (execution_id, turn["id"]),
     )
     return (json.loads(row["payload"]).get("error") or {}) if row else {}
