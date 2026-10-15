@@ -210,3 +210,13 @@ input,textarea,select{accent-color:var(--accent-solid)}
 @media(max-width:340px){.audio-panel{gap:3px}.audio-actions{gap:3px}.audio-panel button{padding:0 5px;font-size:11px}}
 
 .composer-recording .audio-panel #audio-status{flex:0 1 auto;max-width:calc(100% - 116px)}
+
+/* One unobtrusive disclosure after the whole message, including attachments. */
+.message-actions{display:flex;flex-direction:column;align-items:flex-end;margin-top:2px}
+.message-actions>summary{align-self:flex-end;list-style:none;cursor:pointer;font-size:13px;line-height:24px;min-width:28px;text-align:center;opacity:.32;border-radius:4px}
+.message-actions>summary::-webkit-details-marker{display:none}
+.message-actions>summary:hover,.message-actions>summary:focus-visible,.message-actions[open]>summary{opacity:1}
+.message-actions[open]>summary{transform:rotate(180deg)}
+.message-action-buttons{display:flex;justify-content:flex-end;gap:4px}
+.message-actions:not([open])>.message-action-buttons{display:none}
+.message-action-buttons button{font-size:11px;padding:3px 9px;min-height:32px;color:var(--muted)}

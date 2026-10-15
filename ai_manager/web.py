@@ -92,6 +92,13 @@ class ChatResetBody(BaseModel):
     title: str = Field(default="", max_length=120)
 
 
+class ChatMessageDeleteBody(BaseModel):
+    project_id: str | None = None
+    conversation_id: str = Field(min_length=1, max_length=100)
+    message_id: str = Field(min_length=1, max_length=100)
+    confirmed: bool = Field(default=False, strict=True)
+
+
 class ChatTrashBody(BaseModel):
     project_id: str | None = None
     conversation_id: str = Field(min_length=1, max_length=100)
@@ -356,6 +363,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         search: str = Query(default="", max_length=500),
     ):
         return chat.saved_history(conversation_id, project_id, before, search)
+
+    @app.post("/api/chat/message/delete", dependencies=[Depends(require_owner)])
+    def delete_chat_message(body: ChatMessageDeleteBody):
+        return chat.delete_message(**body.model_dump())
 
     @app.post("/api/chat/clear", dependencies=[Depends(require_owner)])
     def clear_chat(body: ChatResetBody):

@@ -125,6 +125,7 @@ def main():
                 reply = page.locator("#messages .message.assistant .message-content")
                 reply.locator("strong").first.wait_for()
                 assert page.locator(".message.assistant .badge").inner_text() != "completed"
+                assert page.locator('#messages .message.assistant .message-delete').is_disabled()
                 # Preserve selection while final/delta content is pending, then reconcile.
                 page.evaluate('''()=>{
                   const n=document.querySelector('.message.assistant .message-content');
@@ -168,11 +169,55 @@ def main():
                 saved = page.locator("#history-detail-messages .message.assistant .message-content")
                 saved.wait_for(state="attached")
                 assert saved.inner_html() == reply.inner_html()
+                # One disclosure per complete logical message, never per Markdown fragment.
+                page.evaluate("window.copied=[];Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async text=>window.copied.push(text)}})")
+                assistant = page.locator('#messages .message.assistant')
+                owner = page.locator('#messages .message.user')
+                assert assistant.locator('.message-actions').count() == 1
+                assert assistant.locator('.message-content > *').count() > 8
+                assert assistant.locator('button', has_text='Copy').is_hidden()
+                assert float(assistant.locator('summary').evaluate('n=>getComputedStyle(n).opacity')) < .5
+                assert assistant.locator('button', has_text='Edit').count() == 0
+                for row, expected in ((assistant, TEXT), (owner, 'Render Markdown')):
+                    row.locator('summary').focus()
+                    page.keyboard.press('Enter')
+                    row.get_by_role('button', name='Copy', exact=True).click()
+                    assert page.evaluate('copied.at(-1)') == expected
+                deletes = []
+                page.on('request', lambda r: deletes.append(r.post_data_json) if r.url.endswith('/api/chat/message/delete') else None)
+                assistant.locator('summary').click()
+                assistant.get_by_role('button', name='Delete', exact=True).click()
+                page.locator('#chat-confirm-cancel').click()
+                assert not deletes and assistant.count() == 1
+                # Disclosure survives a saved-history poll and retains subtle styling/mobile placement.
+                page.evaluate('()=>loadHistory()')
+                for width in (1440, 393, 320):
+                    page.set_viewport_size({'width': width, 'height': 851})
+                    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+                    box = assistant.locator('summary').bounding_box()
+                    whole = assistant.bounding_box()
+                    assert box['x'] + box['width'] >= whole['x'] + whole['width'] - 20
+                assistant.get_by_role('button', name='Delete', exact=True).click()
+                page.locator('#chat-confirm-submit').click()
+                assistant.wait_for(state='detached')
+                assert len(deletes) == 1 and deletes[0]['confirmed'] is True
+                assert page.locator('#history-detail-messages .message.assistant').count() == 0
+                page.reload()
+                page.wait_for_function('()=>state.history?.messages.length===1')
+                assert page.locator('#messages .message.assistant').count() == 0
+                # The owner control removes the full message as well.
+                owner.locator('summary').click()
+                owner.get_by_role('button', name='Delete', exact=True).click()
+                page.locator('#chat-confirm-submit').click()
+                owner.wait_for(state='detached')
+                page.evaluate('()=>loadHistory()')
+                assert page.locator('#messages .message').count() == 0
+                assert len(deletes) == 2
                 assert not errors, errors
                 assert not remote, remote
                 browser.close()
                 print(json.dumps({"markdown": "PASS", "prefixes": len(TEXT) + 1,
-                                  "stream_reload_saved_equivalence": True, "security_mobile_selection": True}))
+                                  "stream_reload_saved_equivalence": True, "security_mobile_selection": True, "whole_message_copy_delete": True}))
         finally:
             process.terminate()
             process.wait(timeout=10)

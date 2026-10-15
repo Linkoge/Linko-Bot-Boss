@@ -1,3 +1,31 @@
+# Whole-message actions — assignment 978211a9c69a48dfa9347b3620b4db1b
+
+Each owner/assistant message in Chat and Search in chat has one small, low-opacity disclosure
+at its lower-right, after all text and attachments. Keyboard activation or tapping reveals Copy
+and Delete underneath; there is no Edit. Copy uses the entire stored source text, including all
+paragraphs, lists, tables and code blocks of an assistant response, rather than the clicked rendered
+fragment. Streaming Copy includes all text received so far. Existing clipboard fallback applies.
+
+Delete opens the existing confirmation dialog with Cancel initially focused. Cancelling sends no
+mutation. Queued/running/recovering responses and their owner messages must finish or be stopped first;
+the server independently enforces this. The owner-authenticated, CSRF-protected endpoint validates
+conversation/project/message identity and requires a strict boolean confirmation. Stale or foreign
+contexts reject; repeated accepted requests are idempotent.
+
+Deletion removes the whole logical display message from Chat, saved/archive readers, search results
+and chat copy exports, persisting across restart. It records a tombstone in existing settings plus an
+audit event in the same transaction; no schema change or physical evidence deletion occurs. Native
+provider history, internal prompt context, execution output, tasks and attachments remain retained.
+This is a display/history removal, not erasure from the provider's native thread. Polling explicitly
+removes deleted IDs while retaining the existing rolling-tail behavior for older undeleted messages.
+Archive/Clear and Trash use the visible tail for stale-confirmation checks after message deletion.
+
+Permanent regressions: tests/test_message_actions.py and scripts/browser_markdown.py (real streamed
+multi-block Markdown, complete owner/assistant copying, one control, no Edit, cancellation without a
+request, confirmed deletion, reload persistence, saved-reader removal, keyboard and 320/393/1440 widths).
+Source, scoped outcome and validation: [assignment report](MESSAGE_ACTIONS_978211.md).
+Earlier dated sections below remain historical.
+
 # Composer visibility and approved bottom row — 2026-10-14
 
 Candidate `parallel-composer-integrated-v5-20261014`; exact preparation/status: [STATE.md](../STATE.md).

@@ -292,13 +292,14 @@ async function loadHistory(selection=state.selection){
   const history=await api(`/api/history?${query}`);if(selection!==state.selection||request!==state.loadHistoryRequest)return;
   const messages=$('messages'),fresh=state.history?.conversation.id!==history.conversation.id;
   const previousTop=messages.scrollTop;
+  history.messages=history.messages.filter(m=>!history.deleted_message_ids?.includes(m.id));
   state.history=history;updateChatActions();
   if(fresh||!history.messages.length)messages.replaceChildren();
   const rows=new Map([...messages.querySelectorAll('[data-message]')].map(row=>[row.dataset.message,row]));
   const ids=new Set(history.messages.map(m=>m.id));
   // /api/history is a rolling 200-message tail, not a deletion list. Keep
   // already loaded older rows until the conversation changes or is cleared.
-  for(const [id,row] of rows)if(fresh&&!ids.has(id))row.remove();
+  for(const [id,row] of rows)if((fresh&&!ids.has(id))||history.deleted_message_ids?.includes(id))row.remove();
   for(const m of history.messages){
     let row=rows.get(m.id);
     if(!row){row=element('article',undefined,`message ${m.role}`);row.setAttribute('aria-label',messageAuthor(m));const body=element('div'),label=element('div',undefined,'message-label');label.append(element('span',undefined,'badge'));body.append(label,element('div',messageText(m),'message-content'));row.append(body);row.dataset.message=m.id;messages.append(row);}
@@ -307,7 +308,7 @@ async function loadHistory(selection=state.selection){
     label.hidden=m.status==='completed';
     badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;
     badge.className=`badge ${m.status==='completed'?'':m.status}`;
-    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);renderMessageAttachments(row,m);
+    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);renderMessageAttachments(row,m);renderMessageActions(row,m,history.conversation.id);
 
   }
   if(!fresh)messages.scrollTop=previousTop;
@@ -317,6 +318,44 @@ async function loadHistory(selection=state.selection){
   $('status-label').textContent=active?(active.status==='waiting'?recoveryLabel(active):active.status==='queued'?'Queued':'Thinking / responding'):'Ready to help';
   if(active)attachStream(active.execution_id,active.id,active.stream_cursor);
   updateChatActions();
+}
+function renderMessageActions(row,message,conversation){
+  if(!['user','assistant'].includes(message.role))return;
+  row._wholeMessage=message;
+  let controls=row.querySelector('.message-actions');
+  if(!controls){
+    controls=element('details',undefined,'message-actions');
+    const toggle=element('summary','⌄');toggle.setAttribute('aria-label','Message actions');toggle.title='Message actions';
+    const buttons=element('div',undefined,'message-action-buttons'),copy=element('button','Copy'),remove=element('button','Delete');
+    copy.type=remove.type='button';remove.className='message-delete';
+    copy.onclick=action(async()=>{await copyText(row._wholeMessage.content);controls.open=false;});
+    remove.onclick=()=>confirmMessageDelete(row._wholeMessage,conversation);
+    buttons.append(copy,remove);controls.append(toggle,buttons);row.append(controls);
+  }
+  if(row.lastElementChild!==controls)row.append(controls);
+  const m=row._wholeMessage;
+  controls.querySelector('.message-delete').disabled=['queued','streaming','waiting','processing'].includes(m.status)||(!!m.execution_id&&m.finished_at===null);
+}
+function confirmMessageDelete(message,conversation){
+  const project=state.project,selection=state.selection;
+  $('chat-confirm-title').textContent='Delete this message?';
+  $('chat-confirm-description').textContent='Remove this entire '+(message.role==='assistant'?'assistant response':'message')+' from chat and history? Internal task and recovery evidence is retained.';
+  $('chat-archive-label').hidden=true;$('chat-confirm-submit').textContent='Delete message';
+  $('chat-confirm-submit').className='danger';$('chat-confirm-error').textContent='';
+  $('chat-confirm-form').onsubmit=async event=>{
+    event.preventDefault();const button=$('chat-confirm-submit');if(button.disabled)return;button.disabled=true;
+    try{
+      if(selection!==state.selection)throw new Error('Context changed. Select the message and confirm again.');
+      await api('/api/chat/message/delete',{method:'POST',body:JSON.stringify({project_id:project,conversation_id:conversation,message_id:message.id,confirmed:true})});
+      $('chat-confirm').close();
+      if(selection===state.selection){
+        for(const container of [$('messages'),$('history-detail-messages')])for(const row of container.querySelectorAll('[data-message]'))if(row.dataset.message===message.id)row.remove();
+        if(state.savedHistory?.conversation.id===conversation)state.savedHistory.messages=state.savedHistory.messages.filter(m=>m.id!==message.id);
+        await loadHistory(selection);
+      }
+    }catch(error){$('chat-confirm-error').textContent=error.message;}finally{button.disabled=false;}
+  };
+  $('chat-confirm').showModal();
 }
 function messageText(m){if(m.attachments?.length&&!m.content)return '';return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Queued':'Thinking…');}
 function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Bot result':'Bot Boss';}
@@ -466,7 +505,7 @@ async function openSavedHistory(id,older=false,search=''){
   $('history-detail-meta').textContent=`${projectName(state.project)} · ${data.conversation.archived_at?'Archived '+new Date(data.conversation.archived_at*1000).toLocaleString():'Active conversation'}${data.search?' · Messages matching “'+data.search+'”':''}`;
   $('history-full').hidden=!data.search;
   $('history-detail-messages').replaceChildren();
-  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');row.setAttribute('aria-label',messageAuthor(m));body.append(element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',undefined,'message-content'));updateMessageContent(body.querySelector('.message-content'),m.content,m.role);row.append(body);renderMessageAttachments(row,m);$('history-detail-messages').append(row);}
+  for(const m of state.savedHistory.messages){const row=element('article',undefined,`message ${m.role}`),body=element('div');row.setAttribute('aria-label',messageAuthor(m));body.append(element('small',new Date(m.created_at*1000).toLocaleString(),'history-time'),element('div',undefined,'message-content'));updateMessageContent(body.querySelector('.message-content'),m.content,m.role);row.append(body);row.dataset.message=m.id;renderMessageAttachments(row,m);renderMessageActions(row,m,id);$('history-detail-messages').append(row);}
   if(!state.savedHistory.messages.length)$('history-detail-messages').append(element('p','This chat is empty.','empty'));
   $('history-older').hidden=!data.has_more;$('history-detail').hidden=false;
   if(!older)$('history-detail').scrollIntoView({block:'start'});

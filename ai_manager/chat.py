@@ -29,6 +29,11 @@ def internal_result(alias="messages"):
             "AND source.task_id IS NOT NULL))")
 
 
+def hidden_message(alias="messages"):
+    return (f"({internal_result(alias)} OR EXISTS(SELECT 1 FROM settings hidden "
+            f"WHERE hidden.key='chat_deleted_message:' || {alias}.id))")
+
+
 ROLES = {"interactive": "low", "execution": "medium"}
 
 
@@ -63,14 +68,48 @@ class Chat:
             WHEN m.role!='assistant' OR e.id IS NULL THEN m.status
             WHEN e.finished_at IS NOT NULL THEN e.status WHEN e.status='recovering' THEN 'waiting'
             WHEN e.status='running' THEN 'streaming' ELSE 'queued' END AS authoritative_status,e.status AS execution_status,
-            e.finished_at,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND NOT """ + internal_result("m") + """ AND instr(lower(m.content),lower(?))>0 ORDER BY m.rowid DESC LIMIT 200""",
+            e.finished_at,e.retry_at,e.recovery_reason,e.error AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND NOT """ + hidden_message("m") + """ AND instr(lower(m.content),lower(?))>0 ORDER BY m.rowid DESC LIMIT 200""",
             (conversation["id"], search),
         )
         for row in rows:
             row["status"] = row.pop("authoritative_status")
             row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
         return {"conversation": conversation, "messages": list(reversed(rows)),
+                "deleted_message_ids": [r["id"] for r in self.db.all(
+                    "SELECT id FROM messages WHERE conversation_id=? AND EXISTS(SELECT 1 FROM settings "
+                    "WHERE key='chat_deleted_message:' || messages.id)", (conversation["id"],))],
                 "trash": self.db.setting("chat_trash:" + (project_id or "global"))}
+
+    def delete_message(self, project_id, conversation_id, message_id, confirmed):
+        """Remove a whole display message, preserving native/task/recovery evidence."""
+        if not confirmed:
+            raise ValueError("Confirm before deleting this message")
+        with self.db.transaction() as conn:
+            conversation = conn.execute(
+                "SELECT c.* FROM conversations c LEFT JOIN chat_archives a ON a.conversation_id=c.id "
+                "WHERE c.id=? AND c.project_id IS ? AND (c.context=? OR a.conversation_id IS NOT NULL)",
+                (conversation_id, project_id, project_id or "global"),
+            ).fetchone()
+            if not conversation:
+                raise ValueError("Chat was not found in the selected context")
+            message = conn.execute(
+                "SELECT m.*,e.finished_at FROM messages m LEFT JOIN executions e ON e.id=m.execution_id "
+                "WHERE m.id=? AND m.conversation_id=? AND m.role IN ('user','assistant')",
+                (message_id, conversation_id),
+            ).fetchone()
+            if not message:
+                raise ValueError("Message was not found in this chat")
+            if message['status'] in {'queued', 'streaming', 'waiting'} or (
+                message['execution_id'] and message['finished_at'] is None
+            ):
+                raise ValueError("Wait for the response to finish or stop it before deleting this message")
+            key = 'chat_deleted_message:' + message_id
+            if conn.execute("SELECT 1 FROM settings WHERE key=?", (key,)).fetchone():
+                return {"result": "accepted", "message_id": message_id}
+            conn.execute("INSERT INTO settings VALUES(?,?)", (key, json.dumps({"deleted_at": time.time()})))
+            self.db.event(conn, "chat.message_deleted", {"conversation_id": conversation_id,
+                          "message_id": message_id, "evidence_retained": True}, project_id)
+        return {"result": "accepted", "message_id": message_id}
 
     def reset(self, project_id, conversation_id, last_message_id, confirmed, archive=False, title=""):
         if not confirmed:
@@ -88,7 +127,7 @@ class Chat:
             if not conversation or conversation["id"] != conversation_id:
                 raise ValueError("Chat changed. Refresh and confirm the current chat again")
             last = conn.execute(
-                "SELECT id FROM messages WHERE conversation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                "SELECT id FROM messages WHERE conversation_id=? AND NOT EXISTS(SELECT 1 FROM settings WHERE key='chat_deleted_message:' || messages.id) ORDER BY created_at DESC,rowid DESC LIMIT 1",
                 (conversation_id,),
             ).fetchone()
             if not last:
@@ -166,7 +205,7 @@ class Chat:
             if not trash:
                 raise ValueError("Trash is unavailable in this context")
             if restore:
-                last = conn.execute("SELECT id FROM messages WHERE conversation_id=? ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                last = conn.execute("SELECT id FROM messages WHERE conversation_id=? AND NOT EXISTS(SELECT 1 FROM settings WHERE key='chat_deleted_message:' || messages.id) ORDER BY created_at DESC,rowid DESC LIMIT 1",
                                     (conversation_id,)).fetchone()
                 if (last["id"] if last else None) != last_message_id:
                     raise ValueError("New messages arrived. Refresh and confirm again")
@@ -198,13 +237,13 @@ class Chat:
             self.registry.get(project_id)
         rows = self.db.all(
             """SELECT c.id, c.project_id, c.created_at, a.title, a.archived_at,
-            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id AND NOT """ + internal_result("m") + """ ) AS message_count,
-            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id AND NOT """ + internal_result("m") + """
+            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id AND NOT """ + hidden_message("m") + """ ) AS message_count,
+            (SELECT count(*) FROM messages m WHERE m.conversation_id=c.id AND NOT """ + hidden_message("m") + """
              AND instr(lower(m.content),lower(?))>0) AS match_count
             FROM conversations c LEFT JOIN chat_archives a ON a.conversation_id=c.id
             WHERE c.project_id IS ? AND (c.context=? OR a.conversation_id IS NOT NULL)
             AND (instr(lower(COALESCE(a.title,'Current chat')),lower(?))>0 OR EXISTS
-              (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND NOT """ + internal_result("m") + """ AND instr(lower(m.content),lower(?))>0))
+              (SELECT 1 FROM messages m WHERE m.conversation_id=c.id AND NOT """ + hidden_message("m") + """ AND instr(lower(m.content),lower(?))>0))
             ORDER BY COALESCE(a.archived_at,c.created_at) DESC,c.id LIMIT 101 OFFSET ?""",
             (search, project_id, project_id or "global", search, search, offset),
         )
@@ -227,7 +266,7 @@ class Chat:
             if not boundary:
                 raise ValueError("Message was not found in this chat")
         rows = self.db.all(
-            """SELECT * FROM messages WHERE NOT """ + internal_result() + """ AND conversation_id=? AND (? IS NULL OR rowid<?)
+            """SELECT * FROM messages WHERE NOT """ + hidden_message() + """ AND conversation_id=? AND (? IS NULL OR rowid<?)
             AND instr(lower(content),lower(?))>0 ORDER BY rowid DESC LIMIT 201""",
             (
                 conversation_id,

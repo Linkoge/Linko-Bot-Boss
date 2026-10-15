@@ -1,3 +1,16 @@
+# Whole-message Copy/Delete — retained scoped candidate, 2026-10-15
+
+Assignment `978211a9c69a48dfa9347b3620b4db1b` now executes only selected To-Do
+`fc506b0047394f5fb0d1c64a90b957ad` per the owner's superseding instruction. One subtle lower-right
+expandable arrow per whole owner/assistant message reveals Copy/Delete; Copy uses all source text,
+Delete confirms and persistently removes the whole display message while retaining internal evidence.
+No Edit. Targeted/history, fixed smoke and Chromium checks are retained with permanent regressions.
+Source descriptions, archived handoffs and links are preserved; other bundled work is unscheduled.
+Implementation/limitations/manager handoff: [report](docs/MESSAGE_ACTIONS_978211.md).
+Exact final candidate, command results/hashes and activation status: `.data/message-actions/manager-summary.json`.
+Application merge/automatic deployment is pending; no deployment receipt or shared operation is claimed.
+Earlier sections below retain their original historical scope and evidence.
+
 # Automatic evidence lifecycle correction — implemented, not activated
 
 The published `simplified-reconciled-e684-v2` and b1e59d9 checks remain immutable historical evidence.
