@@ -9,10 +9,12 @@ for ``thread/read`` reconciliation after a restart.
 import argparse
 import asyncio
 import json
+import math
 import os
 import signal
 import sys
 import tempfile
+import time
 import uuid
 from pathlib import Path
 
@@ -147,7 +149,11 @@ class Host:
 
     async def rpc_account_rateLimits_read(self, params):
         try:
-            return json.loads(self.limits_file.read_text())
+            payload = json.loads(self.limits_file.read_text())
+            if not isinstance(payload, dict):
+                return {}
+            payload.setdefault("observedAt", self.limits_file.stat().st_mtime)
+            return payload
         except (OSError, ValueError):
             return {}
 
@@ -301,12 +307,14 @@ class Host:
         snapshot = {'limitId': 'claude', 'limitName': 'Claude'}
         for slot, key, minutes in (('primary', 'five_hour', 300), ('secondary', 'seven_day', 10080)):
             window = windows.get(key)
-            if isinstance(window, dict) and isinstance(window.get('utilization'), (int, float)):
+            if isinstance(window, dict) and isinstance(window.get('utilization'), (int, float)) and not isinstance(
+                window['utilization'], bool
+            ) and math.isfinite(window['utilization']) and window['utilization'] >= 0:
                 snapshot[slot] = {'usedPercent': round(window['utilization'] * 100, 1), 'windowDurationMins': minutes,
                                   'resetsAt': window.get('resetsAt')}
         if 'primary' not in snapshot and 'secondary' not in snapshot:
             return
-        payload = {'rateLimits': snapshot}
+        payload = {'rateLimits': snapshot, 'observedAt': time.time()}
         self.limits_file.write_text(json.dumps(payload))
         await self.notify('account/rateLimits/updated', payload)
 

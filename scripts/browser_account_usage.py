@@ -99,7 +99,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert page.locator('#usage-dialog').is_visible()
                     assert '87.5%' in page.locator('#usage-details').inner_text()
                     assert '12.5%' not in page.locator('#usage-details').inner_text()
-                    assert page.locator('#usage-details h3').all_text_contents() == ['5 hour', 'Weekly']
+                    assert page.locator('#usage-details h3').all_text_contents() == ['Codex', '5 hour', 'Weekly']
                     assert 'allowance' not in page.locator('#usage-dialog').inner_text()
                     assert page.locator('#usage-last-refresh').inner_text() == page.evaluate("'Last refresh '+localTime(usageData.last_successful_refresh_at)")
                     assert 'Tbilisi' not in page.locator('#usage-details').inner_text()

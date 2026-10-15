@@ -90,7 +90,7 @@ async def test_coalesced_metadata_only_read_cooldown_stale_failure_and_recovery(
     results = await asyncio.gather(*[usage.read() for _ in range(10)])
     assert len(calls) == 1 and all(r["status"] == "available" for r in results)
     assert calls[0][0] == 'account/rateLimits/read'
-    assert calls[0][1] == {"excludeResetCreditDetails": True}
+    assert calls[0][1] == {}
 
     async def fail(*args, **kwargs):
         raise RuntimeError("private diagnostics")
@@ -206,3 +206,71 @@ def test_successful_freshness_requires_usable_account_window_and_invalidates():
     assert usage.view()["last_successful_refresh_at"] == 1000
     usage.invalidate()
     assert usage.view()["last_successful_refresh_at"] is None
+
+
+@pytest.mark.parametrize('provider', ['codex', 'claude'])
+def test_reset_credit_details_counts_and_balance_are_independent(provider):
+    usage = cache()
+    usage.update({'rateLimits': {'limitId': provider, 'primary': snapshot(),
+                                'credits': {'balance': '12.50', 'hasCredits': True, 'unlimited': False}},
+                  'rateLimitResetCredits': {'availableCount': 4, 'credits': [
+                      {'status': 'available', 'expiresAt': 2000},
+                      {'status': 'available', 'expiresAt': None},
+                      {'status': 'available'},
+                      {'status': 'consumed', 'expiresAt': 3000}]}}, replace=True)
+    result = usage.view()
+    assert result['provider'] == provider
+    assert result['reset_credits'] == {'available_count': 4, 'credits': [
+        {'expires_at': 2000, 'expiration_known': True},
+        {'expires_at': None, 'expiration_known': True},
+        {'expires_at': None, 'expiration_known': False}]}
+    assert result['buckets'][0]['credits']['balance'] == '12.50'
+    usage.update({'rateLimitResetCredits': {'availableCount': 0, 'credits': None}}, replace=True)
+    assert usage.view()['reset_credits'] == {'available_count': 0, 'credits': None}
+    usage.invalidate()
+    assert usage.view()['reset_credits'] == {'available_count': None, 'credits': None}
+
+
+@pytest.mark.parametrize('count', [True, -1, '3', float('nan'), None])
+def test_unsupported_reset_credit_values_are_unavailable(count):
+    usage = cache()
+    usage.update({'rateLimitResetCredits': {'availableCount': count, 'credits': 'unknown'}})
+    assert usage.view()['reset_credits'] == {'available_count': None, 'credits': None}
+
+
+@pytest.mark.asyncio
+async def test_claude_persisted_readings_keep_observation_time(tmp_path):
+    from ai_manager.claude_host import Host
+
+    host = Host.__new__(Host)
+    host.limits_file = tmp_path / 'limits.json'
+    events = []
+
+    async def notify(method, payload):
+        events.append(payload)
+
+    host.notify = notify
+    await host.limits({'unifiedWindows': {'five_hour': {'utilization': .25, 'resetsAt': 2000}}})
+    first = await host.rpc_account_rateLimits_read({})
+    assert first == events[-1]
+    assert first == await host.rpc_account_rateLimits_read({})
+    usage = cache()
+    usage.clock = lambda: first['observedAt'] + 200
+    usage.update(first, replace=True)
+    result = usage.view()
+    assert result['provider'] == 'claude' and result['buckets'][0]['windows'][0]['stale']
+    assert result['reset_credits']['available_count'] is None
+    assert result['buckets'][0]['credits']['balance'] is None
+    assert result['last_successful_refresh_at'] == first['observedAt']
+
+
+def test_count_only_refresh_and_expiring_credit_staleness():
+    usage = cache()
+    usage.update({'rateLimitResetCredits': {'availableCount': 2, 'credits': [
+        {'status': 'available', 'expiresAt': 1100}]}}, replace=True)
+    assert usage.view()['status'] == 'available'
+    assert usage.view()['last_successful_refresh_at'] == 1000
+    usage.clock = lambda: 1101
+    assert usage.view()['metadata_stale'] and usage.view()['status'] == 'stale'
+    usage.update({}, replace=True)
+    assert usage.view()['reset_credits']['available_count'] is None

@@ -7,6 +7,7 @@ const PROVIDER_LOGOS={
 const PROVIDER_NAMES={codex:'Codex',claude:'Claude'};
 function setProviderIcon(provider){
   if(!PROVIDER_LOGOS[provider])return;
+  if(typeof setUsageProvider==='function')setUsageProvider(provider);
   const b=$('model-settings-button');b.innerHTML=PROVIDER_LOGOS[provider];b.dataset.provider=provider;
   b.setAttribute('aria-label',`Manager and bot settings, ${PROVIDER_NAMES[provider]} selected`);b.title=`${PROVIDER_NAMES[provider]} settings`;
 }

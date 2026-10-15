@@ -104,3 +104,38 @@ workspaces untouched). Old columns (`lifecycle`, `legacy`, …) and old settings
 release/helper/tier/reviewer/integration/follow-up machinery is gone; its history is in Git.
 
 `ai_manager/static/icons/README.md` records the owner artwork provenance.
+
+## Account usage
+
+The usage button follows the selected provider (Codex or Claude). Details show reported five-hour
+and weekly remaining percentages and reset countdowns; reset timestamps are available to assistive
+technology and on hover. Missing windows remain Unavailable. Cached readings are marked stale after
+three minutes, a passed window reset, or refresh failure. Claude readings retain their original event
+time across disk reads and restarts; reading saved metadata does not refresh the observation.
+
+The metadata-only `account/rateLimits/read` request includes available reset-credit details. The dialog
+shows the provider's available reset count, individual available-credit expiration dates, and reported
+credit balance/unlimited status. Counts are never inferred from the detail list: it may be partial or
+unavailable. Explicit null expiration means no expiration; absent/invalid expiration is Unavailable.
+Balance expiration is unavailable in the current protocol. Claude's retained event adapter supplies
+windows only, so reset credits, balance and expiration remain Unavailable unless authoritative metadata
+is supplied. Unsupported data is never represented as zero. Account/provider changes discard old readings.
+There is no reset/redeem action. Cached limits, empty balances, unavailable metadata and refresh failures
+never disable Send or preflight a message. Real provider errors still follow the existing queue behavior.
+
+Permanent regressions: `tests/test_account_usage.py`, `tests/test_usage_display.py`, and
+`tests/test_claude_provider.py`; responsive interaction checks remain in `scripts/browser_account_usage.py`.
+Protocol reference: installed Codex 0.162.1 generated `GetAccountRateLimitsResponse`,
+`RateLimitResetCreditsSummary`, `RateLimitResetCredit`, and `CreditsSnapshot` (also available in the
+[upstream schema](https://github.com/openai/codex/tree/main/codex-rs/app-server-protocol/schema/typescript/v2)).
+
+Selected source: To-Do `4e9e0e7b530543e3a19dee56acddb351`, revision 0, implemented by assignment
+`a51aadfc0f6f455d8873efe1c67ab91c` after inspecting the retained implementation and
+[original assignment handoff](docs/MESSAGE_ACTIONS_978211.md). Its selected description is:
+“Fix Claude usage/reset display to match available Codex information. Expose available reset
+counts/credits and expiration for both where authoritative data exists. Information only, no reset
+action; unsupported fields honest; never block Send.” The original assignment
+`978211a9c69a48dfa9347b3620b4db1b` runs only Copy/Delete (revision 8); this sequential assignment does
+not amend or resume it. Original descriptions, links, screenshot and archived records remain preserved
+in that handoff and commit `11ff4765c8fcd897bc03baf99cde1d19bdd31087`. This worker does not consume or
+archive the source To-Do; the application owns disposition only upon successful acceptance.
