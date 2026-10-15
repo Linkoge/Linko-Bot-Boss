@@ -58,9 +58,6 @@ MANAGER_TOOL = {
             "established": {"type": "array", "items": {"type": "string"}},
             "evidence": {"type": "string"},
             "deployment_receipt": {"type": "string"},
-            "worker_route": {"type": "object", "properties": {
-                "model": {"type": "string"}, "effort": {"type": "string", "enum": ["low", "medium", "high"]}},
-                "required": ["model", "effort"], "additionalProperties": False},
             "objective": {"type": "string"},
             "task_id": {"type": "string"},
             "execution_id": {"type": "string"},
@@ -229,7 +226,7 @@ class Scheduler:
                 raise ValueError("Use continue to add instructions to an existing task")
             from .model_settings import delegation
             await self.chat.server.start()
-            route = delegation(self.db, self.chat.server, args.get('worker_route'))
+            route = delegation(self.db, self.chat.server)
             task = self.tasks.add(
                 project_id, args["objective"], params["conversation_id"],
                 f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",
@@ -339,14 +336,9 @@ class Scheduler:
         async with self.lock:
             self.pipeline.seed()
             self.pipeline.report()
-            await self.observer.observe(
-                {
-                    **{key: self.chat.server for key in self.chat.jobs},
-                    **{key: server for key, server in self.core.servers.items() if key in self.core.jobs},
-                }
-            )
+            await self.core.runner.tick()  # first: no chat state can keep queued work from starting
+            await self.observer.observe({key: self.chat.server for key in self.chat.jobs})
             await self.chat.recover()
-            await self.core.tick()
             await self.chat.deliver_results()
 
     async def run(self):

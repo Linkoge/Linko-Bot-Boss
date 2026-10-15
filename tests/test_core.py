@@ -14,6 +14,7 @@ from fake_codex import FakeServer
 
 from ai_manager import core as core_module
 from ai_manager import pipeline as pipeline_module
+from ai_manager import runner as runner_module
 from ai_manager.codex import CodexError
 from ai_manager.config import Settings
 from ai_manager.core import HARD_CAP, Core, Tasks, evaluate, outcome, run_gate, unresolved
@@ -218,7 +219,7 @@ async def test_worker_runs_in_isolated_branch_then_merges_and_requests_one_deplo
     assert git(world.app, "branch", "--list", done["workspace_branch"])  # the branch is kept
     request = json.loads((world.pipeline.root / "request.json").read_text())
     assert request["task_id"] == first["id"] and request["source"] == "auto"
-    await world.core.tick()
+    await world.core.runner.tick()
     assert world.pipeline.pending() and not world.core.jobs  # no new work starts while a deploy waits
     assert world.tasks.get(second["id"])["state"] == "queued"
     (world.pipeline.root / "request.json").unlink()  # the deploy script finished
@@ -343,7 +344,7 @@ async def test_interrupted_repair_round_is_not_charged_twice_and_counter_survive
     job = world.core.jobs[claimed["lease_owner"]]
     job.cancel()  # the service stopped mid round
     await asyncio.gather(job, return_exceptions=True)
-    await world.core.watchdog()
+    await world.core.runner.watchdog()
     again = world.tasks.get(task["id"])
     assert again["state"] == "queued" and again["requeues"] == 1 and again["rounds"] == 1
     release.set()
@@ -405,7 +406,7 @@ async def test_a_worker_that_leaves_the_conflict_unresolved_burns_rounds_and_fai
 async def test_watchdog_requeues_a_dead_worker_once_then_fails_with_a_reason(world):
     task = world.tasks.add(world.project["id"], "worker will vanish")
     claimed = world.tasks.claim()  # running, but no live worker (service crashed)
-    await world.core.watchdog()
+    await world.core.runner.watchdog()
     once = world.tasks.get(task["id"])
     assert once["state"] == "queued" and once["requeues"] == 1 and once["lease_owner"] is None
     assert "requeued once" in once["blocker"]
@@ -413,7 +414,7 @@ async def test_watchdog_requeues_a_dead_worker_once_then_fails_with_a_reason(wor
     assert old["finished_at"] is not None  # the dead run is closed
     second = world.tasks.claim()
     assert second["id"] == task["id"] and second["lease_owner"] != claimed["lease_owner"]
-    await world.core.watchdog()
+    await world.core.runner.watchdog()
     final = world.tasks.get(task["id"])
     assert final["state"] == "failed" and "a second time" in final["blocker"] and final["lease_owner"] is None
     assert world.db.one("SELECT 1 FROM tasks WHERE state='running'") is None
@@ -426,11 +427,11 @@ async def test_watchdog_stops_a_stalled_worker_and_fails_queued_work_of_a_remove
     task = world.tasks.add(world.project["id"], "silent forever")
     core.launch(world.tasks.claim())
     await asyncio.sleep(0.4)
-    await core.watchdog()
+    await core.runner.watchdog()
     assert world.tasks.get(task["id"])["state"] == "queued" and not core.jobs
     other = world.tasks.add(world.project["id"], "orphaned")
     world.db.run("UPDATE projects SET status='removed' WHERE id=?", (world.project["id"],))
-    await core.watchdog()
+    await core.runner.watchdog()
     assert world.tasks.get(other["id"])["state"] == "failed" and world.tasks.get(other["id"])["blocker"] == "Project was removed"
     world.lab.release.set()
 
@@ -442,13 +443,14 @@ async def test_stale_deploy_request_expires_so_the_queue_cannot_hang(world):
     request = json.loads((world.pipeline.root / "request.json").read_text())
     request["requested_at"] = time.time() - 8 * 3600
     (world.pipeline.root / "request.json").write_text(json.dumps(request))
-    await world.core.watchdog()
+    await world.core.runner.watchdog()
     assert not world.pipeline.pending()
     assert world.db.one("SELECT 1 FROM events WHERE kind='deployment.expired'")
 
 
 @pytest.mark.asyncio
 async def test_usage_limit_waits_with_bounded_backoff_in_order_then_retries(world):
+    world.pipeline.set(world.project["id"], False)  # no deploy request between the two runs
     first, second = world.tasks.add(world.project["id"], "first"), world.tasks.add(world.project["id"], "second")
 
     async def limited(root, prompt):
@@ -458,12 +460,13 @@ async def test_usage_limit_waits_with_bounded_backoff_in_order_then_retries(worl
     waiting = await run_next(world)
     assert waiting["id"] == first["id"] and waiting["state"] == "queued" and waiting["waits"] == 1
     assert 100 < waiting["retry_at"] - time.time() <= 160 and "usage limit" in waiting["blocker"]
-    assert world.tasks.claim() is None  # strict order: the second task does not jump the waiting one
+    assert world.tasks.get(second["id"])["state"] == "queued"
     assert world.db.one("SELECT delivery FROM executions WHERE task_id=?", (first["id"],))["delivery"] is None  # not a result
+    ran = await run_next(world)  # a task waiting for its retry time is skipped like a hold: the next one runs
+    assert ran["id"] == second["id"] and ran["state"] == "done"
     world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, first["id"]))
     done = await run_next(world)
     assert done["id"] == first["id"] and done["state"] == "done"
-    assert (await run_next(world))["id"] == second["id"]
 
 
 @pytest.mark.asyncio
@@ -474,7 +477,7 @@ async def test_usage_limit_without_a_reset_time_backs_off_exponentially_then_giv
         raise CodexError("limit", {"codexErrorInfo": "rateLimitExceeded"})
 
     delays = []
-    for attempt in range(core_module.MAX_USAGE_WAITS):
+    for attempt in range(runner_module.MAX_WAITS):
         world.lab.actions = [limited]
         world.db.run("UPDATE tasks SET retry_at=NULL WHERE id=?", (task["id"],))
         row = await run_next(world)
@@ -484,24 +487,109 @@ async def test_usage_limit_without_a_reset_time_backs_off_exponentially_then_giv
     world.lab.actions = [limited]
     world.db.run("UPDATE tasks SET retry_at=NULL WHERE id=?", (task["id"],))
     final = await run_next(world)
-    assert final["state"] == "failed" and "did not clear after 8 waits" in final["blocker"]
+    assert final["state"] == "failed" and f"did not clear after {runner_module.MAX_WAITS} waits" in final["blocker"]
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
-async def test_transient_connection_errors_retry_the_turn_inside_the_run(world, monkeypatch):
-    monkeypatch.setattr(core_module, "delay", lambda count, kind: 0)
-
+async def test_network_loss_waits_in_the_queue_with_bounded_backoff_then_resumes_the_same_thread(world):
     async def dropped(root, prompt):
         raise CodexError("lost", {"codexErrorInfo": "transportLost"})
 
-    world.lab.actions = [dropped, dropped]
-    world.tasks.add(world.project["id"], "flaky network")
+    task = world.tasks.add(world.project["id"], "flaky network")
+    world.lab.actions = [dropped]
+    waiting = await run_next(world)
+    assert waiting["state"] == "queued" and waiting["waits"] == 1 and "connection" in waiting["blocker"]
+    assert 20 < waiting["retry_at"] - time.time() <= 40 and waiting["rounds"] == 0 and waiting["requeues"] == 0
+    assert world.tasks.claim() is None  # not eligible before its retry time
+    world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, task["id"]))
     done = await run_next(world)
-    assert done["state"] == "done" and done["rounds"] == 0 and done["requeues"] == 0 and len(world.lab.turns) == 3
-    world.lab.actions = [dropped] * 4
+    assert done["state"] == "done" and done["rounds"] == 0 and len(world.lab.turns) == 2
+    assert done["native_thread"] == waiting["native_thread"]
     world.tasks.add(world.project["id"], "dead network")
+    for attempt in range(runner_module.MAX_WAITS):
+        world.lab.actions = [dropped]
+        row = await run_next(world)
+        assert row["state"] == "queued" and row["waits"] == attempt + 1 and row["retry_at"] - time.time() <= 600
+        world.db.run("UPDATE tasks SET retry_at=NULL WHERE id=?", (row["id"],))
+    world.lab.actions = [dropped]
     failed = await run_next(world)
-    assert failed["state"] == "failed" and "lost" in failed["blocker"]  # bounded: four attempts, then a plain reason
+    assert failed["state"] == "failed" and "connection did not clear" in failed["blocker"]
+
+
+@pytest.mark.asyncio
+async def test_usage_limit_with_a_reset_time_waits_until_it_and_a_restart_forgets_stale_backoff(world):
+    task = world.tasks.add(world.project["id"], "limited")
+    reset = time.time() + 5400
+
+    async def limited(root, prompt):
+        raise CodexError("limit", {"codexErrorInfo": "usageLimitExceeded", "resetsAt": reset})
+
+    world.lab.actions = [limited]
+    waiting = await run_next(world)
+    assert reset + 20 < waiting["retry_at"] < reset + 40  # the provider's reset time, not the 5 minute backoff
+    core = Core(world.db, world.registry, world.settings, world.pipeline, world.lab.factory, gate=world.lab.gate)
+    await core.runner.tick()  # first tick after a service restart: limits may have reset meanwhile
+    await asyncio.gather(*list(core.jobs.values()))
+    assert world.tasks.get(task["id"])["state"] == "done"
+
+
+@pytest.mark.smoke
+@pytest.mark.asyncio
+async def test_restart_mid_task_resumes_without_penalty_and_keeps_the_round_counter(world):
+    task = world.tasks.add(world.project["id"], "survives a restart")
+    world.lab.release = asyncio.Event()
+    world.core.launch(world.tasks.claim())
+    await asyncio.sleep(0.05)
+    world.db.run("UPDATE tasks SET rounds=2,round_limit=3 WHERE id=?", (task["id"],))
+    thread = world.tasks.get(task["id"])["native_thread"]
+    await world.core.close()  # the service stops with the worker mid-turn
+    assert world.tasks.get(task["id"])["state"] == "running"
+    world.lab.release.set()
+    core = Core(world.db, world.registry, world.settings, world.pipeline, world.lab.factory, gate=world.lab.gate)
+    await core.runner.tick()  # no chat, no owner message: the tick alone resumes it
+    await asyncio.gather(*list(core.jobs.values()))
+    row = world.tasks.get(task["id"])
+    assert row["state"] == "done" and row["requeues"] == 0 and row["rounds"] == 2 and row["native_thread"] == thread
+    assert "continuation" in world.lab.turns[-1]
+
+
+@pytest.mark.smoke
+@pytest.mark.asyncio
+async def test_tick_starts_the_oldest_eligible_task_one_at_a_time_and_skips_held(world):
+    world.pipeline.set(world.project["id"], False)  # a pending deploy request would (rightly) hold the queue
+    held, oldest, newest = (world.tasks.add(world.project["id"], name) for name in ("held", "oldest", "newest"))
+    world.tasks.control(held["id"], "hold")
+    world.lab.release = asyncio.Event()
+    await world.core.runner.tick()
+    await world.core.runner.tick()
+    assert world.tasks.get(oldest["id"])["state"] == "running" and len(world.core.jobs) == 1
+    assert world.tasks.get(newest["id"])["state"] == "queued" and world.tasks.get(held["id"])["status"] == "held"
+    world.lab.release.set()
+    await asyncio.gather(*list(world.core.jobs.values()))
+    await world.core.runner.tick()
+    await asyncio.gather(*list(world.core.jobs.values()))
+    assert [world.tasks.get(t["id"])["state"] for t in (oldest, newest, held)] == ["done", "done", "queued"]
+    assert [t["objective"] for t in world.lab.turns] == ["oldest", "newest"]
+
+
+def test_adding_the_same_work_twice_is_deduplicated(world):
+    first = world.tasks.add(world.project["id"], "do it once", "chat-1", request_key="k1")
+    assert world.tasks.add(world.project["id"], "do it once", "chat-1", request_key="k1")["id"] == first["id"]
+    assert world.tasks.add(world.project["id"], "do it once", "chat-1")["id"] == first["id"]
+    assert world.db.one("SELECT count(*) AS n FROM tasks WHERE state='queued'")["n"] == 1
+
+
+@pytest.mark.asyncio
+async def test_paused_project_is_skipped_and_a_stale_deploy_request_does_not_block_forever(world):
+    other = world.tasks.add(world.project["id"], "waits for the project")
+    world.db.run("UPDATE projects SET status='paused' WHERE id=?", (world.project["id"],))
+    await world.core.runner.tick()
+    assert world.tasks.get(other["id"])["state"] == "queued" and not world.core.jobs
+    world.db.run("UPDATE projects SET status='active' WHERE id=?", (world.project["id"],))
+    await world.core.runner.tick()
+    await asyncio.gather(*list(world.core.jobs.values()))
+    assert world.tasks.get(other["id"])["state"] == "done"
 
 
 @pytest.mark.asyncio

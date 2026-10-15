@@ -17,7 +17,6 @@ import subprocess
 import sys
 import tempfile
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
 from . import fence
@@ -27,11 +26,11 @@ from .db import new_id
 from .fence import Busy, main_branch
 from .model_settings import RouteBlocked, assignment_route
 from .pipeline import IDENTITY, Conflict, enabled, git
-from .recovery import classify, delay, owned_alive, reap_orphan, turn_error, usage_limit
+from .recovery import turn_error
+from .runner import Runner, plain
 
 FIRST_ROUNDS, GRANT, HARD_CAP = 3, 3, 9
 SMOKE_SECONDS, SUITE_SECONDS, PROBE_SECONDS = 180, 600, 60
-WATCHDOG_SECONDS, STALL_SECONDS, MAX_USAGE_WAITS = 60, 1800, 8
 WORKER_INSTRUCTIONS = RULES + "\nYou are a worker. The application runs the permanent checks and merges; you implement.\n"
 TEST_FILE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 log = logging.getLogger(__name__)
@@ -126,10 +125,6 @@ def evaluate(history):
         return "continue", f"{'+'.join(now['checks'])} still fails but no longer the same way"
     return "stop", (f"No progress: {'+'.join(now['checks'])} failed the same way in consecutive rounds "
                     f"({now['count']} failure(s)); first: {now['failures'][0] if now['failures'] else 'unknown'}")
-
-
-def plain(error):
-    return (str(error) or type(error).__name__)[:600]
 
 
 # ---- the queue --------------------------------------------------------------------------------------------------
@@ -276,7 +271,7 @@ class Tasks:
                 if task["project_status"] != "active":
                     continue  # paused or archived by the owner: skipped like a hold
                 if task["retry_at"] and task["retry_at"] > now:
-                    break  # strict order: the head waits for its retry time
+                    continue  # waiting for a usage limit or the network: skipped like a hold until its retry time
                 execution_id = new_id()
                 conn.execute("UPDATE tasks SET state='running',blocker='',retry_at=NULL,lease_owner=?,revision=revision+1,"
                              "updated_at=? WHERE id=?", (execution_id, now, task["id"]))
@@ -316,20 +311,13 @@ class Tasks:
 
 # ---- the worker -------------------------------------------------------------------------------------------------
 class Core:
-    def __init__(self, db, registry, settings, pipeline, server_factory=AppServer, gate=run_gate, stall=STALL_SECONDS):
+    def __init__(self, db, registry, settings, pipeline, server_factory=AppServer, gate=run_gate, stall=1800):
         self.db, self.registry, self.settings, self.pipeline = db, registry, settings, pipeline
         self.tasks, self.factory, self.gate, self.stall = Tasks(db), server_factory, gate, stall
         self.jobs, self.servers, self.cancelling = {}, {}, set()
-        self.watchdog_at = 0.0
+        self.runner = Runner(self, stall)  # starts, resumes and unsticks work: ai_manager/runner.py
 
     # -- scheduling ------------------------------------------------------------------------------------------------
-    async def tick(self):
-        if time.monotonic() >= self.watchdog_at:
-            self.watchdog_at = time.monotonic() + WATCHDOG_SECONDS
-            await self.watchdog()
-        while not self.pipeline.pending() and (task := self.tasks.claim()):
-            self.launch(task)
-
     def launch(self, task):
         execution_id = task["lease_owner"]
         if execution_id in self.jobs:
@@ -355,7 +343,7 @@ class Core:
                 job.cancel()
                 await asyncio.gather(job, return_exceptions=True)
             else:
-                self.kill_orphan(execution_id)
+                self.runner.stop_orphan(execution_id)
             self.end(execution_id, "failed", "Cancelled by owner; partial work retained on its branch")
         finally:
             self.cancelling.discard(execution_id)
@@ -375,11 +363,7 @@ class Core:
         except Busy as error:
             self.requeue(eid, f"Waiting to merge: {error}", time.time() + 30)
         except Exception as error:
-            if reset := usage_limit(error):
-                self.wait_usage(task["id"], eid, reset, error)
-            else:
-                log.warning("task %s failed: %s", task["id"], error)
-                self.end(eid, "failed", plain(error))
+            self.runner.failed(task, eid, error)
         finally:
             await server.close()
             self.servers.pop(eid, None)
@@ -477,18 +461,10 @@ class Core:
         return {k: v for k, v in value.items() if v}
 
     async def turn(self, eid, server, thread_id, queue, prompt, route, task):
-        """Run one native turn to completion and return its final message. Transient connection errors retry briefly."""
+        """Run one native turn to completion and return its final message. Errors go to the runner (wait or fail)."""
         images = [{"type": "localImage", "path": i["path"]} for i in prompt.get("task_context", {}).get("attachments", [])
                   if native_image(i)]
-        for attempt in range(4):
-            try:
-                return await self.stream(eid, server, thread_id, queue, prompt, route, images, task)
-            except asyncio.CancelledError:
-                raise
-            except Exception as error:
-                if attempt == 3 or eid in self.cancelling or not (failure := classify(error)) or failure.kind != "connection":
-                    raise
-                await asyncio.sleep(min(60, delay(attempt + 1, "connection")))
+        return await self.stream(eid, server, thread_id, queue, prompt, route, images, task)
 
     async def stream(self, eid, server, thread_id, queue, prompt, route, images, task):
         while not queue.empty():
@@ -667,59 +643,6 @@ class Core:
 
     def requeue(self, eid, reason, retry_at=None, **extra):
         self.release(eid, {"blocker": reason, "retry_at": retry_at, **extra})
-
-    def wait_usage(self, task_id, eid, failure, error):
-        """Provider usage limit: wait (queued, retry time shown) with bounded backoff, else stop with a plain reason."""
-        waits = self.tasks.get(task_id)["waits"]
-        if waits >= MAX_USAGE_WAITS:
-            return self.end(eid, "failed", f"The provider usage limit did not clear after {waits} waits; stopped. Last error: {plain(error)[:200]}")
-        wait = (min(12 * 3600, max(60, failure.retry_at - time.time() + 30)) if failure.retry_at
-                else min(3600, 300 * 2 ** waits))
-        retry_at = time.time() + wait
-        when = datetime.fromtimestamp(retry_at, timezone.utc).strftime("%H:%M UTC")
-        self.requeue(eid, f"Waiting for the provider usage limit; retrying at {when}", retry_at, waits=waits + 1)
-
-    # -- watchdog --------------------------------------------------------------------------------------------------
-    def kill_orphan(self, eid):
-        row = self.db.one("SELECT * FROM executions WHERE id=?", (eid,))
-        if row and owned_alive(row):
-            reap_orphan(row, force=True)
-
-    def activity(self, eid):
-        row = self.db.one("SELECT max(created_at) AS at FROM events WHERE execution_id=?", (eid,))
-        started = self.db.one("SELECT started_at FROM executions WHERE id=?", (eid,))
-        return max(row["at"] or 0, started["started_at"] if started else 0)
-
-    async def watchdog(self):
-        """Every minute: nothing may stay stuck silently. A dead or stalled worker is requeued once, then failed."""
-        self.pipeline.expire()
-        now = time.time()
-        for task in self.db.all("SELECT * FROM tasks WHERE state='running'"):
-            eid = task["lease_owner"]
-            job = self.jobs.get(eid)
-            if job and not job.done():
-                waiting = self.db.one("SELECT 1 FROM questions WHERE execution_id=? AND status='pending'", (eid,))
-                if waiting or now - self.activity(eid) < self.stall:
-                    continue
-                if server := self.servers.get(eid):
-                    server.terminate()
-                job.cancel()
-                await asyncio.gather(job, return_exceptions=True)
-                why = "Worker stalled (no activity for %d minutes)" % (self.stall // 60)
-            else:
-                why = "Worker stopped unexpectedly"
-            self.kill_orphan(eid)
-            if eid is None:
-                self.db.run("UPDATE tasks SET state='failed',blocker=?,updated_at=? WHERE id=? AND state='running'",
-                            (why + " with no run record; stopped", now, task["id"]))
-            elif task["requeues"] < 1:
-                self.requeue(eid, why + "; requeued once", None, requeues=task["requeues"] + 1)
-            else:
-                self.end(eid, "failed", why + " a second time; stopped")
-        with self.db.transaction() as conn:
-            for task in conn.execute("""SELECT t.* FROM tasks t JOIN projects p ON p.id=t.project_id
-                    WHERE t.state='queued' AND p.status='removed'""").fetchall():
-                self.tasks.fail_queued(conn, task, "Project was removed")
 
     async def close(self):
         for job in list(self.jobs.values()):

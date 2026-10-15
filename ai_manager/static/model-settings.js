@@ -9,9 +9,8 @@ function setProviderIcon(provider){
   if(!PROVIDER_LOGOS[provider])return;
   if(typeof setUsageProvider==='function')setUsageProvider(provider);
   const b=$('model-settings-button');b.innerHTML=PROVIDER_LOGOS[provider];b.dataset.provider=provider;
-  b.setAttribute('aria-label',`Manager and bot settings, ${PROVIDER_NAMES[provider]} selected`);b.title=`${PROVIDER_NAMES[provider]} settings`;
+  b.setAttribute('aria-label',`Manager and worker settings, ${PROVIDER_NAMES[provider]} manager selected`);b.title=`${PROVIDER_NAMES[provider]} settings`;
 }
-function providerView(){return modelPanel.providers[modelPanel.provider];}
 function modelButton(text,label,selected,run,disabled=false){
   const b=element('button',text);b.type='button';b.setAttribute('aria-label',label);b.setAttribute('aria-pressed',String(selected));b.disabled=disabled||modelSaving||modelOpening;b.onclick=run;return b;
 }
@@ -31,17 +30,17 @@ function modelMutation(run){
 }
 function recallManagerFavorite(slot){
   if(modelSaving||modelOpening||!modelPanel.favorites[slot]?.available)return;
-  const item=modelPanel.favorites[slot],expected={provider:item.provider,pair:structuredClone(item.pair),revision:modelPanel.providers[item.provider].settings.revision};
   modelDialog.close();modelOpener?.focus({preventScroll:true}); // Close and restore focus in this click turn, before starting network work.
-  modelMutation(async()=>{const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);try{modelPanel=await api(`/api/manager-favorites/${slot}/recall`,{method:'POST',body:JSON.stringify(expected),signal:controller.signal});}finally{clearTimeout(timeout);}});
+  modelMutation(async()=>{const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);try{modelPanel=await api(`/api/manager-favorites/${slot}/recall`,{method:'POST',signal:controller.signal});}finally{clearTimeout(timeout);}});
 }
-async function changeModels(change,provider=modelPanel.provider,activate=false){
+async function changeModels(change){
   return modelMutation(async()=>{
-    const view=modelPanel.providers[provider],next=structuredClone(view.settings);change(next);
-    view.settings=await api('/api/model-settings',{method:'PUT',body:JSON.stringify({...next,provider,activate})});
-    if(activate)modelPanel.provider=provider;
+    const next=structuredClone(modelPanel.settings);change(next);
+    modelPanel.settings=await api('/api/model-settings',{method:'PUT',body:JSON.stringify(next)});
+    modelPanel.provider=providerOf(modelPanel.settings.manager.model);
   });
 }
+function providerOf(model){return /^claude-|^(Haiku|Sonnet|Opus)$/.test(model)?'claude':'codex';}
 function modelRow(label){const row=element('div',undefined,'model-choice-row');row.setAttribute('role','group');row.setAttribute('aria-label',label);return row;}
 function addChoice(row,b,key){b.dataset.choice=key;row.append(b);return b;}
 function addModel(row,m,label,selected,run,disabled,key){
@@ -51,58 +50,31 @@ function addEffort(row,e,label,selected,run,disabled,key){
   const b=addChoice(row,modelButton(titleLevel(e),label,selected,run,disabled),key);b.classList.add('effort-choice');
 }
 function selectModel(pair,m){pair.model=m.model;if(!m.levels.includes(pair.effort))pair.effort=m.levels[0];}
+function renderPair(container,role,label){
+  container.replaceChildren();
+  const pair=modelPanel.settings[role];
+  for(const provider of ['codex','claude']){
+    const {choices}=modelPanel.providers[provider];
+    const models=modelRow(`${label} ${PROVIDER_NAMES[provider]} model`),levels=modelRow(`${label} ${PROVIDER_NAMES[provider]} effort`);
+    const selected=choices.find(m=>m.model===pair.model);
+    for(const m of choices)addModel(models,m,`${label} ${m.name}`,pair.model===m.model,()=>changeModels(c=>selectModel(c[role],m)),!m.levels.length,`${role}-${m.name}`);
+    for(const e of ['low','medium','high'])addEffort(levels,e,`${label} ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,!!selected&&pair.effort===e,
+      ()=>changeModels(c=>{c[role].effort=e;}),!selected?.levels.includes(e),`${role}-${provider}-${e}`);
+    container.append(models,levels);
+  }
+}
 function renderModels(){
   const focused=modelDialog.contains(document.activeElement)?document.activeElement.dataset.choice:null;
-  const manager=$('manager-choices');manager.replaceChildren();
-  for(const provider of ['codex','claude']){
-    const {settings,choices}=modelPanel.providers[provider],pair=settings.manager;
-    const models=modelRow(`Manager ${PROVIDER_NAMES[provider]} model`),levels=modelRow(`Manager ${PROVIDER_NAMES[provider]} effort`);
-    for(const m of choices)addModel(models,m,`Manager ${m.name}`,modelPanel.provider===provider&&pair.model===m.model,
-      ()=>changeModels(c=>selectModel(c.manager,m),provider,true),!m.levels.length,`manager-${m.name}`);
-    const selected=choices.find(m=>m.model===pair.model);
-    for(const e of ['low','medium','high'])addEffort(levels,e,`Manager ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,pair.effort===e,
-      ()=>changeModels(c=>{c.manager.effort=e;},provider,true),!selected?.levels.includes(e),`manager-${provider}-${e}`);
-    manager.append(models,levels);
-  }
-  const {settings,choices}=providerView(),automatic=settings.bot.mode==='automatic';
-  const mode=$('bot-mode');mode.replaceChildren();
-  for(const value of ['manual','automatic']){
-    const b=addChoice(mode,modelButton(titleLevel(value),`Bot ${titleLevel(value)}`,settings.bot.mode===value,
-      ()=>modelMutation(async()=>{modelPanel=await api('/api/bot-mode',{method:'PUT',body:JSON.stringify({mode:value,
-        revisions:Object.fromEntries(Object.entries(modelPanel.providers).map(([p,v])=>[p,v.settings.revision]))})});})),`bot-${value}`);
-    b.classList.add('effort-choice');
-  }
-  const sections=$('bot-choices');sections.replaceChildren();
-  for(const provider of ['codex','claude']){
-    const {settings,choices}=modelPanel.providers[provider],bot=settings.bot;
-    const models=modelRow(`Bot ${PROVIDER_NAMES[provider]} ${automatic?'allowed models':'model'}`);
-    for(const m of choices)addModel(models,m,`Bot ${automatic?'allow':'manual'} ${m.name}`,automatic?bot.policy[m.model].allowed:bot.manual.model===m.model,
-      ()=>changeModels(c=>{c.bot.mode=automatic?'automatic':'manual';if(automatic)c.bot.policy[m.model].allowed=!c.bot.policy[m.model].allowed;else selectModel(c.bot.manual,m);},provider),!m.levels.length,`bot-model-${m.name}`);
-    sections.append(models);
-    if(automatic){
-      const policies=element('div',undefined,'model-policy-grid');
-      for(const m of choices){
-        const levels=modelRow(`Automatic ${m.name} effort allowances`);levels.classList.add('policy-efforts');
-        for(const e of ['low','medium','high'])addEffort(levels,e,`Automatic ${m.name} ${titleLevel(e)}`,bot.policy[m.model].levels[e],
-          ()=>changeModels(c=>{c.bot.mode='automatic';c.bot.policy[m.model].levels[e]=!c.bot.policy[m.model].levels[e];},provider),!m.levels.includes(e),`policy-${m.name}-${e}`);
-        policies.append(levels);
-      }
-      sections.append(policies);
-    }else{
-      const levels=modelRow(`Bot ${PROVIDER_NAMES[provider]} manual effort`),selected=choices.find(m=>m.model===bot.manual.model);
-      for(const e of ['low','medium','high'])addEffort(levels,e,`Bot manual ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,bot.manual.effort===e,
-        ()=>changeModels(c=>{c.bot.mode='manual';c.bot.manual.effort=e;},provider),!selected?.levels.includes(e),`bot-manual-${provider}-${e}`);
-      sections.append(levels);
-    }
-  }
+  renderPair($('manager-choices'),'manager','Manager');
+  renderPair($('worker-choices'),'worker','Worker');
   const favorites=$('manager-favorites');favorites.replaceChildren();
-  const managerPair=providerView().settings.manager,canInsert=choices.some(m=>m.model===managerPair.model&&m.levels.includes(managerPair.effort));
+  const managerPair=modelPanel.settings.manager,canInsert=Object.values(modelPanel.providers).some(v=>v.choices.some(m=>m.model===managerPair.model&&m.levels.includes(managerPair.effort)));
   for(let slot=0;slot<2;slot++){
     const item=modelPanel.favorites[slot],row=element('div',undefined,'favorite-row');
     const insert=addChoice(row,modelButton('Insert',`Insert current Manager into favorite ${slot+1}`,false,
       ()=>modelMutation(async()=>{modelPanel.favorites=await api(`/api/manager-favorites/${slot}`,{method:'PUT'});}),!canInsert),`favorite-insert-${slot}`);
     insert.removeAttribute('aria-pressed');
-    const matching=!!item?.available&&item.provider===modelPanel.provider&&item.pair.model===managerPair.model&&item.pair.effort===managerPair.effort;
+    const matching=!!item?.available&&item.pair.model===managerPair.model&&item.pair.effort===managerPair.effort;
     const entry=addChoice(row,modelButton('',item?`Recall Manager favorite ${slot+1}`:`Empty Manager favorite ${slot+1}`,matching,
       ()=>recallManagerFavorite(slot),!item?.available),`favorite-recall-${slot}`);
     entry.classList.add('favorite-entry');

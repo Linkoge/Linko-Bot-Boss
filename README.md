@@ -28,10 +28,15 @@ both the manager and every worker read are [RULES.md](RULES.md).
    With the project's **Auto-merge and deploy finished work** ON, the merge happens and, for the manager's own project,
    the deploy script is requested automatically. OFF means no merge and no deploy; the manager's `deploy` action
    (optionally with a `task_id`) merges a finished task and deploys on request.
-5. **Watchdog** (every minute). A dead or stalled worker (30 min without activity) is requeued once, then failed with a
-   plain reason. A provider usage limit makes the task wait in the queue and retry with bounded backoff taken from the
-   provider's reset time (else 5 min doubling to 1 h, 8 waits, then failed). A removed project fails its queued tasks;
-   an unconsumed deploy request expires after 7 h. Nothing stays blocked without a visible reason.
+5. **Queue runner** (`ai_manager/runner.py`; independent of any open chat or owner message). A tick every second starts
+   the oldest eligible queued task, one at a time. Not eligible: held, project paused, waiting for its retry time, or a
+   deploy request pending. On service start, whatever was running is resumed without penalty (same branch, same worker
+   thread, repair counters untouched) and stale retry times are forgotten, so a restart or reboot always retries at
+   once. A provider usage limit or a lost connection puts the task back in the queue with a visible retry time: the
+   provider's reset time when it gave one, else backoff (usage limit 5 min doubling to 1 h, connection 30 s doubling to
+   10 min), 10 waits, then failed. The watchdog (every minute) requeues a dead or hung worker (30 min without activity)
+   once, then fails it; fails queued tasks of a removed project; expires an unconsumed deploy request after 7 h.
+   Nothing stays blocked without a visible reason.
 
 Owner controls on a task: **Hold / Release** (queued), **Cancel** (queued or running; the branch is kept),
 **Continue** (failed or done task: appends instructions, re-queues at the end, counters stay). A worker may ask the owner a
@@ -49,7 +54,8 @@ checkout fence, `ai_manager/fence.py`). One-time operator bootstrap, no sudo:
 
 - Chat with Conversation (read-only except To-Do), Auto and Execute modes; composer with recording/transcription,
   Discard/Upload, arbitrary attachments (only verified raster images become native image input), drafts and sequential Send.
-- Model settings: manager and bot (Manual or Automatic) for Codex and Claude, two favorites, exact pairs pinned per task.
+- Model settings: one manager choice and one worker choice, each any Codex or Claude model and effort; what the panel shows
+  is what is saved (`model_choice`) and what is dispatched. A task pins its worker pair when it is created. Two manager favorites.
 - Project list with display names, visibility/stash, pause, discovery; To-Do backlog (never executes by itself; Start
   hands exact revisions to a task); project memory brief with owner-run review; chat clear/trash/archive/search.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
@@ -141,7 +147,8 @@ Configuration: `AI_MANAGER_DATA` (default `~/.local/share/linko-bot-manager`), `
 
 Existing projects, chats, To-Dos and task/execution history rows are preserved. Schema 13 (the task queue) added columns to
 `tasks` and closed every older non-final task once (failed, "Cancelled: closed when the task queue was rebuilt"; branches and
-workspaces untouched). Old columns (`lifecycle`, `legacy`, …) and old settings keys are ignored history. The earlier
+workspaces untouched). Old columns (`lifecycle`, `legacy`, …) and old settings keys are ignored history; the old per-provider model
+settings (`model_settings`, `model_settings:claude`) are adopted once (the most recently edited one) into `model_choice`. The earlier
 release/helper/tier/reviewer/integration/follow-up machinery is gone; its history is in Git.
 
 `ai_manager/static/icons/README.md` records the owner artwork provenance.

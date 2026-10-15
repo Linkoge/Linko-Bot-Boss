@@ -150,9 +150,6 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .model-choice-row button.effort-choice,.model-choice-row button.effort-choice[aria-pressed=true],.model-choice-row button.effort-choice:hover{background:#202734;border-color:var(--border);box-shadow:none;font-weight:400}
 .model-choice-row button.effort-choice[aria-pressed=true]{color:var(--accent)}
 .bot-settings,.model-favorites{margin-top:10px}
-#bot-mode{grid-template-columns:1fr 1fr;margin:0;flex:0 1 240px}
-.model-policy-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px}
-.model-policy-grid .policy-efforts{grid-template-columns:minmax(0,1fr);margin:0}
 .favorite-row{display:flex;gap:5px;margin-top:5px;min-width:0}
 .favorite-row button{min-height:38px;padding:4px 10px;font-size:13px;color:var(--muted)}
 .favorite-entry{display:grid;grid-template-columns:18px minmax(0,1fr) 18px;align-items:center;gap:6px;flex:1;min-width:0;text-align:center;background:linear-gradient(145deg,#352330,#211e2b 70%)}

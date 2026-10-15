@@ -14,7 +14,7 @@ PROGRAM = '''
 import asyncio,json,sys,time
 sys.path.insert(0,'tests')
 import uvicorn
-from test_claude_provider import BothServer
+from test_model_settings import CatalogServer as BothServer
 from ai_manager.config import Settings
 from ai_manager.web import create_app
 class Server(BothServer):
@@ -89,9 +89,9 @@ def main():
                     message = page.locator('#model-error').inner_text()
                     assert (error in message) if error else message == '', message
                 def settings():
-                    return page.evaluate('()=>modelPanel.providers[modelPanel.provider].settings')
+                    return page.evaluate('()=>modelPanel.settings')
                 def bot_snapshot():
-                    return page.evaluate('()=>Object.fromEntries(Object.entries(modelPanel.providers).map(([p,v])=>[p,v.settings.bot]))')
+                    return page.evaluate('()=>modelPanel.settings.worker')
                 def pressed(key):
                     return page.locator(f'[data-choice="{key}"]').get_attribute('aria-pressed') == 'true'
                 choice('manager-Astra')
@@ -102,48 +102,16 @@ def main():
                 assert not pressed('favorite-recall-0')
                 choice('manager-codex-high')
                 assert pressed('favorite-recall-0')
-                assert page.locator('#bot-choices [data-choice^="bot-model-"]').count() == 6
-                choice('bot-model-Haiku')
-                choice('bot-manual-claude-medium')
-                assert page.evaluate('modelPanel.provider') == 'codex'
-                assert page.evaluate('modelPanel.providers.claude.settings.bot.manual') == {'model':'claude-haiku-5-5','effort':'medium'}
-                choice('bot-model-Luna')
-                choice('bot-manual-codex-high')
-                manual = settings()['bot']['manual']
-                choice('bot-automatic')
-                assert page.locator('#bot-choices [data-choice^="bot-model-"]').count() == 6
-                choice('bot-model-Opus')
-                choice('policy-Haiku-low')
-                assert not pressed('bot-model-Opus') and not pressed('policy-Haiku-low')
-                both = page.evaluate("async()=> (await api('/api/model-settings')).providers")
-                assert both['claude']['settings']['bot']['mode'] == 'automatic'
-                assert both['claude']['settings']['bot']['policy']['claude-opus-5-5']['allowed'] is False
-                assert both['claude']['settings']['bot']['policy']['claude-haiku-5-5']['levels']['low'] is False
-                assert both['codex']['settings']['bot']['policy']['gpt-6-astra']['allowed'] is False
-                choice('policy-Luna-low')
-                choice('policy-Luna-medium')
-                choice('bot-model-Sol')
-                choice('bot-model-Astra')
-                choice('policy-Astra-medium')
-                choice('policy-Astra-high')
-                config = settings()
-                assert config['bot']['policy']['gpt-6-luna']['levels'] == {'low': False, 'medium': False, 'high': True}
-                assert config['bot']['policy']['gpt-6-astra']['levels'] == {'low': True, 'medium': False, 'high': False}
-                choice('bot-model-Astra')
-                choice('bot-model-Luna', 'at least one')
-                assert pressed('bot-model-Luna')
-                choice('policy-Luna-high', 'at least one')
-                assert pressed('policy-Luna-high')
-                choice('bot-model-Sol')
-                assert pressed('bot-model-Sol')
-                choice('bot-model-Sol')
-                assert not pressed('bot-model-Sol')
-                # The saved API policy is the one runtime delegation validates.
-                policy = page.evaluate("async()=> (await api('/api/model-settings')).settings.bot.policy")
-                assert policy == settings()['bot']['policy']
-                choice('bot-manual')
-                assert settings()['bot']['manual'] == manual
-                assert pressed('bot-model-Luna') and pressed('bot-manual-codex-high')
+                assert page.locator('#worker-choices [data-choice^="worker-"]').count() == 12
+                choice('worker-Haiku')
+                choice('worker-claude-medium')
+                assert page.evaluate('modelPanel.provider') == 'codex'  # the worker never changes the manager's provider
+                assert page.evaluate('modelPanel.settings.worker') == {'model': 'claude-haiku-5-5', 'effort': 'medium'}
+                choice('worker-Sol')
+                choice('worker-codex-high')
+                assert page.evaluate('modelPanel.settings.worker') == {'model': 'gpt-6.1-sol', 'effort': 'high'}
+                assert page.evaluate("async()=> (await api('/api/model-settings')).settings.worker") == {'model': 'gpt-6.1-sol', 'effort': 'high'}
+                assert pressed('worker-Sol') and pressed('worker-codex-high')
                 bots = bot_snapshot()
                 choice('manager-Sonnet')
                 choice('manager-claude-medium')
@@ -172,7 +140,6 @@ def main():
                 assert pressed('favorite-recall-0') and not pressed('favorite-recall-1')
                 assert pressed('manager-Astra') and pressed('manager-codex-high')
                 assert bot_snapshot() == bots
-                choice('bot-automatic')
                 for width, height in [(1200, 900), (393, 851), (320, 568)]:
                     page.set_viewport_size({'width': width, 'height': height})
                     geometry = page.locator('#model-dialog').evaluate('(n)=>({width:n.clientWidth,scrollWidth:n.scrollWidth,height:n.clientHeight,scrollHeight:n.scrollHeight})')
@@ -185,30 +152,25 @@ def main():
                         const other=document.querySelector('[data-choice="manager-codex-low"]');
                         const h=document.querySelector('#manager-heading').getBoundingClientRect();
                         const x=document.querySelector('#model-close').getBoundingClientRect();
-                        const bh=document.querySelector('#bot-heading').getBoundingClientRect();
-                        const mode=document.querySelector('#bot-mode').getBoundingClientRect();
                         return {selected:surface(selected),other:surface(other),color:getComputedStyle(selected).color,
                           otherColor:getComputedStyle(other).color,headerAligned:Math.abs(h.y+h.height/2-x.y-x.height/2)<2,
-                          botAligned:Math.abs(bh.y+bh.height/2-mode.y-mode.height/2)<2,
                           labels:[...document.querySelectorAll('#model-dialog h2')].map(n=>getComputedStyle(n).color)};
                     }""")
                     assert style['selected'] == style['other']
                     assert style['color'] != style['otherColor']
-                    assert style['headerAligned'] and style['botAligned']
+                    assert style['headerAligned']
                     assert len(set(style['labels'])) == 1
                     assert page.locator('.policy-cell').count() == 0
                     assert page.locator('#model-dialog select').count() == 0
-                    mode_style = page.locator('#bot-mode button').evaluate_all('(buttons)=>buttons.map(b=>{const s=getComputedStyle(b);return [s.backgroundColor,s.borderColor,s.boxShadow,s.fontWeight]})')
-                    assert mode_style[0] == mode_style[1]
                     close_style = page.locator('#model-close').evaluate('(b)=>{const s=getComputedStyle(b);return [s.backgroundColor,s.borderColor,s.borderRadius,b.offsetHeight]}')
                     assert close_style[:3] == ['rgb(29, 37, 52)','rgb(43, 51, 69)','9px'], close_style
                     assert close_style[3] >= 36, close_style
-                    assert page.locator('#manager-choices svg,#bot-choices svg').count() == 0
+                    assert page.locator('#manager-choices svg,#worker-choices svg').count() == 0
                     assert page.locator('.favorite-entry svg').count() == 2
                     favorite_style = page.locator('[data-choice="favorite-recall-0"]').evaluate('(b)=>{const s=getComputedStyle(b);return [s.backgroundImage,s.borderColor]}')
                     model_style = page.locator('[data-choice="manager-Astra"]').evaluate('(b)=>{const s=getComputedStyle(b);return [s.backgroundImage,s.borderColor]}')
                     assert favorite_style == model_style
-                    assert page.locator('#manager-choices button,#bot-mode button,#bot-choices button').evaluate_all('(buttons)=>buttons.every(b=>b.offsetHeight>=38)')
+                    assert page.locator('#manager-choices button,#worker-choices button').evaluate_all('(buttons)=>buttons.every(b=>b.offsetHeight>=38)')
                     for row in page.locator('.favorite-row').all():
                         assert row.locator('button').first.inner_text() == 'Insert'
                     entry_geometry = page.locator('[data-choice="favorite-recall-0"]').evaluate('''(b)=>{const r=b.getBoundingClientRect(),l=b.querySelector('.favorite-label').getBoundingClientRect(),i=b.querySelector('.favorite-logo').getBoundingClientRect();return {center:Math.abs(l.x+l.width/2-r.x-r.width/2),right:r.right-i.right};}''')
@@ -224,16 +186,13 @@ def main():
                     assert page.locator('#model-close').evaluate('(n)=>n===document.activeElement')
                     assert page.locator('#model-close').evaluate('(n)=>{const r=n.getBoundingClientRect(),d=n.closest("dialog").getBoundingClientRect();return r.top>=d.top&&r.bottom<=d.bottom}')
                     results.append({'width': width, 'panel': geometry, 'style': style})
-                choice('bot-manual')
                 for width,height in [(1200,900),(393,851),(320,568)]:
                     page.set_viewport_size({'width':width,'height':height})
-                    assert page.locator('#bot-choices > .model-choice-row').count() == 4
-                    assert page.locator('#bot-choices [data-choice^="bot-model-"]').count() == 6
-                    assert page.locator('#bot-choices [data-choice^="bot-manual-"]').count() == 6
+                    assert page.locator('#worker-choices > .model-choice-row').count() == 4
+                    assert page.locator('#worker-choices [data-choice^="worker-"]').count() == 12
                     assert page.locator('#model-dialog').evaluate('(d)=>d.scrollWidth<=d.clientWidth')
                     page.locator('#model-dialog').evaluate('(d)=>d.scrollTop=0')
                     page.screenshot(path=str(evidence / f'manual-{width}.png'))
-                choice('bot-automatic')
                 page.locator('[data-choice="manager-Luna"]').focus()
                 page.keyboard.press('ArrowRight')
                 assert page.locator('[data-choice="manager-Sol"]').evaluate('(n)=>n===document.activeElement')

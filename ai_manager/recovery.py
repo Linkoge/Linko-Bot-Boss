@@ -23,28 +23,6 @@ class Failure:
     retry_at: float | None = None
 
 
-USAGE_LIMITS = {"usageLimitExceeded", "rateLimitExceeded", "usage_limit_exceeded", "rate_limit_exceeded",
-                "insufficient_quota", "slow_down"}
-
-
-def usage_limit(error):
-    """A provider usage/rate limit as Failure('usage', known_reset_or_None), else None. Only the provider's error counts."""
-    details = error.details if isinstance(error, CodexError) else error if isinstance(error, dict) else {}
-    data = details.get("data") if isinstance(details.get("data"), dict) else {}
-    info = details.get("codexErrorInfo") or data.get("codexErrorInfo") or data.get("code") or details.get("code")
-    status = details.get("httpStatusCode") or data.get("httpStatusCode") or details.get("status")
-    if isinstance(info, dict):
-        name = next(iter(info), "")
-        value = info.get(name)
-        status = value.get("httpStatusCode") if isinstance(value, dict) else status
-        info = name
-    message = str(details.get("message", str(error))).lower()
-    if (info in USAGE_LIMITS or status == 429
-            or (not info or info in {"other", -32000}) and any(s in message for s in ("usage limit", "rate limit", "quota exceeded"))):
-        return Failure("usage", reset_time({**data, **details}))
-    return None
-
-
 def classify(error):
     """Prefer native enums, HTTP status and OS codes. Unknown errors are permanent."""
     if isinstance(error, (TimeoutError, ConnectionError, socket.gaierror)):
