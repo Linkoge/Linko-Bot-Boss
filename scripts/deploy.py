@@ -112,6 +112,8 @@ class Deploy:
         (self.root / 'state.json').unlink(missing_ok=True)
         if self.request():
             (self.root / 'request.json').unlink(missing_ok=True)
+        if (read(self.root / 'emergency.json') or {}).get('id') == self.id:
+            (self.root / 'emergency.json').unlink(missing_ok=True)
         return result
 
     # ---- idle, holds, health -------------------------------------------------------------------------------------
@@ -143,7 +145,8 @@ class Deploy:
         """Withdrawn request, owner OFF or paused project all stop the deploy before anything changes."""
         if not self.request():
             raise Stop('cancelled', 'request withdrawn before the restart')
-        if request.get('source') == 'auto' and request.get('project_id'):
+        if (request.get('source') == 'auto' and request.get('project_id') and not request.get('emergency')
+                and (read(self.root / 'emergency.json') or {}).get('id') != self.id):
             row = self.query('SELECT value FROM settings WHERE key=?', ('auto_deploy:' + request['project_id'],))
             if not row or not json.loads(row[0]).get('enabled'):
                 raise Stop('cancelled', 'owner turned Auto-deploy off')
@@ -251,6 +254,26 @@ class Deploy:
         previous = target = None
         backups = self.root / 'backups' / self.id
         fenced = ExitStack()  # holds the checkout fence from the final idle check to the end
+        def emergency_stop():
+            nonlocal stopped
+            # Explicit host-only escape hatch: stop the app under the existing checkout fence,
+            # then ignore stale queue records. Never race a still-live native worker.
+            fenced.enter_context(fence.hold(self.data, True, wait=5))
+            self.state('emergency_backing_up')
+            self.backup(backups / 'before.sqlite3')
+            stopped = True
+            run(self.commands['stop'], timeout=120)
+            with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=10) as conn:
+                pids = conn.execute('SELECT pid,process_start FROM executions WHERE pid IS NOT NULL').fetchall()
+            def process_start(pid):
+                try:
+                    fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
+                    return fields[19] if fields[0] != 'Z' else None
+                except (OSError, IndexError):
+                    return None
+            if any((current := process_start(pid)) and (not start or current == start) for pid, start in pids):
+                raise RuntimeError('Emergency deploy refused: a recorded worker is still alive')
+
         try:
             self.state('testing')
             try:
@@ -263,22 +286,29 @@ class Deploy:
                     target = self.git('rev-parse', 'HEAD')
             except fence.Busy as error:
                 raise Stop('failed', 'live checkout is busy: ' + str(error)) from error
-            if previous == target:
+            if previous == target and not request.get('emergency'):
                 raise Stop('success', f'{target[:10]} is already live; nothing to deploy')
             tests = self.config.get('test_cmd')
             if tests and not request.get('skip_tests'):
                 result = run(tests, cwd=self.repo, timeout=self.config.get('test_seconds', 3600), check=False)
                 if result.returncode:
                     raise Stop('failed', 'full backend suite failed: ' + (result.stdout + result.stderr).strip()[-300:])
+            if request.get('emergency'):
+                emergency_stop()
             self.state('waiting_idle', commit=target)
             deadline = time.monotonic() + self.config.get('idle_seconds', 6 * 3600)
             last_busy, reported_at = None, 0.0
             while True:
                 self.check_request(request)
-                busy = self.busy()
+                if not request.get('emergency') and (read(self.root / 'emergency.json') or {}).get('id') == self.id:
+                    request['emergency'] = True
+                    emergency_stop()
+                busy = {} if request.get('emergency') else self.busy()
                 if not busy:
                     # Fence: from here until the end no merge and no new task/chat can start, so the idle
                     # check below cannot be invalidated before the stop. Work that slipped in releases the fence.
+                    if request.get('emergency'):
+                        break
                     try:
                         fenced.enter_context(fence.hold(self.data, True, wait=5))
                         if not (busy := self.busy()):
@@ -296,13 +326,15 @@ class Deploy:
                 self.sleep(self.config.get('poll_seconds', 5))
             self.check_request(request)
             self.state('backing_up')
-            self.backup(backups / 'before.sqlite3')
+            if not request.get('emergency'):
+                self.backup(backups / 'before.sqlite3')
             self.check_request(request)
-            if self.busy():
+            if not request.get('emergency') and self.busy():
                 raise Stop('failed', 'work appeared during backup; will not interrupt it')
             self.state('restarting')
             stopped = True
-            run(self.commands['stop'], timeout=120)
+            if not request.get('emergency'):
+                run(self.commands['stop'], timeout=120)
             self.backup(backups / 'stopped.sqlite3')  # consistent snapshot; nothing writes while stopped
             self.state('updating')
             changed = True
@@ -318,6 +350,12 @@ class Deploy:
             return self.finish(request, 'success', f'deployed {target[:10]}; health check passed',
                                commit=target, previous=previous, backup=str(backups))
         except Stop as stop:
+            if stopped:
+                try:
+                    run(self.commands['start'], timeout=120)
+                    self.wait_health(previous)
+                except Exception as restart_error:
+                    return self.finish(request, 'rollback_failed', str(stop) + '; restart failed: ' + str(restart_error))
             return self.finish(request, stop.status, str(stop), commit=target, previous=previous)
         except Exception as error:
             if not stopped:
@@ -340,6 +378,9 @@ class Deploy:
             if problems:
                 return self.finish(request, 'rollback_failed', f'{str(error)[:200]}; ' + '; '.join(problems),
                                    commit=target, previous=previous, backup=str(backups))
+            if not changed:
+                return self.finish(request, 'failed', str(error)[:300] + '; service restarted',
+                                   commit=target, previous=previous)
             return self.finish(request, 'rolled_back', f'{str(error)[:300]}; code and database restored to '
                                f'{previous[:10]}', commit=target, previous=previous, backup=str(backups))
         finally:
@@ -361,6 +402,9 @@ class Deploy:
             if not request:
                 print('no deploy requested')
                 return None
+            if getattr(self, 'emergency', False) or (read(self.root / 'emergency.json') or {}).get('id') == request['id']:
+                request['emergency'] = True
+                atomic(self.root / 'request.json', request)
             self.id = request['id']
             result = self.execute(request)
             return result
@@ -378,6 +422,7 @@ def main(argv=None):
     parser.add_argument('--config', type=Path)
     parser.add_argument('--data', default=os.getenv('AI_MANAGER_DATA', '~/.local/share/linko-bot-manager'))
     parser.add_argument('--now', action='store_true', help='create a deploy request first (manual deploy)')
+    parser.add_argument('--emergency', action='store_true', help='Host repair only: stop app and bypass stale queue records')
     args = parser.parse_args(argv)
     os.umask(0o077)
     data = Path(args.data).expanduser()
@@ -385,7 +430,10 @@ def main(argv=None):
     deploy = Deploy(config)
     if args.now and not (deploy.root / 'request.json').exists():
         atomic(deploy.root / 'request.json', {'id': secrets.token_hex(8), 'source': 'owner', 'reason': 'manual run',
-                                              'requested_at': time.time()})
+                                              'requested_at': time.time(), 'emergency': args.emergency})
+    if args.emergency and (pending := read(deploy.root / 'request.json')):
+        atomic(deploy.root / 'emergency.json', {'id': pending['id']})
+    deploy.emergency = args.emergency
     result = deploy.main()
     return 0 if not result or result['status'] in {'success', 'cancelled'} else 1
 

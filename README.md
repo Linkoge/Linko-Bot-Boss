@@ -57,6 +57,94 @@ tasks, streaming messages and running deliveries do. Stale leases are reconciled
 both the runner and its recorded process are gone, preserving workspaces and limiting recovery retries.
 
 
+## Emergency host repair
+
+The host repair role is an explicit exception to the normal sequential work queue. It can diagnose/fix the
+application, restart its user service, and call the existing deploy flow while the app or queue is broken.
+It never creates a normal task. `scripts/emergency_repair.py` uses only host Python's standard library and the
+installed Codex/Claude CLI, with native shell/file tools and arbitrary provider model names, without model catalog,
+usage preflight, queue, project pause or deploy-pending checks. Provider authentication and actual provider limits
+still apply. Catastrophic destruction requires specific owner confirmation: unattended agents must stop and return
+a failed result asking for that confirmation. As with other native workers, this is an agent instruction convention,
+not a sandbox; ordinary repairs/restarts are authorized by the repair request.
+
+**One-time operator bootstrap is required after this code is merged.** From the live checkout, as the service user:
+
+```bash
+python3 scripts/install_repair.py --conversation EXACT_EXISTING_CHAT_ID --provider codex --auto-detect
+```
+
+Omit `--auto-detect` for explicit requests only. An optional `--model` passes the exact model directly to the CLI;
+Claude uses `--provider claude`. The installer copies a standalone launcher to `DATA/repair/launcher.py` outside the
+checkout/venv and enables independent `linko-bot-manager-repair.service` and `.timer` user units. It does not deploy
+or restart the application. Re-run it to update that snapshot after launcher changes. It uses the same optional
+`~/.config/linko-bot-manager.env`; configure provider executable paths/login for that host user. The host needs
+Python 3, Linux flock/process groups, writable durable DATA, and a working user systemd manager. For unattended
+operation after logout/reboot, that user needs lingering enabled by the operator (`loginctl enable-linger USER`,
+subject to host permissions). Installation, lingering and real provider authorization are **not** activated or verified
+by repository tests or by the implementing worker. A dead host, lost storage, unavailable provider login or broken
+systemd cannot be repaired by a timer on that host. The launcher remains manually callable without systemd.
+
+Owner escape hatch over a host terminal/SSH, even with the app stopped (replace DATA and the chat ID):
+
+```bash
+python3 DATA/repair/launcher.py --data DATA request --key owner-incident-1 \
+  --conversation EXACT_EXISTING_CHAT_ID --instructions-file /path/to/repair-instructions.txt
+python3 DATA/repair/launcher.py --data DATA status
+python3 DATA/repair/launcher.py --data DATA tick
+```
+
+`request` durably accepts only; the timer wakes within about a minute, or `tick` runs immediately. Do not launch that
+manual tick inside the application's service cgroup if you intend to restart it: use an independent terminal or the
+repair systemd unit. The manager's `emergency_repair` action accepts an `objective` in Auto/Execute and returns its
+receipt; `repair_status` reads receipts. Authenticated owner endpoints `POST /api/repair` (request_id, instructions,
+conversation_id, optional provider/model) and `GET /api/repair` also bypass task checks, with existing CSRF protection.
+Those entry points need a responding app; the host launcher is the service-down entry point. The exact original
+conversation ID is retained, including archived chats; missing chats are never silently replaced.
+
+Requests, instructions, attempts, status, errors, final result and pending chat notices live in fsynced atomic JSON
+receipts under `DATA/repair/requests`; native JSONL/output logs live under `DATA/repair/runs`. The request key is
+idempotent forever. A different request while a repair is active is rejected with its receipt ID; its instructions
+are not silently discarded. A host-wide flock permits one repair at a time; the CLI inherits it across launcher
+failure. Verified orphan process groups are killed only after their recorded 30-minute deadline. The systemd unit
+also kills its own cgroup at 35 minutes. Interrupted attempts consume the same durable five-attempt budget; completed
+native results are reconciled from logs before another turn. Otherwise the retained native session is resumed with
+instructions to inspect effects/receipts before repeating operations. A crash before a native session ID was emitted
+can require a new session; retained logs and reconciliation instructions still apply. This does not promise exactly-once
+execution of arbitrary shell commands. A crash between CLI spawn and PID receipt can leave an unidentifiable orphan
+holding the lock: the unit's cgroup timeout handles installed runs; a manual operator must inspect that process before
+terminating it. The launcher never breaks an unproven lock to start a duplicate.
+
+Connection/timeouts and usage/rate-limit errors retry at 1, 2, 4, 8 minutes (one-hour delay cap); five total attempts,
+30 minutes per turn, with counters and retry deadlines preserved across restart. Other errors fail immediately.
+There is no provider fallback or indefinite usage-limit loop. Unattended detection, when enabled, checks app health
+and read-only task activity each timer wake. Thirty minutes of app outage or running task silence requests a repair;
+pending owner questions are excluded. A durable incident key prevents relaunching a completed/failed repair for the
+same incident; recovery followed by a new outage is a new incident. Inspect host status if automatic repair fails;
+an owner may submit a new key after addressing the cause.
+
+Status and success/failure notices are delivered without another model turn: after app health recovers, the host
+launcher inserts stable-ID assistant messages into the exact original chat in a SQLite transaction. An absent/offline
+app keeps delivery pending without consuming delivery attempts. Database/destination failures back off, up to ten
+attempts with a one-hour delay cap, retaining the error and result on the host. After fixing delivery (or restoring an
+older database), `python3 DATA/repair/launcher.py --data DATA retry-delivery` explicitly replays retained notices;
+stable message IDs prevent duplicates. A stopped timer requires manual `tick` for delivery too.
+
+The agent can invoke `python3 scripts/deploy.py --now --emergency` on the host. This uses the same full suite,
+checkout fence, SQLite backups, health check and code/database rollback as normal deployment. It stops the app under
+the fence and refuses to proceed while any recorded native worker is alive, then bypasses stale queue rows without
+mutating them; service startup retains normal queue recovery. Existing pending deploy consumers remain serialized
+by the deploy lock. A durable emergency intent for the exact request wakes a consumer already waiting for idle;
+that consumer performs the same emergency stop and worker check on its next poll, without waiting for the queue. This mode still needs a readable database, the existing deploy installation,
+repairable checkout/dependencies and a known previous release for code rollback. The agent must diagnose those
+failures instead of claiming this flag fixes corruption or bypasses backup/health safeguards.
+
+Permanent coverage: `tests/test_emergency_repair.py`, emergency cases in `tests/test_deploy_script.py` and
+`tests/test_web.py`: mocked CLIs, disposable spool/database, absent app/queue, deduplication, orphan lock, interruption,
+bounded retries, detection, result delivery, bootstrap snapshot, deploy safeguards and rollback. No paid provider
+probes, live database changes, service restarts or host installation are part of those checks.
+
+
 ## Product behaviour that is unchanged
 
 - Chat with Conversation (read-only except To-Do), Auto and Execute modes; composer with recording/transcription,

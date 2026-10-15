@@ -457,3 +457,71 @@ def test_blocker_report_identifies_rows_without_task_content(tmp_path):
     report = deploy.blockers()
     assert report['tasks'][0]['id'] == 't' and report['executions'][0]['id'] == 'e'
     assert 'private input' not in json.dumps(report)
+
+
+@pytest.mark.parametrize('live_worker,broken_health,late_intent',
+                         [(False, False, False), (True, False, False), (False, True, False), (False, False, True)])
+def test_emergency_deploy_bypasses_stale_queue_preserving_backup_and_rollback(tmp_path, monkeypatch,
+                                                                            live_worker, broken_health, late_intent):
+    from ai_manager.db import Database
+    from scripts.emergency_repair import identity
+
+    db = Database(tmp_path / 'manager.sqlite3')
+    db.run("INSERT INTO executions(id,agent_id,status,pid,process_start,started_at) VALUES('stale','w','running',?,?,1)",
+           (os.getpid() if live_worker else 99999999, identity(os.getpid()) if live_worker else 'gone'))
+    deploy = deploy_script.Deploy({'repo': str(tmp_path), 'data': str(tmp_path), 'branch': 'main'})
+    request = {'id': 'repair', 'source': 'owner', 'emergency': not late_intent}
+    deploy.root.mkdir()
+    deploy.id = request['id']
+    deploy_script.atomic(deploy.root / 'request.json', request)
+    calls = []
+
+    def fake_git(*args, **kwargs):
+        if args[0] == 'status':
+            return ''
+        if args[0] == 'symbolic-ref':
+            return 'main'
+        return 'new-commit'
+
+    def health(commit):
+        calls.append(('health', commit))
+        if broken_health and commit == 'new-commit':
+            raise RuntimeError('bad release')
+
+    monkeypatch.setattr(deploy_script.fence, 'main_branch', lambda *a: 'main')
+    monkeypatch.setattr(deploy, 'git', fake_git)
+    monkeypatch.setattr(deploy, 'running_commit', lambda: 'old-commit')
+    monkeypatch.setattr(deploy, 'busy', lambda: {'unfinished_executions': 1} if late_intent
+                        else pytest.fail('Emergency must never wait for stale queue'))
+    monkeypatch.setattr(deploy, 'sleep', lambda seconds: deploy_script.atomic(
+        deploy.root / 'emergency.json', {'id': 'repair'}))
+    monkeypatch.setattr(deploy, 'wait_health', health)
+    monkeypatch.setattr(deploy, 'deps_changed', lambda *a: False)
+    monkeypatch.setattr(deploy, 'rollback', lambda *a: calls.append(('rollback',)))
+    monkeypatch.setattr(deploy_script, 'run', lambda argv, **kwargs: calls.append(tuple(argv)))
+    result = deploy.execute(request)
+    assert result['status'] == ('failed' if live_worker else 'rolled_back' if broken_health else 'success')
+    assert (deploy.root / 'backups/repair/before.sqlite3').exists()
+    assert db.one("SELECT status FROM executions WHERE id='stale'")['status'] == 'running'
+    assert any('start' in command for command in calls)
+    if live_worker:
+        assert 'worker is still alive' in result['reason']
+        assert not (deploy.root / 'backups/repair/stopped.sqlite3').exists()
+    else:
+        assert (deploy.root / 'backups/repair/stopped.sqlite3').exists()
+        assert ('health', 'new-commit') in calls
+    if broken_health:
+        assert ('rollback',) in calls and ('health', 'old-commit') in calls
+
+
+def test_explicit_emergency_intent_bypasses_auto_deploy_settings_but_preserves_cancellation(tmp_path):
+    deploy = deploy_script.Deploy({'repo': str(tmp_path), 'data': str(tmp_path)})
+    deploy.id = 'repair'
+    request = {'id': 'repair', 'source': 'auto', 'project_id': 'paused'}
+    deploy_script.atomic(deploy.root / 'request.json', request)
+    deploy_script.atomic(deploy.root / 'emergency.json', {'id': 'repair'})
+    # No settings/database is needed: explicit host intent overrides normal scheduling gates.
+    deploy.check_request(request)
+    (deploy.root / 'request.json').unlink()
+    with pytest.raises(deploy_script.Stop, match='withdrawn'):
+        deploy.check_request(request)

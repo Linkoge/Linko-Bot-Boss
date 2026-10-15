@@ -139,3 +139,31 @@ def test_portfolio_project_scope_never_reassigns_tasks(client):
     assert tasks.get(a['id'])['project_id'] == one
     assert tasks.get(b['id'])['project_id'] == two
     assert browser.get('/api/portfolio?project_id=unknown').status_code == 409
+
+
+def test_emergency_owner_api_bypasses_task_queue_and_requires_auth_and_csrf(client, monkeypatch):
+    from scripts.emergency_repair import atomic
+    browser, app, settings = client
+    assert browser.get('/api/repair').status_code == 401
+    assert browser.post('/api/repair', json={}).status_code in {401, 403}
+    sign_in(browser, app, settings)
+    origin = app.state.chat.conversation(None)['id']
+    atomic(settings.data_dir / 'repair/installed.json', {'repo': str(settings.data_dir)})
+    def unavailable(*a, **kw):
+        raise AssertionError('Normal queue must not be consulted')
+    monkeypatch.setattr(app.state.scheduler.tasks, 'add', unavailable)
+    body = {'request_id': 'emergency', 'instructions': 'Repair host', 'conversation_id': origin,
+            'model': 'future-unlisted-model'}
+    assert browser.post('/api/repair', json=body, headers={'X-CSRF-Token': 'bad'}).status_code == 403
+    receipt = browser.post('/api/repair', json=body)
+    assert receipt.status_code == 200 and receipt.json()['status'] == 'pending'
+    assert browser.post('/api/repair', json=body).json()['id'] == receipt.json()['id']
+    assert browser.get('/api/repair').json()[0]['conversation_id'] == origin
+
+    from scripts.emergency_repair import Repair
+    repair = Repair(settings.data_dir)
+    monkeypatch.setattr(repair, 'healthy', lambda: True)
+    repair.run(lambda *args: 'Application recovered')
+    history = app.state.chat.history()
+    assert history['messages'][-1]['content'].endswith('Application recovered')
+    assert all(message['status'] == 'completed' for message in history['messages'])

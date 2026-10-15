@@ -23,6 +23,8 @@ MANAGER_TOOL = {
                 "enum": [
                     "deploy",
                     "deployment_status",
+                    "emergency_repair",
+                    "repair_status",
                     "list_todos",
                     "save_todo",
                     "delegate",
@@ -106,10 +108,20 @@ class Scheduler:
             sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
             if sources:
                 args = {**args, 'todos': sources}
-        if internal and action in {'delegate', 'continue', 'hold', 'release', 'cancel', 'resume_project', 'deploy'}:
+        if internal and action in {'delegate', 'continue', 'hold', 'release', 'cancel', 'resume_project', 'deploy', 'emergency_repair'}:
             raise ValueError('Worker result notices are not explicit owner authorization; the owner decides what happens next')
         if args.get("todos") and action not in {"delegate", "continue"}:
             raise ValueError("To-Do handoff requires explicit owner scheduling")
+        if action in {'emergency_repair', 'repair_status'}:
+            from scripts.emergency_repair import Repair
+
+            repair = Repair(self.settings.data_dir)
+            if action == 'repair_status':
+                return repair.records()
+            if params.get('mode') not in {'auto', 'execute'}:
+                raise ValueError('Use Auto or Execute to request emergency repair')
+            return repair.submit('manager:' + str(params.get('manager_execution_id')), args.get('objective', ''),
+                                 params['conversation_id'])
         if action == 'deployment_status':
             return self.pipeline.status()
         if action == 'deploy':

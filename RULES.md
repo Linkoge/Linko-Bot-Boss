@@ -18,3 +18,8 @@ One short file, read by the manager and by every worker.
 6. Commit finished work on the branch. If you cannot finish, end your last line with `RESULT: FAILED - <reason>`;
    otherwise reply with a short summary. A merge conflict with main is resolved by the same worker in the same task.
 7. Update the relevant docs in place; do not duplicate them.
+
+8. The owner's emergency host repair role (`README.md`, Emergency host repair) is outside the task queue. Its installed
+   host launcher may repair/restart/deploy without queue checks, preserving backups, health checks, rollback and
+   specific owner confirmation before catastrophic destruction. A worker implementing that capability still follows
+   rule 3; implementation is not permission to activate it or operate the live host.

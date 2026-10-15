@@ -243,6 +243,20 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "scheduler_running": bool(scheduler.job and not scheduler.job.done()),
         }
 
+    @app.get('/api/repair', dependencies=[Depends(require_owner)])
+    def repair_status():
+        from scripts.emergency_repair import Repair
+        return Repair(settings.data_dir).records()
+
+    @app.post('/api/repair', dependencies=[Depends(require_owner)])
+    def request_repair(body: dict):
+        from scripts.emergency_repair import Repair
+        conversation = body.get('conversation_id')
+        if not db.one('SELECT 1 FROM conversations WHERE id=?', (conversation,)):
+            raise HTTPException(400, 'Select an existing originating conversation')
+        return Repair(settings.data_dir).submit(body.get('request_id'), body.get('instructions', ''), conversation,
+                                                body.get('provider'), body.get('model'))
+
     @app.get('/api/deployment', dependencies=[Depends(require_owner)])
     def deployment_status():
         return scheduler.pipeline.status()
