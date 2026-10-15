@@ -1,3 +1,16 @@
+# Combined policy/model/recording integration candidate — 2026-10-15
+
+Serialized integration in retained assignment `e01954965b8347b7abbb6d1d9d5a92cf` merged exact
+source `37898cd556db919d24c184bfa9d1707d7cb9d1f8` into policy candidate `a0f9694`, without
+conflicts. This source supersedes its earlier failed status under the owner's revised acceptance;
+the optional recording-start diagnostic is not a delivery gate. Historical failures and actual
+five-used source budget remain in [the source report](docs/MODEL_SETTINGS_REDESIGN_REPORT.md).
+Five-round policy/cumulative-counter enforcement remains intact; no runtime counters were changed.
+Combined validation passed: 37 smoke tests, 114 focused backend tests, lint, JS syntax, and
+favorite-recall/recording/model-settings/chat Chromium checks. No new repair round was needed.
+Candidate activation is pending application-managed merge/deploy; no live deployment claim.
+Integration evidence: [policy report](docs/REPAIR_POLICY_REPORT.md). Earlier snapshots below are historical.
+
 # Five-round policy candidate — 2026-10-15
 
 Prepared in assignment `e01954965b8347b7abbb6d1d9d5a92cf`; activation is pending normal
