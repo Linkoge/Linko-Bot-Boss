@@ -1,9 +1,11 @@
-# Recording-start path — 2026-10-15 unverified candidate
+# Recording-start path — 2026-10-15 verified candidate
 
-**Delivery blocked:** corrected instrumentation passes native-start and latency assertions, and the
-full recording browser suite passes. The probe then hangs while setting up its pending-permission
-mock. The owner-expanded five-round repair budget is exhausted; no new deployment was performed.
-See the combined report for exact measurements, checks and remaining acceptance gap.
+Ready for normal application-managed delivery; no new deployment receipt is claimed. The owner
+explicitly removed the optional startup probe from acceptance and authorized removal of its hanging
+pending-permission mock case. The complete recording browser suite, model/chat browser checks,
+smoke and targeted backend tests passed. The probe remains an optional local timing diagnostic;
+its retained native-start and latency observations do not establish physical-device performance.
+Current acceptance and historical failures: [combined report](MODEL_SETTINGS_REDESIGN_REPORT.md).
 
 Recording taps immediately render truthful **Starting microphone…** feedback, request permission
 in the click gesture, and fetch `/api/audio` metadata alongside device startup. There is no microphone

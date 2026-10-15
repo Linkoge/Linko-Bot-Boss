@@ -1,4 +1,4 @@
-"""Local Chromium startup measurements; fake device, not physical mobile performance."""
+"""Optional local timing diagnostic, not a delivery gate or physical mobile benchmark."""
 import argparse
 import json
 import os
@@ -36,7 +36,8 @@ new MutationObserver(()=>{const n=document.querySelector('#audio-status');if(n&&
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--output', type=Path, required=True)
-    parser.add_argument('--verify', action='store_true')
+    parser.add_argument('--verify', action='store_true',
+                        help='Optional diagnostic assertions; not a delivery acceptance check')
     args = parser.parse_args()
     with tempfile.TemporaryDirectory(prefix='linko-start-probe-') as directory:
         root = Path(directory)
@@ -96,21 +97,6 @@ def main():
                     page.wait_for_function('()=>!audioState.session')
                     assert page.evaluate('captureProbe.streams.every(s=>s.getTracks().every(t=>t.readyState==="ended"))')
                     page.unroute('**/api/audio')
-                if args.verify:
-                    # No prewarming: only the two deliberate taps above requested a device.
-                    assert page.evaluate('captureProbe.streams.length') == 2
-                    page.evaluate("window.originalCapture=navigator.mediaDevices.getUserMedia;navigator.mediaDevices.getUserMedia=()=>new Promise(resolve=>window.grantLater=resolve)")
-                    page.locator('#microphone').click()
-                    assert page.evaluate("audioState.session.phase") == 'starting'
-                    assert 'Starting microphone' in page.locator('#audio-status').inner_text()
-                    page.evaluate("document.querySelector('#microphone').click()")
-                    page.evaluate("window.dispatchEvent(new Event('pagehide'))")
-                    assert page.evaluate('audioState.session') is None
-                    page.evaluate("async()=>{const stream=await originalCapture({audio:true});grantLater(stream)}")
-                    page.wait_for_function('()=>captureProbe.streams.every(s=>s.getTracks().every(t=>t.readyState==="ended"))')
-                    page.evaluate('navigator.mediaDevices.getUserMedia=originalCapture')
-                    assert page.evaluate('audioState.session') is None
-                    results.append({'pending_pagehide': 'late tracks stopped', 'rapid_tap': 'no second session', 'unsolicited_capture': False})
                 browser.close()
             args.output.parent.mkdir(parents=True, exist_ok=True)
             args.output.write_text(json.dumps(results, indent=2))

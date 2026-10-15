@@ -1,3 +1,69 @@
+# Owner-authorized acceptance update — 2026-10-15
+
+**RESULT: PASSED under the owner's revised acceptance criteria.** The owner explicitly removed
+the optional recording-start probe as an acceptance gate, requested removal of its hanging case,
+and required no application code changes. The retained implementation is ready for normal
+application-managed automatic merge/deployment. This worker did not merge, push, deploy, restart
+services or establish a new live deployment receipt.
+
+Same assignment/workspace/thread and branch:
+`linko/assignment-4a985c35b51345ada354cd666acbf80e`; continuation base `e13b3b5`.
+Only the optional probe and relevant documentation change in this continuation. No application code,
+provider catalog/routing, recording lifecycle, favorites persistence, queue behavior or product styling
+changes. No parallel worker/reviewer, replacement task, or unrelated paused/cancelled/held work.
+
+## Authorized scope and current acceptance
+
+Removed the probe's entire extra pending-permission/pagehide mock case, including the function-valued
+`page.evaluate` setup that hung. The timing recorder and its optional diagnostic assertions remain
+available for investigation, explicitly labeled **not a delivery acceptance check** in the module and
+`--verify` help. It is not registered in the smoke or deployment suite. No claim is made that the deleted
+case passed; prior failure/interruption logs remain unchanged below and in private evidence.
+The standalone diagnostic was not rerun or used as a gate.
+
+The already-passing behavior checks remain valid for the unchanged application:
+
+- Smoke: **37 passed**, 283 deselected; targeted models/providers/audio/chat-queue backend: **73 passed**.
+- Async favorite browser: immediate close/focus, ordered actual saved fast-Send route, duplicate
+  suppression, stale/unavailable/network failure notices/reconciliation, draft retention and reopen races.
+- Full recording browser: real Chromium capture with fixture STT only, **28 uploads**, **6 submissions**,
+  permission denial/cancel/late-stream release, unavailable configuration, discard/retry, uploads,
+  draft/context handling, limits, attachments and desktop/mobile widths **1440/393/320**.
+- Model browser: both functional Bot providers in Manual/Automatic, direct policy toggles and nonempty
+  enforcement, effort/mode text-only selection, favorites persistence/derived highlight/recall, keyboard
+  focus, responsive layout and unchanged manual chat scrolling.
+- Broader chat browser smoke: login, streaming/selection, copy/archive/search, rename, recovery and
+  responsive controls without page errors or overflow. Final application JavaScript syntax passed.
+
+Prior native-start/latency assertions passed in both local diagnostic timing scenarios. They are
+supplementary fixture observations, not physical Android/iOS performance or hardware/permission UI
+acceptance. The deleted mock case adds no acceptance claim. Existing full recording and favorite
+behavioral tests are retained unchanged.
+
+Durable repair history remains **five rounds used** as recorded previously; it was not reset to the
+stale machine value of four. This is the owner's explicit acceptance/scope change, not a sixth repair
+attempt or another test/fix loop. Historical failed status sections below describe their respective
+attempts and are superseded for current acceptance by this section.
+
+## Checks for this limited change
+
+Commands ran sequentially in the retained workspace, with no application/runtime changes:
+
+| Command | Output/result |
+| --- | --- |
+| `PATH=/home/codex/projects/Linko-Bot-Manager/.venv/bin:$PATH ruff check scripts/probe_recording_start.py` | **All checks passed!** |
+| `git diff --check` | **Exit 0**, no output |
+| `git diff --exit-code HEAD -- ai_manager` before commit | **Exit 0**, no output: application tree unchanged |
+
+Raw lint output: `<workspace>/.data/model-recording-acceptance/lint.txt`; diff checks and their zero
+exit status are preserved in the execution record. Passing smoke/backend/browser results were not
+repeated for this diagnostic deletion/documentation change. Full backend suite remains the normal
+deployment script's responsibility. All earlier reports, screenshots, timing data and failure logs in
+`.data/model-recording-ux/` and `.data/model-recording-repair/` are retained, with no new device or live
+inference measurements claimed. Only a later application deployment result can establish activation.
+
+---
+
 # Authorized bounded repair continuation — 2026-10-15
 
 **RESULT: FAILED — startup probe hangs in pending-permission mock setup
