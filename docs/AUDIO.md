@@ -1,8 +1,9 @@
 # Recording-start path — 2026-10-15 unverified candidate
 
-**Delivery blocked:** the startup probe failed its UI/start-event ordering assertion. The durable
-repair budget is exhausted; no repair/retry or new deployment was performed. The source behavior
-described here is implemented but not accepted. See the combined report for exact checks and limits.
+**Delivery blocked:** corrected instrumentation passes native-start and latency assertions, and the
+full recording browser suite passes. The probe then hangs while setting up its pending-permission
+mock. The owner-expanded five-round repair budget is exhausted; no new deployment was performed.
+See the combined report for exact measurements, checks and remaining acceptance gap.
 
 Recording taps immediately render truthful **Starting microphone…** feedback, request permission
 in the click gesture, and fetch `/api/audio` metadata alongside device startup. There is no microphone

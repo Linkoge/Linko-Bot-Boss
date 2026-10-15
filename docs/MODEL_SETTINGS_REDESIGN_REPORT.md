@@ -1,3 +1,116 @@
+# Authorized bounded repair continuation — 2026-10-15
+
+**RESULT: FAILED — startup probe hangs in pending-permission mock setup
+(`scripts/probe_recording_start.py:102`, `page.evaluate(...)`).** The recording timing assertions and
+full recording/model/chat browser suites pass, but the complete startup probe does not finish.
+Candidate remains on the same retained assignment branch; no merge/deployment was performed or claimed.
+
+The latest owner verification policy explicitly expanded the limit from three to **five total rounds**,
+with three already used and two remaining. The historical three-round counter was preserved, not reset.
+Used rounds four and five below. **5 rounds used, 0 remaining.** Stopped implementation repairs after
+round five stalled; no replacement task, reviewer, parallel work, source-branch switch or scope change.
+No production/shared data, checkout, services, paused/cancelled/held work or native inference was touched.
+Base for this continuation: retained failed candidate `1e086d4`. Application code is unchanged here;
+only probe instrumentation and truthful documentation are updated.
+
+## Round four: correct causal instrumentation
+
+The previous probe attached its `start` listener in patched `MediaRecorder.start`, after the app had
+already installed its `onstart` handler. App mutations could be observed before that later listener,
+so its timestamp did not establish the beginning of native event dispatch.
+
+The probe now wraps recorder construction and installs native `start`/first-data listeners before the
+app can install its handlers. It also records the current app phase at each event. Verification keeps
+the timestamp inequality and adds the stronger assertion that phase is still **starting** when native
+start dispatch is first observed. No application source or desired behavior was relaxed.
+
+Command:
+`python scripts/probe_recording_start.py --verify --output .data/model-recording-repair/start-after.json`.
+The start/phase assertions passed in both scenarios. The run then failed with
+`KeyError: 'config-response'`: the probe read its events immediately after the first chunk, which the
+improved client can produce before the deliberately delayed metadata response. Partial event data
+is now written before assertions so failures retain observations. The round-four event data was copied
+to `start-round-4.json`, and the complete traceback remains in `probe-round-4.txt`.
+
+## Round five: wait for observations, then stop at another harness defect
+
+Added a probe-only wait for its configuration-response event before collecting/comparing timestamps.
+This changes no application scheduling and preserves every native-start, first-sample and user-gesture
+assertion. Both delay scenarios then passed all those assertions and persisted their complete data.
+
+The probe subsequently stalled at its extra privacy-case setup:
+
+```python
+page.evaluate("window.originalCapture=navigator.mediaDevices.getUserMedia;navigator.mediaDevices.getUserMedia=()=>new Promise(resolve=>window.grantLater=resolve)")
+```
+
+The hang is at that setup expression, **before** the case's recording tap or pagehide dispatch. It is
+not evidence of the application holding a microphone after pagehide. The expression's final value is
+a function that returns an unresolved permission promise; evaluator handling of that return value is
+a plausible harness cause. This was not repaired or waived with the budget exhausted. After more than
+two minutes without completion, SIGINT was sent only to the exact owned probe process, preserving its
+stack. Browser/context and temporary server cleanup followed. The interruption produces Playwright
+TargetClosed/pending-task diagnostics; these are harness shutdown output, not app page errors.
+No probe retry, deletion of the case, assertion relaxation or sixth repair round occurred.
+
+## Measured recording behavior
+
+Final corrected observations in `start-after.json` (Chromium fake audio device/auto-granted permission):
+
+| Event after deliberate tap | Normal local metadata | Metadata delayed by 600ms |
+| --- | --- | --- |
+| Permission request | 13.7ms | 1.1ms |
+| Starting UI observation | 17.2ms | 1.6ms |
+| Stream ready | 72.8ms | 15.0ms |
+| Native recorder start observed, app phase still starting | 133.7ms | 76.1ms |
+| Recording UI observation | 134.8ms | 77.3ms |
+| First recorded chunk | 377.8ms | 316.4ms |
+| Configuration response | 52.5ms | 615.6ms |
+
+For the preceding baseline's delayed scenario, permission was requested at 629.9ms and the first
+chunk arrived at 944.1ms. The corrected candidate observations demonstrate that the metadata network
+roundtrip no longer gates permission or initial capture, and Recording UI follows native start.
+These are individual local fixture runs, with warm-device/order effects and a 250ms chunk timeslice,
+not a device benchmark or physical-mobile improvement guarantee. Both permission requests retained
+user activation. Physical OS permission/device/encoder startup remains unmeasured and browser-dependent.
+Full end-to-end probe acceptance remains incomplete because its final setup hangs.
+
+## Remaining initial browser verification completed (not repeated)
+
+These checks were left unrun when the prior continuation exhausted its original budget. They ran once
+here, sequentially, on disposable temporary fixtures and ports:
+
+| Command | Result |
+| --- | --- |
+| `LINKO_AUDIO_EVIDENCE="$PWD/.data/model-recording-repair/audio" python scripts/browser_audio.py` | **passed**, real Chromium capture, fixture provider only, **28 uploads**, **6 chat submissions**, widths **1440/393/320** |
+| `LINKO_MODEL_EVIDENCE="$PWD/.data/model-recording-repair/models" python scripts/browser_model_scroll.py` | **passed**, settings persistence/policy/mobile/keyboard and manual scrolling during sends/streams/polling |
+| `LINKO_CHAT_EVIDENCE="$PWD/.data/model-recording-repair/chat" python scripts/browser_smoke.py` | **passed**, login/chat/copy/archive/search/rename/model/recovery/responsive behavior, no page errors/overflow |
+| `ruff check scripts/probe_recording_start.py` | **All checks passed!** |
+| `node --check ai_manager/static/app.js`, `model-settings.js`, `audio.js` | **exit 0**, final JS including the metadata-dependent Upload guard |
+| `git diff --check` | **passed** |
+
+The recording suite covers microphone denial, canceled permission/late tracks, unavailable metadata
+cleanup, draft/context preservation, discard/retry/checkpoint behavior, audio uploads and limits, busy
+manager/queued explicit Send, and recording Send with attachments. Model checks retain both functional
+Bot provider groups, direct Automatic allowances/nonempty rejection, exact effort/mode surfaces,
+favorites insert/derived highlight/recall and mobile focus/layout. The intentional last-allow errors
+and preexisting Starlette/httpx deprecation warning remain expected outputs.
+
+Previously passing results retained without repetition: **37 smoke tests** and **73 targeted backend
+tests**, lint of all changed Python files, plus the async favorite browser suite covering immediate
+close/focus, actual persisted fast-Send route, duplicate prevention, stale/unavailable/network failures,
+draft retention and reopened-modal races. No backend/application change in this continuation justified
+repeating them. The full backend suite remains reserved for deployment.
+
+Durable evidence directory:
+`/home/codex/.local/share/linko-bot-manager/assignment-workspaces/4a985c35b51345ada354cd666acbf80e/.data/model-recording-repair/`.
+Files: `probe-round-4.txt`, `start-round-4.json`, `probe-round-5.txt`, `start-after.json`,
+`browser-audio.txt`, `browser-model-scroll.txt`, `browser-smoke.txt`, `lint.txt`, and screenshot/results
+subdirectories `audio/`, `models/`, `chat/`. Prior raw evidence under `.data/model-recording-ux/` is
+unchanged. Reports below are historical; this section is the current acceptance and repair record.
+
+---
+
 # Immediate favorite recall / recording startup — 2026-10-15
 
 **RESULT: FAILED — `scripts/probe_recording_start.py --verify`: assertion
