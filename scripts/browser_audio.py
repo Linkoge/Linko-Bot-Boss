@@ -74,6 +74,9 @@ def main():
                     time.sleep(0.4)
                     route.continue_()
                 page.route('**/static/audio.js', delayed_audio)
+                page.add_init_script('''window.audioProbeStreams=[];window.audioProbePending=0;
+                    const capture=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+                    navigator.mediaDevices.getUserMedia=(...a)=>{audioProbePending++;return capture(...a).then(s=>{audioProbeStreams.push(s);return s;}).finally(()=>audioProbePending--);};''')
                 page.goto(url)
                 page.locator('#username').fill('owner')
                 page.locator('#password').fill('disposable-browser-password')
@@ -401,12 +404,12 @@ def main():
                 page.wait_for_function("()=>window.lateStream.getTracks().every(track=>track.readyState==='ended')")
                 page.evaluate('()=>{navigator.mediaDevices.getUserMedia=window.savedGetUserMedia}')
 
-                # Missing server setup fails before requesting a microphone.
+                # Missing server setup fails visibly and releases any acquired/late microphone.
                 page.route('**/api/audio', lambda route: route.fulfill(json={'available': False, 'reason': 'Audio needs XAI_API_KEY in the server environment.'}))
                 page.locator('#microphone').click()
                 page.wait_for_function("()=>audioState.session?.phase==='error'")
                 assert 'XAI_API_KEY' in page.locator('#audio-status').inner_text()
-                assert not page.evaluate('!!audioState.session.stream')
+                page.wait_for_function('()=>audioProbePending===0&&audioProbeStreams.every(s=>s.getTracks().every(t=>t.readyState==="ended"))')
                 page.locator('#audio-cancel').click()
                 page.unroute('**/api/audio')
 

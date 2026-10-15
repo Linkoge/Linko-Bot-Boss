@@ -449,3 +449,27 @@ def test_bot_mode_both_providers_atomic_and_routes_remain_independent(tmp_path):
             set_active(app.state.db, provider)
             pair = panel['providers'][provider]['settings']['bot']['manual']
             assert {k: delegation(app.state.db, app.state.chat.server)[k] for k in pair} == pair
+
+
+def test_expected_favorite_guards_late_recall_and_slot_replacement(tmp_path):
+    from test_claude_provider import BothServer
+
+    settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
+    app = create_app(settings, BothServer(settings), BothServer)
+    with TestClient(app, base_url='http://localhost') as client:
+        sign_in(client, app, settings)
+        first = client.get('/api/model-settings').json()
+        slot = client.put('/api/manager-favorites/0').json()[0]
+        expected = {'provider': slot['provider'], 'pair': slot['pair'], 'revision': first['settings']['revision']}
+        updated = first['settings']
+        updated['manager'] = {'model': MODELS['Astra'], 'effort': 'high'}
+        saved = client.put('/api/model-settings', json=updated).json()
+        assert client.post('/api/manager-favorites/0/recall', json=expected).status_code == 409
+        assert client.get('/api/model-settings').json()['settings'] == saved
+        expected['revision'] = saved['revision']
+        client.put('/api/manager-favorites/0').raise_for_status()
+        assert client.post('/api/manager-favorites/0/recall', json=expected).status_code == 409
+        expected['pair'] = saved['manager']
+        recalled = client.post('/api/manager-favorites/0/recall', json=expected)
+        recalled.raise_for_status()
+        assert recalled.json()['settings']['manager'] == saved['manager']

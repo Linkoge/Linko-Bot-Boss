@@ -1,3 +1,41 @@
+# Recording-start path — 2026-10-15 verified candidate
+
+Ready for normal application-managed delivery; no new deployment receipt is claimed. The owner
+explicitly removed the optional startup probe from acceptance and authorized removal of its hanging
+pending-permission mock case. The complete recording browser suite, model/chat browser checks,
+smoke and targeted backend tests passed. The probe remains an optional local timing diagnostic;
+its retained native-start and latency observations do not establish physical-device performance.
+Current acceptance and historical failures: [combined report](MODEL_SETTINGS_REDESIGN_REPORT.md).
+
+Recording taps immediately render truthful **Starting microphone…** feedback, request permission
+in the click gesture, and fetch `/api/audio` metadata alongside device startup. There is no microphone
+prewarm or unsolicited capture. Local supported encoder selection uses the existing WebM/Opus,
+Ogg/Opus, MP4 preference; server MIME types remain hints, as in the format pass-through contract.
+MediaRecorder starts immediately when the granted stream arrives and retains its opening chunks,
+even while configuration is pending. The UI enters Recording and starts its elapsed timer only on
+the native recorder `start` event. Configuration must resolve successfully before transcription;
+limits apply when known, with the existing 15-second configuration read deadline bounding missing
+configuration, and a 30-second pending-start deadline. Errors stop capture and retain any captured
+bytes for explicit review/discard/retry. Unavailable configuration may briefly request permission on an
+explicit tap before its response arrives; acquired and late-arriving streams are stopped on failure.
+
+Discard, auth/view changes, pagehide/freeze and hidden-during-start cancel the pending session;
+late permission results stop their tracks without resurrecting capture. Existing foreground recording,
+background warnings, interruption checks, stop/Send/Upload, draft/context fencing, IndexedDB recovery,
+limits and safe whole-file transcription remain. Network metadata completion never discards initial
+audio from a successful start. Keyboard focus behavior is unchanged.
+
+Inspection found no provider inference or STT call at recording startup: `/api/audio` only checks local
+configuration/ffprobe availability. The old client nevertheless awaited that request before asking for
+the microphone. In a local Chromium fake-device probe, adding 600ms response delay moved permission
+request from 35.2ms (ordinary local request) to 629.9ms after tap. The old UI claimed Recording at
+643.7ms although its recorder start event arrived at 704.0ms. These are reproducible fixture observations,
+not physical Android/iOS or real permission-prompt timings. Actual device startup and permission UI
+remain browser/OS dependent. Probe, candidate timings, verification and delivery limits are in the
+[combined durable report](MODEL_SETTINGS_REDESIGN_REPORT.md). No new live deployment is claimed here.
+
+---
+
 # Approved recording row and parallel Send — 2026-10-14
 
 [Composer contract](chat-history.md) supersedes previous layout descriptions: + / Record / Send right

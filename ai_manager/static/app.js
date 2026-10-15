@@ -24,6 +24,15 @@ const appliedTranscripts=new Set(draftRecovery.transcripts||[]);
 const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
 const submissionKey = 'linko-chat-submissions-v1';
 const submissions = new Map(JSON.parse(sessionStorage.getItem(submissionKey)||'[]'));
+// Settings intents and owner chat acceptance share one order, including background favorite recall.
+let modelIntentQueue=Promise.resolve(),modelSelectionError=null;
+function orderModelIntent(run){const next=modelIntentQueue.then(run);modelIntentQueue=next.catch(()=>{});return next;}
+function submitWithModelSelection(submission){
+  return orderModelIntent(()=>{
+    if(modelSelectionError){const error=new Error('Message not sent: '+modelSelectionError+' Choose a Manager selection again before sending.');error.modelBlocked=true;throw error;}
+    return api('/api/chat',{method:'POST',body:JSON.stringify(submission)});
+  });
+}
 function saveDrafts(){try{sessionStorage.setItem('linko-drafts-v1',JSON.stringify({drafts:[...state.drafts],transcripts:[...appliedTranscripts]}));}catch{notice('Draft recovery storage unavailable. Keep this tab open.');}}
 function saveSubmissions(){sessionStorage.setItem(submissionKey,JSON.stringify([...submissions]));}
 const element = (tag, text, cls) => {const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
@@ -492,13 +501,14 @@ async function sendSubmission(bound=null,parallel=false){
   state.pending.add(project);$('send').disabled=true;renderAttachments();
   let accepted=false;
   try{
-    await api('/api/chat',{method:'POST',body:JSON.stringify(submission)});
+    await submitWithModelSelection(submission);
     accepted=true;clearSentAttachments(project,submission.attachment_ids||[]);
     submissions.delete(project);saveSubmissions();
     if(state.drafts.get(project)===submission.content)state.drafts.set(project,'');saveDrafts();
     if(selection===state.selection){if($('message-input').value===submission.content)$('message-input').value='';await loadHistory(selection);}
   }catch(error){
-    if(accepted){if(selection===state.selection)updatesUnavailable(error,'history');error.ambiguous=true;error.message='Message accepted. Saved response unavailable; updates will retry.';}
+    if(error.modelBlocked){submissions.delete(project);saveSubmissions();}
+    else if(accepted){if(selection===state.selection)updatesUnavailable(error,'history');error.ambiguous=true;error.message='Message accepted. Saved response unavailable; updates will retry.';}
     else if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){submissions.delete(project);saveSubmissions();}
     else{error.ambiguous=true;error.message='Acceptance is unconfirmed. Your saved request will be checked on return or Send.';}
     throw error;
@@ -670,7 +680,7 @@ async function startTodo(entry){
     todoStarts.set(key,request);saveTodoStarts();
   }
   try{
-    await api('/api/chat',{method:'POST',body:JSON.stringify(request)});
+    await submitWithModelSelection(request);
     todoStarts.delete(key);saveTodoStarts();
   }catch(error){
     // Keep the exact request across ambiguous network failures. A later deliberate

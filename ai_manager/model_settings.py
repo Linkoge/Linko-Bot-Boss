@@ -246,7 +246,7 @@ def insert_favorite(db, server, slot):
     return favorites(db, server)
 
 
-def recall_favorite(db, server, slot):
+def recall_favorite(db, server, slot, expected=None):
     if slot not in (0, 1):
         raise ValueError('Choose favorite slot 1 or 2')
     item = favorites(db, server)[slot]
@@ -254,6 +254,10 @@ def recall_favorite(db, server, slot):
         raise ValueError('Favorite unavailable; insert a supported Manager selection to replace it')
     provider = item['provider']
     config = current(db, server, provider)
+    if expected is not None and (not isinstance(expected, dict) or set(expected) != {'provider', 'pair', 'revision'}
+                                 or type(expected['revision']) is not int or expected['provider'] != provider
+                                 or expected['pair'] != item['pair'] or expected['revision'] != config['revision']):
+        raise ValueError('Favorite or settings changed; reopen settings before recalling')
     config['manager'] = item['pair']
     return save(db, server, {**config, 'provider': provider}, activate=True)
 
