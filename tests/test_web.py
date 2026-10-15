@@ -125,7 +125,7 @@ def test_portfolio_project_scope_never_reassigns_tasks(client):
     a, b = tasks.add(one, 'A'), tasks.add(two, 'B')
     # Keep this read-only scope fixture independent of scheduler dispatch.
     with app.state.db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='waiting'")
+        conn.execute("UPDATE tasks SET held=1")
     assert {t['id'] for t in browser.get('/api/portfolio').json()['tasks']} == {a['id'], b['id']}
     for project, expected in ((one, a['id']), (two, b['id']), (one, a['id'])):
         result = browser.get('/api/portfolio', params={'project_id': project}).json()

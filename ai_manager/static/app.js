@@ -231,25 +231,20 @@ function taskControlButton(task,label,command){
   return button;
 }
 function appendTaskControls(controls,t){
-  if(['cancelled','cancel_requested'].includes(t.status))return;
-  if(t.lease_owner){
-    if(t.status!=='pause_requested')controls.append(taskControlButton(t,'Pause','pause'));
-    controls.append(taskControlButton(t,'Cancel','cancel'));
-  }else{
-    if(t.status!=='queued')controls.append(taskControlButton(t,t.status==='paused'?'Resume':'Continue','continue'));
-    if(!['paused','completed','failed'].includes(t.status))controls.append(taskControlButton(t,'Pause','pause'));
-    if(t.status!=='completed')controls.append(taskControlButton(t,'Cancel','cancel'));
-  }
+  if(t.status==='running')controls.append(taskControlButton(t,'Cancel','cancel'));
+  else if(t.status==='queued')controls.append(taskControlButton(t,'Hold','hold'),taskControlButton(t,'Cancel','cancel'));
+  else if(t.status==='held')controls.append(taskControlButton(t,'Release','release'),taskControlButton(t,'Cancel','cancel'));
+  else if(t.status==='failed')controls.append(taskControlButton(t,'Continue','continue'));
 }
-function taskStateLabel(status){return ({pause_requested:'Pause requested · waiting for checkpoint',cancel_requested:'Cancel requested · waiting for termination',paused:'Paused · progress retained',cancelled:'Cancelled · partial work retained'})[status]||status;}
+function taskStateLabel(status){return ({held:'Held · skipped until released',done:'Done',failed:'Failed'})[status]||status;}
 function renderTasks(){
   const tasks=state.portfolio.tasks.filter(t=>!state.project||t.project_id===state.project);
-  const count=tasks.filter(t=>['queued','running','waiting','paused','pause_requested','cancel_requested'].includes(t.status)).length;
+  const count=tasks.filter(t=>['queued','running','held'].includes(t.status)).length;
   $('task-count').textContent=count;$('task-count').hidden=count===0;$('task-list').replaceChildren();
   for(const t of tasks){
     const row=element('article',undefined,'panel');row.dataset.taskId=t.id;
-    row.append(element('h3',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.retry_at?recoveryLabel(t):t.blocker));
-    if(t.legacy&&!['completed','cancelled','failed'].includes(t.status))row.append(element('small','Historical work: continuation inspects existing source and saved results.'));
+    row.append(element('h3',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
+    if(t.rounds)row.append(element('small',`Repair rounds ${t.rounds} of ${t.round_limit}`+(t.checkpoints?.length?` · ${t.checkpoints.at(-1).decision}: ${t.checkpoints.at(-1).reason}`:'')));
     const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));appendTaskControls(controls,t);
     const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});
     controls.append(records);row.append(controls);$('task-list').append(row);
@@ -492,12 +487,12 @@ function editor(title,fields,onSave,reloadContext=true){
 }
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:['active','paused','archived','removed'].map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
-async function sendSubmission(bound=null,parallel=false){
+async function sendSubmission(bound=null){
   if(audioState.session||attachmentState.uploads.has(bound?bound.project_id:state.project))return;
   const project=bound?bound.project_id:state.project,selection=state.selection;
   if(state.pending.has(project))return;
   let submission=submissions.get(project);
-  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id),parallel:bound?!!bound.parallel:parallel};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
+  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id)};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
   state.pending.add(project);$('send').disabled=true;renderAttachments();
   let accepted=false;
   try{
@@ -515,7 +510,6 @@ async function sendSubmission(bound=null,parallel=false){
   }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=state.pending.has(project);updateChatActions();renderAttachments();}}
 }
 $('chat-form').onsubmit=action(async event=>{event.preventDefault();if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length&&!submissions.has(state.project))return;await sendSubmission();});
-$('parallel-send').onclick=async event=>{await action(async()=>{if(audioState.session?.phase==='recording'){finishAudio(true,true);return;}if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length&&!submissions.has(state.project))return;await sendSubmission(null,true);})(event);renderAudio();};
 $('message-input').addEventListener('input',()=>{state.drafts.set(state.project,$('message-input').value);saveDrafts();});
 // Cancel only pointer press focus transfer. Click/keyboard activation remains native;
 // in particular file-picker activation must stay synchronous inside its trusted click.
@@ -594,11 +588,6 @@ function updateComposer(){
   form.classList.toggle('composer-recording',recording&&audioState.session?.phase==='recording');
   form.classList.toggle('composer-caret',focused&&!document.hidden&&(!mobile||(composerKeyboard.seen&&!composerKeyboard.closed)));
   $('send').hidden=!active;
-  const relevant=state.project&&(state.portfolio?.tasks||[]).some(task=>task.project_id===state.project&&(['queued','running','waiting','paused','pause_requested','cancel_requested'].includes(task.status)||(task.job_followup&&['actionable','review'].includes(task.job_followup.state))));
-  const parallel=active&&!!relevant&&$('chat-mode').value!=='conversation';
-  $('parallel-send').hidden=!parallel;
-  $('parallel-send').disabled=$('send').disabled||submissions.has(state.project);
-  form.classList.toggle('composer-parallel',parallel);
   // Measure at the initial active size, independent of the previous overflow size.
   form.style.setProperty('--composer-height',(active?140:92)+'px');
   form.classList.toggle('composer-overflow',false);

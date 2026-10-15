@@ -12,11 +12,10 @@ from test_web import sign_in
 
 from ai_manager.chat import Chat
 from ai_manager.codex import safe_config
+from ai_manager.core import Core, Tasks
 from ai_manager.orchestration import Scheduler
-from ai_manager.pipeline import atomic
+from ai_manager.pipeline import Pipeline, atomic
 from ai_manager.project_memory import MAXIMUM, MemoryReviews, ProjectMemory, encode
-from ai_manager.tasks import Tasks
-from ai_manager.workers import Workers
 
 system = system_fixture
 client = client_fixture
@@ -87,7 +86,7 @@ async def test_archive_excluded_from_fresh_prompt_and_explicitly_retrievable(sys
     prompt, _ = chat.prompt(fresh, "new question", "auto", "new", "new-thread", None)
     assert "archived project evidence" not in encode(prompt)
     assert prompt["context"]["project_brief"]["goals"] == before["brief"]["goals"]
-    scheduler = Scheduler(db, registry, settings, Workers(db, registry, settings, NativeFixture), chat)
+    scheduler = Scheduler(db, registry, settings, Core(db, registry, settings, Pipeline(db, registry), NativeFixture), chat)
 
     async def read(action, **extra):
         return await scheduler.manager_action(
@@ -224,7 +223,7 @@ async def test_workers_receive_focused_acceptance_and_selected_context_only(syst
         servers.append(server)
         return server
 
-    workers = Workers(db, registry, settings, factory)
+    workers = Core(db, registry, settings, Pipeline(db, registry), factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     origin = chat.conversation(project)["id"]
     task = await scheduler.manager_action(
@@ -244,7 +243,7 @@ async def test_workers_receive_focused_acceptance_and_selected_context_only(syst
             },
         },
     )
-    workers.launch(Tasks(db).claim(2))
+    workers.launch(Tasks(db).claim())
     await settled(workers)
     prompt = json.loads(servers[-1].prompts[-1])
     assert prompt["objective"] == "Fix selected feature"
@@ -256,7 +255,7 @@ async def test_workers_receive_focused_acceptance_and_selected_context_only(syst
     }
     assert "project_brief" not in prompt and "owner_notes" not in prompt and "global_instructions" not in prompt
     assert "Persistent owner goals" not in encode(prompt)
-    assert Tasks(db).get(task["id"])["status"] == "completed"
+    assert Tasks(db).get(task["id"])["status"] == "done"
 
 
 def test_candidate_diff_preservation_apply_rollback_and_ambiguous_keep(system):

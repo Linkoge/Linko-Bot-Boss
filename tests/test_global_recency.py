@@ -5,8 +5,8 @@ import json
 import pytest
 from test_minimal_flow import system as system
 
+from ai_manager.core import Tasks
 from ai_manager.db import Database
-from ai_manager.tasks import Tasks
 
 
 def test_global_backfill_is_once_preserves_rows_and_survives_history_removal(system):
@@ -63,7 +63,7 @@ async def test_only_accepted_submissions_and_assignments_update_recency(system, 
     task = Tasks(db).add(project['id'], 'Accepted assignment')
     assert registry.get(project['id'])['last_used_at'] == 1200
     clock[0] = 1300
-    claimed = Tasks(db).claim(2)
+    claimed = Tasks(db).claim()
     assert claimed['id'] == task['id']
     assert registry.get(project['id'])['last_used_at'] == 1300
     assert Database(db.path).setting('global_last_used_at') == 1100

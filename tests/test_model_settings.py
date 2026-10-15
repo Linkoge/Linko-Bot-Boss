@@ -9,13 +9,13 @@ from test_web import sign_in
 
 from ai_manager.chat import Chat
 from ai_manager.config import Settings
+from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.model_settings import MODELS, assignment_route, current, delegation, permitted, save
 from ai_manager.orchestration import Scheduler
+from ai_manager.pipeline import Pipeline
 from ai_manager.registry import Registry
-from ai_manager.tasks import Tasks
 from ai_manager.web import create_app
-from ai_manager.workers import Workers
 
 
 class CatalogServer(FakeServer):
@@ -50,7 +50,7 @@ def system(tmp_path):
     registry.add(root / 'one')
     server = CatalogServer(settings)
     chat = Chat(db, registry, server)
-    workers = Workers(db, registry, settings, CatalogServer)
+    workers = Core(db, registry, settings, Pipeline(db, registry), CatalogServer)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
     return db, registry, settings, server, chat, workers, scheduler
@@ -123,7 +123,7 @@ async def test_manager_delegation_pins_actual_worker_turn_and_resume(system):
               'arguments': {'action': 'delegate', 'objective': 'Small deterministic change', 'worker_route': pair}}
     result = await scheduler.manager_action(project, params)
     assert result['worker_route'] == {**pair, 'mode': 'automatic', 'settings_revision': config['revision']}
-    task = Tasks(db).claim(2)
+    task = Tasks(db).claim()
     await workers._run(task)
     execution = db.one('SELECT * FROM executions WHERE id=?', (task['lease_owner'],))
     assert execution['status'] == 'completed'
@@ -140,11 +140,11 @@ async def test_manager_delegation_pins_actual_worker_turn_and_resume(system):
     config['bot']['policy'][MODELS['Luna']]['allowed'] = False
     save(restored, server, config)
     with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='queued' WHERE id=?", (task['id'],))
-    resumed = Tasks(db).claim(2)
+        conn.execute("UPDATE tasks SET state='queued',lease_owner=NULL WHERE id=?", (task['id'],))
+    resumed = Tasks(db).claim()
     before = len(CatalogServer.turns)
     await workers._run(resumed)
-    assert Tasks(db).get(task['id'])['status'] == 'waiting'
+    assert Tasks(db).get(task['id'])['status'] == 'failed' and 'denied' in Tasks(db).get(task['id'])['blocker']
     assert len(CatalogServer.turns) == before
     assert Tasks(db).get(task['id'])['worker_route']['model'] == pair['model']
     assert Tasks(db).get(task['id'])['native_thread'] == execution['thread_id']
@@ -189,7 +189,7 @@ def test_manual_override_and_pre_feature_resume(system):
     explicit = config['bot']['manual']
     assert {k: delegation(db, server, {'model': MODELS['Astra'], 'effort': 'high'})[k] for k in explicit} == explicit
     task = Tasks(db).add(registry.list()[0]['id'], 'Existing task')
-    claim = Tasks(db).claim(2)
+    claim = Tasks(db).claim()
     with db.transaction() as conn:
         conn.execute('UPDATE executions SET model=?,effort=? WHERE id=?', (MODELS['Sol'], 'high', claim['lease_owner']))
     config['bot']['mode'] = 'automatic'
@@ -204,7 +204,7 @@ async def test_policy_edit_during_thread_start_blocks_dispatch(system):
     config = restricted(db, server)
     pair = {'model': MODELS['Luna'], 'effort': 'high'}
     task = Tasks(db).add(registry.list()[0]['id'], 'Delayed thread preparation', model_route=delegation(db, server, pair))
-    claim = Tasks(db).claim(2)
+    claim = Tasks(db).claim()
 
     class DenyingServer(CatalogServer):
         async def thread(self, *args, **kwargs):
@@ -213,9 +213,9 @@ async def test_policy_edit_during_thread_start_blocks_dispatch(system):
             return await super().thread(*args, **kwargs)
 
     before = len(CatalogServer.turns)
-    await Workers(db, registry, settings, DenyingServer)._run(claim)
+    await Core(db, registry, settings, Pipeline(db, registry), DenyingServer)._run(claim)
     assert len(CatalogServer.turns) == before
-    assert Tasks(db).get(task['id'])['status'] == 'waiting'
+    assert Tasks(db).get(task['id'])['status'] == 'failed' and 'denied' in Tasks(db).get(task['id'])['blocker']
     assert db.one('SELECT launch_key FROM executions WHERE id=?', (claim['lease_owner'],))['launch_key'] == 'not-started'
 
 

@@ -1,22 +1,20 @@
-"""Direct manager delegation and an always-on project queue."""
+"""Manager actions and the scheduler loop that drives the task core."""
 
 import asyncio
+import hashlib
 import json
 import logging
-import time
 
 from .chat import internal_result
-from .parallel import policy, reserve_integration
-from .pipeline import Pipeline
+from .core import Tasks
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
-from .tasks import Tasks
 from .todos import Todos
 
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Record/update deferred ideas, delegate/control assignments and projects, or retrieve scoped evidence/history. Deploy only when the owner asks to deploy now (optionally with task_id of a finished assignment to merge first); Auto-deploy ON merges and deploys finished work by itself. Read actions support offset pagination.",
+    "description": "Record deferred ideas, delegate and control tasks and projects, or retrieve scoped evidence/history. Deploy only when the owner asks to deploy now (optionally with task_id of a finished task to merge first); Auto-deploy ON merges and deploys passing work by itself. Read actions support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -29,11 +27,9 @@ MANAGER_TOOL = {
                     "save_todo",
                     "delegate",
                     "continue",
-                    "integrate_assignment",
-                    "pause",
+                    "hold",
+                    "release",
                     "cancel",
-                    "wait",
-                    "job_followup",
                     "read_document",
                     "read_memory",
                     "read_project",
@@ -72,19 +68,11 @@ MANAGER_TOOL = {
             "todos": {"type": "array", "minItems": 1, "maxItems": 200, "items": {
                 "type": "object", "properties": {"id": {"type": "string"}, "revision": {"type": "integer"}},
                 "required": ["id", "revision"], "additionalProperties": False}},
-            "owner_parallel_quote": {"type": "string"},
-            "parallel_safe": {"type": "boolean"},
-            "parallel_reason": {"type": "string"},
-            "change_paths": {"type": "array", "items": {"type": "string"}},
-            "batch": {"type": "boolean"},
-            "depends_on": {"type": "array", "items": {"type": "string"}},
-            "task_ids": {"type": "array", "items": {"type": "string"}},
             "title": {"type": "string"},
             "details": {"type": "string"},
             "revision": {"type": "integer", "minimum": 0},
             "path": {"type": "string"},
             "reason": {"type": "string"},
-            "followup_state": {"type": "string", "enum": ["actionable", "owner_wait", "deferred", "complete"]},
             "query": {"type": "string"},
             "message_id": {"type": "string"},
             "offset": {"type": "integer", "minimum": 0},
@@ -96,14 +84,13 @@ MANAGER_TOOL = {
 
 
 class Scheduler:
-    def __init__(self, db, registry, settings, workers, chat):
-        self.db, self.registry, self.settings, self.workers, self.chat = db, registry, settings, workers, chat
+    def __init__(self, db, registry, settings, core, chat, pipeline=None):
+        self.db, self.registry, self.settings, self.core, self.chat = db, registry, settings, core, chat
         self.observer = SilentObserver(db)
         self.tasks, self.job = Tasks(db), None
         self.lock = asyncio.Lock()
         self.error = ""
-        self.followup_check_at = 0.0
-        self.pipeline = Pipeline(db, registry)
+        self.pipeline = pipeline or core.pipeline
 
     async def manager_action(self, selected_project, params):
         args = params["arguments"]
@@ -112,10 +99,6 @@ class Scheduler:
         if params["tool"] != "manager_action":
             raise ValueError("Unknown manager action")
         action = args["action"]
-        integrating = action == 'integrate_assignment'
-        if integrating:
-            action = 'continue'
-            args = {**args, 'objective': 'Perform serialized integration in this retained workspace. Merge the exact source commits listed in execution_policy.sources, preserve all branches on conflict, review conflicts sequentially and validate the complete combined candidate. Preserve prior requirements. Prepare evidence; do not deploy or push.'}
         execution = self.db.one(
             "SELECT stop_requested,finished_at,rowid AS queue_position FROM executions WHERE id=?", (params.get("manager_execution_id"),)
         )
@@ -126,25 +109,10 @@ class Scheduler:
             sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
             if sources:
                 args = {**args, 'todos': sources}
-        if internal and action in {'resume_project', 'deploy'}:
-            raise ValueError('Internal results/recovery are not owner authorization for deployment or project resume')
-        if args.get("todos") and (internal or action not in {"delegate", "continue"}):
+        if internal and action in {'delegate', 'continue', 'hold', 'release', 'cancel', 'resume_project', 'deploy'}:
+            raise ValueError('Worker result notices are not explicit owner authorization; the owner decides what happens next')
+        if args.get("todos") and action not in {"delegate", "continue"}:
             raise ValueError("To-Do handoff requires explicit owner scheduling")
-        if internal and action == 'delegate':
-            source_task = self.db.one('SELECT lifecycle,lease_owner FROM tasks WHERE id=?', (params.get('internal_task'),))
-            if not source_task or source_task['lifecycle'] != 'completed' or source_task['lease_owner']:
-                raise ValueError('Repair the existing assignment; unfinished/failed results cannot create a replacement task')
-        if internal and action in {'continue', 'delegate'}:
-            from .assignment_workflow import get
-            target_id = args.get('task_id') if action == 'continue' else params.get('internal_task')
-            with self.db.transaction() as conn:
-                held = conn.execute('SELECT id,lifecycle FROM tasks WHERE id=?', (target_id,)).fetchone()
-                workflow = get(conn, target_id) if held else None
-                if held and (held['lifecycle'] in {'paused', 'waiting', 'cancelled', 'pause_requested', 'cancel_requested'} or
-                             ((workflow or {}).get('state') in {'owner_wait', 'deferred'}
-                              or ((workflow or {}).get('state') == 'complete'
-                                  and not (workflow or {}).get('automatic_completion')))):
-                    raise ValueError('Owner pauses/waits are retained; explicit owner continuation is required')
         if action == 'deployment_status':
             return self.pipeline.status()
         if action == 'deploy':
@@ -156,8 +124,10 @@ class Scheduler:
             if args.get('task_id'):
                 task = self.tasks.get(args['task_id'])
                 if task['project_id'] != project_id:
-                    raise ValueError('Assignment belongs to another project')
-                await self.pipeline.merge_assignment(task['id'])
+                    raise ValueError('Task belongs to another project')
+                self.tasks.request_merge(task['id'])
+                return {'merge': 'requested', 'task_id': task['id'],
+                        'next': 'the worker merges it and a deploy is requested when the merge succeeds'}
             return self.pipeline.request(project_id, 'owner', args.get('task_id'), params['conversation_id'],
                                          args.get('reason', 'owner requested deploy'))
         offset = args.get("offset", 0)
@@ -223,8 +193,6 @@ class Scheduler:
         if not project_id or (selected_project and selected_project != project_id):
             raise ValueError("Select the intended project; cross-project work requires All Projects context")
         project = self.registry.get(project_id)
-        if internal and action in {'continue', 'delegate'} and project['status'] != 'active':
-            raise ValueError('Internal review cannot schedule work in a paused project')
         if action == "save_todo":
             # Deferred recording is allowed in every mode and never calls Tasks.add/control.
             return Todos(self.db).save(project_id, args["title"], args.get("details", ""),
@@ -258,118 +226,41 @@ class Scheduler:
             raise ValueError("Selected task context must be at most 12000 characters")
         if action == "delegate":
             if args.get("task_id"):
-                raise ValueError("Use continue to bundle instructions into an existing assignment")
+                raise ValueError("Use continue to add instructions to an existing task")
             from .model_settings import delegation
-            execution_policy = policy(self.db, params, args, project_id)
             await self.chat.server.start()
             route = delegation(self.db, self.chat.server, args.get('worker_route'))
             task = self.tasks.add(
                 project_id, args["objective"], params["conversation_id"],
-                params["manager_execution_id"] + ":" + project_id,
+                f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",
                 acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
-                execution_policy=execution_policy, batch=args.get('batch') is True,
             )
-            return {**self.tasks.context(task), **({'batched': True} if task.get('batched') else {})}
-        if action == 'job_followup':
-            task = self.tasks.get(args['task_id'])
-            state, reason = args.get('followup_state'), args.get('reason', '').strip()
-            if task['project_id'] != project_id or state not in {'actionable', 'owner_wait', 'deferred', 'complete'} or not reason:
-                raise ValueError('Follow-up needs the existing assignment, a state and review/reason')
-            if state in {'complete', 'actionable'} and (task['lease_owner'] or task['status'] not in {'completed', 'failed'}):
-                raise ValueError('Review the inactive worker result first; use explicit continue for held work')
-            from .assignment_workflow import get, update
-            with self.db.transaction() as conn:
-                actual = conn.execute('SELECT lifecycle,lease_owner FROM tasks WHERE id=?', (task['id'],)).fetchone()
-                if state in {'complete', 'actionable'} and (actual['lease_owner'] or actual['lifecycle'] not in {'completed', 'failed'}):
-                    raise ValueError('Assignment changed while recording follow-up')
-                previous = get(conn, task['id'])
-                if internal and state == 'actionable' and previous and (previous['state'] in {'owner_wait', 'deferred'}
-                        or (previous['state'] == 'complete' and not previous.get('automatic_completion'))):
-                    raise ValueError('An internal result cannot reopen held or completed work')
-                return update(self.db, conn, task['id'], state, reason, params['manager_execution_id'], reset_retry=not internal)
-        if action == "wait":
-            task = self.tasks.get(args["task_id"])
-            reason = args.get("reason", "").strip()
-            if task["project_id"] != project_id or task["lease_owner"] or task["status"] == "cancelled" or not reason:
-                raise ValueError("Waiting needs an inactive assignment in this project and a reason")
-            with self.db.transaction() as conn:
-                changed = conn.execute(
-                    "UPDATE tasks SET lifecycle='waiting',blocker=?,revision=revision+1 WHERE id=? AND revision=? AND lease_owner IS NULL",
-                    (reason[:2000], task["id"], task["revision"]),
-                )
-                if changed.rowcount != 1:
-                    raise ValueError("Assignment changed while recording the wait")
-                from .assignment_workflow import update
-                update(self.db, conn, task["id"], "owner_wait", reason)
-                self.db.event(conn, "task.waiting", {"reason": reason[:2000]}, project_id, task["id"])
-            return self.tasks.context(self.tasks.get(task["id"]))
-        if action in {"pause", "cancel"}:
+            return self.tasks.context(task)
+        if action in {"hold", "release", "cancel", "continue"}:
             task = self.tasks.get(args["task_id"])
             if task["project_id"] != project_id:
-                raise ValueError("Assignment belongs to another project")
-            if task["status"] in {"cancelled", action + "_requested"} or (action == "pause" and task["status"] == "paused"):
-                return self.tasks.context(task)
-            return self.tasks.context(await self.workers.control(task["id"], action, args.get("revision", task["revision"])))
-        if action == "continue":
-            task = self.tasks.get(args["task_id"])
-            if task["project_id"] != project_id:
-                raise ValueError("Assignment belongs to another project")
-            with self.db.transaction() as conn:
-                previous = conn.execute(
-                    "SELECT payload FROM events WHERE kind='manager.continued' AND execution_id=? AND task_id=?",
-                    (params["manager_execution_id"], task["id"]),
-                ).fetchone()
-                if previous:
+                raise ValueError("Task belongs to another project")
+            if action == "continue":
+                with self.db.transaction() as conn:
+                    previous = conn.execute(
+                        "SELECT 1 FROM events WHERE kind='manager.continued' AND execution_id=? AND task_id=?",
+                        (params["manager_execution_id"], task["id"])).fetchone()
+                    if previous:
+                        return self.tasks.context(task)  # replayed call
                     if args.get("todos"):
                         Todos(self.db).consume(conn, args["todos"], project_id, task["id"])
-                    return self.tasks.context(self.tasks.get(task["id"]))
-                if task["lease_owner"] or task["status"] in {"cancelled", "queued", "running", "pause_requested", "cancel_requested"}:
-                    raise ValueError("Wait for confirmed pause/cleanup before bundling this assignment")
-                if integrating:
-                    reserve_integration(self.db, conn, task, args.get('task_ids', []))
-                elif self.db.setting('assignment_policy:' + task['id'], {}).get('integration'):
-                    p = self.db.setting('assignment_policy:' + task['id'])
-                    reserve_integration(self.db, conn, task, [v['task_id'] for v in p['sources']])
-                from .assignment_workflow import consume_repair
-                consume_repair(conn, {**task, "lifecycle": task["status"]})
-                # Append, never silently replace unfinished objective/acceptance/context.
-                additions = args.get("objective", "").strip()
-                objective = task["description"]
-                if additions and additions != objective:
-                    objective += "\n\nAdditional instructions (preserve prior requirements):\n" + additions
-                acceptance = task["acceptance"]
-                extra = args.get("acceptance", "").strip()
-                if extra and extra != acceptance:
-                    acceptance += ("\n\n" if acceptance else "") + extra
-                old = conn.execute("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task["id"],)).fetchone()
-                context = json.loads(old["payload"]) if old else {}
-                for key, values in selected.items():
-                    context[key] = list(context.get(key, []))
-                    for value in values:
-                        if value not in context[key]:
-                            context[key].append(value)
-                if len(objective) > 24000 or len(acceptance) > 12000 or len(json.dumps(context)) > 12000:
-                    raise ValueError("Bundled instructions exceed assignment limits; prior requirements remain intact")
-                changed = conn.execute(
-                    "UPDATE tasks SET lifecycle='queued',description=?,acceptance=?,blocker='',origin_conversation=?,revision=revision+1 WHERE id=? AND revision=? AND lease_owner IS NULL",
-                    (objective, acceptance, params["conversation_id"], task["id"], args.get("revision", task["revision"])),
-                )
-                if changed.rowcount != 1:
-                    raise ValueError("Assignment changed while continuing")
-                if args.get("todos"):
-                    Todos(self.db).consume(conn, args["todos"], project_id, task["id"])
-                from .parallel import load, save
-                p = load(conn, 'assignment_policy:' + task['id'], {})
-                save(conn, 'assignment_policy:' + task['id'], p)
-                from .assignment_workflow import update
-                update(self.db, conn, task["id"], "actionable", "Explicit authorized continuation", reset_retry=True)
-                if context:
-                    self.db.event(conn, "task.context", context, project_id, task["id"])
-                self.db.event(
-                    conn, "manager.continued", {"call_id": params["callId"], "added_instructions": additions, "added_acceptance": extra},
-                    project_id, task["id"], params["manager_execution_id"],
-                )
-            return self.tasks.context(self.tasks.get(task["id"]))
+                    if selected:
+                        old = conn.execute("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task["id"],)).fetchone()
+                        context = json.loads(old["payload"]) if old else {}
+                        for key, values in selected.items():
+                            context[key] = list(context.get(key, [])) + [v for v in values if v not in context.get(key, [])]
+                        self.db.event(conn, "task.context", context, project_id, task["id"])
+                    self.db.event(conn, "manager.continued", {"call_id": params["callId"]}, project_id, task["id"], params["manager_execution_id"])
+                task = await self.core.control(task["id"], "continue", args.get("revision", task["revision"]),
+                                               args.get("objective", ""), args.get("acceptance", ""))
+            else:
+                task = await self.core.control(task["id"], action, args.get("revision", task["revision"]))
+            return self.tasks.context(task)
         if action in {"pause_project", "resume_project"}:
             updated = self.registry.update(
                 project_id, project["revision"], {"status": "paused" if action == "pause_project" else "active"}
@@ -396,11 +287,12 @@ class Scheduler:
             output = result.pop("output")
             return {**result, "output": output[offset:offset + 12000],
                     "next_offset": offset + 12000 if len(output) > offset + 12000 else None,
+                    "checks": self.db.all("SELECT seq,payload FROM events WHERE execution_id=? AND kind IN ('task.check','task.round') ORDER BY seq", (result["id"],)),
                     "evidence": self.db.all("SELECT seq,payload FROM events WHERE execution_id=? AND kind='task.evidence' ORDER BY seq", (result["id"],))}
         if action == "read_task":
             task = self.tasks.get(args["task_id"])
             if task["project_id"] != project_id:
-                raise ValueError("Assignment belongs to another project")
+                raise ValueError("Task belongs to another project")
             result = self.db.one(
                 "SELECT status,output,error FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1",
                 (task["id"],),
@@ -409,11 +301,12 @@ class Scheduler:
                 output = result["output"]
                 result["output"] = output[offset : offset + 12000]
                 result["next_offset"] = offset + 12000 if len(output) > offset + 12000 else None
-            evidence = self.db.all(
-                "SELECT payload FROM events WHERE task_id=? AND kind='task.evidence' ORDER BY seq DESC LIMIT 5",
-                (task["id"],),
-            )
-            return {**self.tasks.context(task), "result": result, "evidence": [json.loads(e["payload"]) for e in evidence]}
+            def events(*kinds):
+                rows = self.db.all(f"SELECT payload FROM events WHERE task_id=? AND kind IN ({','.join('?' * len(kinds))}) ORDER BY seq DESC LIMIT 5",
+                                   (task["id"], *kinds))
+                return [json.loads(e["payload"]) for e in rows]
+            return {**self.tasks.context(task), "result": result, "checks": events("task.check", "task.round"),
+                    "evidence": events("task.evidence")}
         if action == "read_memory":
             if not args.get("path"):
                 return ProjectMemory(self.db, self.registry).snapshot(project_id)
@@ -431,10 +324,9 @@ class Scheduler:
             if args.get('task_id'):
                 task = self.tasks.get(args['task_id'])
                 if task['project_id'] != project_id:
-                    raise ValueError('Assignment document belongs to another project')
+                    raise ValueError('Task document belongs to another project')
                 if task['workspace']:
-                    from .parallel import check_workspace
-                    root = check_workspace(task)
+                    root = self.core.workspace(task, project)
             path = (root / args["path"]).resolve()
             if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > 100000:
                 raise ValueError("Read a project text document smaller than 100KB")
@@ -450,25 +342,12 @@ class Scheduler:
             await self.observer.observe(
                 {
                     **{key: self.chat.server for key in self.chat.jobs},
-                    **{key: server for key, server in self.workers.servers.items() if key in self.workers.jobs},
+                    **{key: server for key, server in self.core.servers.items() if key in self.core.jobs},
                 }
             )
-            await self.workers.recover()
             await self.chat.recover()
-            # A pending deploy waits for idle, so no new coding starts until it finishes.
-            while not self.pipeline.pending() and (task := self.tasks.claim(self.settings.max_workers)):
-                self.workers.launch(task)
+            await self.core.tick()
             await self.chat.deliver_results()
-            if time.monotonic() >= self.followup_check_at:
-                from .assignment_workflow import CHECK_INTERVAL, due
-                self.followup_check_at = time.monotonic() + CHECK_INTERVAL
-                for task in due(self.db):
-                    try:
-                        await self.chat.submit(task['project_id'], 'Internal unfinished assignment review',
-                                               task['origin_conversation'], recovery_task=task['id'])
-                    except ValueError:
-                        pass  # A competing checker/owner transition won the transaction.
-            self.pipeline.step()
 
     async def run(self):
         while True:
@@ -484,9 +363,6 @@ class Scheduler:
         self.job = asyncio.create_task(self.run())
 
     async def close(self):
-        if self.pipeline.busy():
-            self.pipeline.job.cancel()
-            await asyncio.gather(self.pipeline.job, return_exceptions=True)
         if self.job:
             self.job.cancel()
             await asyncio.gather(self.job, return_exceptions=True)

@@ -11,11 +11,11 @@ from pathlib import Path
 from ai_manager.chat import Chat
 from ai_manager.codex import AppServer
 from ai_manager.config import Settings
+from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.orchestration import Scheduler
+from ai_manager.pipeline import Pipeline
 from ai_manager.registry import Registry
-from ai_manager.tasks import Tasks
-from ai_manager.workers import Workers
 
 
 async def main():
@@ -54,7 +54,7 @@ async def main():
         registry = Registry(db, (root,))
         project = registry.add(source)
         chat = Chat(db, registry, AppServer(settings))
-        workers = Workers(db, registry, settings)
+        workers = Core(db, registry, settings, Pipeline(db, registry))
         scheduler = Scheduler(db, registry, settings, workers, chat)
         chat.action_handler = scheduler.manager_action
         try:
@@ -73,18 +73,20 @@ async def main():
                 result = db.one("SELECT * FROM executions WHERE task_id IS NOT NULL AND delivery='delivered'")
                 if result:
                     assert len(tasks) == 1
-                    assert tasks[0]["status"] == "completed", tasks[0]
-                    assert (source / "calculator.py").read_text().find("a + b") >= 0
+                    assert tasks[0]["status"] == "done", tasks[0]
+                    # Auto-deploy is off for this fixture: the work stays on the task's own branch, main is untouched.
+                    work = Path(tasks[0]["workspace"])
+                    assert (work / "calculator.py").read_text().find("a + b") >= 0
                     check = subprocess.run(
-                        ["python3", "-m", "unittest", "discover", "-v"], cwd=source, capture_output=True, text=True
+                        ["python3", "-m", "unittest", "discover", "-v"], cwd=work, capture_output=True, text=True
                     )
                     assert check.returncode == 0, check.stderr
-                    assert int(subprocess.check_output(["git", "-C", str(source), "rev-list", "--count", "HEAD"])) == 2
-                    assert (source / "hello.txt").read_text() == "Hello World\n"
+                    assert int(subprocess.check_output(["git", "-C", str(work), "rev-list", "--count", "HEAD"])) == 2
+                    assert (work / "hello.txt").read_text() == "Hello World\n"
+                    assert (source / "calculator.py").read_text().find("a - b") >= 0
                     reply = db.one("SELECT * FROM executions WHERE id=?", (result["delivery_execution"],))
                     assert reply["conversation_id"] == origin and reply["output"].strip()
-                    assert db.all("SELECT name FROM sqlite_master WHERE name='verification_results'") == []
-                    workers.finish(result["id"], "completed", "Repeated event", "")
+                    workers.end(result["id"], "done", "", "Repeated event")
                     await scheduler.tick()
                     assert len(db.all("SELECT * FROM executions WHERE agent_id='manager'")) == 2
                     print(

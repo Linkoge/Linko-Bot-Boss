@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The one deploy script. Contract: docs/AUTO_DEPLOY.md. Standard library only.
+"""The one deploy script. Contract: README.md. Standard library only.
 
 Triggered by systemd when the manager writes DATA/deploy/request.json (or run by hand: `python3 scripts/deploy.py`).
 Steps: run the full backend suite once on main -> wait until nothing is running -> back up the SQLite database ->

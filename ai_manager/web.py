@@ -24,14 +24,14 @@ from .auth import Auth
 from .chat import ROLES, Chat
 from .codex import CodexError
 from .config import Settings
+from .core import Core, Tasks
 from .db import Database
 from .execution_ui import execution_summary
 from .orchestration import Scheduler
+from .pipeline import Pipeline
 from .project_memory import MemoryReviews, ProjectMemory
 from .registry import Registry, git
-from .tasks import Tasks
 from .todos import Todos
-from .workers import Workers
 
 
 class LoginBody(BaseModel):
@@ -74,7 +74,6 @@ class MessageBody(BaseModel):
     content: str = Field(default='', max_length=64000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     todos: list[TodoSelection] = Field(default_factory=list, max_length=200)
-    parallel: bool = False
     conversation_id: str | None = None
     mode: Literal["conversation", "auto", "execute"] = "auto"
 
@@ -137,7 +136,7 @@ class MemoryCancel(BaseModel):
 
 class TaskControl(BaseModel):
     revision: int
-    action: str
+    action: Literal["hold", "release", "continue", "cancel"]
 
 
 class AnswerBody(BaseModel):
@@ -161,8 +160,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     audio = Audio(settings)
     attachments = Attachments(db, settings)
     chat.attachments = attachments
-    workers = Workers(db, registry, settings, worker_factory)
-    scheduler = Scheduler(db, registry, settings, workers, chat)
+    pipeline = Pipeline(db, registry)
+    core = Core(db, registry, settings, pipeline, worker_factory)
+    scheduler = Scheduler(db, registry, settings, core, chat, pipeline)
     chat.action_handler = scheduler.manager_action
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
@@ -175,20 +175,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             auth.bootstrap()
             registry.discover()
-            settings.max_workers = db.setting("max_workers", settings.max_workers)
             reviews.recover()
             scheduler.start()
             yield
         finally:
             await reviews.close()
             await scheduler.close()
-            await workers.close()
+            await core.close()
             await chat.close()
             lock_file.close()
 
     app = FastAPI(title="Linko Bot Boss", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
-    app.state.workers, app.state.scheduler = workers, scheduler
+    app.state.core, app.state.scheduler = core, scheduler
     app.state.audio = audio
     app.state.attachments = attachments
     app.state.memory, app.state.memory_reviews = memory, reviews
@@ -504,7 +503,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 + (" AND e.project_id=?" if project_id else ""),
                 (project_id,) if project_id else (),
             ),
-            "capacity": settings.max_workers,
+            "capacity": 1,
             "queue_error": scheduler.error,
             "storage_free": shutil.disk_usage(settings.data_dir).free,
         }
@@ -567,15 +566,16 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def submit(body: MessageBody):
         return await chat.submit(
             body.project_id, body.content, body.conversation_id, mode=body.mode, request_id=body.request_id,
-            attachment_ids=body.attachment_ids, todos=[entry.model_dump() for entry in body.todos], parallel=body.parallel
+            attachment_ids=body.attachment_ids, todos=[entry.model_dump() for entry in body.todos]
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
     async def task_control(task_id: str, body: TaskControl):
-        return await workers.control(task_id, body.action, body.revision)
+        return await core.control(task_id, body.action, body.revision)
 
     @app.get("/api/tasks/{task_id}/execution-records", dependencies=[Depends(require_owner)])
     def records(task_id: str):
+        # Tables and events from earlier eras stay readable; nothing writes them any more.
         historical = {
             "historical_" + label: db.all(f"SELECT * FROM {table} WHERE task_id=?", (task_id,))
             if db.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
@@ -584,6 +584,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         }
         return {
             "task": tasks.get(task_id),
+            "checks": db.all(
+                "SELECT payload,created_at FROM events WHERE task_id=? AND kind IN ('task.check','task.round') ORDER BY seq DESC LIMIT 20",
+                (task_id,),
+            ),
             "evidence": db.all(
                 "SELECT payload,created_at FROM events WHERE task_id=? AND kind='task.evidence' ORDER BY seq DESC LIMIT 5",
                 (task_id,),
@@ -596,7 +600,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def interrupt(execution_id: str):
         execution = db.one("SELECT task_id FROM executions WHERE id=?", (execution_id,))
         if execution and execution["task_id"]:
-            await workers.interrupt(execution_id)
+            await core.cancel(execution_id)
         else:
             await chat.interrupt(execution_id)
         return {"result": "accepted"}
@@ -634,7 +638,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():
         from .model_settings import active
-        return {"global_instructions": db.setting("global_instructions", ""), "max_workers": settings.max_workers,
+        return {"global_instructions": db.setting("global_instructions", ""), "max_workers": 1,
                 "model_provider": active(db), "auto_deploy": scheduler.pipeline.settings()}
 
     static = Path(__file__).parent / "static"

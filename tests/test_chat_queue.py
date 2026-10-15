@@ -160,14 +160,15 @@ async def test_other_conversation_runs_independently_and_stop_tail_is_explicit(s
 
 @pytest.mark.asyncio
 async def test_active_history_tool_cannot_consume_future_queued_request(system):
+    from ai_manager.core import Core
     from ai_manager.orchestration import Scheduler
-    from ai_manager.workers import Workers
+    from ai_manager.pipeline import Pipeline
 
     db, registry, chat, settings = system
     chat.launch = lambda *args: None
     first = await chat.submit(None, 'Current instruction', mode='conversation')
     second = await chat.submit(None, 'Future instruction', mode='execute')
-    scheduler = Scheduler(db, registry, settings, Workers(db, registry, settings), chat)
+    scheduler = Scheduler(db, registry, settings, Core(db, registry, settings, Pipeline(db, registry)), chat)
     params = dict(tool='manager_action', manager_execution_id=first['execution_id'],
                   conversation_id=chat.conversation()['id'], mode='conversation')
     result = await scheduler.manager_action(None, params | {'arguments': {'action': 'read_history'}})

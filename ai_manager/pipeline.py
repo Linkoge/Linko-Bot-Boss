@@ -1,16 +1,13 @@
-"""Minimal delivery pipeline. Contract: docs/AUTO_DEPLOY.md.
+"""Merge into main and the deploy request/result protocol. Contract: README.md.
 
-Worker success -> merge the assignment branch into main (one at a time) -> ask the single deploy script
+The worker (core.py) merges a passed branch into main one at a time, then asks the single deploy script
 (scripts/deploy.py) to deploy main. Per-project "Auto-deploy" ON means merge and deploy; OFF means neither.
 The deploy script itself waits for idle, backs up, restarts, health-checks and rolls back; this module only
-writes its request file, honors holds and reports its short result. No AI call decides anything here.
+writes its request file and reports its short result. No AI call decides anything here.
 """
-import asyncio
 import hashlib
 import json
-import logging
 import os
-import re
 import subprocess
 import time
 from pathlib import Path
@@ -21,8 +18,11 @@ from .fence import Busy, main_branch
 SETTING = 'auto_deploy:'
 SEED = 'auto_deploy_seed'
 ROOT = Path(os.getenv('AI_MANAGER_REPO') or Path(__file__).resolve().parents[1]).resolve()  # live code checkout
-FAILED_MARK = re.compile(r'^\W*RESULT:\s*(PASSED|FAILED)\b', re.I | re.M)
 IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
+
+
+class Conflict(ValueError):
+    """The branch does not merge cleanly into main."""
 
 
 def atomic(path, value):
@@ -70,8 +70,7 @@ def merge_into_main(root, commit):
     result = git(root, *IDENTITY, 'merge', '--no-edit', commit, check=False)
     if result.returncode:
         git(root, 'merge', '--abort', check=False)
-        raise ValueError('merge conflict with main; rebase or merge main into the assignment branch and retry: '
-                         + (result.stdout + result.stderr).strip()[-300:])
+        raise Conflict('merge conflict with main: ' + (result.stdout + result.stderr).strip()[-300:])
     return git(root, 'rev-parse', 'HEAD'), True
 
 
@@ -189,118 +188,22 @@ class Pipeline:
             conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(payload)))
 
     # ---- merge to main ----------------------------------------------------------------------------------------
-    def busy(self):
-        return bool(self.job and not self.job.done())
-
-    def candidate(self):
-        """Oldest finished assignment whose verified branch is ready to merge, else None."""
-        with self.db.connect() as conn:
-            for task in conn.execute("SELECT t.*,p.path AS project_path FROM tasks t JOIN projects p ON p.id=t.project_id "
-                                     "WHERE t.lifecycle='completed' AND t.lease_owner IS NULL AND t.workspace IS NOT NULL "
-                                     "AND p.status='active' ORDER BY t.updated_at,t.id").fetchall():
-                if not enabled(conn, task['project_id']):
-                    continue
-                execution = conn.execute('SELECT * FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1',
-                                         (task['id'],)).fetchone()
-                if (not execution or execution['status'] != 'completed' or execution['stop_requested']
-                        or execution['delivery'] not in {'delivered', 'discarded'}):
-                    continue
-                if self.held(conn, task['id']):
-                    continue
-                row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_source:' + task['id'],)).fetchone()
-                source = json.loads(row[0]) if row else {}
-                if not source.get('commit') or source.get('dirty'):
-                    continue
-                row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_merge:' + task['id'],)).fetchone()
-                if row and json.loads(row[0]).get('commit') == source['commit']:
-                    continue  # Merged or already reported failed; a new commit is a new attempt.
-                return {'task': dict(task), 'commit': source['commit'], 'execution': dict(execution)}
-        return None
-
-    def held(self, conn, task_id):
-        flow = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_workflow:' + task_id,)).fetchone()
-        return bool(flow and json.loads(flow[0]).get('state') != 'complete')  # owner hold, wait, deferral or repair
-
-    def locked_merge(self, project_path, commit):
+    def merge(self, project_path, commit):
         """The only path into main: exclusive checkout fence, re-checked pending deploy, then the merge."""
         with fence.hold(self.db.path.parent, exclusive=True):
             if self.pending():
                 raise Busy('a deploy is pending')
             return merge_into_main(project_path, commit)
 
-    def mark(self, conn, candidate, state, reason, **extra):
-        task = candidate['task']
-        value = {'state': state, 'commit': candidate['commit'], 'reason': reason[:600], 'at': time.time(), **extra}
-        conn.execute('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                     ('assignment_merge:' + task['id'], json.dumps(value)))
-        self.db.event(conn, 'pipeline.' + state, value, task['project_id'], task['id'])
-        return value
-
-    def step(self):
-        """One scheduler tick: at most one merge, never while a deploy is pending or another merge runs."""
-        if self.busy() or self.pending():
-            return
-        candidate = self.candidate()
-        if candidate:
-            self.job = asyncio.create_task(self.merge(candidate))
-
-    async def merge(self, candidate):
-        task, commit = candidate['task'], candidate['commit']
-        short = task['id'][:8]
-        try:
-            tail = candidate['execution']['output'][-4000:]
-            marks = FAILED_MARK.findall(tail)
-            if marks and marks[-1].upper() == 'FAILED':
-                with self.db.transaction() as conn:
-                    self.mark(conn, candidate, 'blocked', 'worker reported failing checks after its repair rounds')
-                    self.post(conn, task['origin_conversation'], 'merge:' + task['id'] + commit,
-                              f'Assignment {short} was not merged: the worker reported failing checks after its repair '
-                              'rounds. Nothing was merged or deployed.')
-                return
-            head, changed = await asyncio.to_thread(self.locked_merge, task['project_path'], commit)
-            requested = None
-            if changed and self.deployable(task['project_path']):
-                requested = self.request(task['project_id'], 'auto', task['id'], task['origin_conversation'],
-                                         'merged assignment ' + short)
+    def expire(self, max_age=7 * 3600):
+        """A deploy request nobody consumed (script not installed, stuck unit) must not hold the queue forever."""
+        request = read(self.root / 'request.json')
+        if request and time.time() - request.get('requested_at', time.time()) > max_age:
+            (self.root / 'request.json').unlink(missing_ok=True)
+            (self.root / 'state.json').unlink(missing_ok=True)
             with self.db.transaction() as conn:
-                self.mark(conn, candidate, 'merged', 'merged into main' if changed else 'already in main', main=head)
-                if changed:
-                    self.post(conn, task['origin_conversation'], 'merge:' + task['id'] + commit,
-                              f'Assignment {short} merged into main ({head[:10]})'
-                              + ('; deploy requested.' if requested else '.'))
-        except asyncio.CancelledError:
-            raise
-        except Busy:
-            return  # A deploy or another merge owns the checkout; the next tick retries. Nothing is marked.
-        except Exception as error:
-            logging.getLogger(__name__).warning('merge of %s failed: %s', short, error)
-            with self.db.transaction() as conn:
-                self.mark(conn, candidate, 'merge_failed', str(error))
-                self.post(conn, task['origin_conversation'], 'merge:' + task['id'] + commit,
-                          f'Assignment {short} was not merged: {str(error)[:400]}. Nothing was deployed; '
-                          'repair the existing assignment.')
-
-    async def merge_assignment(self, task_id):
-        """Owner-requested merge (manager `deploy` action) even when Auto-deploy is OFF. Same fence and holds as step()."""
-        if self.pending():
-            raise ValueError('A deploy is pending; merge after it finishes')
-        with self.db.connect() as conn:
-            task = conn.execute("SELECT t.*,p.path AS project_path FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?",
-                                (task_id,)).fetchone()
-            row = conn.execute('SELECT value FROM settings WHERE key=?', ('assignment_source:' + task_id,)).fetchone()
-            held = bool(task) and self.held(conn, task_id)
-        source = json.loads(row[0]) if row else {}
-        if (not task or task['lifecycle'] != 'completed' or task['lease_owner'] or not source.get('commit')
-                or source.get('dirty')):
-            raise ValueError('Assignment must be completed, stopped and committed to merge')
-        if held:
-            raise ValueError('Assignment is on an owner hold or has unfinished follow-up; it is not merged')
-        execution = self.db.one('SELECT * FROM executions WHERE task_id=? ORDER BY started_at DESC LIMIT 1', (task_id,))
-        try:
-            head, changed = await asyncio.to_thread(self.locked_merge, task['project_path'], source['commit'])
-        except Busy as error:
-            raise ValueError('Another merge or a deploy is using the live checkout: ' + str(error)) from error
-        with self.db.transaction() as conn:
-            self.mark(conn, {'task': dict(task), 'commit': source['commit'], 'execution': execution}, 'merged',
-                      'merged into main by owner request', main=head)
-        return {'main': head, 'changed': changed}
+                self.db.event(conn, 'deployment.expired', {'id': request.get('id')}, request.get('project_id'))
+                self.post(conn, request.get('conversation_id'), 'expired:' + str(request.get('id')),
+                          'Deploy request expired without being processed (is the deploy unit installed?). Nothing changed.')
+            return True
+        return False

@@ -94,7 +94,7 @@ class ProjectMemory:
             "pending": [],
             "sources": [
                 "project fields",
-                "read_document:MASTER_SPEC.md",
+                "read_document:README.md",
                 "list_memory/read_memory; list_tasks; list_history/read_history",
             ],
             "recent": [],
@@ -579,7 +579,7 @@ class MemoryReviews:
             }
         elif kind == "tasks":
             data = db.all(
-                "SELECT id,description,acceptance,lifecycle,blocker FROM tasks WHERE project_id=? "
+                "SELECT id,description,acceptance,state,blocker FROM tasks WHERE project_id=? "
                 "ORDER BY created_at DESC LIMIT 20 OFFSET ?",
                 (project_id, offset),
             )
@@ -668,7 +668,7 @@ class MemoryReviews:
                     for k in ("id", "name", "description", "objective", "success_criteria", "instructions", "status")
                 },
                 "durable_state": self.memory.db.all(
-                    "SELECT id,lifecycle,blocker FROM tasks WHERE project_id=? AND lifecycle IN ('queued','running','waiting','failed') ORDER BY created_at DESC LIMIT 20",
+                    "SELECT id,state,blocker FROM tasks WHERE project_id=? AND state IN ('queued','running','failed') ORDER BY created_at DESC LIMIT 20",
                     (project_id,),
                 ),
                 "scope": "Only this project; retrieve tasks for older work and selective source/evidence. No database dump.",

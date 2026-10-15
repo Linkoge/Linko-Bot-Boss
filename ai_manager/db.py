@@ -85,13 +85,10 @@ class Database:
                     SELECT 'global_last_used_at', CAST(COALESCE(MAX(created_at),0) AS TEXT)
                     FROM events WHERE project_id IS NULL AND kind='chat.queued'""")
             task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
-            # Old supervision records remain historical. Only lifecycle drives new execution.
             for name, definition in (
-                ("lifecycle", "TEXT NOT NULL DEFAULT 'waiting'"),
                 ("origin_conversation", "TEXT"),
                 ("request_key", "TEXT"),
                 ("native_thread", "TEXT"),
-                ("legacy", "INTEGER NOT NULL DEFAULT 1"),
                 ("workspace", "TEXT"),
                 ("workspace_branch", "TEXT"),
                 ("workspace_base", "TEXT"),
@@ -121,22 +118,6 @@ class Database:
             ):
                 if name not in execution_columns:
                     conn.execute(f"ALTER TABLE executions ADD COLUMN {name} {definition}")
-            if not conn.execute("SELECT 1 FROM schema_version WHERE version=7").fetchone():
-                conn.execute(
-                    "UPDATE tasks SET lifecycle=CASE WHEN status IN ('completed','cancelled','failed') THEN status ELSE 'waiting' END"
-                )
-                conn.execute("INSERT INTO schema_version VALUES(7)")
-            if not conn.execute("SELECT 1 FROM schema_version WHERE version=8").fetchone():
-                conn.execute(
-                    "UPDATE executions SET delivery='pending' WHERE delivery='waiting' AND finished_at IS NOT NULL"
-                )
-                conn.execute("INSERT INTO schema_version VALUES(8)")
-            # Existing shared-checkout assignments keep their exclusive slot. Isolated
-            # claims use one durable workspace per assignment; admission is transactional.
-            conn.execute("DROP INDEX IF EXISTS project_worker")
-            conn.execute("CREATE UNIQUE INDEX project_worker ON tasks(project_id) WHERE lifecycle='running' AND workspace IS NULL")
-            conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS workspace_worker ON tasks(workspace) WHERE lease_owner IS NOT NULL AND workspace IS NOT NULL")
-            conn.execute("INSERT OR IGNORE INTO schema_version VALUES(12)")
             if not conn.execute("SELECT 1 FROM schema_version WHERE version=9").fetchone():
                 conn.execute("""UPDATE executions SET
                     mode=COALESCE((SELECT json_extract(payload,'$.prompt.mode') FROM events
@@ -145,21 +126,54 @@ class Database:
                         WHERE execution_id=executions.id AND kind='model.context' ORDER BY seq DESC LIMIT 1)
                     WHERE finished_at IS NULL""")
                 conn.execute("INSERT INTO schema_version VALUES(9)")
-            conn.execute("INSERT OR IGNORE INTO schema_version VALUES(10)")
             if not conn.execute("SELECT 1 FROM schema_version WHERE version=11").fetchone():
                 from .todos import migrate_deferred
                 migrate_deferred(conn)
                 conn.execute("INSERT INTO schema_version VALUES(11)")
-            # Retire the application usage lock, including already persisted waits.
-            # Keep native outcomes, ownership, user stops and history for reconciliation.
-            conn.execute("DELETE FROM settings WHERE key='recovery_account_gate'")
-            conn.execute("""UPDATE executions SET retry_at=0
-                WHERE finished_at IS NULL AND status='recovering' AND recovery_reason='usage'""")
-            conn.execute("""UPDATE tasks SET blocker='' WHERE lease_owner IN
-                (SELECT id FROM executions WHERE finished_at IS NULL AND recovery_reason='usage')
-                AND blocker='Waiting for usage limit'""")
+            self.migrate_queue(conn, task_columns)
             conn.commit()
         self.path.chmod(0o600)
+
+    @staticmethod
+    def migrate_queue(conn, task_columns):
+        """Schema 13: the sequential task queue. Old columns (lifecycle, legacy, ...) stay as ignored history.
+
+        Old non-final tasks are closed once (failed, reason says cancelled); branches, workspaces and rows are kept.
+        """
+        added = {
+            "state": "TEXT NOT NULL DEFAULT 'queued'", "held": "INTEGER NOT NULL DEFAULT 0",
+            "queued_at": "REAL NOT NULL DEFAULT 0", "rounds": "INTEGER NOT NULL DEFAULT 0",
+            "round_limit": "INTEGER NOT NULL DEFAULT 3", "open_round": "INTEGER NOT NULL DEFAULT 0",
+            "stage": "TEXT NOT NULL DEFAULT 'work'", "merge_requested": "INTEGER NOT NULL DEFAULT 0",
+            "requeues": "INTEGER NOT NULL DEFAULT 0", "waits": "INTEGER NOT NULL DEFAULT 0", "retry_at": "REAL",
+            "checkpoints": "TEXT NOT NULL DEFAULT '[]'", "gate_history": "TEXT NOT NULL DEFAULT '[]'",
+            "merge": "TEXT",
+        }
+        have = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
+        for name, definition in added.items():
+            if name not in have:
+                conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")
+        conn.execute("DROP INDEX IF EXISTS project_worker")
+        conn.execute("DROP INDEX IF EXISTS workspace_worker")
+        if not conn.execute("SELECT 1 FROM schema_version WHERE version=13").fetchone():
+            now = time.time()
+            has_lifecycle = "lifecycle" in have  # absent on databases created after this rebuild
+            conn.execute("UPDATE tasks SET queued_at=created_at")
+            if has_lifecycle:
+                conn.execute("UPDATE tasks SET state='done' WHERE lifecycle='completed'")
+                conn.execute("UPDATE tasks SET state='failed' WHERE lifecycle IN ('failed','cancelled')")
+                conn.execute("""UPDATE tasks SET state='failed',blocker=?,lease_owner=NULL,updated_at=?
+                    WHERE lifecycle NOT IN ('completed','failed','cancelled')""",
+                    ("Cancelled: closed when the task queue was rebuilt (branch and workspace kept)", now))
+            conn.execute("""UPDATE executions SET status='interrupted',finished_at=?,
+                error='Closed when the task queue was rebuilt'
+                WHERE task_id IS NOT NULL AND finished_at IS NULL""", (now,))
+            conn.execute("UPDATE questions SET status='expired' WHERE status='pending'")
+            conn.execute("UPDATE tasks SET lease_owner=NULL WHERE state!='running'")
+            conn.execute("INSERT INTO schema_version VALUES(13)")
+        conn.execute("UPDATE tasks SET lease_owner=NULL WHERE state IN ('done','failed')")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_running ON tasks(state) WHERE state='running'")
+        conn.execute("CREATE INDEX IF NOT EXISTS task_queue ON tasks(state,held,queued_at)")
 
     def connect(self):
         conn = sqlite3.connect(self.path, timeout=10)
@@ -181,6 +195,10 @@ class Database:
             raise
         finally:
             conn.close()
+
+    def run(self, sql: str, params=()):
+        with self.transaction() as conn:
+            conn.execute(sql, params)
 
     def all(self, sql: str, params=()) -> list[dict]:
         with closing(self.connect()) as conn:

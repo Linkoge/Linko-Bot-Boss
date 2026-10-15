@@ -11,11 +11,11 @@ from fake_codex import FakeServer
 from ai_manager.chat import Chat
 from ai_manager.codex import AppServer, safe_config
 from ai_manager.config import Settings
+from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.orchestration import Scheduler
+from ai_manager.pipeline import Pipeline
 from ai_manager.registry import Registry
-from ai_manager.tasks import Tasks
-from ai_manager.workers import Workers
 
 
 @pytest.fixture
@@ -77,65 +77,39 @@ async def settled(workers):
     await asyncio.gather(*list(workers.jobs.values()))
 
 
-def test_legacy_migration_preserves_rows_and_history(system):
-    db, registry, _, _ = system
-    project = registry.list()[0]
-    with db.transaction() as conn:
-        conn.execute("DROP TABLE tasks")
-        conn.execute("""CREATE TABLE tasks(
-            id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), description TEXT NOT NULL,
-            acceptance TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', blocker TEXT NOT NULL DEFAULT '',
-            lease_owner TEXT, revision INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL, updated_at REAL NOT NULL)""")
-        conn.execute(
-            "INSERT INTO tasks(id,project_id,description,acceptance,status,created_at,updated_at) VALUES('old',?,'old objective','criteria','verifying',?,?)",
-            (project["id"], time.time(), time.time()),
-        )
-        conn.execute("DELETE FROM schema_version WHERE version=7")
-        db.event(conn, "historical.evidence", {"original": "unchanged"})
-    before = db.all("SELECT * FROM events")
-    reopened = Database(db.path)
-    task = Tasks(reopened).get("old")
-    assert task["status"] == "waiting" and task["legacy_status"] == "verifying"
-    assert task["acceptance"] == "criteria"
-    assert reopened.all("SELECT * FROM events") == before
-    assert reopened.one("PRAGMA integrity_check")["integrity_check"] == "ok"
-    assert not reopened.all("PRAGMA foreign_key_check")
-    assert Tasks(reopened).claim(2) is None
-
-
 @pytest.mark.smoke
-def test_idempotency_exclusive_project_and_future_projects(system):
+def test_idempotency_strict_order_one_worker_and_future_projects(system):
     db, registry, chat, settings = system
     tasks = Tasks(db)
     p, q = registry.list()
     a = tasks.add(p["id"], "first", chat.conversation(p["id"])["id"], "key")
     assert tasks.add(p["id"], "first", request_key="key")["id"] == a["id"]
-    tasks.add(p["id"], "next")
-    tasks.add(q["id"], "parallel")
-    claimed = tasks.claim(2)
+    b = tasks.add(p["id"], "next")
+    c = tasks.add(q["id"], "other project")
+    claimed = tasks.claim()
     assert claimed["id"] == a["id"]
-    assert tasks.claim(2) is None  # Single global worker, even across projects.
-    assert tasks.claim(2) is None
-    # Unknown surviving process holds its project even in waiting state.
+    assert tasks.claim() is None  # One global worker, even across projects.
     with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='waiting' WHERE id=?", (a["id"],))
-    assert tasks.claim(3) is None
+        conn.execute("UPDATE tasks SET state='done',lease_owner=NULL WHERE id=?", (a["id"],))
+        conn.execute("UPDATE executions SET status='completed',finished_at=1 WHERE id=?", (claimed["lease_owner"],))
     directory = settings.project_roots[0] / "future"
     directory.mkdir()
     future = registry.add(directory)
-    tasks.add(future["id"], "works without configuration")
-    assert tasks.claim(3) is None  # Unknown surviving owner blocks every new writer.
-    with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='completed',lease_owner=NULL WHERE id=?", (a["id"],))
-        conn.execute("UPDATE executions SET status='completed',finished_at=1 WHERE id=?", (claimed["lease_owner"],))
-    assert tasks.claim(3) is not None
+    d = tasks.add(future["id"], "works without configuration")
+    order = []
+    while task := tasks.claim():
+        order.append(task["id"])
+        with db.transaction() as conn:
+            conn.execute("UPDATE tasks SET state='done',lease_owner=NULL WHERE id=?", (task["id"],))
+            conn.execute("UPDATE executions SET status='completed',finished_at=1 WHERE id=?", (task["lease_owner"],))
+    assert order == [b["id"], c["id"], d["id"]]
 
 
 @pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_direct_delegation_native_execution_and_return(system):
     db, registry, chat, settings = system
-    workers = Workers(db, registry, settings, NativeFixture)
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
     p = registry.list()[0]
@@ -156,7 +130,7 @@ async def test_direct_delegation_native_execution_and_return(system):
     await settled(workers)
     result = db.one("SELECT * FROM executions WHERE task_id=?", (task["id"],))
     assert result["worktree"] == p["path"]
-    assert Tasks(db).get(task["id"])["status"] == "completed"
+    assert Tasks(db).get(task["id"])["status"] == "done"
     assert (await scheduler.manager_action(p["id"], repeated))["id"] == task["id"]
     assert result["delivery"] == "pending"
     await chat.deliver_results()
@@ -175,8 +149,8 @@ async def test_pending_result_restart_archive_and_busy_conversation(system):
     p = registry.list()[0]
     origin = chat.conversation(p["id"])["id"]
     task = Tasks(db).add(p["id"], "done", origin)
-    workers = Workers(db, registry, settings, NativeFixture)
-    workers.launch(Tasks(db).claim(2))
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
+    workers.launch(Tasks(db).claim())
     await settled(workers)
     with db.transaction() as conn:
         conn.execute("INSERT INTO messages VALUES('u',?,'user','prior','completed',NULL,?)", (origin, time.time()))
@@ -199,7 +173,7 @@ async def test_pending_result_restart_archive_and_busy_conversation(system):
     assert messages[-1]["role"] == "assistant" and messages[-1]["status"] == "completed"
     assert restored.history(p["id"])["messages"] == []
     assert current != origin
-    assert Tasks(db).get(task["id"])["status"] == "completed"
+    assert Tasks(db).get(task["id"])["status"] == "done"
 
 
 @pytest.mark.asyncio
@@ -207,8 +181,8 @@ async def test_catastrophic_question_waits_for_exact_answer(system):
     db, registry, _, settings = system
     tasks = Tasks(db)
     task = tasks.add(registry.list()[0]["id"], "dangerous objective")
-    task = tasks.claim(2)
-    workers = Workers(db, registry, settings, NativeFixture)
+    task = tasks.claim()
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
     request = asyncio.create_task(
         workers.question(
             task["lease_owner"],
@@ -219,46 +193,14 @@ async def test_catastrophic_question_waits_for_exact_answer(system):
     await asyncio.sleep(0.03)
     assert not request.done()
     question = db.one("SELECT * FROM questions")
-    assert Tasks(db).get(task["id"])["status"] == "waiting"
+    assert Tasks(db).get(task["id"])["status"] == "running"
+    assert Tasks(db).get(task["id"])["blocker"] == "Waiting for your answer"
     with db.transaction() as conn:
         conn.execute(
             "UPDATE questions SET status='answered',answer=? WHERE id=?",
             (json.dumps({"approve": False}), question["id"]),
         )
     assert await request == {"decision": "decline"}
-
-
-@pytest.mark.smoke
-@pytest.mark.asyncio
-async def test_restart_recovers_completed_worker_without_replay(system):
-    db, registry, _, settings = system
-    task = Tasks(db).add(registry.list()[0]["id"], "completed before crash")
-    task = Tasks(db).claim(2)
-    with db.transaction() as conn:
-        conn.execute(
-            "UPDATE executions SET thread_id='saved',turn_id='finished-turn',status='running' WHERE id=?",
-            (task["lease_owner"],),
-        )
-    workers = Workers(Database(db.path), registry, settings, NativeFixture)
-    await workers.recover()
-    assert not workers.jobs
-    assert Tasks(db).get(task["id"])["status"] == "completed"
-    result = db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],))
-    assert result["output"] == "Recovered outcome" and result["delivery"] == "pending"
-
-
-@pytest.mark.asyncio
-async def test_launch_without_turn_id_is_not_blindly_replayed(system):
-    db, registry, _, settings = system
-    task = Tasks(db).add(registry.list()[0]["id"], "uncertain launch")
-    task = Tasks(db).claim(2)
-    with db.transaction() as conn:
-        conn.execute("UPDATE executions SET thread_id='saved',status='starting' WHERE id=?", (task["lease_owner"],))
-    workers = Workers(db, registry, settings, NativeFixture)
-    await workers.recover()
-    assert Tasks(db).get(task["id"])["status"] == "waiting"
-    assert "uncertain" in Tasks(db).get(task["id"])["blocker"]
-    assert not workers.jobs
 
 
 @pytest.mark.smoke
@@ -275,54 +217,10 @@ def test_backup_restore_and_native_configuration(system, tmp_path):
 
 
 @pytest.mark.asyncio
-async def test_shutdown_continues_active_work_but_preserves_user_wait(system):
-    db, registry, _, settings = system
-    task = Tasks(db).add(registry.list()[0]["id"], "long objective")
-    task = Tasks(db).claim(2)
-    NativeFixture.release = asyncio.Event()
-    try:
-        workers = Workers(db, registry, settings, NativeFixture)
-        workers.launch(task)
-        await asyncio.sleep(0.03)
-        await workers.close()
-        assert Tasks(db).get(task["id"])["status"] == "waiting"
-        assert Tasks(db).get(task["id"])["lease_owner"] == task["lease_owner"]
-        assert Tasks(db).get(task["id"])["retry_at"] > time.time()
-        assert Tasks(db).get(task["id"])["native_thread"]
-        waiting = Tasks(db).add(registry.list()[1]["id"], "paused objective")
-        Tasks(db).control(waiting["id"], "pause", waiting["revision"])
-        await workers.recover()
-        assert Tasks(db).get(waiting["id"])["status"] == "paused"
-    finally:
-        NativeFixture.release.set()
-        NativeFixture.release = None
-
-
-@pytest.mark.asyncio
-async def test_owned_detached_process_keeps_project_unavailable(system):
-    from ai_manager.codex import process_start
-
-    db, registry, _, settings = system
-    task = Tasks(db).add(registry.list()[0]["id"], "detached")
-    task = Tasks(db).claim(2)
-    with db.transaction() as conn:
-        conn.execute(
-            "UPDATE executions SET pid=?,process_start=? WHERE id=?",
-            (os.getpid(), process_start(os.getpid()), task["lease_owner"]),
-        )
-    workers = Workers(db, registry, settings, NativeFixture)
-    await workers.recover()
-    assert Tasks(db).get(task["id"])["status"] == "waiting"
-    assert Tasks(db).get(task["id"])["lease_owner"] == task["lease_owner"]
-    Tasks(db).add(task["project_id"], "must not overlap")
-    assert Tasks(db).claim(2) is None
-
-
-@pytest.mark.asyncio
 async def test_manager_completion_after_crash_delivers_once(system):
     db, registry, chat, settings = system
     task = Tasks(db).add(registry.list()[0]["id"], "already done")
-    task = Tasks(db).claim(2)
+    task = Tasks(db).claim()
     with db.transaction() as conn:
         conn.execute(
             "UPDATE executions SET delivery='running',delivery_execution='reply',finished_at=? WHERE id=?",
@@ -347,38 +245,37 @@ async def test_manager_completion_after_crash_delivers_once(system):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("status,error", [("completed", ""), ("failed", "Disk full"), ("waiting", "Interrupted")])
+@pytest.mark.parametrize("status,error", [("done", ""), ("failed", "Disk full")])
 async def test_terminal_result_is_reasoning_input_and_finish_is_idempotent(system, status, error):
     db, registry, chat, settings = system
     project = registry.list()[0]
     origin = chat.conversation(project["id"])["id"]
     tasks = Tasks(db)
     tasks.add(project["id"], "Create requested text file", origin)
-    task = tasks.claim(2)
-    workers = Workers(db, registry, settings, NativeFixture)
+    task = tasks.claim()
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
     with db.transaction() as conn:
         conn.execute(
             "UPDATE executions SET input=?,thread_id='worker-thread',turn_id='worker-turn' WHERE id=?",
             (json.dumps({"objective": "Original objective"}), task["lease_owner"]),
         )
-        conn.execute("UPDATE tasks SET description='Later objective',lease_owner=NULL WHERE id=?", (task["id"],))
-    workers.finish(task["lease_owner"], status, "Actual worker result", error)
+        conn.execute("UPDATE tasks SET description='Later objective' WHERE id=?", (task["id"],))
+    workers.end(task["lease_owner"], status, error, "Actual worker result")
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
     evidence = json.loads(chat.server.prompts[0])["worker_result"]
     scheduler = Scheduler(db, registry, settings, workers, chat)
     retained = await scheduler.manager_action(project["id"], {"tool": "manager_action", "arguments": {"action": "read_result", "execution_id": evidence["execution_id"]}})
     assert json.loads(retained["input"])["objective"] == "Original objective"
-    assert evidence["task_status"] == status
     assert retained["output"] == "Actual worker result"
     assert evidence["status"] == status
-    assert evidence["error"] == error
+    assert evidence["reason"] == error
     assert "execution" not in evidence
     diagnostic = db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],))
     assert diagnostic["thread_id"] == "worker-thread"
     assert diagnostic["turn_id"] == "worker-turn"
     before = db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],))
-    workers.finish(task["lease_owner"], "failed", "Duplicate event", "Duplicate error")
+    workers.end(task["lease_owner"], "failed", "Duplicate error", "Duplicate event")
     assert db.one("SELECT * FROM executions WHERE id=?", (task["lease_owner"],)) == before
     await chat.deliver_results()
     assert len(chat.server.prompts) == 1
@@ -391,8 +288,8 @@ async def test_failed_manager_delivery_retries_after_restart_without_duplicate_w
     project = registry.list()[0]
     origin = chat.conversation(project["id"])["id"]
     task = Tasks(db).add(project["id"], "Create a file", origin)
-    workers = Workers(db, registry, settings, NativeFixture)
-    workers.launch(Tasks(db).claim(2))
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
+    workers.launch(Tasks(db).claim())
     await settled(workers)
 
     async def fail(*args, **kwargs):
@@ -423,10 +320,10 @@ async def test_results_stay_in_their_project_or_global_origin(system):
     db, registry, chat, settings = system
     projects = registry.list()
     origins = [chat.conversation(projects[0]["id"])["id"], chat.conversation()["id"]]
-    workers = Workers(db, registry, settings, NativeFixture)
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
     for project, origin in zip(projects, origins, strict=True):
         Tasks(db).add(project["id"], "Result for " + project["name"], origin)
-        workers.launch(Tasks(db).claim(2))
+        workers.launch(Tasks(db).claim())
         await settled(workers)
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
@@ -445,8 +342,8 @@ async def test_cleared_origin_does_not_receive_results_in_new_chat(system):
     project = registry.list()[0]
     origin = chat.conversation(project["id"])["id"]
     Tasks(db).add(project["id"], "Original request", origin)
-    workers = Workers(db, registry, settings, NativeFixture)
-    workers.launch(Tasks(db).claim(2))
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
+    workers.launch(Tasks(db).claim())
     await settled(workers)
     with db.transaction() as conn:
         conn.execute(
@@ -461,44 +358,30 @@ async def test_cleared_origin_does_not_receive_results_in_new_chat(system):
     assert db.one("SELECT context FROM conversations WHERE id=?", (origin,))["context"] == "trash:" + origin
 
 
-def test_migration_recovers_previously_stranded_deliveries(system):
-    db, registry, _, _ = system
-    Tasks(db).add(registry.list()[0]["id"], "Stranded result")
-    task = Tasks(db).claim(2)
-    with db.transaction() as conn:
-        conn.execute(
-            "UPDATE executions SET finished_at=?,delivery='waiting' WHERE id=?", (time.time(), task["lease_owner"])
-        )
-        conn.execute("DELETE FROM schema_version WHERE version=8")
-    restored = Database(db.path)
-    assert restored.one("SELECT delivery FROM executions WHERE id=?", (task["lease_owner"],))["delivery"] == "pending"
-
-
 @pytest.mark.asyncio
-async def test_manager_can_continue_incomplete_work_from_result(system):
+async def test_result_notice_cannot_start_new_work_but_owner_can_continue(system):
     db, registry, chat, settings = system
     project = registry.list()[0]
     origin = chat.conversation(project["id"])["id"]
     task = Tasks(db).add(project["id"], "Create the requested file", origin)
-    task = Tasks(db).claim(2)
-    workers = Workers(db, registry, settings, NativeFixture)
-    workers.finish(task["lease_owner"], "failed", "File creation needs another attempt", "Temporary error")
-    with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lease_owner=NULL WHERE id=?", (task["id"],))
+    task = Tasks(db).claim()
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
+    workers.end(task["lease_owner"], "failed", "Temporary error", "File creation needs another attempt")
+    attempts = []
 
     class ContinueServer(FakeServer):
         async def request(self, method, params, timeout=30):
             if method == "turn/start":
                 prompt = json.loads(params["input"][0]["text"])
+                assert prompt["mode"] == "conversation"  # a failed result never runs in Auto
                 retained = await self.tool_handlers[params["threadId"]]({"tool": "manager_action", "arguments": {"action": "read_result", "execution_id": prompt["worker_result"]["execution_id"]}})
                 assert retained["output"] == "File creation needs another attempt"
-                await self.tool_handlers[params["threadId"]](
-                    {
-                        "tool": "manager_action",
-                        "arguments": {"action": "continue", "task_id": task["id"]},
-                        "callId": "continue-incomplete",
-                    }
-                )
+                for action in ("continue", "delegate"):
+                    with pytest.raises(ValueError, match="explicit owner authorization"):
+                        await self.tool_handlers[params["threadId"]](
+                            {"tool": "manager_action", "arguments": {"action": action, "task_id": task["id"], "objective": "again"},
+                             "callId": "continue-incomplete"})
+                    attempts.append(action)
             return await super().request(method, params, timeout)
 
     chat.server = ContinueServer(settings)
@@ -506,10 +389,9 @@ async def test_manager_can_continue_incomplete_work_from_result(system):
     chat.action_handler = scheduler.manager_action
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
-    assert Tasks(db).get(task["id"])["status"] == "queued"
-    assert Tasks(db).get(task["id"])["origin_conversation"] == origin
-    assert len(Tasks(db).list()) == 1
-    assert not db.one("SELECT 1 FROM sqlite_master WHERE name='verification_results'")
+    assert attempts == ["continue", "delegate"]
+    assert Tasks(db).get(task["id"])["status"] == "failed" and len(Tasks(db).list()) == 1
+    assert Tasks(db).control(task["id"], "continue")["status"] == "queued"  # the owner's explicit continue
 
 
 @pytest.mark.asyncio
@@ -518,11 +400,9 @@ async def test_large_result_and_concurrent_delivery_claims(system):
     project = registry.list()[0]
     origin = chat.conversation(project["id"])["id"]
     Tasks(db).add(project["id"], "a" * 24000, origin)
-    task = Tasks(db).claim(2)
-    workers = Workers(db, registry, settings, NativeFixture)
-    workers.finish(task["lease_owner"], "completed", "前" * 100000 + "Final result", "")
-    with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lease_owner=NULL WHERE id=?", (task["id"],))
+    task = Tasks(db).claim()
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
+    workers.end(task["lease_owner"], "done", "", "前" * 100000 + "Final result")
     await asyncio.gather(chat.deliver_results(), chat.deliver_results())
     await asyncio.gather(*list(chat.jobs.values()))
     assert len(chat.server.prompts) == 1
@@ -540,7 +420,7 @@ async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
     db, registry, chat, settings = system
     project = registry.list()[0]
     (settings.project_roots[0] / project["name"] / "notes.txt").write_text("Project notes")
-    workers = Workers(db, registry, settings, NativeFixture)
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
 
@@ -559,7 +439,7 @@ async def test_modes_use_one_manager_path_and_enforce_read_only(system, mode):
                     "delegate",
                     "pause_project",
                     "resume_project",
-                    *(["wait", "continue"] if mode == "conversation" else []),
+                    *(["hold", "continue"] if mode == "conversation" else []),
                 ):
                     mutation = {**call, "arguments": {"action": action, "objective": "Complete objective"}}
                     if mode == "conversation":
@@ -610,22 +490,25 @@ def test_fresh_schema_contains_only_current_storage(system):
         "recovery_identity",
         "lease_until",
         "priority",
+        "lifecycle",
+        "legacy",
     }
+    assert {"state", "held", "rounds", "round_limit", "checkpoints", "requeues", "retry_at"} <= columns
 
 
 @pytest.mark.asyncio
-async def test_background_queue_runs_projects_concurrently_with_capacity(system):
+async def test_background_queue_runs_one_task_at_a_time_in_order(system):
     db, registry, chat, settings = system
     for project in registry.list():
         Tasks(db).add(project["id"], "Independent work", chat.conversation(project["id"])["id"])
     NativeFixture.release = asyncio.Event()
-    workers = Workers(db, registry, settings, NativeFixture)
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     try:
         await scheduler.tick()
         await asyncio.sleep(0.03)
         assert len(workers.jobs) == 1
-        assert len({t["project_id"] for t in Tasks(db).list() if t["lease_owner"]}) == 1
+        assert len([t for t in Tasks(db).list() if t["state"] == "running"]) == 1
         directory = settings.project_roots[0] / "new-project"
         directory.mkdir()
         future = registry.add(directory)
@@ -633,13 +516,13 @@ async def test_background_queue_runs_projects_concurrently_with_capacity(system)
         await scheduler.tick()
         assert len(workers.jobs) == 1
         NativeFixture.release.set()
+        for _ in range(3):
+            await settled(workers)
+            await scheduler.tick()
         await settled(workers)
-        await scheduler.tick()
-        await settled(workers)
-        await scheduler.tick()
-        await settled(workers)
-        assert all(t["status"] == "completed" for t in Tasks(db).list())
-        assert len(db.all("SELECT id FROM executions WHERE task_id IS NOT NULL")) == 3
+        assert all(t["status"] == "done" for t in Tasks(db).list())
+        runs = db.all("SELECT started_at FROM executions WHERE task_id IS NOT NULL ORDER BY started_at")
+        assert len(runs) == 3
     finally:
         NativeFixture.release.set()
         NativeFixture.release = None
@@ -664,13 +547,13 @@ async def test_uploaded_files_and_photos_reach_delegated_worker(system):
             if method == 'turn/start':
                 captured.append(params['input'])
             return await super().request(method, params, timeout)
-    workers = Workers(db, registry, settings, AttachmentFixture)
+    workers = Core(db, registry, settings, Pipeline(db, registry), AttachmentFixture)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     conversation = chat.conversation(project['id'])
     params = {'tool': 'manager_action', 'arguments': {'action': 'delegate', 'objective': 'Inspect supplied file'},
               'manager_execution_id': 'origin-manager', 'conversation_id': conversation['id'], 'callId': 'attachment-call'}
     task = await scheduler.manager_action(project['id'], params)
-    claimed = scheduler.tasks.claim(2)
+    claimed = scheduler.tasks.claim()
     assert claimed['id'] == task['id']
     workers.launch(claimed)
     await settled(workers)

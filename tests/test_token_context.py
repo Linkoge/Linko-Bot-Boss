@@ -9,9 +9,9 @@ from test_minimal_flow import system as system_fixture
 
 from ai_manager.chat import Chat
 from ai_manager.codex import TurnUsage
+from ai_manager.core import Core, Tasks
 from ai_manager.orchestration import Scheduler
-from ai_manager.tasks import Tasks
-from ai_manager.workers import Workers
+from ai_manager.pipeline import Pipeline
 
 system = system_fixture
 
@@ -41,7 +41,6 @@ async def test_context_updates_survive_restart_and_clear_removed_constraints(sys
     await asyncio.gather(*list(restored.jobs.values()))
     followup = json.loads(chat.server.prompts[-1])
     assert followup.pop('bot_selection')['mode'] == 'manual'
-    assert followup.pop("request_execution")["parallel_permission"] == {}
     assert followup == {"mode": "auto", "message": "Keep talking"}
     db.set_setting("global_instructions", "")
     await restored.submit(project["id"], "The constraint changed")
@@ -56,7 +55,7 @@ async def test_old_history_tasks_and_memory_are_retrievable_in_conversation_mode
     origin = chat.conversation(project["id"])["id"]
     task = Tasks(db).add(project["id"], "Older completed objective " + "x" * 1000)
     with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='completed' WHERE id=?", (task["id"],))
+        conn.execute("UPDATE tasks SET state='done' WHERE id=?", (task["id"],))
         conn.execute(
             "INSERT INTO memory VALUES(?,'DECISIONS.md',?,0,?)",
             (project["id"], "critical decision " + "x" * 13000, time.time()),
@@ -77,7 +76,7 @@ async def test_old_history_tasks_and_memory_are_retrievable_in_conversation_mode
     assert "assignments" not in chat.context(project["id"])
     prompt, _ = chat.prompt(chat.conversation(project["id"]), "New result", "auto", "new", "new-thread", None)
     assert prompt["conversation_history"][0]["content"] == "original authorized goal"
-    scheduler = Scheduler(db, registry, settings, Workers(db, registry, settings, NativeFixture), chat)
+    scheduler = Scheduler(db, registry, settings, Core(db, registry, settings, Pipeline(db, registry), NativeFixture), chat)
 
     async def read(action, **args):
         return await scheduler.manager_action(
@@ -148,7 +147,7 @@ async def test_manager_usage_is_persisted_with_native_events(system):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("used", [0, 3, 4])
-async def test_worker_continuation_keeps_thread_and_only_updates_changed_context(system, used):
+async def test_worker_continuation_keeps_thread_and_the_durable_round_counter(system, used):
     db, registry, chat, settings = system
     project = registry.list()[0]
     task = Tasks(db).add(project["id"], "First objective")
@@ -159,22 +158,20 @@ async def test_worker_continuation_keeps_thread_and_only_updates_changed_context
         servers.append(server)
         return server
 
-    workers = Workers(db, registry, settings, factory)
-    workers.launch(Tasks(db).claim(2))
+    workers = Core(db, registry, settings, Pipeline(db, registry), factory)
+    workers.launch(Tasks(db).claim())
     await settled(workers)
     first_thread = Tasks(db).get(task["id"])["native_thread"]
-    workflow = db.setting('assignment_workflow:' + task['id'])
-    db.set_setting('assignment_workflow:' + task['id'], {**workflow, 'repair_rounds': used})
-    Tasks(db).control(task["id"], "continue", Tasks(db).get(task["id"])["revision"])
-    workers.launch(Tasks(db).claim(2))
+    db.run("UPDATE tasks SET rounds=? WHERE id=?", (used, task["id"]))
+    Tasks(db).control(task["id"], "continue", Tasks(db).get(task["id"])["revision"], "Also handle the edge case")
+    assert Tasks(db).get(task["id"])["rounds"] == used  # continuing never resets the counter
+    workers.launch(Tasks(db).claim())
     await settled(workers)
     assert Tasks(db).get(task["id"])["native_thread"] == first_thread
     continued = json.loads(servers[-1].prompts[-1])
-    assert set(continued) == {"objective", "verification"}
-    assert continued["objective"] == "First objective"
-    assert continued["verification"]["repair_rounds_used"] == used + 1
-    assert continued["verification"]["repair_rounds_remaining"] == max(0, 5 - used - 1)
-    assert "project" not in continued  # Unchanged project context remains in the retained native thread.
+    assert "Also handle the edge case" in continued["objective"] and "First objective" in continued["objective"]
+    assert continued["repair_rounds"] == {"used": used, "limit": 3, "hard_cap": 9}
+    assert "continuation" in continued
     assert (
         json.loads(
             db.all("SELECT input FROM executions WHERE task_id=? ORDER BY started_at", (task["id"],))[-1]["input"]

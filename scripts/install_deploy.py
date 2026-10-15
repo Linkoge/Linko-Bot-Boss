@@ -4,8 +4,7 @@
     python3 scripts/install_deploy.py
 
 It writes DATA/deploy/installed.json, installs a path unit that runs scripts/deploy.py whenever the manager writes a
-deploy request, retires the old deployment helper service if it is idle, and queues the first deploy so the running
-service picks up the code now in main. Safe to re-run.
+deploy request, and queues the first deploy so the running service picks up the code now in main. Safe to re-run.
 """
 import json
 import os
@@ -17,10 +16,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from deploy import atomic, read  # noqa: E402
+from deploy import atomic  # noqa: E402
 
 UNITS = ('linko-bot-manager-deploy.service', 'linko-bot-manager-deploy.path')
-IDLE_PHASES = {None, 'idle', 'succeeded', 'failed', 'rolled_back', 'cancelled'}
 
 
 def install(repo, data, home):
@@ -44,11 +42,6 @@ def install(repo, data, home):
         (directory / name).write_text(text)
     systemctl = ['systemctl', '--user']
     subprocess.run([*systemctl, 'daemon-reload'], check=True)
-    old = read(data / 'deployment-helper' / 'active.json') or {}
-    if old.get('phase') in IDLE_PHASES:
-        subprocess.run([*systemctl, 'disable', '--now', 'linko-deployment-helper.service'], capture_output=True)
-    else:
-        print('Old deployment helper has an unfinished request; it was left running.')
     request = data / 'deploy' / 'request.json'
     if not request.exists():
         atomic(request, {'id': os.urandom(8).hex(), 'source': 'owner', 'reason': 'first deploy after install',

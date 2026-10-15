@@ -5,9 +5,9 @@ from test_minimal_flow import system as system
 from test_web import client as client
 from test_web import sign_in
 
+from ai_manager.core import Tasks
 from ai_manager.db import Database
 from ai_manager.registry import Registry
-from ai_manager.tasks import Tasks
 
 
 @pytest.mark.parametrize('status', ['active', 'paused', 'archived'])
