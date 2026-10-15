@@ -3,6 +3,7 @@ what is saved and dispatched: manager turns use the saved manager pair; a new ta
 the worker is Automatic (null), on whatever the manager picks for it. A task keeps the pair it first ran on."""
 import copy
 import json
+import re
 
 from .providers import provider_of
 
@@ -33,11 +34,38 @@ def saved(db):
     return {'revision': 0, **{k: routes.get(r, DEFAULT[k]) for k, r in (('manager', 'interactive'), ('worker', 'execution'))}}
 
 
-def choices(server, provider):
-    """Every visible catalog model of the provider with the efforts it supports."""
-    return [{'name': m.get('displayName') or m['model'], 'model': m['model'],
-             'levels': [e['reasoningEffort'] for e in m['supportedReasoningEfforts']]}
-            for m in server.catalog if not m.get('hidden') and provider_of(m['model']) == provider]
+FAMILIES = {'codex': ('Luna', 'Sol', 'Astra'), 'claude': ('Haiku', 'Sonnet', 'Opus')}
+PICKER_LEVELS = ('low', 'medium', 'high')
+_NAME = re.compile(r'^(?:gpt-(\d+(?:\.\d+)*)-(luna|sol|astra)|claude-(haiku|sonnet|opus)-(\d+(?:-\d+)*))$')
+
+
+def _family(model):
+    if match := _NAME.fullmatch(model):
+        return (match[2] or match[3]).title(), tuple(int(n) for n in re.split(r'[.-]', match[1] or match[4]))
+
+
+def _levels(entry):
+    return [e['reasoningEffort'] for e in entry['supportedReasoningEfforts']]
+
+
+def choices(server, provider, extra=()):
+    """What the picker shows (presentation only; dispatch accepts any catalog model): the provider's three families in
+    their fixed order, each as its newest installed model with Low/Medium/High, then any other model that is currently
+    saved or favorited in `extra`, so a selection made outside the families stays visible and pressed."""
+    visible = [m for m in server.catalog if not m.get('hidden') and provider_of(m['model']) == provider]
+    result = []
+    for name in FAMILIES[provider]:
+        found = [(f[1], m) for m in visible if (f := _family(m['model'])) and f[0] == name
+                 and 'text' in m.get('inputModalities', ['text', 'image']) and set(_levels(m)) & set(PICKER_LEVELS)]
+        best = max(found, key=lambda item: item[0])[1] if found else None  # numeric version, never catalog order
+        result.append({'name': name, 'model': best['model'] if best else name,
+                       'levels': [e for e in _levels(best) if e in PICKER_LEVELS] if best else []})
+    shown = {c['model'] for c in result}
+    for m in visible:
+        if m['model'] in extra and m['model'] not in shown:
+            shown.add(m['model'])
+            result.append({'name': m.get('displayName') or m['model'], 'model': m['model'], 'levels': _levels(m)})
+    return result
 
 
 def current(db, server=None):

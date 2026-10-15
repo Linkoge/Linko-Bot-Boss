@@ -109,19 +109,45 @@ def test_one_global_choice_any_provider_validation_and_revisions(system):
     assert current(db, server)['worker'] == first['worker']  # nothing half-saved
 
 
-def test_any_catalog_model_and_effort_is_selectable_not_just_the_named_families(system):
+def test_picker_shows_the_compact_family_layout_while_dispatch_accepts_any_catalog_model(system):
     db, _, _, server, *_ = system
     server.catalog.append({'model': 'custom-model-x', 'displayName': 'Custom X', 'isDefault': False,
                            'supportedReasoningEfforts': [{'reasoningEffort': e} for e in ('minimal', 'ultra')],
                            'defaultReasoningEffort': 'minimal'})
-    names = [m['model'] for p in ('codex', 'claude') for m in choices(server, p)]
-    assert set(names) == {m['model'] for m in server.catalog} and 'custom-model-x' in names
-    assert next(m for m in choices(server, 'codex') if m['model'] == 'custom-model-x')['levels'] == ['minimal', 'ultra']
+    server.catalog.append({'model': 'gpt-5-sol', 'displayName': 'Old Sol', 'isDefault': False,
+                           'supportedReasoningEfforts': [{'reasoningEffort': e} for e in ('low', 'xhigh')],
+                           'defaultReasoningEffort': 'low'})
+    # The normal picker: three families per provider in fixed order, newest model each, Low/Medium/High only.
+    codex = choices(server, 'codex')
+    assert [(c['name'], c['model'], c['levels']) for c in codex] == [
+        ('Luna', MODELS['Luna'], ['low', 'medium', 'high']), ('Sol', SOL, ['low', 'medium', 'high']),
+        ('Astra', MODELS['Astra'], ['low', 'medium', 'high'])]
+    claude = choices(server, 'claude')
+    assert [c['name'] for c in claude] == ['Haiku', 'Sonnet', 'Opus'] and len(claude) == 3
+    assert all(set(c['levels']) <= {'low', 'medium', 'high'} for c in claude)
+    # A family missing from the catalog stays visible but disabled; no other family is substituted.
+    server.catalog[:] = [m for m in server.catalog if 'astra' not in m['model']]
+    assert next(c for c in choices(server, 'codex') if c['name'] == 'Astra') == {'name': 'Astra', 'model': 'Astra', 'levels': []}
+    # Dispatch is unrestricted: any catalog model and effort saves and is dispatched...
     saved = save(db, server, {**current(db, server), 'manager': {'model': 'custom-model-x', 'effort': 'ultra'},
-                              'worker': {'model': SONNET, 'effort': 'high'}})
+                              'worker': {'model': 'gpt-5-sol', 'effort': 'xhigh'}})
     assert saved['manager'] == {'model': 'custom-model-x', 'effort': 'ultra'}
+    # ...and a saved off-family selection stays visible (and so pressed) without cluttering the normal picker.
+    shown = choices(server, 'codex', {'custom-model-x', 'gpt-5-sol'})
+    assert [c['name'] for c in shown] == ['Luna', 'Sol', 'Astra', 'Custom X', 'Old Sol']
+    assert shown[3]['levels'] == ['minimal', 'ultra'] and shown[4]['levels'] == ['low', 'xhigh']
     with pytest.raises(ValueError, match='not supported'):
         save(db, server, {**saved, 'manager': {'model': SOL, 'effort': 'ultra'}})  # the catalog decides, nothing else
+
+
+def test_a_newer_family_version_replaces_the_older_one_numerically(system):
+    _, _, _, server, *_ = system
+    for model in ('gpt-6.10-sol', 'gpt-6.9-sol', 'claude-sonnet-5-10'):
+        server.catalog.append({'model': model, 'displayName': model, 'isDefault': False,
+                               'supportedReasoningEfforts': [{'reasoningEffort': e} for e in ('low', 'medium', 'high')],
+                               'defaultReasoningEffort': 'low'})
+    assert next(c for c in choices(server, 'codex') if c['name'] == 'Sol')['model'] == 'gpt-6.10-sol'
+    assert next(c for c in choices(server, 'claude') if c['name'] == 'Sonnet')['model'] == 'claude-sonnet-5-10'
 
 
 @pytest.mark.asyncio
@@ -187,13 +213,17 @@ def test_favorites_set_only_the_manager_across_providers(system):
 
 def test_api_saves_exactly_what_the_panel_sent(tmp_path):
     settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
-    app = create_app(settings, CatalogServer(settings), CatalogServer)
+    server = CatalogServer(settings)
+    server.catalog.append({'model': 'custom-model-x', 'displayName': 'Custom X', 'isDefault': False,
+                           'supportedReasoningEfforts': [{'reasoningEffort': 'minimal'}], 'defaultReasoningEffort': 'minimal'})
+    app = create_app(settings, server, CatalogServer)
     with TestClient(app, base_url='http://localhost') as client:
         assert client.get('/api/model-settings').status_code == 401
         sign_in(client, app, settings)
         panel = client.get('/api/model-settings').json()
         assert set(panel['providers']) == {'codex', 'claude'} and set(panel['settings']) == {'revision', 'manager', 'worker'}
-        assert panel['providers']['codex']['choices'] and panel['providers']['claude']['choices']
+        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra']
+        assert [c['name'] for c in panel['providers']['claude']['choices']] == ['Haiku', 'Sonnet', 'Opus']
         choice = {**panel['settings'], 'manager': {'model': SONNET, 'effort': 'high'}, 'worker': {'model': SOL, 'effort': 'medium'}}
         assert client.put('/api/model-settings', json=choice, headers={'X-CSRF-Token': 'bad'}).status_code == 403
         assert client.put('/api/model-settings', json=choice).json()['worker'] == {'model': SOL, 'effort': 'medium'}
@@ -204,3 +234,10 @@ def test_api_saves_exactly_what_the_panel_sent(tmp_path):
         assert client.put('/api/model-settings', json=auto).json()['worker'] is None
         assert client.get('/api/model-settings').json()['settings']['worker'] is None
         assert client.get('/api/models').status_code == 404  # the unused models endpoint is gone
+        # A saved or favorited model outside the three families stays visible; nothing else is added to the picker.
+        now = client.get('/api/model-settings').json()
+        assert 'Custom X' not in [c['name'] for c in now['providers']['codex']['choices']]
+        custom = {**now['settings'], 'manager': {'model': 'custom-model-x', 'effort': 'minimal'}}
+        assert client.put('/api/model-settings', json=custom).status_code == 200
+        names = [c['name'] for c in client.get('/api/model-settings').json()['providers']['codex']['choices']]
+        assert names == ['Luna', 'Sol', 'Astra', 'Custom X']

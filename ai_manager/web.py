@@ -405,8 +405,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
-        return {"provider": active(db), "settings": current(db, chat.server), "favorites": favorites(db, chat.server),
-                "providers": {p: {"choices": choices(chat.server, p)} for p in ("codex", "claude")}}
+        saved, marked = current(db, chat.server), favorites(db, chat.server)
+        keep = {pair["model"] for pair in (saved["manager"], saved["worker"], *(f["pair"] for f in marked if f)) if pair}
+        return {"provider": active(db), "settings": saved, "favorites": marked,
+                "providers": {p: {"choices": choices(chat.server, p, keep)} for p in ("codex", "claude")}}
 
     @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
     async def save_model_settings(body: dict):

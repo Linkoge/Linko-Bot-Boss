@@ -50,7 +50,7 @@ function addEffort(row,e,label,selected,run,disabled,key){
   const b=addChoice(row,modelButton(titleLevel(e),label,selected,run,disabled),key);b.classList.add('effort-choice');
 }
 function selectModel(c,role,m){const pair=c[role]||{effort:'medium'};pair.model=m.model;if(!m.levels.includes(pair.effort))pair.effort=m.levels[0];c[role]=pair;}
-const LEVEL_RANK=['minimal','low','medium','high','xhigh','max','ultra'];
+const PICKER_LEVELS=['low','medium','high'];
 function renderPair(container,role,label){
   container.replaceChildren();
   const pair=modelPanel.settings[role];
@@ -65,7 +65,7 @@ function renderPair(container,role,label){
     const models=modelRow(`${label} ${PROVIDER_NAMES[provider]} model`),levels=modelRow(`${label} ${PROVIDER_NAMES[provider]} effort`);
     const selected=choices.find(m=>m.model===pair?.model);
     for(const m of choices)addModel(models,m,`${label} ${m.name}`,pair?.model===m.model,()=>changeModels(c=>selectModel(c,role,m)),!m.levels.length,`${role}-${m.name}`);
-    const all=[...new Set(choices.flatMap(m=>m.levels))].sort((a,b)=>(LEVEL_RANK.indexOf(a)+1||99)-(LEVEL_RANK.indexOf(b)+1||99));
+    const all=[...PICKER_LEVELS,...(selected?.levels||[]).filter(e=>!PICKER_LEVELS.includes(e))]; // Low/Medium/High; a selected off-family model adds its own
     for(const e of all)addEffort(levels,e,`${label} ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,!!selected&&pair.effort===e,
       ()=>changeModels(c=>{c[role].effort=e;}),!selected?.levels.includes(e),`${role}-${provider}-${e}`);
     container.append(models,levels);

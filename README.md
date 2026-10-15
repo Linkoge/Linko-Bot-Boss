@@ -155,10 +155,15 @@ probes, live database changes, service restarts or host installation are part of
 
 - Chat has no modes: the manager does what is asked. Composer with recording/transcription,
   Discard/Upload, arbitrary attachments (only verified raster images become native image input), drafts and sequential Send.
-- Model settings: one manager choice and one worker choice, each any model and effort the provider catalogs offer (no
-  restriction beyond the catalog); what the panel shows is what is saved (`model_choice`) and what is dispatched. The worker
-  can also be **Automatic**: the manager then picks the model and effort for each task (provider default if it names none).
-  A task keeps the pair it first ran on, and each run records the model and effort actually used. Two manager favorites.
+- Model settings: one manager choice and one worker choice. Dispatch accepts any model and effort the provider catalogs
+  offer (no restriction beyond the catalog); what the panel shows is what is saved (`model_choice`) and what is dispatched.
+  The picker itself stays compact: per provider the three families in fixed order (Codex Luna, Sol, Astra; Claude Haiku,
+  Sonnet, Opus), each as its newest installed model, with Low/Medium/High (`model_settings.choices`; a family missing from
+  the catalog shows disabled). The catalog is never dumped into the panel. A saved or favorited model outside those
+  families (for example set through `PUT /api/model-settings`) is added as one extra button while it is selected or
+  favorited; a brand-new family is reached through the **Automatic** worker. Automatic lets the manager pick any catalog
+  model and effort for each task (provider default if it names none). A task keeps the pair it first ran on, and each run
+  records the model and effort actually used. Two manager favorites.
 - Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
   To-Do to a task); read-only project memory brief for the manager with owner-run review; chat clear/trash/archive/search.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
