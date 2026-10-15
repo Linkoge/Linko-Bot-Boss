@@ -1,0 +1,9 @@
+[Unit]
+Description=Start a Linko Bot Boss deploy when the manager requests one
+
+[Path]
+PathExists=@DATA@/deploy/request.json
+Unit=linko-bot-manager-deploy.service
+
+[Install]
+WantedBy=default.target

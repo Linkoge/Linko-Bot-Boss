@@ -40,7 +40,7 @@ for name in ('Alpha','Beta'):
  p=app.state.registry.add(s.project_roots[0]/name)
  t=app.state.scheduler.tasks.add(p['id'],name+' scoped objective')
  with app.state.db.transaction() as conn:
-  conn.execute("UPDATE tasks SET lifecycle='waiting',created_at=1700000000 WHERE id=?",(t['id'],))
+  conn.execute("UPDATE tasks SET held=1,created_at=1700000000,queued_at=1700000000 WHERE id=?",(t['id'],))
   conn.execute("INSERT INTO executions(id,project_id,agent_id,status,started_at,finished_at,turn_id) VALUES(?,?,'execution','completed',1700000000,1700000060,'turn')",(name,p['id']))
   app.state.db.event(conn,'worker.started',{{}},p['id'],execution_id=name)
   conn.execute("UPDATE events SET created_at=1700000040 WHERE execution_id=?",(name,))
@@ -185,7 +185,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 receipts.append({'simulated_safe_area':{'top':20,'bottom':28,'composer_gap':safe_gap}})
                 # Older active records precede newer history through real portfolio APIs.
                 with sqlite3.connect(root/'data/manager.sqlite3') as conn:
-                    conn.execute("UPDATE tasks SET lifecycle='running',created_at=1600000000 WHERE description LIKE 'Alpha%'")
+                    conn.execute("UPDATE tasks SET state='running',held=0,created_at=1600000000 WHERE description LIKE 'Alpha%'")
                     conn.execute("UPDATE executions SET status='running',finished_at=NULL,started_at=1600000000 WHERE id='Beta'")
                 page.evaluate('()=>refresh()')
                 page.locator('[data-view=tasks]').click()

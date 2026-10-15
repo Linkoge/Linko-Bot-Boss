@@ -1,0 +1,110 @@
+"""Optional local timing diagnostic, not a delivery gate or physical mobile benchmark."""
+import argparse
+import json
+import os
+import socket
+import subprocess
+import tempfile
+import time
+from pathlib import Path
+
+import httpx
+from browser_audio import PROGRAM
+from playwright.sync_api import sync_playwright
+
+INSTRUMENT = '''
+window.captureProbe={events:[],streams:[]};
+const mark=(name)=>captureProbe.events.push({name,at:performance.now(),gesture:navigator.userActivation.isActive,phase:typeof audioState==='undefined'?null:audioState.session?.phase});
+const network=window.fetch;window.fetch=(...a)=>network(...a).then(r=>{if(String(a[0])==='/api/audio')mark('config-response');return r;});
+const original=navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+navigator.mediaDevices.getUserMedia=(...args)=>{mark('permission-request');return original(...args).then(stream=>{captureProbe.streams.push(stream);mark('stream-ready');return stream;});};
+// Observe native dispatch before the application can install its onstart handler.
+// A listener added in start() runs after that handler and can reverse observer timestamps.
+const Recorder=MediaRecorder,start=Recorder.prototype.start;
+window.MediaRecorder=new Proxy(Recorder,{construct(Target,args){
+  const recorder=Reflect.construct(Target,args);
+  recorder.addEventListener('start',()=>mark('recorder-start-event'),{once:true});
+  recorder.addEventListener('dataavailable',()=>mark('first-data'),{once:true});
+  return recorder;
+}});
+Recorder.prototype.start=function(...args){mark('recorder-start-call');return start.apply(this,args);};
+document.addEventListener('click',event=>{if(event.target.closest('#microphone'))mark('tap');},true);
+new MutationObserver(()=>{const n=document.querySelector('#audio-status');if(n&&!n.closest('[hidden]')){const phase=typeof audioState==='undefined'?null:audioState.session?.phase;if(phase&&!captureProbe.events.some(e=>e.name==='ui-'+phase))mark('ui-'+phase);}}).observe(document,{subtree:true,childList:true,characterData:true,attributes:true,attributeFilter:['hidden']});
+'''
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--verify', action='store_true',
+                        help='Optional diagnostic assertions; not a delivery acceptance check')
+    args = parser.parse_args()
+    with tempfile.TemporaryDirectory(prefix='linko-start-probe-') as directory:
+        root = Path(directory)
+        for name in ('Alpha', 'Beta'):
+            (root / 'projects' / name).mkdir(parents=True)
+        with socket.socket() as sock:
+            sock.bind(('127.0.0.1', 0))
+            port = sock.getsockname()[1]
+        url = f'http://127.0.0.1:{port}'
+        env = {**os.environ, 'AI_MANAGER_DATA': str(root / 'data'),
+               'AI_MANAGER_PROJECT_ROOTS': str(root / 'projects'), 'AI_MANAGER_SECURE_COOKIE': '0'}
+        process = subprocess.Popen([os.sys.executable, '-c', PROGRAM.replace('PORT', str(port))], env=env)
+        try:
+            for _ in range(100):
+                try:
+                    if httpx.get(url + '/api/auth-status').status_code == 200:
+                        break
+                except httpx.HTTPError:
+                    pass
+                time.sleep(.1)
+            results = []
+            with sync_playwright() as playwright:
+                browser = playwright.chromium.launch(args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
+                page = browser.new_page(viewport={'width': 393, 'height': 851})
+                page.add_init_script(INSTRUMENT)
+                page.goto(url)
+                page.locator('#username').fill('owner')
+                page.locator('#password').fill('disposable-browser-password')
+                page.locator('#setup-token').fill((root / 'data/setup-token').read_text())
+                page.locator('#login-button').click()
+                page.wait_for_function('()=>state.ready&&state.history&&!audioState.loading')
+                for delay in (0, 600):
+                    page.route('**/api/audio', lambda route: (time.sleep(delay / 1000), route.continue_()))
+                    page.evaluate('captureProbe.events=[]')
+                    page.locator('#microphone').click()
+                    page.wait_for_function("()=>audioState.session?.phase==='recording'&&audioState.session.bytes>0")
+                    # Capture may produce its first chunk before metadata arrives. Wait for both
+                    # observations before comparing timestamps; do not serialize the app itself.
+                    page.wait_for_function("()=>captureProbe.events.some(e=>e.name==='config-response')")
+                    events = page.evaluate('captureProbe.events')
+                    tap = next(e['at'] for e in events if e['name'] == 'tap')
+                    results.append({'injected_config_delay_ms': delay,
+                                    'events': [{**event, 'after_tap_ms': round(event['at'] - tap, 2)} for event in events]})
+                    args.output.parent.mkdir(parents=True, exist_ok=True)
+                    args.output.write_text(json.dumps(results, indent=2))
+                    if args.verify:
+                        assert next(e['phase'] for e in events if e['name'] == 'recorder-start-event') == 'starting'
+                        times = {e['name']: e['at'] for e in events}
+                        assert times['permission-request'] - times['tap'] < 200
+                        assert times['ui-starting'] - times['tap'] < 200
+                        assert times['ui-recording'] >= times['recorder-start-event']
+                        assert next(e['gesture'] for e in events if e['name'] == 'permission-request')
+                        if delay:
+                            assert times['recorder-start-event'] < times['config-response']
+                            assert times['first-data'] < times['config-response']
+                    page.locator('#audio-cancel').click()
+                    page.wait_for_function('()=>!audioState.session')
+                    assert page.evaluate('captureProbe.streams.every(s=>s.getTracks().every(t=>t.readyState==="ended"))')
+                    page.unroute('**/api/audio')
+                browser.close()
+            args.output.parent.mkdir(parents=True, exist_ok=True)
+            args.output.write_text(json.dumps(results, indent=2))
+            print(json.dumps(results, indent=2))
+        finally:
+            process.terminate()
+            process.wait(timeout=10)
+
+
+if __name__ == '__main__':
+    main()

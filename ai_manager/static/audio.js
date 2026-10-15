@@ -8,7 +8,7 @@ function renderAudio(){
   const session=audioState.session,phase=session?.phase;
   const recording=phase==='recording',busy=['starting','stopping','transcribing','sending'].includes(phase);
   $('audio-panel').hidden=!session;
-  $('audio-status').textContent=recording?session.message:session?`${session.label} · ${session.message||({starting:'Requesting microphone…',recording:'Recording',stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
+  $('audio-status').textContent=recording?session.message:session?`${session.label} · ${session.message||({starting:'Starting microphone…',recording:'Recording',stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
   $('audio-cancel').disabled=phase==='sending';
   $('audio-download').hidden=!session?.blob;
   if(recording||phase==='error')$('microphone').textContent=recording?'■':'Retry';
@@ -16,7 +16,7 @@ function renderAudio(){
   $('microphone').setAttribute('aria-label',recording?'Stop recording and transcribe':phase==='error'?'Retry recording transcription':'Record microphone');
   $('microphone').title=audioSupported()?'Record microphone':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
   $('microphone').disabled=visibilityPending.size>0||audioState.loading||busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));
-  $('audio-upload').hidden=!recording;$('audio-upload').disabled=!recording;
+  $('audio-upload').hidden=!recording;$('audio-upload').disabled=!recording||!session.config;
   $('send').type=session?'button':'submit';
   $('send').disabled=session?!recording||session.project!==state.project||state.pending.has(state.project)||submissions.has(state.project):state.pending.has(state.project);
   if(typeof attachmentState!=='undefined'&&attachmentState.uploads.has(state.project))$('send').disabled=true;
@@ -33,62 +33,77 @@ function audioChanged(auth=false){
   if(session.phase==='recording')finishAudio(false);
   renderAudio();
 }
-function releaseMicrophone(session){clearInterval(session.timer);session.stream?.getTracks().forEach(track=>track.stop());}
+function releaseMicrophone(session){clearTimeout(session.startTimer);clearInterval(session.timer);session.stream?.getTracks().forEach(track=>track.stop());}
 function discardAudio(){
   const session=audioState.session;if(!session||session.phase==='sending')return;
   audioState.session=null;clearAudioCheckpoint();session.controller?.abort();
   if(session.recorder&&session.recorder.state!=='inactive')session.recorder.stop();
   releaseMicrophone(session);renderAudio();
 }
+function failAudioStartup(session,error){
+  if(audioState.session!==session||session.startFailed)return;
+  session.startFailed=true;session.interrupted=true;session.send=false;
+  session.message=error.name==='NotAllowedError'?'Microphone permission denied. Allow it in browser settings, then retry.':error.name==='NotFoundError'?'No microphone found. Connect one, then retry.':error.message;
+  session.phase='error';
+  if(session.recorder&&session.recorder.state!=='inactive')session.recorder.stop();
+  releaseMicrophone(session);renderAudio();
+}
 async function startAudio(){
   if(audioState.session||audioState.loading)return;
   if(!audioSupported()){notice(!window.isSecureContext?'Open this manager over HTTPS to use the microphone on mobile.':'This browser does not support microphone recording. Try a current browser.');return;}
-  if(state.pending.has(state.project)||submissions.has(state.project)||!state.history)return;
+  if(state.pending.has(state.project)||submissions.has(state.project)||!state.history||document.hidden||state.view!=='chat')return;
   const session={id:crypto.randomUUID(),project:state.project,conversation:state.history.conversation.id,mode:$('chat-mode').value,label:projectName(state.project),phase:'starting',chunks:[],bytes:0,send:false};
   audioState.session=session;renderAudio();
   try{
-    const config=await api('/api/audio');if(audioState.session!==session)return;
-    if(!config.available)throw new Error(config.reason);
-    session.config=config;
-    const mime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4'].find(type=>config.mime_types.includes(type.split(';')[0])&&MediaRecorder.isTypeSupported(type));
+    const mime=['audio/webm;codecs=opus','audio/ogg;codecs=opus','audio/mp4'].find(type=>MediaRecorder.isTypeSupported(type));
     if(!mime)throw new Error('This browser has no supported audio recording format.');
-    const stream=await navigator.mediaDevices.getUserMedia({audio:true});
-    if(audioState.session!==session){stream.getTracks().forEach(track=>track.stop());return;}
+    // Request permission in the click gesture. Configuration is metadata, never a capture prerequisite.
+    // Start the recorder as soon as the device arrives so no opening samples wait on the network.
+    const permission=navigator.mediaDevices.getUserMedia({audio:true});
+    session.configReady=api('/api/audio').then(config=>{
+      if(!config.available)throw new Error(config.reason);
+      session.config=config;if(audioState.session===session){checkpointAudio(session,true);renderAudio();}return config;
+    });
+    session.configReady.catch(error=>failAudioStartup(session,error));
+    session.startTimer=setTimeout(()=>failAudioStartup(session,new Error('Microphone did not start. Discard or retry when ready.')),30000);
+    const stream=await permission;
+    if(audioState.session!==session||session.startFailed||document.hidden||state.view!=='chat'){stream.getTracks().forEach(track=>track.stop());return;}
     session.stream=stream;session.recorder=new MediaRecorder(stream,{mimeType:mime,audioBitsPerSecond:64000});
-    session.recorder.ondataavailable=event=>{if(audioState.session!==session)return;if(event.data.size){session.chunks.push(event.data);session.bytes+=event.data.size;if(Date.now()-(session.checkpointAt||0)>2000){session.checkpointAt=Date.now();checkpointAudio(session);}if(session.bytes>=config.max_bytes&&session.phase==='recording'){session.message='Size limit reached';finishAudio(false);}}};
-    session.recorder.onerror=()=>interruptAudio(session,'Microphone interrupted');
+    session.recorder.ondataavailable=event=>{if(audioState.session!==session)return;if(event.data.size){session.chunks.push(event.data);session.bytes+=event.data.size;if(Date.now()-(session.checkpointAt||0)>2000){session.checkpointAt=Date.now();checkpointAudio(session);}if(session.config&&session.bytes>=session.config.max_bytes&&session.phase==='recording'){session.message='Size limit reached';finishAudio(false);}}};
+    session.recorder.onerror=()=>{if(session.phase==='starting')failAudioStartup(session,new Error('Microphone failed to start'));else interruptAudio(session,'Microphone interrupted');};
     session.recorder.onstop=()=>{
       releaseMicrophone(session);
       if(audioState.session!==session)return;
-      if(session.phase==='recording'){session.interrupted=true;session.send=false;session.message='Capture stopped unexpectedly';}
+      if(['starting','recording'].includes(session.phase)){session.interrupted=true;session.send=false;session.message='Capture stopped unexpectedly';}
       session.blob=new Blob(session.chunks,{type:session.recorder.mimeType});session.chunks=[];checkpointAudio(session,true);
       if(session.authLost){session.phase='error';session.message='Recording saved in this tab. Sign in, then retry.';renderAudio();return;}
       if(session.interrupted){session.phase='error';session.message=(session.message||'Capture interrupted')+'. Captured audio kept; Retry transcribes it. Missing audio cannot be recovered.';renderAudio();return;}
       transcribeAudio(session);
     };
-    session.recorder.start(250);session.phase='recording';session.message='00:00';session.started=performance.now();session.lastTick=Date.now();
-    session.timer=setInterval(()=>{
-      if(audioState.session!==session||session.phase!=='recording')return;
-      const now=Date.now();if(now-session.lastTick>5000){interruptAudio(session,'Browser suspended capture; audio continuity is uncertain');return;}session.lastTick=now;
-      const elapsed=Math.floor((performance.now()-session.started)/1000);
-      session.message=`${String(Math.floor(elapsed/60)).padStart(2,'0')}:${String(elapsed%60).padStart(2,'0')}`;
-      if(session.background||session.muted)session.message+=' · '+(session.muted?'Microphone paused; audio may be missing':'Background capture may pause');
-      renderAudio();if(elapsed>=config.max_seconds)finishAudio(false);
-    },250);
-    for(const track of stream.getTracks()){track.onended=()=>interruptAudio(session,'Microphone ended');track.onmute=()=>{if(audioState.session!==session)return;session.muted=true;renderAudio();};track.onunmute=()=>{if(audioState.session===session&&session.muted)interruptAudio(session,'Microphone was paused; audio may be missing');};}
-    renderAudio();
-  }catch(error){
-    releaseMicrophone(session);if(audioState.session!==session)return;
-    session.phase='error';session.message=error.name==='NotAllowedError'?'Microphone permission denied. Allow it in browser settings, then retry.':error.name==='NotFoundError'?'No microphone found. Connect one, then retry.':error.message;renderAudio();
-  }
+    session.recorder.onstart=()=>{
+      if(audioState.session!==session||session.startFailed||session.phase!=='starting'){if(session.recorder.state!=='inactive')session.recorder.stop();releaseMicrophone(session);return;}
+      clearTimeout(session.startTimer);session.phase='recording';session.message='00:00';session.started=performance.now();session.lastTick=Date.now();
+      session.timer=setInterval(()=>{
+        if(audioState.session!==session||session.phase!=='recording')return;
+        const now=Date.now();if(now-session.lastTick>5000){interruptAudio(session,'Browser suspended capture; audio continuity is uncertain');return;}session.lastTick=now;
+        const elapsed=Math.floor((performance.now()-session.started)/1000);
+        session.message=`${String(Math.floor(elapsed/60)).padStart(2,'0')}:${String(elapsed%60).padStart(2,'0')}`;
+        if(session.background||session.muted)session.message+=' · '+(session.muted?'Microphone paused; audio may be missing':'Background capture may pause');
+        renderAudio();if(session.config&&elapsed>=session.config.max_seconds)finishAudio(false);
+      },250);
+      renderAudio();
+    };
+    for(const track of stream.getTracks()){track.onended=()=>{if(session.phase==='starting')failAudioStartup(session,new Error('Microphone ended before capture started'));else interruptAudio(session,'Microphone ended');};track.onmute=()=>{if(audioState.session!==session)return;session.muted=true;renderAudio();};track.onunmute=()=>{if(audioState.session===session&&session.muted)interruptAudio(session,'Microphone was paused; audio may be missing');};}
+    session.recorder.start(250);
+  }catch(error){failAudioStartup(session,error);}
 }
 function interruptAudio(session,message){
   if(audioState.session!==session||session.phase!=='recording')return;
   session.interrupted=true;session.message=message;session.send=false;finishAudio(false);
 }
-function finishAudio(send,parallel=false){
+function finishAudio(send){
   const session=audioState.session;if(session?.phase!=='recording')return;
-  session.send=send&&!session.changed;session.parallel=parallel&&session.send;session.phase='stopping';if(!session.interrupted)session.message='';clearInterval(session.timer);renderAudio();
+  session.send=send&&!session.changed;session.phase='stopping';if(!session.interrupted)session.message='';clearInterval(session.timer);renderAudio();
   if(session.recorder.state!=='inactive')session.recorder.stop();releaseMicrophone(session);
 }
 function appendTranscript(session,text){
@@ -107,6 +122,8 @@ async function transcribeAudio(session){
   const timeout=setTimeout(()=>session.controller.abort(),480000);
   let submitting=false;
   try{
+    if(session.configReady)session.config=await session.configReady;
+    if(audioState.session!==session)return;
     if(!session.blob?.size)throw new Error('No audio captured. Discard and record again.');
     if(session.blob.size>session.config.max_bytes)throw new Error('Recording exceeds the upload limit. Download it or discard and record again.');
     let text=session.transcript;
@@ -124,7 +141,7 @@ async function transcribeAudio(session){
     audioState.session=null;clearAudioCheckpoint();renderAudio();
     if(send){
       submitting=true;
-      await sendSubmission({project_id:session.project,conversation_id:session.conversation,mode:session.mode,content,parallel:!!session.parallel});
+      await sendSubmission({project_id:session.project,conversation_id:session.conversation,mode:session.mode,content});
     }else if(state.project===session.project){$('message-input').focus();}
     else notice(`Transcript added to ${session.label}'s draft.`);
   }catch(error){
@@ -140,9 +157,9 @@ $('microphone').onclick=()=>{
 };
 $('send').addEventListener('click',()=>{if(audioState.session?.phase==='recording')finishAudio(true);});
 $('message-input').addEventListener('input',()=>{const session=audioState.session;if(session&&session.phase!=='recording')session.send=false;});
-document.addEventListener('visibilitychange',()=>{const session=audioState.session;if(!session)return;session.background=document.hidden;if(session.phase==='recording'){session.send=false;if(!document.hidden&&Date.now()-session.lastTick>5000)interruptAudio(session,'Browser suspended capture; audio continuity is uncertain');else{if(document.hidden)try{session.recorder.requestData();}catch{}renderAudio();}}});
-document.addEventListener('freeze',()=>{const session=audioState.session;if(session)interruptAudio(session,'Browser froze capture');});
-window.addEventListener('pagehide',()=>{const session=audioState.session;if(session)interruptAudio(session,'Page left; capture interrupted');});
+document.addEventListener('visibilitychange',()=>{const session=audioState.session;if(!session)return;session.background=document.hidden;if(session.phase==='starting'&&document.hidden){discardAudio();return;}if(session.phase==='recording'){session.send=false;if(!document.hidden&&Date.now()-session.lastTick>5000)interruptAudio(session,'Browser suspended capture; audio continuity is uncertain');else{if(document.hidden)try{session.recorder.requestData();}catch{}renderAudio();}}});
+document.addEventListener('freeze',()=>{const session=audioState.session;if(session?.phase==='starting')discardAudio();else if(session)interruptAudio(session,'Browser froze capture');});
+window.addEventListener('pagehide',()=>{const session=audioState.session;if(session?.phase==='starting')discardAudio();else if(session)interruptAudio(session,'Page left; capture interrupted');});
 $('audio-cancel').onclick=discardAudio;
 $('audio-download').onclick=()=>{
   const session=audioState.session;if(!session?.blob)return;

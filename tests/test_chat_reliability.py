@@ -9,10 +9,11 @@ from test_minimal_flow import system as system_fixture
 from test_recovery import Faults, eligible, settle
 
 from ai_manager.chat import Chat
+from ai_manager.core import Core
 from ai_manager.db import Database
 from ai_manager.orchestration import Scheduler
+from ai_manager.pipeline import Pipeline
 from ai_manager.recovery import SilentObserver
-from ai_manager.workers import Workers
 
 system = system_fixture
 
@@ -24,7 +25,7 @@ async def test_lost_acceptance_retry_after_completion_restart_and_clear(system):
     conversation = chat.conversation(project["id"])
     faults = Faults()
     chat.server = faults.factory(settings)
-    workers = Workers(db, registry, settings, faults.factory)
+    workers = Core(db, registry, settings, Pipeline(db, registry), faults.factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
     request = dict(
@@ -151,11 +152,11 @@ async def test_recent_tools_and_pending_approval_are_not_silent_failures(system,
 async def test_silent_worker_completion_uses_owned_runner_cleanup(system):
     db, registry, chat, settings = system
     faults = Faults(["hold"])
-    workers = Workers(db, registry, settings, faults.factory)
+    workers = Core(db, registry, settings, Pipeline(db, registry), faults.factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     project = registry.list()[0]
     task = scheduler.tasks.add(project["id"], "Silent worker", chat.conversation(project["id"])["id"])
-    claimed = scheduler.tasks.claim(1)
+    claimed = scheduler.tasks.claim()
     workers.launch(claimed)
     await asyncio.sleep(0.02)
     row = db.one("SELECT * FROM executions WHERE id=?", (claimed["lease_owner"],))
@@ -166,9 +167,9 @@ async def test_silent_worker_completion_uses_owned_runner_cleanup(system):
         conn.execute("UPDATE events SET created_at=? WHERE execution_id=?", (time.time() - 61, row["id"]))
     await scheduler.observer.observe(workers.servers)
     await settle(workers)
-    assert db.one("SELECT lease_owner,lifecycle FROM tasks WHERE id=?", (task["id"],)) == {
+    assert db.one("SELECT lease_owner,state FROM tasks WHERE id=?", (task["id"],)) == {
         "lease_owner": None,
-        "lifecycle": "completed",
+        "state": "done",
     }
     assert len(faults.calls) == 1 and not workers.servers
 
@@ -203,7 +204,7 @@ def test_schema10_additive_migration_preserves_all_existing_rows(system):
     before = {table: db.all(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
     migrated = Database(settings.db_path)
     assert before == {table: migrated.all(f"SELECT * FROM {table} ORDER BY rowid") for table in tables}
-    assert migrated.one("SELECT max(version) AS version FROM schema_version")["version"] == 12
+    assert migrated.one("SELECT max(version) AS version FROM schema_version")["version"] == 13
     assert migrated.one("PRAGMA integrity_check")["integrity_check"] == "ok"
     assert not migrated.all("PRAGMA foreign_key_check")
 

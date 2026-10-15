@@ -36,10 +36,10 @@ for name in ('Alpha','Beta','Recovery Fixture'):app.state.registry.add(s.project
 recovery=app.state.db.one("SELECT id FROM projects WHERE name='Recovery Fixture'")
 recovery_chat=app.state.chat.conversation(recovery['id'])
 app.state.scheduler.tasks.add(recovery['id'],'Retain partial development during outage',recovery_chat['id'])
-recovery_task=app.state.scheduler.tasks.claim(2)
+recovery_task=app.state.scheduler.tasks.claim()
 with app.state.db.transaction() as conn:
-    conn.execute("UPDATE tasks SET lifecycle='waiting',blocker='Waiting for connection' WHERE id=?",(recovery_task['id'],))
-    conn.execute("UPDATE executions SET status='recovering',retry_at=?,retry_count=1,recovery_reason='connection' WHERE id=?",(time.time()+3600,recovery_task['lease_owner']))
+    conn.execute("UPDATE tasks SET state='queued',lease_owner=NULL,retry_at=?,waits=1,blocker='Waiting for the provider usage limit; retrying at 23:59 UTC' WHERE id=?",(time.time()+3600,recovery_task['id']))
+    conn.execute("UPDATE executions SET status='waiting',finished_at=? WHERE id=?",(time.time(),recovery_task['lease_owner']))
     conn.execute("INSERT INTO executions(id,agent_id,status,started_at,conversation_id,retry_at,recovery_reason) VALUES('recovery-reply','manager','recovering',?,?,?,'connection')",(time.time(),recovery_chat['id'],time.time()+3600))
     conn.execute("INSERT INTO messages VALUES('recovery-message',?,'assistant','Partial response is preserved','waiting','recovery-reply',?)",(recovery_chat['id'],time.time()))
 beta=app.state.db.one("SELECT id FROM projects WHERE name='Beta'")
@@ -111,8 +111,10 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("[data-view=settings]").click()
                 page.locator("#load-models").click()
                 page.locator("#model-dialog").wait_for(state="visible")
-                assert page.locator("#manager-choices > div").count() == 2
-                assert page.locator(".bot-model-section").count() == 3
+                page.wait_for_function("()=>!!modelPanel&&!modelOpening")
+                assert page.locator("#manager-choices > div").count() == 4
+                assert page.locator("#bot-choices .model-choice-row").count() == 4
+                assert page.locator(".favorite-row").count() == 2
                 page.keyboard.press("Escape")
                 page.locator("#rename-project").click()
                 page.locator("#editor-form input[name=display_name]").fill("Renamed")
@@ -253,8 +255,8 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 assert page.locator("#microphone").is_enabled()
                 assert page.locator("#archive-chat").is_disabled()
                 page.locator("[data-view=tasks]").click()
-                page.locator("#task-list").get_by_text("Waiting for connection", exact=False).wait_for()
-                assert "Next attempt" in page.locator("#task-list").inner_text()
+                page.locator("#task-list").get_by_text("provider usage limit", exact=False).wait_for()
+                assert "retrying at" in page.locator("#task-list").inner_text()
                 page.locator("[data-view=chat]").click()
                 for width in (1440, 393, 320):
                     page.set_viewport_size({"width": width, "height": 851})

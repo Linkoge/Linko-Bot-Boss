@@ -14,7 +14,7 @@ def test_persistence_isolation_atomic_selection_archive_and_no_dispatch(client):
     one, two = [app.state.registry.add(settings.project_roots[0] / name)["id"] for name in ("one", "two")]
     task = app.state.scheduler.tasks.add(one, "Execution assignment must survive To-Do deletion")
     with app.state.db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='waiting' WHERE id=?", (task["id"],))
+        conn.execute("UPDATE tasks SET held=1 WHERE id=?", (task["id"],))
     recency = app.state.db.all("SELECT id,last_used_at FROM projects ORDER BY id")
     before_tasks = app.state.db.all("SELECT * FROM tasks")
     before_executions = app.state.db.all("SELECT * FROM executions")
@@ -93,7 +93,7 @@ async def test_manager_future_recording_in_every_mode_without_task_or_queue(clie
         await scheduler.manager_action(project, params)
     assert not app.state.db.all("SELECT * FROM tasks")
     assert not app.state.db.all("SELECT * FROM executions")
-    assert scheduler.tasks.claim(2) is None
+    assert scheduler.tasks.claim() is None
     listed = await scheduler.manager_action(None, {"tool": "manager_action", "arguments": {"action": "list_todos"}})
     assert len(listed["entries"]) == 3
     with pytest.raises(ValueError):
@@ -114,7 +114,7 @@ def test_deferred_note_migrates_once_preserving_original_assignment_and_audit(cl
         project, "Original deferred objective; preserve architectural review and audit"
     )
     with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET id=?,lifecycle=? WHERE id=?", (DEFERRED_ASSIGNMENT, "completed", task["id"]))
+        conn.execute("UPDATE tasks SET id=?,state=? WHERE id=?", (DEFERRED_ASSIGNMENT, "done", task["id"]))
         conn.execute("DELETE FROM schema_version WHERE version=11")
         db.event(conn, "task.evidence", {"report": "original-note-report"}, project, DEFERRED_ASSIGNMENT)
     before = db.one("SELECT * FROM tasks WHERE id=?", (DEFERRED_ASSIGNMENT,))
@@ -183,7 +183,7 @@ async def test_manager_delegate_and_bundled_continue_handoff(client):
     task = await scheduler.manager_action(project, params)
     assert todos.list(project) == [b]
     with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='paused' WHERE id=?", (task["id"],))
+        conn.execute("UPDATE tasks SET held=1 WHERE id=?", (task["id"],))
     params["arguments"] = {"action": "continue", "task_id": task["id"], "objective": "Bundle owner addition",
                            "todos": [{"id": b["id"], "revision": 0}]}
     params["manager_execution_id"] = "fixture-resume"

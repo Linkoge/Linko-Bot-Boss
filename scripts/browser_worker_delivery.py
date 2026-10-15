@@ -12,13 +12,13 @@ from playwright.sync_api import sync_playwright
 
 SEED = '''
 import time
-from ai_manager.tasks import Tasks
+from ai_manager.core import Tasks
 c=app.state.chat.conversation()
 p=app.state.registry.list()[0]
 t=Tasks(app.state.db).add(p['id'],'INTERNAL_OBJECTIVE',c['id'])
-e=Tasks(app.state.db).claim(2)
+e=Tasks(app.state.db).claim()
 with app.state.db.transaction() as conn:
-    conn.execute("UPDATE tasks SET lifecycle='completed',lease_owner=NULL WHERE id=?",(t['id'],))
+    conn.execute("UPDATE tasks SET state='done',lease_owner=NULL WHERE id=?",(t['id'],))
     conn.execute("UPDATE executions SET finished_at=?,status='completed',delivery='delivered' WHERE id=?",(time.time(),e['lease_owner']))
     for ident,role,body in [('result:'+e['lease_owner'],'worker','Codex result: INTERNAL_OBJECTIVE'),('literal','user','Codex result: {"objective":"OWNER_LITERAL_JSON"}'),('reply','assistant','Ready; activation pending.')]:
         conn.execute('INSERT INTO messages VALUES(?,?,?,?,?,NULL,?)',(ident,c['id'],role,body,'completed',time.time()))

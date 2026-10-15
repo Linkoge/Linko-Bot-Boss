@@ -1,8 +1,8 @@
 # Whole-message Copy and Delete — retained assignment report
 
-Assignment: `978211a9c69a48dfa9347b3620b4db1b`  
-Branch: `linko/assignment-978211a9c69a48dfa9347b3620b4db1b`  
-Base: `1406e396b001052e1ad5f6a9cec1dbad30adedd4`  
+Assignment: `978211a9c69a48dfa9347b3620b4db1b`
+Branch: `linko/assignment-978211a9c69a48dfa9347b3620b4db1b`
+Base: `1406e396b001052e1ad5f6a9cec1dbad30adedd4`
 Source: To-Do `fc506b0047394f5fb0d1c64a90b957ad`, observed revision 1.
 
 ## Scope and preserved source
@@ -18,7 +18,7 @@ Original selected source title: **Whole-message Copy and Delete controls**.
 The source details below are preserved verbatim as read from the existing To-Do:
 
 > Subtle small low-opacity lower-right expandable arrow on whole owner/assistant messages reveals Copy and Delete underneath. Copy/delete entire message and complete assistant response rather than fragments. No Edit; maintain deletion confirmation.
-> 
+>
 > Restored at owner's request from held assignment 978211a9c69a48dfa9347b3620b4db1b (read_task description, four linked To-Dos). Original handoff/source records remain authoritative and must be preserved. Backlog only; do not execute or resume the held assignment. When explicitly scheduled, inspect and reuse that existing assignment to avoid duplicate implementation.
 
 The source already had `archived_at` set when inspected. This worker neither archived it nor claims
@@ -73,3 +73,21 @@ No activation receipt exists for this change from this worker; deployment remain
 retention means Delete is not provider-side erasure. Physical mobile touch/clipboard behavior is not claimed;
 Chromium responsive and keyboard behavior is verified. There is no overnight/quota bootstrap claim because
 recovery work was explicitly excluded by the owner's latest scope.
+
+## Merge repair round 1
+
+The application merged main `d42423c54cad3332abfb4da8ecc39a9fb7ffe47d` into this retained branch
+and returned modify/delete conflicts in `STATE.md` and `docs/chat-history.md`. Main deliberately
+removed those documents while consolidating the project contract into README and RULES. This repair
+keeps their removal and moves the Copy/Delete product contract into README, preserving both intents.
+The original source descriptions and documentation remain retrievable from implementation commit
+`11ff4765c8fcd897bc03baf99cde1d19bdd31087` (including both deleted paths); the quoted To-Do and source
+snapshot above remain unchanged. Earlier references to those paths/check totals describe that original
+candidate, not the combined repair. No unrelated bundled feature is resumed.
+
+The already merged runtime changes are main's simplification; this repair does not restore removed
+queue/deployment machinery or edit shared runtime. The application still handles merge/deploy.
+Current repair checks, exact merge candidate, durable hashes and pending activation facts are retained
+in `.data/message-actions/merge-manager-summary.json`; logs use `merge-*.log`. The earlier report and
+`.data/message-actions/manager-summary.json` remain original-candidate evidence. Only a real succeeded
+application deployment receipt can establish activation; this worker performs no deployment.

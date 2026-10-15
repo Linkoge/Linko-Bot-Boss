@@ -1,6 +1,7 @@
 """Global role choices and bot policy, using existing settings and task audit events."""
 import copy
 import json
+from contextlib import nullcontext
 
 from .model_families import PROVIDER_FAMILIES, family, latest, policy_item, resolve
 
@@ -116,31 +117,13 @@ def permitted(config, server, provider=None):
 
 def guidelines(provider):
     small, work, strong = GUIDES[provider]
-    return ('Before delegate in Automatic choose worker_route from permitted_pairs by verification tier. '
-            f'Small: {small} or {work} Low. Normal: {work} Medium. Risky: {work} High or {strong}; '
-            'a weaker risky pair is rejected while a qualifying pair is permitted. '
+    return ('Before delegate in Automatic choose worker_route from permitted_pairs by difficulty. '
+            f'Simple: {small} or {work} Low. Ordinary: {work} Medium. Hard: {work} High or {strong}. '
             'Manual uses the saved pair; never override it. No extra routing call. '
             'Existing assignments retain their selected pair on continue.')
 
 
-def rank(pair, provider):
-    return PROVIDER_FAMILIES[provider].index(family(pair['model'])), LEVELS.index(pair['effort'])
-
-
-def risky_capable(pair, provider):
-    tier, effort = rank(pair, provider)
-    return tier == 2 or (tier == 1 and effort == 2)
-
-
-def cheapest(db, server, provider):
-    """Lowest-cost permitted pair for the automatic diff review; never outside the owner policy."""
-    pairs = permitted(current(db, server, provider), server, provider)
-    if not pairs:
-        raise ValueError('No permitted review model')
-    return min(pairs, key=lambda pair: rank(pair, provider))
-
-
-def save(db, server, value):
+def save(db, server, value, activate=False, connection=None):
     value = dict(value)
     provider = value.pop('provider', 'codex')
     if provider not in PROVIDERS:
@@ -164,7 +147,7 @@ def save(db, server, value):
             raise ValueError('Each model and level needs an allow or deny state')
     if not permitted(value, server, provider):
         raise ValueError('Allow at least one supported model and level combination')
-    with db.transaction() as conn:
+    with (db.transaction() if connection is None else nullcontext(connection)) as conn:
         if current(db, server, provider)['revision'] != value['revision']:
             raise ValueError('Settings changed; reopen the panel before editing')
         value = {**value, 'revision': value['revision'] + 1}
@@ -175,11 +158,15 @@ def save(db, server, value):
             routes = {'interactive': value['manager'], 'execution': value['bot']['manual']}
             conn.execute("INSERT INTO settings VALUES('model_routes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                          (json.dumps(routes),))
+        if activate:
+            conn.execute("INSERT INTO settings VALUES('model_provider',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                         (json.dumps(provider),))
+            db.event(conn, 'models.provider', {'provider': provider})
         db.event(conn, 'models.saved', {**value, 'provider': provider})
     return value
 
 
-def delegation(db, server, requested=None, tier=None):
+def delegation(db, server, requested=None):
     provider = active(db)
     if provider == 'codex' and not db.setting('model_settings'):
         pair = resolve(server, db.setting('model_routes', {}).get('execution', {'effort': 'medium'}))
@@ -192,9 +179,6 @@ def delegation(db, server, requested=None, tier=None):
         allowed = permitted(config, server, provider)
         if pair not in allowed:
             raise ValueError('Bot pair is denied; choose from permitted pairs: ' + json.dumps(allowed))
-        strong = [p for p in allowed if risky_capable(p, provider)]
-        if tier == 'risky' and strong and pair not in strong:
-            raise ValueError('Risky verification tier needs a stronger permitted pair: ' + json.dumps(strong))
     return {**pair, 'mode': config['bot']['mode'], 'settings_revision': config['revision']}
 
 
@@ -227,3 +211,67 @@ def assignment_route(db, server, task):
         if not item['allowed'] or not item['levels'].get(pair['effort'], False):
             raise RouteBlocked('Saved bot pair is now denied or unavailable; enable it before resuming this assignment')
     return pair
+
+
+def favorites(db, server):
+    """Project saved families to the current catalog without silently replacing unavailable pairs."""
+    slots = db.setting('manager_favorites', [None, None])
+    result = []
+    for slot in slots[:2]:
+        if slot is None:
+            result.append(None)
+            continue
+        item = copy.deepcopy(slot)
+        try:
+            item['pair'] = validate_pair(server, item['pair'], item['provider'])
+            item['available'] = True
+        except (ValueError, KeyError):
+            item['available'] = False
+        result.append(item)
+    return (result + [None, None])[:2]
+
+
+def insert_favorite(db, server, slot):
+    if slot not in (0, 1):
+        raise ValueError('Choose favorite slot 1 or 2')
+    provider = active(db)
+    pair = validate_pair(server, current(db, server, provider)['manager'], provider)
+    with db.transaction() as conn:
+        row = conn.execute("SELECT value FROM settings WHERE key='manager_favorites'").fetchone()
+        slots = json.loads(row[0]) if row else [None, None]
+        slots[slot] = {'provider': provider, 'pair': pair}
+        conn.execute("INSERT INTO settings VALUES('manager_favorites',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (json.dumps(slots),))
+        db.event(conn, 'models.favorite_inserted', {'slot': slot, **slots[slot]})
+    return favorites(db, server)
+
+
+def recall_favorite(db, server, slot, expected=None):
+    if slot not in (0, 1):
+        raise ValueError('Choose favorite slot 1 or 2')
+    item = favorites(db, server)[slot]
+    if not item or not item['available']:
+        raise ValueError('Favorite unavailable; insert a supported Manager selection to replace it')
+    provider = item['provider']
+    config = current(db, server, provider)
+    if expected is not None and (not isinstance(expected, dict) or set(expected) != {'provider', 'pair', 'revision'}
+                                 or type(expected['revision']) is not int or expected['provider'] != provider
+                                 or expected['pair'] != item['pair'] or expected['revision'] != config['revision']):
+        raise ValueError('Favorite or settings changed; reopen settings before recalling')
+    config['manager'] = item['pair']
+    return save(db, server, {**config, 'provider': provider}, activate=True)
+
+
+def save_bot_mode(db, server, mode, revisions):
+    """Update available providers together; a conflict must not leave different modes half-saved."""
+    if mode not in ('manual', 'automatic') or not isinstance(revisions, dict) or set(revisions) != set(PROVIDERS):
+        raise ValueError('Choose Manual or Automatic with current provider revisions')
+    with db.transaction() as conn:
+        for provider in PROVIDERS:
+            config = current(db, server, provider)
+            if type(revisions[provider]) is not int or config['revision'] != revisions[provider]:
+                raise ValueError('Settings changed; reopen the panel before editing')
+            if not any(m['levels'] for m in choices(server, provider)):
+                continue  # An unavailable provider must not prevent editing the usable one.
+            config['bot']['mode'] = mode
+            save(db, server, {**config, 'provider': provider}, connection=conn)

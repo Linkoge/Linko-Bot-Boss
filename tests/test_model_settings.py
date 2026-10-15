@@ -9,13 +9,13 @@ from test_web import sign_in
 
 from ai_manager.chat import Chat
 from ai_manager.config import Settings
+from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.model_settings import MODELS, assignment_route, current, delegation, permitted, save
 from ai_manager.orchestration import Scheduler
+from ai_manager.pipeline import Pipeline
 from ai_manager.registry import Registry
-from ai_manager.tasks import Tasks
 from ai_manager.web import create_app
-from ai_manager.workers import Workers
 
 
 class CatalogServer(FakeServer):
@@ -50,7 +50,7 @@ def system(tmp_path):
     registry.add(root / 'one')
     server = CatalogServer(settings)
     chat = Chat(db, registry, server)
-    workers = Workers(db, registry, settings, CatalogServer)
+    workers = Core(db, registry, settings, Pipeline(db, registry), CatalogServer)
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
     return db, registry, settings, server, chat, workers, scheduler
@@ -123,7 +123,7 @@ async def test_manager_delegation_pins_actual_worker_turn_and_resume(system):
               'arguments': {'action': 'delegate', 'objective': 'Small deterministic change', 'worker_route': pair}}
     result = await scheduler.manager_action(project, params)
     assert result['worker_route'] == {**pair, 'mode': 'automatic', 'settings_revision': config['revision']}
-    task = Tasks(db).claim(2)
+    task = Tasks(db).claim()
     await workers._run(task)
     execution = db.one('SELECT * FROM executions WHERE id=?', (task['lease_owner'],))
     assert execution['status'] == 'completed'
@@ -140,11 +140,11 @@ async def test_manager_delegation_pins_actual_worker_turn_and_resume(system):
     config['bot']['policy'][MODELS['Luna']]['allowed'] = False
     save(restored, server, config)
     with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='queued' WHERE id=?", (task['id'],))
-    resumed = Tasks(db).claim(2)
+        conn.execute("UPDATE tasks SET state='queued',lease_owner=NULL WHERE id=?", (task['id'],))
+    resumed = Tasks(db).claim()
     before = len(CatalogServer.turns)
     await workers._run(resumed)
-    assert Tasks(db).get(task['id'])['status'] == 'waiting'
+    assert Tasks(db).get(task['id'])['status'] == 'failed' and 'denied' in Tasks(db).get(task['id'])['blocker']
     assert len(CatalogServer.turns) == before
     assert Tasks(db).get(task['id'])['worker_route']['model'] == pair['model']
     assert Tasks(db).get(task['id'])['native_thread'] == execution['thread_id']
@@ -189,7 +189,7 @@ def test_manual_override_and_pre_feature_resume(system):
     explicit = config['bot']['manual']
     assert {k: delegation(db, server, {'model': MODELS['Astra'], 'effort': 'high'})[k] for k in explicit} == explicit
     task = Tasks(db).add(registry.list()[0]['id'], 'Existing task')
-    claim = Tasks(db).claim(2)
+    claim = Tasks(db).claim()
     with db.transaction() as conn:
         conn.execute('UPDATE executions SET model=?,effort=? WHERE id=?', (MODELS['Sol'], 'high', claim['lease_owner']))
     config['bot']['mode'] = 'automatic'
@@ -204,7 +204,7 @@ async def test_policy_edit_during_thread_start_blocks_dispatch(system):
     config = restricted(db, server)
     pair = {'model': MODELS['Luna'], 'effort': 'high'}
     task = Tasks(db).add(registry.list()[0]['id'], 'Delayed thread preparation', model_route=delegation(db, server, pair))
-    claim = Tasks(db).claim(2)
+    claim = Tasks(db).claim()
 
     class DenyingServer(CatalogServer):
         async def thread(self, *args, **kwargs):
@@ -213,9 +213,9 @@ async def test_policy_edit_during_thread_start_blocks_dispatch(system):
             return await super().thread(*args, **kwargs)
 
     before = len(CatalogServer.turns)
-    await Workers(db, registry, settings, DenyingServer)._run(claim)
+    await Core(db, registry, settings, Pipeline(db, registry), DenyingServer)._run(claim)
     assert len(CatalogServer.turns) == before
-    assert Tasks(db).get(task['id'])['status'] == 'waiting'
+    assert Tasks(db).get(task['id'])['status'] == 'failed' and 'denied' in Tasks(db).get(task['id'])['blocker']
     assert db.one('SELECT launch_key FROM executions WHERE id=?', (claim['lease_owner'],))['launch_key'] == 'not-started'
 
 
@@ -321,3 +321,155 @@ async def test_catalog_refresh_ttl_atomic_pages_bounded_failure_and_empty_cache(
     pages.append({'data':[]})
     with pytest.raises(ValueError, match='empty'):
         await empty.refresh_catalog()
+
+
+def test_manager_favorites_persist_recall_across_providers_without_bot_changes(tmp_path):
+    from test_claude_provider import BothServer
+
+    settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
+    server = BothServer(settings)
+    app = create_app(settings, server, BothServer)
+    with TestClient(app, base_url='http://localhost') as client:
+        assert client.put('/api/manager-favorites/0').status_code == 401
+        assert client.post('/api/manager-favorites/0/recall').status_code == 401
+        sign_in(client, app, settings)
+        panel = client.get('/api/model-settings').json()
+        assert panel['favorites'] == [None, None]
+        bots = {p: v['settings']['bot'] for p, v in panel['providers'].items()}
+        pair = {'model': MODELS['Astra'], 'effort': 'high'}
+        config = panel['settings']
+        config['manager'] = pair
+        client.put('/api/model-settings', json=config).raise_for_status()
+        assert client.put('/api/manager-favorites/0', headers={'X-CSRF-Token': 'bad'}).status_code == 403
+        first = client.put('/api/manager-favorites/0').json()
+        assert first[0]['pair'] == pair and first[1] is None
+        claude = panel['providers']['claude']['settings']
+        claude['manager'] = {'model': 'claude-haiku-5-5', 'effort': 'medium'}
+        client.put('/api/model-settings', json={**claude, 'provider': 'claude', 'activate': True}).raise_for_status()
+        second = client.put('/api/manager-favorites/1').json()
+        assert second[0] == first[0] and second[1]['pair'] == claude['manager']
+        recalled = client.post('/api/manager-favorites/0/recall').json()
+        assert recalled['provider'] == 'codex' and recalled['settings']['manager'] == pair
+        assert {p: v['settings']['bot'] for p, v in recalled['providers'].items()} == bots
+        recalled = client.post('/api/manager-favorites/1/recall').json()
+        assert recalled['provider'] == 'claude' and recalled['settings']['manager'] == claude['manager']
+        assert {p: v['settings']['bot'] for p, v in recalled['providers'].items()} == bots
+        # Insert replaces immediately, including a slot originally saved on another provider.
+        replaced = client.put('/api/manager-favorites/0').json()
+        assert replaced[0] == replaced[1]
+        assert len(Database(settings.db_path).setting('manager_favorites')) == 2
+        assert client.put('/api/manager-favorites/2').status_code == 409
+
+
+def test_favorites_follow_family_but_never_substitute_unsupported_effort(system):
+    from ai_manager.model_settings import active, favorites, insert_favorite, recall_favorite
+
+    db, _, _, server, *_ = system
+    config = current(db, server)
+    config['manager'] = {'model': MODELS['Sol'], 'effort': 'high'}
+    save(db, server, config)
+    insert_favorite(db, server, 0)
+    newer = copy.deepcopy(next(m for m in server.catalog if m['model'] == MODELS['Sol']))
+    newer['model'] = 'gpt-6.2-sol'
+    server.catalog.append(newer)
+    assert favorites(db, server)[0]['pair'] == {'model': 'gpt-6.2-sol', 'effort': 'high'}
+    recall_favorite(db, server, 0)
+    assert current(db, server)['manager']['model'] == 'gpt-6.2-sol'
+    newer['supportedReasoningEfforts'] = [{'reasoningEffort': 'low'}]
+    before = db.setting('model_settings')
+    assert favorites(db, server)[0]['available'] is False
+    with pytest.raises(ValueError, match='unavailable'):
+        recall_favorite(db, server, 0)
+    assert db.setting('model_settings') == before and active(db) == 'codex'
+    server.catalog = [m for m in server.catalog if 'sol' not in m['model']]
+    assert favorites(db, server)[0]['available'] is False
+    with pytest.raises(ValueError, match='unavailable'):
+        recall_favorite(db, server, 1)
+
+
+def test_provider_activation_rejects_stale_or_invalid_pair_atomically(system):
+    from test_claude_provider import BothServer
+
+    from ai_manager.model_settings import active
+
+    db, _, settings, *_ = system
+    server = BothServer(settings)
+    config = current(db, server, 'claude')
+    saved = save(db, server, {**config, 'provider': 'claude'})
+    with pytest.raises(ValueError, match='Settings changed'):
+        save(db, server, {**config, 'provider': 'claude'}, activate=True)
+    assert active(db) == 'codex'
+    saved['manager']['effort'] = 'ultra'
+    with pytest.raises(ValueError):
+        save(db, server, {**saved, 'provider': 'claude'}, activate=True)
+    assert active(db) == 'codex'
+
+
+def test_bot_mode_both_providers_atomic_and_routes_remain_independent(tmp_path):
+    from test_claude_provider import BothServer
+
+    from ai_manager.model_settings import active, set_active
+
+    settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
+    app = create_app(settings, BothServer(settings), BothServer)
+    with TestClient(app, base_url='http://localhost') as client:
+        assert client.put('/api/bot-mode', json={}).status_code == 401
+        sign_in(client, app, settings)
+        panel = client.get('/api/model-settings').json()
+        revisions = {p: v['settings']['revision'] for p, v in panel['providers'].items()}
+        assert client.put('/api/bot-mode', json={'mode': 'automatic', 'revisions': revisions},
+                          headers={'X-CSRF-Token': 'bad'}).status_code == 403
+        response = client.put('/api/bot-mode', json={'mode': 'automatic', 'revisions': revisions})
+        response.raise_for_status()
+        panel = response.json()
+        assert active(app.state.db) == 'codex'
+        assert all(v['settings']['bot']['mode'] == 'automatic' for v in panel['providers'].values())
+        before = {p: v['settings'] for p, v in panel['providers'].items()}
+        revisions = {p: v['revision'] for p, v in before.items()}
+        # A stale second provider rolls back the already-written first provider too.
+        revisions['claude'] -= 1
+        assert client.put('/api/bot-mode', json={'mode': 'manual', 'revisions': revisions}).status_code == 409
+        after = client.get('/api/model-settings').json()
+        assert {p: v['settings'] for p, v in after['providers'].items()} == before
+        for provider, model in [('codex', MODELS['Luna']), ('claude', 'claude-haiku-5-5')]:
+            config = after['providers'][provider]['settings']
+            for name, item in config['bot']['policy'].items():
+                item['allowed'] = name == model
+                item['levels'] = {e: e == 'high' for e in ('low', 'medium', 'high')}
+            client.put('/api/model-settings', json={**config, 'provider': provider}).raise_for_status()
+            set_active(app.state.db, provider)
+            assert delegation(app.state.db, app.state.chat.server, {'model': model, 'effort': 'high'})['model'] == model
+            with pytest.raises(ValueError, match='denied'):
+                delegation(app.state.db, app.state.chat.server, {'model': model, 'effort': 'low'})
+        panel = client.get('/api/model-settings').json()
+        revisions = {p: v['settings']['revision'] for p, v in panel['providers'].items()}
+        panel = client.put('/api/bot-mode', json={'mode': 'manual', 'revisions': revisions}).json()
+        assert all(v['settings']['bot']['mode'] == 'manual' for v in panel['providers'].values())
+        for provider in ('codex', 'claude'):
+            set_active(app.state.db, provider)
+            pair = panel['providers'][provider]['settings']['bot']['manual']
+            assert {k: delegation(app.state.db, app.state.chat.server)[k] for k in pair} == pair
+
+
+def test_expected_favorite_guards_late_recall_and_slot_replacement(tmp_path):
+    from test_claude_provider import BothServer
+
+    settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
+    app = create_app(settings, BothServer(settings), BothServer)
+    with TestClient(app, base_url='http://localhost') as client:
+        sign_in(client, app, settings)
+        first = client.get('/api/model-settings').json()
+        slot = client.put('/api/manager-favorites/0').json()[0]
+        expected = {'provider': slot['provider'], 'pair': slot['pair'], 'revision': first['settings']['revision']}
+        updated = first['settings']
+        updated['manager'] = {'model': MODELS['Astra'], 'effort': 'high'}
+        saved = client.put('/api/model-settings', json=updated).json()
+        assert client.post('/api/manager-favorites/0/recall', json=expected).status_code == 409
+        assert client.get('/api/model-settings').json()['settings'] == saved
+        expected['revision'] = saved['revision']
+        client.put('/api/manager-favorites/0').raise_for_status()
+        assert client.post('/api/manager-favorites/0/recall', json=expected).status_code == 409
+        expected['pair'] = saved['manager']
+        recalled = client.post('/api/manager-favorites/0/recall', json=expected)
+        recalled.raise_for_status()
+        assert recalled.json()['settings']['manager'] == saved['manager']

@@ -25,7 +25,6 @@ class Settings:
     audio_model: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_MODEL", "grok-voice-transcribe-2.0"))
     audio_probe: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_PROBE", "ffprobe"))
     session_seconds: int = 43200
-    max_workers: int = 2
     allowed_hosts: tuple[str, ...] = field(
         default_factory=lambda: tuple(
             os.getenv("AI_MANAGER_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",")

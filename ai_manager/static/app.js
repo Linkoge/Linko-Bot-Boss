@@ -24,6 +24,15 @@ const appliedTranscripts=new Set(draftRecovery.transcripts||[]);
 const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
 const submissionKey = 'linko-chat-submissions-v1';
 const submissions = new Map(JSON.parse(sessionStorage.getItem(submissionKey)||'[]'));
+// Settings intents and owner chat acceptance share one order, including background favorite recall.
+let modelIntentQueue=Promise.resolve(),modelSelectionError=null;
+function orderModelIntent(run){const next=modelIntentQueue.then(run);modelIntentQueue=next.catch(()=>{});return next;}
+function submitWithModelSelection(submission){
+  return orderModelIntent(()=>{
+    if(modelSelectionError){const error=new Error('Message not sent: '+modelSelectionError+' Choose a Manager selection again before sending.');error.modelBlocked=true;throw error;}
+    return api('/api/chat',{method:'POST',body:JSON.stringify(submission)});
+  });
+}
 function saveDrafts(){try{sessionStorage.setItem('linko-drafts-v1',JSON.stringify({drafts:[...state.drafts],transcripts:[...appliedTranscripts]}));}catch{notice('Draft recovery storage unavailable. Keep this tab open.');}}
 function saveSubmissions(){sessionStorage.setItem(submissionKey,JSON.stringify([...submissions]));}
 const element = (tag, text, cls) => {const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
@@ -222,25 +231,20 @@ function taskControlButton(task,label,command){
   return button;
 }
 function appendTaskControls(controls,t){
-  if(['cancelled','cancel_requested'].includes(t.status))return;
-  if(t.lease_owner){
-    if(t.status!=='pause_requested')controls.append(taskControlButton(t,'Pause','pause'));
-    controls.append(taskControlButton(t,'Cancel','cancel'));
-  }else{
-    if(t.status!=='queued')controls.append(taskControlButton(t,t.status==='paused'?'Resume':'Continue','continue'));
-    if(!['paused','completed','failed'].includes(t.status))controls.append(taskControlButton(t,'Pause','pause'));
-    if(t.status!=='completed')controls.append(taskControlButton(t,'Cancel','cancel'));
-  }
+  if(t.status==='running')controls.append(taskControlButton(t,'Cancel','cancel'));
+  else if(t.status==='queued')controls.append(taskControlButton(t,'Hold','hold'),taskControlButton(t,'Cancel','cancel'));
+  else if(t.status==='held')controls.append(taskControlButton(t,'Release','release'),taskControlButton(t,'Cancel','cancel'));
+  else if(t.status==='failed')controls.append(taskControlButton(t,'Continue','continue'));
 }
-function taskStateLabel(status){return ({pause_requested:'Pause requested · waiting for checkpoint',cancel_requested:'Cancel requested · waiting for termination',paused:'Paused · progress retained',cancelled:'Cancelled · partial work retained'})[status]||status;}
+function taskStateLabel(status){return ({held:'Held · skipped until released',done:'Done',failed:'Failed'})[status]||status;}
 function renderTasks(){
   const tasks=state.portfolio.tasks.filter(t=>!state.project||t.project_id===state.project);
-  const count=tasks.filter(t=>['queued','running','waiting','paused','pause_requested','cancel_requested'].includes(t.status)).length;
+  const count=tasks.filter(t=>['queued','running','held'].includes(t.status)).length;
   $('task-count').textContent=count;$('task-count').hidden=count===0;$('task-list').replaceChildren();
   for(const t of tasks){
     const row=element('article',undefined,'panel');row.dataset.taskId=t.id;
-    row.append(element('h3',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.retry_at?recoveryLabel(t):t.blocker));
-    if(t.legacy&&!['completed','cancelled','failed'].includes(t.status))row.append(element('small','Historical work: continuation inspects existing source and saved results.'));
+    row.append(element('h3',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
+    if(t.rounds)row.append(element('small',`Repair rounds ${t.rounds} of ${t.round_limit}`+(t.checkpoints?.length?` · ${t.checkpoints.at(-1).decision}: ${t.checkpoints.at(-1).reason}`:'')));
     const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));appendTaskControls(controls,t);
     const records=element('button','History');records.onclick=action(async()=>{const result=await api(`/api/tasks/${t.id}/execution-records`);editor('Execution history',[{name:'history',label:'Recorded results',long:true,readonly:true,value:JSON.stringify(result,null,2)}],async()=>{});});
     controls.append(records);row.append(controls);$('task-list').append(row);
@@ -522,29 +526,29 @@ function editor(title,fields,onSave,reloadContext=true){
 }
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:['active','paused','archived','removed'].map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
-async function sendSubmission(bound=null,parallel=false){
+async function sendSubmission(bound=null){
   if(audioState.session||attachmentState.uploads.has(bound?bound.project_id:state.project))return;
   const project=bound?bound.project_id:state.project,selection=state.selection;
   if(state.pending.has(project))return;
   let submission=submissions.get(project);
-  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id),parallel:bound?!!bound.parallel:parallel};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
+  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,mode:bound?bound.mode:$('chat-mode').value,attachment_ids:attachmentDraft(project).map(file=>file.id)};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
   state.pending.add(project);$('send').disabled=true;renderAttachments();
   let accepted=false;
   try{
-    await api('/api/chat',{method:'POST',body:JSON.stringify(submission)});
+    await submitWithModelSelection(submission);
     accepted=true;clearSentAttachments(project,submission.attachment_ids||[]);
     submissions.delete(project);saveSubmissions();
     if(state.drafts.get(project)===submission.content)state.drafts.set(project,'');saveDrafts();
     if(selection===state.selection){if($('message-input').value===submission.content)$('message-input').value='';await loadHistory(selection);}
   }catch(error){
-    if(accepted){if(selection===state.selection)updatesUnavailable(error,'history');error.ambiguous=true;error.message='Message accepted. Saved response unavailable; updates will retry.';}
+    if(error.modelBlocked){submissions.delete(project);saveSubmissions();}
+    else if(accepted){if(selection===state.selection)updatesUnavailable(error,'history');error.ambiguous=true;error.message='Message accepted. Saved response unavailable; updates will retry.';}
     else if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){submissions.delete(project);saveSubmissions();}
     else{error.ambiguous=true;error.message='Acceptance is unconfirmed. Your saved request will be checked on return or Send.';}
     throw error;
   }finally{state.pending.delete(project);if(selection===state.selection){$('send').disabled=state.pending.has(project);updateChatActions();renderAttachments();}}
 }
 $('chat-form').onsubmit=action(async event=>{event.preventDefault();if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length&&!submissions.has(state.project))return;await sendSubmission();});
-$('parallel-send').onclick=async event=>{await action(async()=>{if(audioState.session?.phase==='recording'){finishAudio(true,true);return;}if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length&&!submissions.has(state.project))return;await sendSubmission(null,true);})(event);renderAudio();};
 $('message-input').addEventListener('input',()=>{state.drafts.set(state.project,$('message-input').value);saveDrafts();});
 // Cancel only pointer press focus transfer. Click/keyboard activation remains native;
 // in particular file-picker activation must stay synchronous inside its trusted click.
@@ -623,11 +627,6 @@ function updateComposer(){
   form.classList.toggle('composer-recording',recording&&audioState.session?.phase==='recording');
   form.classList.toggle('composer-caret',focused&&!document.hidden&&(!mobile||(composerKeyboard.seen&&!composerKeyboard.closed)));
   $('send').hidden=!active;
-  const relevant=state.project&&(state.portfolio?.tasks||[]).some(task=>task.project_id===state.project&&(['queued','running','waiting','paused','pause_requested','cancel_requested'].includes(task.status)||(task.job_followup&&['actionable','review'].includes(task.job_followup.state))));
-  const parallel=active&&!!relevant&&$('chat-mode').value!=='conversation';
-  $('parallel-send').hidden=!parallel;
-  $('parallel-send').disabled=$('send').disabled||submissions.has(state.project);
-  form.classList.toggle('composer-parallel',parallel);
   // Measure at the initial active size, independent of the previous overflow size.
   form.style.setProperty('--composer-height',(active?140:92)+'px');
   form.classList.toggle('composer-overflow',false);
@@ -709,7 +708,7 @@ async function startTodo(entry){
     todoStarts.set(key,request);saveTodoStarts();
   }
   try{
-    await api('/api/chat',{method:'POST',body:JSON.stringify(request)});
+    await submitWithModelSelection(request);
     todoStarts.delete(key);saveTodoStarts();
   }catch(error){
     // Keep the exact request across ambiguous network failures. A later deliberate
@@ -741,19 +740,22 @@ $('todo-delete').onclick=action(async()=>{
   if(selection===state.selection){state.todoSelection.clear();await loadTodos(selection);}
 });
 
-let deploymentNonce=null;
-async function deploymentStatus(){const result=await api('/api/deployment');deploymentNonce=result.nonce;$('deployment-status').textContent=result.phase==='idle'?'No pending deployment.':`${result.release_id}: ${result.phase.replaceAll('_',' ')}`;$('deployment-cancel').hidden=result.phase!=='waiting_idle';const container=$('deployment-intents');container.replaceChildren();for(const intent of result.intents||[]){if(['dispatched','revoked','superseded'].includes(intent.status))continue;const row=element('p',`${intent.candidate?.release_id||'Preparing release'} · ${intent.needs_owner_review?'Waiting for latest request review':intent.status}`);const cancel=element('button','Cancel deployment intent');cancel.onclick=action(async()=>{await api('/api/deployment/intents/revoke',{method:'POST',body:JSON.stringify({intent_id:intent.id})});await deploymentStatus();});row.append(document.createTextNode(' '),cancel);container.append(row);}}
+function deploymentText(result){
+  if(result.request)return `Deploy requested: ${((result.state||{}).phase||'queued').replaceAll('_',' ')}`+(result.installed?'':' (waiting for the one-time install command; see README)');
+  const last=result.last_result;return last?`Last deploy ${last.status.replaceAll('_',' ')}: ${last.reason}`:'No deploy yet.';
+}
+async function deploymentStatus(){const result=await api('/api/deployment');$('deployment-status').textContent=deploymentText(result);$('deployment-cancel').hidden=!result.request;}
 $('deployment-check').onclick=action(deploymentStatus);
-$('deployment-cancel').onclick=action(async()=>{await api('/api/deployment/cancel',{method:'POST',body:JSON.stringify({nonce:deploymentNonce})});await deploymentStatus();});
+$('deployment-cancel').onclick=action(async()=>{await api('/api/deployment/cancel',{method:'POST',body:'{}'});await deploymentStatus();});
 
 async function loadAutoDeploySettings(){
   const result=await api('/api/settings');const container=$('auto-deploy-settings');container.replaceChildren();
   for(const project of result.auto_deploy||[]){
     const label=element('label');const input=document.createElement('input');input.type='checkbox';
     input.checked=project.enabled;input.dataset.projectId=project.project_id;
-    input.setAttribute('aria-label',`${project.name}: Auto-deploy verified work`);
+    input.setAttribute('aria-label',`${project.name}: Auto-merge and deploy finished work`);
     input.onchange=action(async()=>{input.disabled=true;try{await api('/api/settings/auto-deploy',{method:'PUT',body:JSON.stringify({project_id:project.project_id,enabled:input.checked})});}finally{await loadAutoDeploySettings();}});
-    label.append(input,document.createTextNode(`${project.name}: Auto-deploy verified work`));container.append(label);
-    if(!project.deployable)container.append(element('p','Automatic deployment requires a configured deployment helper for this project.'));
+    label.append(input,document.createTextNode(`${project.name}: Auto-merge and deploy finished work`));container.append(label);
+    if(!project.deployable)container.append(element('p','Only this manager project can be deployed; other projects are merged only.'));
   }
 }

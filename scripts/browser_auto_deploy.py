@@ -25,18 +25,16 @@ sys.path.insert(0, 'tests')
 import uvicorn
 from fake_codex import FakeServer
 from ai_manager.config import Settings
-from ai_manager.deployment import atomic
 from ai_manager.web import create_app
 s = Settings()
 app = create_app(s, FakeServer(s))
 root = Path(os.environ['AI_MANAGER_PROJECT_ROOTS'])
 app.state.registry.add(root / 'Boss', name='Linko-Bot-Boss')
 app.state.registry.add(root / 'Other', name='Other')
-atomic(s.data_dir / 'deployment-helper/config.json', {'repo': str(root / 'Boss')})
 uvicorn.run(app, host='127.0.0.1', port=PORT, log_level='error')
 '''.replace('PORT', str(port))
         env = {**os.environ, 'AI_MANAGER_DATA': str(root / 'data'), 'AI_MANAGER_PROJECT_ROOTS': str(projects),
-               'AI_MANAGER_SECURE_COOKIE': '0'}
+               'AI_MANAGER_SECURE_COOKIE': '0', 'AI_MANAGER_REPO': str(projects / 'Boss')}
         process = subprocess.Popen([os.sys.executable, '-c', program], env=env)
         base = f'http://127.0.0.1:{port}'
         try:
@@ -62,8 +60,8 @@ uvicorn.run(app, host='127.0.0.1', port=PORT, log_level='error')
                     page.locator('#password').fill('long-private-browser-password')
                     page.locator('#auth-form button').click()
                     page.locator('[data-view=settings]').click()
-                    boss = page.get_by_role('checkbox', name='Linko-Bot-Boss: Auto-deploy verified work', exact=True)
-                    other = page.get_by_role('checkbox', name='Other: Auto-deploy verified work', exact=True)
+                    boss = page.get_by_role('checkbox', name='Linko-Bot-Boss: Auto-merge and deploy finished work', exact=True)
+                    other = page.get_by_role('checkbox', name='Other: Auto-merge and deploy finished work', exact=True)
                     boss.wait_for()
                     assert boss.is_checked()
                     assert not other.is_checked()

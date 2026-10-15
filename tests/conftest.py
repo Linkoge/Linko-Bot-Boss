@@ -1,4 +1,4 @@
-"""Smoke suite: python -m pytest -q -m smoke. Contract: docs/VERIFICATION_TIERS.md."""
+"""Smoke suite: python -m pytest -q -m smoke. Contract: README.md."""
 import time
 
 SMOKE_BUDGET_SECONDS = 20  # The full backend suite takes about a minute; smoke must stay well below it.

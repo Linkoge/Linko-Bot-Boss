@@ -1,2 +1,0 @@
-PASS: git diff --check 0223c3493a6edf9b54b280fa5993fb6404e2d8ca HEAD -- . :(exclude).data/auto-deploy-bootstrap/review.diff
-Raw review.diff is exact Git patch evidence: its space-prefixed empty context lines trigger whitespace warnings if treated as added text. Those bytes are preserved to retain the reviewed SHA256.

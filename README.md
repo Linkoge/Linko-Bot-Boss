@@ -1,54 +1,106 @@
 # Linko Bot Boss
 
-Repository: [Linkoge/Linko-Bot-Boss](https://github.com/Linkoge/Linko-Bot-Boss). The existing project ID is `29018771ce9842f2bb52afb7dcf491d0`; owner display name remains **Bot Boss**.
+A private, single-owner conversational manager for software projects: **you → manager → one worker → merge → deploy**.
+FastAPI + SQLite + plain JavaScript; Codex or Claude does the thinking and coding. The installed names stay unchanged
+(`ai_manager`, `AI_MANAGER_*`, the service, the data directory and the private URL
+`https://codex-server.tail5ebb9d.ts.net:8787/`). Repository: `Linkoge/Linko-Bot-Boss`.
 
-The repository/product rename preserves `/home/codex/projects/Linko-Bot-Manager`, Python package `ai_manager`, distribution `linko-bot-manager`, `AI_MANAGER_*` configuration, `linko_bot_manager` native client identity, existing service/data names, browser storage keys and private URLs. These identify the installed runtime and retained history, and require a separate migration if ever changed. PWA ID `/`, scope/start URL and icon artwork remain stable.
+## How work runs
 
+One global queue, strictly sequential. States: **queued → running → done | failed**. A **held** task is a queued task with
+the hold flag set; it is skipped until released. Order is the only dependency. The code is `ai_manager/core.py`; the rules
+both the manager and every worker read are [RULES.md](RULES.md).
 
-A private conversational manager for software projects:
+1. **Worker.** The oldest eligible queued task gets an isolated Git worktree and branch
+   (`linko/assignment-<id>`, kept on disk, never deleted). The worker implements, adds the permanent tests for its change
+   and commits. Projects that are not Git repositories run in place, with no checks and no merge.
+2. **Checks.** After every worker turn the application runs the permanent checks: the one fixed smoke suite
+   (`python -m pytest -q -m smoke`, 180 s) plus the test files the branch added or changed (600 s). Only permanent
+   repository suites can block delivery; one-off probes are informational. Probes run under a 60 s timeout. Checks run
+   with disposable data directories.
+3. **Repair rounds** (durable on the task row, never reset by retry, restart or continue). The first 3 failing rounds go
+   back to the same worker. When the 3rd round still fails the core compares it with the round before: the failing check
+   changed or there are fewer failures means progress and grants +3; the same check failing the same way means a loop
+   and the task fails with a plain reason. The same checkpoint runs at 6. The hard cap is 9. Every checkpoint decision
+   and reason is stored on the task (`checkpoints`).
+4. **Merge and deploy.** A passing branch merges into `main` under the checkout fence (one at a time). Main is first merged
+   into the branch; a conflict goes to the same worker as a repair round of the same task (no separate integration step).
+   With the project's **Auto-merge and deploy finished work** ON, the merge happens and, for the manager's own project,
+   the deploy script is requested automatically. OFF means no merge and no deploy; the manager's `deploy` action
+   (optionally with a `task_id`) merges a finished task and deploys on request.
+5. **Watchdog** (every minute). A dead or stalled worker (30 min without activity) is requeued once, then failed with a
+   plain reason. A provider usage limit makes the task wait in the queue and retry with bounded backoff taken from the
+   provider's reset time (else 5 min doubling to 1 h, 8 waits, then failed). A removed project fails its queued tasks;
+   an unconsumed deploy request expires after 7 h. Nothing stays blocked without a visible reason.
 
-**User → AI Manager → native coding worker (Codex or Claude) → AI Manager → User**
+Owner controls on a task: **Hold / Release** (queued), **Cancel** (queued or running; the branch is kept),
+**Continue** (failed or done task: appends instructions, re-queues at the end, counters stay). A worker may ask the owner a
+question; the task stays running and says so. Finished results return to the originating chat automatically.
 
-Use Conversation for discussion, Auto to delegate requested work, or Execute to send a work objective through the same manager path. Discuss work naturally in a project context. The manager delegates a complete objective when requested. Codex investigates, edits, installs dependencies, runs commands, builds, tests, debugs and uses Git in its durably owned assignment workspace (or the retained original cwd for historical/non-Git sequential work). Results return automatically to the originating conversation.
+## Deploy
 
-Verification follows [two check levels](docs/VERIFICATION_TIERS.md): tasks run targeted tests, smoke and relevant build/lint; automatic preparation runs full backend once against the exact combined candidate. No independent review or escalation loop. Up to three durable repair rounds; one global coding worker. Deployment preserves exact evidence, idle/drain, backup, health/rollback and explicit OFF/holds.
+`scripts/deploy.py` is the only deploy mechanism: full backend suite once, wait for idle, back up SQLite, restart the
+service on `main`, health check, and automatic rollback of code and database on any failure after the stop. The short
+result is `DATA/deploy/last-deploy.txt`. No new work starts and nothing merges while a request is pending (the
+checkout fence, `ai_manager/fence.py`). One-time operator bootstrap, no sudo:
+`python3 scripts/install_deploy.py`. Manual deploy: `python3 scripts/deploy.py --now`.
 
-Attachment batching preserves dictionary references, their metadata and first-seen order; the retained regression passes. Exact scoped preparation evidence and validation status are in [current state](STATE.md). The lifecycle repair adds a supported [immutable publication command](docs/DEPLOYMENT_HELPER.md) after worker cleanup and stable V2 task-scope binding. See dated state entries for historical intent/deployment status.
+## Product behaviour that is unchanged
 
-Coding runs with one global sequential worker, retaining isolated workspace ownership. Historical chat/⇈ Send permission and capacity settings do not admit overlap. See [parallel execution](docs/PARALLEL_EXECUTION.md). Projects participate automatically. Tasks, conversations, native thread references, questions and execution history persist in SQLite. Temporary network, process and account usage interruptions recover automatically with persisted backoff. Restart handling inspects native outcomes before resuming the same assignment and conversation. See [automatic recovery](docs/AUTOMATIC_RECOVERY.md) and [Pause/Cancel and bundled updates](docs/AGENT_CONTROLS.md).
+- Chat with Conversation (read-only except To-Do), Auto and Execute modes; composer with recording/transcription,
+  Discard/Upload, arbitrary attachments (only verified raster images become native image input), drafts and sequential Send.
+- Model settings: manager and bot (Manual or Automatic) for Codex and Claude, two favorites, exact pairs pinned per task.
+- Project list with display names, visibility/stash, pause, discovery; To-Do backlog (never executes by itself; Start
+  hands exact revisions to a task); project memory brief with owner-run review; chat clear/trash/archive/search.
+- Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
+- Security: Argon2 owner login, one-time setup token, revocable sessions, CSRF/origin/host checks, CSP, throttling.
+  Workers run as the service user with broad access; the rules ask them to confirm before catastrophic destruction.
+  That is an agent convention, not a sandbox.
 
-The private interface remains at **https://codex-server.tail5ebb9d.ts.net:8787/**. Existing owner authentication and private hosting are preserved. Initial setup, when required:
+## Whole-message Copy and Delete
 
-```bash
-uv run python -m ai_manager.cli setup-owner
-```
+Each whole owner/assistant message in Chat and saved/archive history has one small, low-opacity
+lower-right arrow after its text and attachments. Expand it to reveal Copy and Delete underneath.
+There is no Edit. Keyboard activation is supported. Copy includes the entire source text across all
+rendered paragraphs, lists, tables and code blocks; during streaming it includes all text received so far.
+The existing clipboard fallback applies.
 
-Configuration: `AI_MANAGER_DATA`, `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE` and `AI_MANAGER_CODEX`. Runtime data defaults to `~/.local/share/linko-bot-manager`. Manager and bot settings are global: manual Manager, manual Bot or manager-selected permitted automatic pair, validated against the installed Codex catalog (see [model settings](docs/MODEL_SETTINGS.md)); the selected Codex or Claude subscription supplies inference. Existing assignments retain their original provider/model/thread when the owner switches providers.
+Delete opens a confirmation dialog with Cancel focused. Queued/running/recovering responses and their
+owner messages must finish or be stopped first. The owner/CSRF-protected endpoint independently checks
+confirmation and exact project/conversation/message membership. Deletion persists across restart and
+removes the whole display message from Chat, saved/archive readers, search and chat copy exports.
+Idempotent SQLite tombstones and an audit event retain native/provider history, internal prompt context,
+execution output, tasks and attachments; this is not provider-side erasure. Polling removes deleted IDs
+while preserving older undeleted rows outside the rolling history tail. Clear/archive/trash confirmation
+uses the visible tail after deletion.
 
-Native workers have broad same-user access. They preserve user work and request explicit confirmation before catastrophic broad destruction. This is an agent-recognized conversational boundary, not a deterministic classifier of arbitrary programs. Completion is reported by the worker, not independently certified. See [security boundaries](docs/security.md).
+Permanent checks: `tests/test_message_actions.py`, `tests/test_chat_history.py` and
+`scripts/browser_markdown.py` (streamed multi-block responses, owner/assistant copying, Cancel/confirm,
+reload, saved-reader removal, keyboard and narrow layouts). Historical source and assignment evidence:
+[retained Copy/Delete report](docs/MESSAGE_ACTIONS_978211.md).
 
-Legacy unfinished assignments remain waiting until explicitly continued, preserving their source/workspace references and historical dispositions. Historical verification and integration evidence remains readable through task history. There is no migration-time replay or automatic merge of old clones.
-
-Rich red chat theme candidate and truthful activation/evidence: [UI theme](docs/UI_THEME.md).
-
-## Development
+## Run and develop
 
 ```bash
 uv sync --locked
-uv run pytest -q -m smoke
-uv run pytest -q
+uv run python -m ai_manager.cli setup-owner     # first time only
+uv run pytest -q -m smoke                       # the fixed smoke suite, every task
+uv run pytest -q                                # full suite: run by the deploy script
 uv run ruff check ai_manager scripts tests
 node --check ai_manager/static/app.js
-PYTHONPATH=. uv run python scripts/browser_smoke.py
-PYTHONPATH=. uv run python scripts/smoke_minimal.py
+PYTHONPATH=. uv run python scripts/browser_smoke.py   # also browser_tasks.py and the other browser_*.py checks
 ```
 
-The fast pytest smoke suite covers 28 core-path tests (44 cases) with a 20-second budget. Run it on every tiered task; the full suite is the final Normal/Risky check and the release preparation gate. The real Codex smoke script uses a disposable calculator repository and database, fixes code, runs tests, commits locally and checks automatic manager delivery. It invokes the existing subscription. Browser acceptance uses an isolated local HTTP fixture. Neither script uses the production database.
+Configuration: `AI_MANAGER_DATA` (default `~/.local/share/linko-bot-manager`), `AI_MANAGER_PORT` (8787),
+`AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE`, `AI_MANAGER_CODEX`,
+`AI_MANAGER_CLAUDE`, `AI_MANAGER_REPO` (live checkout, tests only). Daily database backup: `scripts/backup_daily.py`
+(restore only to a fresh path with the service stopped; native thread storage and project files are backed up separately).
 
-See [operations](docs/operations.md), [autonomy](docs/AUTONOMY_POLICY.md) and [cleanup/deployment evidence](docs/CODEBASE_CLEANUP.md). Historical reports link to their complete versions in Git.
+## Data and history
 
-Automatic deployment contract and close readiness corrections: [AUTO_DEPLOY.md](docs/AUTO_DEPLOY.md).
-ON new owner work uses standing deployment policy even with an explicit new-work intent; source
-mappings remain separate from audit readiness dependencies. OFF retains manual behavior.
-Exact bootstrap and old-manager scope compatibility must be resolved externally before activation;
-implementation or publication is never a live deployment claim.
+Existing projects, chats, To-Dos and task/execution history rows are preserved. Schema 13 (the task queue) added columns to
+`tasks` and closed every older non-final task once (failed, "Cancelled: closed when the task queue was rebuilt"; branches and
+workspaces untouched). Old columns (`lifecycle`, `legacy`, …) and old settings keys are ignored history. The earlier
+release/helper/tier/reviewer/integration/follow-up machinery is gone; its history is in Git.
+
+`ai_manager/static/icons/README.md` records the owner artwork provenance.

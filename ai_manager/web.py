@@ -24,14 +24,14 @@ from .auth import Auth
 from .chat import ROLES, Chat
 from .codex import CodexError
 from .config import Settings
+from .core import Core, Tasks
 from .db import Database
 from .execution_ui import execution_summary
 from .orchestration import Scheduler
+from .pipeline import Pipeline
 from .project_memory import MemoryReviews, ProjectMemory
 from .registry import Registry, git
-from .tasks import Tasks
 from .todos import Todos
-from .workers import Workers
 
 
 class LoginBody(BaseModel):
@@ -74,7 +74,6 @@ class MessageBody(BaseModel):
     content: str = Field(default='', max_length=64000)
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     todos: list[TodoSelection] = Field(default_factory=list, max_length=200)
-    parallel: bool = False
     conversation_id: str | None = None
     mode: Literal["conversation", "auto", "execute"] = "auto"
 
@@ -142,17 +141,9 @@ class MemoryCancel(BaseModel):
     review: str
 
 
-class DeploymentCancel(BaseModel):
-    nonce: str = Field(pattern=r"^[0-9a-f]{32}$")
-
-
-class DeploymentIntentCancel(BaseModel):
-    intent_id: str = Field(pattern=r"^[0-9a-f]{32}$")
-
-
 class TaskControl(BaseModel):
     revision: int
-    action: str
+    action: Literal["hold", "release", "continue", "cancel"]
 
 
 class AnswerBody(BaseModel):
@@ -176,8 +167,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     audio = Audio(settings)
     attachments = Attachments(db, settings)
     chat.attachments = attachments
-    workers = Workers(db, registry, settings, worker_factory)
-    scheduler = Scheduler(db, registry, settings, workers, chat)
+    pipeline = Pipeline(db, registry)
+    core = Core(db, registry, settings, pipeline, worker_factory)
+    scheduler = Scheduler(db, registry, settings, core, chat, pipeline)
     chat.action_handler = scheduler.manager_action
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
@@ -190,27 +182,23 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             auth.bootstrap()
             registry.discover()
-            settings.max_workers = db.setting("max_workers", settings.max_workers)
             reviews.recover()
             scheduler.start()
             yield
         finally:
             await reviews.close()
             await scheduler.close()
-            await workers.close()
+            await core.close()
             await chat.close()
             lock_file.close()
 
     app = FastAPI(title="Linko Bot Boss", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
-    app.state.workers, app.state.scheduler = workers, scheduler
+    app.state.core, app.state.scheduler = core, scheduler
     app.state.audio = audio
     app.state.attachments = attachments
     app.state.memory, app.state.memory_reviews = memory, reviews
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
-
-    app.state.deployment_mutations = 0
-    scheduler.deployment_busy = lambda: app.state.deployment_mutations > 0 or bool(reviews.jobs)
 
     @app.middleware("http")
     async def browser_security(request: Request, call_next):
@@ -224,22 +212,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                     return JSONResponse({"detail": "Login required"}, status_code=401)
                 if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
                     return JSONResponse({"detail": "CSRF token required"}, status_code=403)
-        mutation = request.method not in {'GET', 'HEAD', 'OPTIONS'}
-        drain = request.url.path in {'/api/login', '/api/deployment/cancel', '/api/deployment/intents/revoke', '/api/settings/auto-deploy'} or request.url.path.endswith('/answer') or request.url.path.endswith('/interrupt') or request.url.path.endswith('/brief/cancel')
-        if request.method == 'PATCH' and request.url.path.startswith('/api/tasks/'):
-            body = await request.json()
-            drain = body.get('action') in {'stop', 'pause', 'cancel'}
-        if mutation and scheduler.deployment.gated() and not drain:
-            return JSONResponse({'detail': 'Deployment pending; wait for activation'}, status_code=503)
-        if mutation and scheduler.deployment.ready_to_stop():
-            return JSONResponse({'detail': 'Deployment handoff acknowledged'}, status_code=503)
-        if mutation:
-            app.state.deployment_mutations += 1
-        try:
-            response = await call_next(request)
-        finally:
-            if mutation:
-                app.state.deployment_mutations -= 1
+        response = await call_next(request)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
@@ -277,24 +250,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get('/api/deployment', dependencies=[Depends(require_owner)])
     def deployment_status():
-        return {**scheduler.deployment.status(), 'intents': scheduler.intents.list()}
-
-    @app.post('/api/deployment/intents/revoke', dependencies=[Depends(require_owner)])
-    def revoke_deployment_intent(body: DeploymentIntentCancel):
-        from .deployment_intent import revoke, rows
-        with db.transaction() as conn:
-            value = next((v for v in rows(conn) if v['id'] == body.intent_id), None)
-            if not value or value['status'] == 'dispatched':
-                raise HTTPException(409, 'Use the exact pending deployment cancellation for a dispatched intent')
-            try:
-                revoke(db, conn, 'Owner cancelled deployment intent in Settings', intent_id=body.intent_id)
-            except ValueError as error:
-                raise HTTPException(409, str(error)) from error
-        return {'status': 'revoked'}
+        return scheduler.pipeline.status()
 
     @app.post('/api/deployment/cancel', dependencies=[Depends(require_owner)])
-    def cancel_deployment(body: DeploymentCancel):
-        return scheduler.deployment.cancel(body.nonce)
+    def cancel_deployment():
+        return {'cancelled': scheduler.pipeline.cancel()}
 
     @app.post("/api/setup")
     async def setup(body: SetupBody, request: Request):
@@ -448,20 +408,47 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings():
-        from .model_settings import PROVIDERS, active, choices, current
+        from .model_settings import PROVIDERS, active, choices, current, favorites
         try:
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
         provider = active(db)
         providers = {p: {"choices": choices(chat.server, p), "settings": current(db, chat.server, p)} for p in PROVIDERS}
-        return {"provider": provider, "providers": providers, **providers[provider]}
+        return {"provider": provider, "providers": providers, "favorites": favorites(db, chat.server), **providers[provider]}
 
     @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
     async def save_model_settings(body: dict):
         from .model_settings import save
         await chat.server.start()
-        return save(db, chat.server, body)
+        activate = body.pop('activate', False)
+        if type(activate) is not bool:
+            raise ValueError('Invalid provider activation')
+        result = save(db, chat.server, body, activate=activate)
+        if activate:
+            account_usage.invalidate()
+        return result
+
+    @app.put("/api/bot-mode", dependencies=[Depends(require_owner)])
+    async def save_bot_selection_mode(body: dict):
+        from .model_settings import save_bot_mode
+        await chat.server.start()
+        save_bot_mode(db, chat.server, body.get('mode'), body.get('revisions'))
+        return await model_settings()
+
+    @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
+    async def insert_manager_favorite(slot: int):
+        from .model_settings import insert_favorite
+        await chat.server.start()
+        return insert_favorite(db, chat.server, slot)
+
+    @app.post("/api/manager-favorites/{slot}/recall", dependencies=[Depends(require_owner)])
+    async def recall_manager_favorite(slot: int, body: dict | None = None):
+        from .model_settings import recall_favorite
+        await chat.server.start()
+        recall_favorite(db, chat.server, slot, expected=body)
+        account_usage.invalidate()
+        return await model_settings()
 
     @app.put("/api/model-provider", dependencies=[Depends(require_owner)])
     async def save_model_provider(body: dict):
@@ -527,7 +514,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 + (" AND e.project_id=?" if project_id else ""),
                 (project_id,) if project_id else (),
             ),
-            "capacity": settings.max_workers,
+            "capacity": 1,
             "queue_error": scheduler.error,
             "storage_free": shutil.disk_usage(settings.data_dir).free,
         }
@@ -590,15 +577,16 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def submit(body: MessageBody):
         return await chat.submit(
             body.project_id, body.content, body.conversation_id, mode=body.mode, request_id=body.request_id,
-            attachment_ids=body.attachment_ids, todos=[entry.model_dump() for entry in body.todos], parallel=body.parallel
+            attachment_ids=body.attachment_ids, todos=[entry.model_dump() for entry in body.todos]
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])
     async def task_control(task_id: str, body: TaskControl):
-        return await workers.control(task_id, body.action, body.revision)
+        return await core.control(task_id, body.action, body.revision)
 
     @app.get("/api/tasks/{task_id}/execution-records", dependencies=[Depends(require_owner)])
     def records(task_id: str):
+        # Tables and events from earlier eras stay readable; nothing writes them any more.
         historical = {
             "historical_" + label: db.all(f"SELECT * FROM {table} WHERE task_id=?", (task_id,))
             if db.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
@@ -607,6 +595,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         }
         return {
             "task": tasks.get(task_id),
+            "checks": db.all(
+                "SELECT payload,created_at FROM events WHERE task_id=? AND kind IN ('task.check','task.round') ORDER BY seq DESC LIMIT 20",
+                (task_id,),
+            ),
             "evidence": db.all(
                 "SELECT payload,created_at FROM events WHERE task_id=? AND kind='task.evidence' ORDER BY seq DESC LIMIT 5",
                 (task_id,),
@@ -619,7 +611,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def interrupt(execution_id: str):
         execution = db.one("SELECT task_id FROM executions WHERE id=?", (execution_id,))
         if execution and execution["task_id"]:
-            await workers.interrupt(execution_id)
+            await core.cancel(execution_id)
         else:
             await chat.interrupt(execution_id)
         return {"result": "accepted"}
@@ -650,15 +642,15 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.put('/api/settings/auto-deploy', dependencies=[Depends(require_owner)])
     def auto_deploy_setting(body: dict):
         try:
-            return scheduler.auto_deploy.set(body.get('project_id'), body.get('enabled'))
+            return scheduler.pipeline.set(body.get('project_id'), body.get('enabled'))
         except ValueError as error:
             raise HTTPException(400, str(error)) from error
 
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():
         from .model_settings import active
-        return {"global_instructions": db.setting("global_instructions", ""), "max_workers": settings.max_workers,
-                "model_provider": active(db), "auto_deploy": scheduler.auto_deploy.settings()}
+        return {"global_instructions": db.setting("global_instructions", ""), "max_workers": 1,
+                "model_provider": active(db), "auto_deploy": scheduler.pipeline.settings()}
 
     static = Path(__file__).parent / "static"
     # Pin content and URLs to this process/release; never cache mutable aliases.

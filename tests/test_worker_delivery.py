@@ -9,10 +9,10 @@ from test_minimal_flow import NativeFixture
 from test_minimal_flow import system as system_fixture
 
 from ai_manager.chat import Chat
+from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.orchestration import MANAGER_TOOL, Scheduler
-from ai_manager.tasks import Tasks
-from ai_manager.workers import Workers
+from ai_manager.pipeline import Pipeline
 
 system = system_fixture
 
@@ -23,11 +23,10 @@ async def test_historical_transport_hidden_without_rewriting_user_or_audit(syste
     project = registry.list()[0]
     origin = chat.conversation(project['id'])['id']
     task = Tasks(db).add(project['id'], 'secret bulk objective ' * 1000, origin)
-    claimed = Tasks(db).claim(2)
-    workers = Workers(db, registry, settings, NativeFixture)
-    workers.finish(claimed['lease_owner'], 'completed', 'internal report ' * 5000, '')
+    claimed = Tasks(db).claim()
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
+    workers.end(claimed['lease_owner'], 'done', '', 'internal report ' * 5000)
     with db.transaction() as conn:
-        conn.execute('UPDATE tasks SET lease_owner=NULL WHERE id=?', (task['id'],))
         conn.execute("INSERT INTO messages VALUES(?,?,'worker',?,'completed',NULL,?)", ('result:' + claimed['lease_owner'], origin, 'Codex result:\n' + json.dumps({'objective': task['description']}), time.time()))
         for identity, role, content in [('owner-json', 'user', 'Codex result:\n{"task_id":"example","objective":"literal code"}'), ('real-answer', 'assistant', 'A real conversation answer'), ('unproven', 'worker', 'Keep unproven historical content')]:
             conn.execute('INSERT INTO messages VALUES(?,?,?,?,?,NULL,?)', (identity, origin, role, content, 'completed', time.time()))
@@ -64,16 +63,16 @@ async def test_instruction_upgrade_rotates_native_thread_and_compact_failure_pre
     with db.transaction() as conn:
         conn.execute("UPDATE conversations SET thread_id='contaminated-old-thread' WHERE id=?", (origin,))
     task = Tasks(db).add(project['id'], 'large objective ' * 1000, origin)
-    claimed = Tasks(db).claim(2)
-    workers = Workers(db, registry, settings, NativeFixture)
-    workers.finish(claimed['lease_owner'], 'failed', 'release_id=example; NOT deployed. full report retained', 'error' * 1000)
+    claimed = Tasks(db).claim()
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
+    workers.end(claimed['lease_owner'], 'failed', 'error' * 1000, 'release_id=example; NOT deployed. full report retained')
     with db.transaction() as conn:
-        conn.execute('UPDATE tasks SET lease_owner=NULL,blocker=? WHERE id=?', ('blocker' * 1000, task['id']))
+        conn.execute('UPDATE tasks SET blocker=? WHERE id=?', ('blocker' * 1000, task['id']))
     await chat.deliver_results()
     await asyncio.gather(*list(chat.jobs.values()))
     prompt = json.loads(chat.server.prompts[0])
     notice = prompt['worker_result']
-    assert notice['status'] == 'failed' and notice['error_truncated'] and notice['blocker_truncated']
+    assert notice['status'] == 'failed' and notice['reason_truncated']
     assert notice['deployment'].startswith('unverified')
     assert 'large objective' not in json.dumps(prompt)
     assert prompt['context']['instructions'] == 'Brief routine replies; preserve blockers'

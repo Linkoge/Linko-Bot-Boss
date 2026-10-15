@@ -1,12 +1,11 @@
-import time
 
 import pytest
 
 from ai_manager.config import Settings
+from ai_manager.core import Tasks
 from ai_manager.db import Database
 from ai_manager.execution_ui import execution_summary
 from ai_manager.registry import Registry
-from ai_manager.tasks import Tasks
 
 
 @pytest.fixture
@@ -28,7 +27,7 @@ def execution(db, project, id, status='running', task=None, queued=100):
         conn.execute('''INSERT INTO executions(id,project_id,agent_id,task_id,status,started_at,turn_id)
             VALUES(?,?,'execution',?,?,?,?)''', (id, project, task, status, queued, 'turn' if status == 'running' else None))
         if task:
-            conn.execute("UPDATE tasks SET lifecycle='running',lease_owner=? WHERE id=?", (id, task))
+            conn.execute("UPDATE tasks SET state='running',lease_owner=? WHERE id=?", (id, task))
 
 
 def test_count_scope_question_pause_finish_and_unlimited_count(records):
@@ -48,10 +47,10 @@ def test_count_scope_question_pause_finish_and_unlimited_count(records):
     assert execution_summary(db, one)['active_agents'] == 0
     with db.transaction() as conn:
         conn.execute("UPDATE questions SET status='answered'")
-        conn.execute("UPDATE tasks SET lifecycle='waiting' WHERE id=?", (task['id'],))
+        conn.execute("UPDATE tasks SET state='queued' WHERE id=?", (task['id'],))
     assert execution_summary(db, one)['active_agents'] == 0
     with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='running' WHERE id=?", (task['id'],))
+        conn.execute("UPDATE tasks SET state='running' WHERE id=?", (task['id'],))
     assert execution_summary(db, one)['active_agents'] == 1
     with db.transaction() as conn:
         conn.execute("UPDATE executions SET finished_at=400 WHERE id='worker'")
@@ -74,74 +73,26 @@ def test_work_start_uses_durable_event_not_queue_time(records):
     assert execution_summary(reopened, one) == execution_summary(db, one)
 
 
-def test_archive_preserves_cutoff_running_artifacts_history_and_dependencies(records):
+def test_archived_tasks_stay_hidden_but_kept(records):
     db, tasks, (one, two) = records
-    old = tasks.add(one, 'Old')
-    running = tasks.add(two, 'Running')
-    execution(db, two, 'busy', task=running['id'])
-    leased = tasks.add(one, 'Waiting leased')
-    execution(db, one, 'waiting', 'queued', task=leased['id'])
-    patch = tasks.add(one, 'Prepared deployment')
-    with db.transaction() as conn:
-        conn.execute("CREATE TABLE dependencies(task_id TEXT,depends_on TEXT)")
-        conn.execute('INSERT INTO dependencies VALUES(?,?)', (patch['id'], old['id']))
-    failed = tasks.add(one, 'Failed old task')
-    with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='failed' WHERE id=?", (failed['id'],))
-    completed = tasks.add(one, 'Completed old task')
-    with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='completed' WHERE id=?", (completed['id'],))
-    cutoff = time.time()
-    new = tasks.add(one, 'New descendant')
-    before = db.all('SELECT * FROM dependencies')
-    cleared = tasks.archive_before(cutoff, preserve=[patch['id']])
-    assert cleared == [old['id'], failed['id'], completed['id']]
-    assert tasks.get(completed['id'])['status'] == 'completed'
-    assert tasks.get(failed['id'])['status'] == 'cancelled'
-    assert tasks.get(old['id'])['status'] == 'cancelled'
-    assert old['id'] not in {t['id'] for t in tasks.list()}
-    assert {t['id'] for t in tasks.list()} == {running['id'], leased['id'], patch['id'], new['id']}
-    assert db.all('SELECT * FROM dependencies') == before
-    assert len(db.all('SELECT * FROM tasks')) == 7
-    assert tasks.archive_before(cutoff, preserve=[patch['id']]) == []
+    old, new = tasks.add(one, 'Old'), tasks.add(one, 'New')
+    db.set_setting('archived_tasks', {old['id']: {'at': 1}})
+    assert [t['id'] for t in tasks.list()] == [new['id']]
+    assert len(db.all('SELECT * FROM tasks')) == 2
     with pytest.raises(ValueError, match='archived'):
-        tasks.control(old['id'], 'continue', tasks.get(old['id'])['revision'])
-
-
-def test_archived_records_cannot_be_dispatched_even_if_legacy_state_requeued(records):
-    db, tasks, (one, two) = records
-    old = tasks.add(one, 'Legacy queued')
-    tasks.archive_before(time.time())
-    with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET lifecycle='queued' WHERE id=?", (old['id'],))
-    assert tasks.claim(2) is None
-    assert db.all('SELECT * FROM executions') == []
-
-
-def test_archive_audit_failure_rolls_back_entire_clear(records, monkeypatch):
-    db, tasks, (one, two) = records
-    tasks.add(one, 'Old one')
-    tasks.add(two, 'Old two')
-    before = db.all('SELECT * FROM tasks')
-
-    def fail(*args, **kwargs):
-        raise RuntimeError('Audit unavailable')
-
-    monkeypatch.setattr(db, 'event', fail)
-    with pytest.raises(RuntimeError, match='Audit unavailable'):
-        tasks.archive_before(time.time())
-    assert db.all('SELECT * FROM tasks') == before
-    assert db.setting('archived_tasks') is None
+        tasks.control(old['id'], 'hold', tasks.get(old['id'])['revision'])
 
 
 def test_status_group_order_is_stable_and_history_remains(records):
     db, tasks, (one, _) = records
-    ids = {status: tasks.add(one, status)['id'] for status in ('running', 'queued', 'waiting', 'completed', 'failed')}
+    ids = {status: tasks.add(one, status)['id'] for status in ('running', 'queued', 'held', 'done', 'failed')}
     with db.transaction() as conn:
         for status, id in ids.items():
-            conn.execute('UPDATE tasks SET lifecycle=?,created_at=100 WHERE id=?', (status, id))
+            conn.execute('UPDATE tasks SET state=?,held=?,created_at=100 WHERE id=?',
+                         ('queued' if status == 'held' else status, int(status == 'held'), id))
     rows = tasks.list(one)
-    assert [t['status'] for t in rows[:3]] == ['running', 'queued', 'waiting']
+    assert rows[0]['status'] == 'running' and {t['status'] for t in rows[1:3]} == {'queued', 'held'}
+    assert {t['status'] for t in rows[3:]} == {'done', 'failed'}
     assert len(rows) == 5 and tasks.list(one) == rows
     execution(db, one, 'old-active', queued=1)
     for i in range(105):

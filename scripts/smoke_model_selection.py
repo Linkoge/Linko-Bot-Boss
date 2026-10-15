@@ -8,12 +8,12 @@ from pathlib import Path
 from ai_manager.chat import Chat
 from ai_manager.codex import AppServer
 from ai_manager.config import Settings
+from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.model_settings import MODELS, current, save
 from ai_manager.orchestration import Scheduler
+from ai_manager.pipeline import Pipeline
 from ai_manager.registry import Registry
-from ai_manager.tasks import Tasks
-from ai_manager.workers import Workers
 
 
 async def main():
@@ -30,7 +30,7 @@ async def main():
     project = registry.add(source)
     server = AppServer(settings)
     chat = Chat(db, registry, server)
-    workers = Workers(db, registry, settings)
+    workers = Core(db, registry, settings, Pipeline(db, registry))
     scheduler = Scheduler(db, registry, settings, workers, chat)
     chat.action_handler = scheduler.manager_action
     try:

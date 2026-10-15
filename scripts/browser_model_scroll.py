@@ -14,10 +14,10 @@ PROGRAM = '''
 import asyncio,json,sys,time
 sys.path.insert(0,'tests')
 import uvicorn
-from test_model_settings import CatalogServer
+from test_claude_provider import BothServer
 from ai_manager.config import Settings
 from ai_manager.web import create_app
-class Server(CatalogServer):
+class Server(BothServer):
     async def request(self,method,params,timeout=30):
         if method!='turn/start': return {}
         queue=self.queues[params['threadId']]
@@ -75,70 +75,172 @@ def main():
                 assert page.locator('#model-settings-button').count() == 1
                 page.locator('#model-settings-button').click()
                 page.locator('#model-dialog').wait_for(state='visible')
-                assert page.locator('#manager-choices > div').count() == 2
-                assert page.locator('.bot-model-section').count() == 3
-                assert page.locator('.policy-cell').count() == 12
-                def choice(key):
+                page.wait_for_function('()=>!!modelPanel&&!modelOpening')
+                assert page.locator('#manager-choices > div').count() == 4
+                assert page.locator('#model-dialog svg').count() == 0
+                assert page.locator('.favorite-row').count() == 2
+                def choice(key, error=None):
                     page.locator(f'[data-choice="{key}"]').click()
                     page.wait_for_function('()=>!modelSaving')
-                    assert page.locator('#model-error').inner_text() == ''
+                    if key.startswith('favorite-recall-'):
+                        assert not page.locator('#model-dialog').is_visible()
+                        page.locator('#model-settings-button').click()
+                        page.wait_for_function('()=>!modelOpening&&modelDialog.open')
+                    message = page.locator('#model-error').inner_text()
+                    assert (error in message) if error else message == '', message
+                def settings():
+                    return page.evaluate('()=>modelPanel.providers[modelPanel.provider].settings')
+                def bot_snapshot():
+                    return page.evaluate('()=>Object.fromEntries(Object.entries(modelPanel.providers).map(([p,v])=>[p,v.settings.bot]))')
+                def pressed(key):
+                    return page.locator(f'[data-choice="{key}"]').get_attribute('aria-pressed') == 'true'
                 choice('manager-Astra')
-                choice('manager-high')
-                choice('manual-Luna-high')
+                choice('manager-codex-high')
+                choice('favorite-insert-0')
+                assert pressed('favorite-recall-0')
+                choice('manager-codex-medium')
+                assert not pressed('favorite-recall-0')
+                choice('manager-codex-high')
+                assert pressed('favorite-recall-0')
+                assert page.locator('#bot-choices [data-choice^="bot-model-"]').count() == 6
+                choice('bot-model-Haiku')
+                choice('bot-manual-claude-medium')
+                assert page.evaluate('modelPanel.provider') == 'codex'
+                assert page.evaluate('modelPanel.providers.claude.settings.bot.manual') == {'model':'claude-haiku-5-5','effort':'medium'}
+                choice('bot-model-Luna')
+                choice('bot-manual-codex-high')
+                manual = settings()['bot']['manual']
                 choice('bot-automatic')
-                assert page.locator('[data-choice="manual-Luna-high"]').is_disabled()
-                assert page.locator('[data-choice="manual-Luna-high"]').get_attribute('aria-pressed') == 'true'
-                choice('policy-Luna-low-Deny')
-                choice('policy-Luna-medium-Deny')
-                choice('policy-Sol-model-Deny')
-                choice('policy-Astra-model-Allow')
-                choice('policy-Astra-medium-Deny')
-                choice('policy-Astra-high-Deny')
-                settings = page.evaluate('()=>modelPanel.providers[modelPanel.provider].settings')
-                assert settings['bot']['policy']['gpt-6-luna']['levels'] == {'low': False, 'medium': False, 'high': True}
-                assert settings['bot']['policy']['gpt-6-astra']['levels'] == {'low': True, 'medium': False, 'high': False}
-                page.screenshot(path=str(evidence / 'desktop-automatic.png'))
-                choice('policy-Astra-model-Deny')
-                page.locator('[data-choice="policy-Luna-high-Deny"]').click()
-                page.wait_for_function('()=>!modelSaving')
-                assert 'at least one' in page.locator('#model-error').inner_text()
-                assert page.locator('[data-choice="policy-Luna-high-Allow"]').get_attribute('aria-pressed') == 'true'
+                assert page.locator('#bot-choices [data-choice^="bot-model-"]').count() == 6
+                choice('bot-model-Opus')
+                choice('policy-Haiku-low')
+                assert not pressed('bot-model-Opus') and not pressed('policy-Haiku-low')
+                both = page.evaluate("async()=> (await api('/api/model-settings')).providers")
+                assert both['claude']['settings']['bot']['mode'] == 'automatic'
+                assert both['claude']['settings']['bot']['policy']['claude-opus-5-5']['allowed'] is False
+                assert both['claude']['settings']['bot']['policy']['claude-haiku-5-5']['levels']['low'] is False
+                assert both['codex']['settings']['bot']['policy']['gpt-6-astra']['allowed'] is False
+                choice('policy-Luna-low')
+                choice('policy-Luna-medium')
+                choice('bot-model-Sol')
+                choice('bot-model-Astra')
+                choice('policy-Astra-medium')
+                choice('policy-Astra-high')
+                config = settings()
+                assert config['bot']['policy']['gpt-6-luna']['levels'] == {'low': False, 'medium': False, 'high': True}
+                assert config['bot']['policy']['gpt-6-astra']['levels'] == {'low': True, 'medium': False, 'high': False}
+                choice('bot-model-Astra')
+                choice('bot-model-Luna', 'at least one')
+                assert pressed('bot-model-Luna')
+                choice('policy-Luna-high', 'at least one')
+                assert pressed('policy-Luna-high')
+                choice('bot-model-Sol')
+                assert pressed('bot-model-Sol')
+                choice('bot-model-Sol')
+                assert not pressed('bot-model-Sol')
+                # The saved API policy is the one runtime delegation validates.
+                policy = page.evaluate("async()=> (await api('/api/model-settings')).settings.bot.policy")
+                assert policy == settings()['bot']['policy']
                 choice('bot-manual')
-                assert page.locator('[data-choice="manual-Luna-high"]').is_enabled()
-                assert page.locator('[data-choice="manual-Luna-high"]').get_attribute('aria-pressed') == 'true'
+                assert settings()['bot']['manual'] == manual
+                assert pressed('bot-model-Luna') and pressed('bot-manual-codex-high')
+                bots = bot_snapshot()
+                choice('manager-Sonnet')
+                choice('manager-claude-medium')
+                choice('favorite-insert-1')
+                choice('favorite-recall-0')
+                assert pressed('favorite-recall-0') and not pressed('favorite-recall-1')
+                assert pressed('manager-Astra') and pressed('manager-codex-high')
+                assert bot_snapshot() == bots
+                choice('favorite-recall-1')
+                assert pressed('favorite-recall-1') and not pressed('favorite-recall-0')
+                assert pressed('manager-Sonnet') and pressed('manager-claude-medium')
+                assert bot_snapshot() == bots
+                choice('manager-Haiku')
+                assert not pressed('favorite-recall-1')
+                choice('favorite-insert-1')
+                assert pressed('favorite-recall-1')
+                assert page.locator('[data-choice="favorite-recall-1"] .favorite-label').text_content() == 'MediumHaiku'
                 page.keyboard.press('Escape')
                 assert page.locator('#model-settings-button').evaluate('(n)=>n===document.activeElement')
                 page.reload()
                 page.wait_for_function('()=>state.ready&&state.history')
-                assert page.locator('#messages').evaluate('(n)=>Math.abs(n.scrollTop+n.clientHeight-n.scrollHeight)<=1')
                 page.locator('#model-settings-button').click()
-                assert page.locator('[data-choice="manager-Astra"]').get_attribute('aria-pressed') == 'true'
-                assert page.locator('[data-choice="manual-Luna-high"]').get_attribute('aria-pressed') == 'true'
+                choice('favorite-recall-1')
+                assert pressed('manager-Haiku') and pressed('manager-claude-medium')
+                choice('favorite-recall-0')
+                assert pressed('favorite-recall-0') and not pressed('favorite-recall-1')
+                assert pressed('manager-Astra') and pressed('manager-codex-high')
+                assert bot_snapshot() == bots
                 choice('bot-automatic')
                 for width, height in [(1200, 900), (393, 851), (320, 568)]:
                     page.set_viewport_size({'width': width, 'height': height})
                     geometry = page.locator('#model-dialog').evaluate('(n)=>({width:n.clientWidth,scrollWidth:n.scrollWidth,height:n.clientHeight,scrollHeight:n.scrollHeight})')
                     assert geometry['scrollWidth'] <= geometry['width']
-                    assert geometry['scrollHeight'] <= geometry['height']  # All controls visible at once.
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-                    style = page.evaluate("""() => ({families:[...document.querySelectorAll('.model-family')].map(b=>({
-                        image:getComputedStyle(b).backgroundImage,pressed:b.getAttribute('aria-pressed')})),
-                        efforts:[...document.querySelectorAll('[data-choice="manager-low"],[data-choice="manual-Sol-low"]')].map(b=>getComputedStyle(b).backgroundImage)})""")
-                    assert len(style['families']) == 6
-                    assert all('linear-gradient' in b['image'] for b in style['families'])
-                    assert all(image=='none' for image in style['efforts'])
-                    results.append({'family_button_style':style,'viewport':width})
+                    # Compare exactly the selected and nonselected effort surfaces, including hover.
+                    style = page.evaluate("""() => {
+                        const surface=b=>{const s=getComputedStyle(b);return [s.backgroundColor,s.backgroundImage,s.borderColor,s.boxShadow,s.fontWeight]};
+                        const selected=document.querySelector('[data-choice="manager-codex-high"]');
+                        const other=document.querySelector('[data-choice="manager-codex-low"]');
+                        const h=document.querySelector('#manager-heading').getBoundingClientRect();
+                        const x=document.querySelector('#model-close').getBoundingClientRect();
+                        const bh=document.querySelector('#bot-heading').getBoundingClientRect();
+                        const mode=document.querySelector('#bot-mode').getBoundingClientRect();
+                        return {selected:surface(selected),other:surface(other),color:getComputedStyle(selected).color,
+                          otherColor:getComputedStyle(other).color,headerAligned:Math.abs(h.y+h.height/2-x.y-x.height/2)<2,
+                          botAligned:Math.abs(bh.y+bh.height/2-mode.y-mode.height/2)<2,
+                          labels:[...document.querySelectorAll('#model-dialog h2')].map(n=>getComputedStyle(n).color)};
+                    }""")
+                    assert style['selected'] == style['other']
+                    assert style['color'] != style['otherColor']
+                    assert style['headerAligned'] and style['botAligned']
+                    assert len(set(style['labels'])) == 1
+                    assert page.locator('.policy-cell').count() == 0
+                    assert page.locator('#model-dialog select').count() == 0
+                    mode_style = page.locator('#bot-mode button').evaluate_all('(buttons)=>buttons.map(b=>{const s=getComputedStyle(b);return [s.backgroundColor,s.borderColor,s.boxShadow,s.fontWeight]})')
+                    assert mode_style[0] == mode_style[1]
+                    close_style = page.locator('#model-close').evaluate('(b)=>{const s=getComputedStyle(b);return [s.backgroundColor,s.borderColor,s.borderRadius,b.offsetHeight]}')
+                    assert close_style[:3] == ['rgb(29, 37, 52)','rgb(43, 51, 69)','9px'], close_style
+                    assert close_style[3] >= 36, close_style
+                    assert page.locator('#manager-choices svg,#bot-choices svg').count() == 0
+                    assert page.locator('.favorite-entry svg').count() == 2
+                    favorite_style = page.locator('[data-choice="favorite-recall-0"]').evaluate('(b)=>{const s=getComputedStyle(b);return [s.backgroundImage,s.borderColor]}')
+                    model_style = page.locator('[data-choice="manager-Astra"]').evaluate('(b)=>{const s=getComputedStyle(b);return [s.backgroundImage,s.borderColor]}')
+                    assert favorite_style == model_style
+                    assert page.locator('#manager-choices button,#bot-mode button,#bot-choices button').evaluate_all('(buttons)=>buttons.every(b=>b.offsetHeight>=38)')
+                    for row in page.locator('.favorite-row').all():
+                        assert row.locator('button').first.inner_text() == 'Insert'
+                    entry_geometry = page.locator('[data-choice="favorite-recall-0"]').evaluate('''(b)=>{const r=b.getBoundingClientRect(),l=b.querySelector('.favorite-label').getBoundingClientRect(),i=b.querySelector('.favorite-logo').getBoundingClientRect();return {center:Math.abs(l.x+l.width/2-r.x-r.width/2),right:r.right-i.right};}''')
+                    assert entry_geometry['center'] <= 1 and 5 <= entry_geometry['right'] <= 12
+                    page.locator('#model-dialog').evaluate('(d)=>d.scrollTop=0')
                     page.screenshot(path=str(evidence / f'panel-{width}.png'))
-                    # Native modal focus containment, plus explicit first/last wrapping.
+                    page.locator('#manager-favorites').scroll_into_view_if_needed()
+                    page.screenshot(path=str(evidence / f'favorites-{width}.png'))
                     page.locator('#model-close').focus()
                     page.keyboard.press('Shift+Tab')
                     assert page.locator('#model-dialog').evaluate('(n)=>n.contains(document.activeElement)')
                     page.keyboard.press('Tab')
                     assert page.locator('#model-close').evaluate('(n)=>n===document.activeElement')
-                    results.append({'width': width, 'panel': geometry})
+                    assert page.locator('#model-close').evaluate('(n)=>{const r=n.getBoundingClientRect(),d=n.closest("dialog").getBoundingClientRect();return r.top>=d.top&&r.bottom<=d.bottom}')
+                    results.append({'width': width, 'panel': geometry, 'style': style})
+                choice('bot-manual')
+                for width,height in [(1200,900),(393,851),(320,568)]:
+                    page.set_viewport_size({'width':width,'height':height})
+                    assert page.locator('#bot-choices > .model-choice-row').count() == 4
+                    assert page.locator('#bot-choices [data-choice^="bot-model-"]').count() == 6
+                    assert page.locator('#bot-choices [data-choice^="bot-manual-"]').count() == 6
+                    assert page.locator('#model-dialog').evaluate('(d)=>d.scrollWidth<=d.clientWidth')
+                    page.locator('#model-dialog').evaluate('(d)=>d.scrollTop=0')
+                    page.screenshot(path=str(evidence / f'manual-{width}.png'))
+                choice('bot-automatic')
                 page.locator('[data-choice="manager-Luna"]').focus()
                 page.keyboard.press('ArrowRight')
                 assert page.locator('[data-choice="manager-Sol"]').evaluate('(n)=>n===document.activeElement')
+                assert page.locator('[data-choice="manager-Sol"]').evaluate('(n)=>getComputedStyle(n).outlineStyle') == 'solid'
+                page.keyboard.press('Enter')
+                page.wait_for_function('()=>!modelSaving')
+                assert pressed('manager-Sol')
                 page.keyboard.press('Escape')
                 # At top, middle, and old bottom: sends, streams and reconciliation cannot follow.
                 for width,height,position in [(w,h,p) for w,h in [(1200,900),(393,851),(320,568)] for p in ['top','middle','bottom']]:

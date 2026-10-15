@@ -5,7 +5,7 @@
 ACTIVE = """e.status='running' AND e.finished_at IS NULL AND e.turn_id IS NOT NULL
     AND NOT EXISTS(SELECT 1 FROM questions q WHERE q.execution_id=e.id AND q.status='pending')
     AND (e.task_id IS NULL OR EXISTS(SELECT 1 FROM tasks t WHERE t.id=e.task_id
-        AND t.lease_owner=e.id AND t.lifecycle IN ('running','pause_requested','cancel_requested')))"""
+        AND t.lease_owner=e.id AND t.state='running'))"""
 
 
 def execution_summary(db, project_id=None):
@@ -18,8 +18,5 @@ def execution_summary(db, project_id=None):
         FROM executions e WHERE 1=1{scope}
         ORDER BY is_working DESC,CASE WHEN e.finished_at IS NULL THEN 0 ELSE 1 END,e.started_at DESC,e.id LIMIT 100""", params,
     )
-    for row in rows:
-        if row["task_id"] and row["finished_at"] is None and row["stop_requested"] in (2, 3):
-            row["status"] = "pause_requested" if row["stop_requested"] == 2 else "cancel_requested"
     count = db.one(f"SELECT count(*) AS n FROM executions e WHERE {ACTIVE}{scope}", params)["n"]
     return {"executions": rows, "active_agents": count}
