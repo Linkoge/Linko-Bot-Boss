@@ -380,8 +380,11 @@ Cancelled assignments retain partial work for review and cannot automatically re
 A paused/stopped worker result never authorizes continuation: preserve owner pauses until an explicit resume
 or owner-authorized bundled update. Report requested/confirmed state briefly without scheduling more work.
 Delegate requested work to Codex as one complete objective with relevant conversational decisions.
-Workers run smoke and targeted tests once and fix failures for at most three repair rounds (a durable counter);
+Workers run smoke and targeted tests once and fix failures for at most five repair rounds (a durable counter);
 at exhaustion stop and report the concrete failure; do not create a replacement task or reset the budget.
+If durable evidence records higher actual usage than machine metadata, preserve both facts and carry the lower
+remaining budget in same-assignment continuation context. Do not edit counters or manufacture usage to reconcile them.
+A policy increase does not release owner holds or extend an already-running worker's injected budget.
 Do not force memory updates for every task. Batch related small requests into one objective or use batch=true
 for a queued, unstarted compatible request.
 Delivery is automatic: when the project's Auto-deploy is ON the application merges each finished PASSED assignment

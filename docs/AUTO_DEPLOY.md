@@ -8,10 +8,43 @@ removed; its history is in Git. Older dated sections elsewhere that mention mani
 ## 1. Worker checks (once per task)
 
 Every task, every size: run the smoke suite (`python -m pytest -q -m smoke`) and the targeted tests for the changed
-behavior (plus build/lint when relevant) **once**. Fix failures for at most **three repair rounds** (durable counter in
+behavior (plus build/lint when relevant) **once**. Fix failures for at most **five repair rounds** (durable counter in
 `assignment_workflow`, surviving retries/restarts). Then stop and report the concrete failure. The final reply ends
 with `RESULT: PASSED` or `RESULT: FAILED - <check>`. There is no independent AI review, no risk tier and no escalation.
 One coding worker runs at a time globally. The full backend suite is not run by workers.
+
+## Five-round activation and retained assignments (2026-10-15)
+
+The owner permanently raised the application limit from three to five total repair rounds. Both
+`repair_rounds` (committed manager/UI repair continuations) and the separate `followup_rounds`
+(manager wakes) retain their cumulative values; transport retries and paused resumes do not charge
+repairs. No migration, reset or automatic release of owner holds accompanies this change. The fifth
+queued repair may finish successfully; another repair is rejected atomically at five or above.
+Worker prompts report the saved usage and `max(0, 5 - usage)` remaining. Workers must also retain
+actual verification usage from durable evidence when it exceeds machine metadata; counters do not
+measure individual test/fix cycles inside a worker turn.
+
+Activation uses the normal PASSED-candidate merge/deploy pipeline below. Only a successful deployment
+status establishes activation; editing policy code does not extend the already-running worker's
+injected budget. This policy implementation worker remains governed by three rounds.
+
+Held model/recording assignment `4a985c35b51345ada354cd666acbf80e` remains separate. Its retained
+`docs/MODEL_SETTINGS_REDESIGN_REPORT.md` (read with that task_id) records **three actually used**; supplied machine metadata
+is **repair_rounds=2**. Keep both facts, failed candidate `1e086d4`, and owner-reported live `f8f4d55`.
+This policy-only branch is based on `f8f4d55`, excluding failed `1e086d4` from its ancestry.
+It neither resumes nor deploys that failed candidate, edits its workspace, nor
+changes shared counters. The lifecycle has no dedicated historical-counter reconciliation operation.
+After policy activation and explicit owner continuation authorization, the manager should read_task,
+read_result for execution `d1e9eec6a6304ffaa0ebf2fc8df415d6`, and read_document(task_id, report path),
+then continue the **same** inactive assignment with the discrepancy and a conservative **two remaining**
+in appended constraints/context. Re-read current revision, hold, lease and counters first. For an unchanged
+failed lifecycle/count of two, this real continuation transaction charges **2 → 3**; its next prompt shows
+three used/two remaining. That is a continuation charge, not a retroactive correction or proof of historical
+usage. Paused/waiting resumes do not charge it: carry the evidence-based ceiling explicitly even if machine
+remaining is higher. Do not manufacture a continuation solely to adjust a number or rewrite old evidence.
+The worker must stop after the two actual remaining rounds if still failing; the manager must preserve
+that exhaustion/hold even if stale counters would permit more. Subsequent real continuations remain
+cumulative and replay-safe. Only a later verified PASSED result may enter automatic merge/deployment.
 
 ## 2. Merge to main (sequential)
 

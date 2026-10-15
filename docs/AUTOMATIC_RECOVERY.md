@@ -64,9 +64,9 @@ execution and stores its wake identity. Competing checkers cannot queue another 
 service lock, conversation head ordering and runner cleanup guards serialize execution. On restart, native
 outcome reconciliation resumes the saved execution rather than creating a replacement wake.
 
-Follow-up retains persisted backoff and transactional deduplication, with at most three new manager wakes
+Follow-up retains persisted backoff and transactional deduplication, with at most five new manager wakes
 tracked in `followup_rounds`. Old backoff `attempts` are retained without being treated as repair usage.
-Repair continuations have a separate total cap of three in `repair_rounds`, charged by both manager and UI
+Repair continuations have a separate total cap of five in `repair_rounds`, charged by both manager and UI
 paths and never reset by retry flags/state changes/restart. Exhausted failed work becomes owner-wait and must
 be reported; no substitute assignment may evade the budget. Successful worker completion is complete for normal
 automatic handoff, without another review or escalation loop. See [current verification](AUTO_DEPLOY.md).

@@ -30,8 +30,10 @@ When workspace_ownership.branch is present, edit/commit only that assignment wor
 Do not edit, switch, reset, stash or merge in shared_checkout or another assignment worktree.
 Do not write shared runtime databases, restart shared services, deploy or push; the application merges and deploys.
 Use disposable per-workspace runtime data, ports and outputs for tests.
-Run the smoke suite and targeted tests for your change once; fix failures for at most three rounds total
+Run the smoke suite and targeted tests for your change once; fix failures for at most five rounds total
 (the prompt records the remaining durable budget), then stop. Do not run the full backend suite repeatedly.
+If durable evidence records more rounds used than machine metadata, retain both facts and honor the lower
+remaining budget. Do not infer a reset from a new limit or continuation.
 Commit completed source changes in your retained branch. Update relevant docs without duplicating them.
 End your final reply with one line: `RESULT: PASSED`, or `RESULT: FAILED - <concrete failing check>` when checks
 still fail after the repair rounds. Only PASSED work is merged and deployed.

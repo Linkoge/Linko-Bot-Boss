@@ -128,6 +128,8 @@ def task_in(system, objective="Work", project_index=0):
 async def test_network_recovery_same_task_thread_history_no_waiting_inference(system, outcomes):
     db, registry, chat, settings = system
     task, project, origin = task_in(system)
+    db.set_setting('assignment_workflow:' + task['id'],
+                   {'state': 'actionable', 'repair_rounds': 3, 'followup_rounds': 2})
     faults = Faults(outcomes)
     workers = Workers(db, registry, settings, faults.factory)
     scheduler = Scheduler(db, registry, settings, workers, chat)
@@ -157,6 +159,12 @@ async def test_network_recovery_same_task_thread_history_no_waiting_inference(sy
     assert len(chat.server.prompts) == 1
     assert chat.history(project["id"])["conversation"]["id"] == origin
     assert all("recovery" in p for p in faults.calls[1:])
+    saved = Database(db.path).setting('assignment_workflow:' + task['id'])
+    assert saved['repair_rounds'] == 3 and saved['followup_rounds'] == 2
+    for row in db.all("SELECT input FROM executions WHERE task_id=?", (task['id'],)):
+        verification = json.loads(row['input'])['verification']
+        assert verification['repair_rounds_used'] == 3
+        assert verification['repair_rounds_remaining'] == 2
 
 
 @pytest.mark.asyncio

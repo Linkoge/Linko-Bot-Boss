@@ -1,8 +1,12 @@
 # Delivery decision — 2026-10-15
 
+Owner explicitly increased the permanent repair/follow-up limit from three to five on 2026-10-15,
+preserving cumulative usage and existing holds. Existing executions keep their injected budgets.
+Activation and held model/recording continuation: [docs/AUTO_DEPLOY.md](docs/AUTO_DEPLOY.md).
+
 Owner (single user, private Tailscale) wants deployment simple and automatic. Replaced the heavyweight machinery
 (hash-pinned helper service, immutable release bundles/manifests/evidence, deployment intents/approvals, exact-commit
-binding, risk tiers, automatic AI security review) with: worker smoke + targeted tests once and at most three repair
+binding, risk tiers, automatic AI security review) with: worker smoke + targeted tests once and at most five repair
 rounds; sequential merge of passed work to main; one deploy script (idle wait, SQLite backup, restart, health check,
 automatic code+database rollback, short persisted result). Auto-deploy ON means merge and deploy, OFF neither; explicit
 owner holds/pauses are honored; one global coding worker; usage-limit gate stays removed. Full backend runs once, in the

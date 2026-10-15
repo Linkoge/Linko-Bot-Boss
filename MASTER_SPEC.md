@@ -8,7 +8,7 @@ Current architecture, superseding prior supervision requirements as authorized o
 - Natural conversational requests; the manager decides when requested work should be delegated.
 - One ordinary request becomes one complete objective, with necessary project/conversation context. Related small requests (at most three concrete files) may batch into a queued, never-started assignment, preserving selected attachment references, metadata and first-seen order.
 - Native Codex tools handle investigation, editing, commands, dependency installation, builds, testing, debugging and Git.
-- Validation: every task runs smoke and targeted tests once, at most three durable same-assignment repair rounds, then reports the concrete failure; one worker self-check, no independent reviewer, risk tier or escalation. The full backend suite runs once, in the deploy script. Contract: docs/AUTO_DEPLOY.md.
+- Validation: every task runs smoke and targeted tests once, at most five durable same-assignment repair rounds, then reports the concrete failure; one worker self-check, no independent reviewer, risk tier or escalation. The full backend suite runs once, in the deploy script. Contract: docs/AUTO_DEPLOY.md.
 - No separate planner, task DAG, verification controller, registered verification commands, permission profiles, capability broker or integration controller or independent reviewer.
 - No routine owner approval. Preserve explicit confirmation for catastrophic broad destruction, using native interaction where available and conversational continuation otherwise.
 - Automatic durable worker-result delivery to the originating manager conversation, including when the browser disconnects or another project is selected.

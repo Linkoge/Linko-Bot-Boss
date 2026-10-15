@@ -11,7 +11,7 @@ A private conversational manager for software projects:
 
 Use Conversation for discussion, Auto to delegate requested work, or Execute to send a work objective through the same manager path. Discuss work naturally in a project context. The manager delegates a complete objective when requested. Codex investigates, edits, installs dependencies, runs commands, builds, tests, debugs and uses Git in its durably owned assignment workspace (or the retained original cwd for historical/non-Git sequential work). Results return automatically to the originating conversation.
 
-Delivery is a short pipeline ([docs/AUTO_DEPLOY.md](docs/AUTO_DEPLOY.md)): each task runs smoke and targeted tests once with at most three repair rounds and no AI review; finished work merges into main one at a time; one deploy script waits for idle, backs up SQLite, restarts, health-checks and rolls back automatically, then records a short result. Per-project Auto-deploy ON means merge and deploy, OFF means neither. One global coding worker.
+Delivery is a short pipeline ([docs/AUTO_DEPLOY.md](docs/AUTO_DEPLOY.md)): each task runs smoke and targeted tests once with at most five repair rounds and no AI review; finished work merges into main one at a time; one deploy script waits for idle, backs up SQLite, restarts, health-checks and rolls back automatically, then records a short result. Per-project Auto-deploy ON means merge and deploy, OFF means neither. One global coding worker.
 
 Attachment batching preserves dictionary references, their metadata and first-seen order; the retained regression passes. Current status and limits: [STATE.md](STATE.md).
 

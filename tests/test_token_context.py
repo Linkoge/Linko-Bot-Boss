@@ -147,7 +147,8 @@ async def test_manager_usage_is_persisted_with_native_events(system):
 
 
 @pytest.mark.asyncio
-async def test_worker_continuation_keeps_thread_and_only_updates_changed_context(system):
+@pytest.mark.parametrize("used", [0, 3, 4])
+async def test_worker_continuation_keeps_thread_and_only_updates_changed_context(system, used):
     db, registry, chat, settings = system
     project = registry.list()[0]
     task = Tasks(db).add(project["id"], "First objective")
@@ -162,6 +163,8 @@ async def test_worker_continuation_keeps_thread_and_only_updates_changed_context
     workers.launch(Tasks(db).claim(2))
     await settled(workers)
     first_thread = Tasks(db).get(task["id"])["native_thread"]
+    workflow = db.setting('assignment_workflow:' + task['id'])
+    db.set_setting('assignment_workflow:' + task['id'], {**workflow, 'repair_rounds': used})
     Tasks(db).control(task["id"], "continue", Tasks(db).get(task["id"])["revision"])
     workers.launch(Tasks(db).claim(2))
     await settled(workers)
@@ -169,8 +172,8 @@ async def test_worker_continuation_keeps_thread_and_only_updates_changed_context
     continued = json.loads(servers[-1].prompts[-1])
     assert set(continued) == {"objective", "verification"}
     assert continued["objective"] == "First objective"
-    assert continued["verification"]["repair_rounds_used"] == 1
-    assert continued["verification"]["repair_rounds_remaining"] == 2
+    assert continued["verification"]["repair_rounds_used"] == used + 1
+    assert continued["verification"]["repair_rounds_remaining"] == max(0, 5 - used - 1)
     assert "project" not in continued  # Unchanged project context remains in the retained native thread.
     assert (
         json.loads(

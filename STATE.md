@@ -1,3 +1,14 @@
+# Five-round policy candidate — 2026-10-15
+
+Prepared in assignment `e01954965b8347b7abbb6d1d9d5a92cf`; activation is pending normal
+application-managed merge/deploy. The policy-only branch is based on `f8f4d55`, excluding
+failed `1e086d4` from its ancestry. No deployment success is claimed. Permanent repair/follow-up
+policy is five total rounds, preserving saved usage/holds; this worker still has its injected three-round
+limit. Held model/recording assignment `4a985c35b51345ada354cd666acbf80e` is untouched:
+actual three used versus machine two remains documented, failed candidate `1e086d4` retained,
+owner-reported live `f8f4d55` unchanged by this work. See [activation and continuation](docs/AUTO_DEPLOY.md#five-round-activation-and-retained-assignments-2026-10-15)
+and [policy evidence](docs/REPAIR_POLICY_REPORT.md). Earlier state below is historical.
+
 # Current state — minimal pipeline, 2026-10-15
 
 **Status: implemented and verified on branch `linko/assignment-a683bcca8afd4f12a4af581e5706a0ac`; not merged, not
