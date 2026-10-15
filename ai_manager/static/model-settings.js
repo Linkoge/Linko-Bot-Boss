@@ -51,29 +51,36 @@ function renderModels(){
       ()=>changeModels(c=>{c.manager.effort=e;},provider,true),!selected?.levels.includes(e),`manager-${provider}-${e}`);
     manager.append(models,levels);
   }
-  const {settings,choices}=providerView(),bot=settings.bot,automatic=bot.mode==='automatic';
+  const {settings,choices}=providerView(),automatic=settings.bot.mode==='automatic';
   const mode=$('bot-mode');mode.replaceChildren();
-  for(const value of ['manual','automatic'])addChoice(mode,modelButton(titleLevel(value),`Bot ${titleLevel(value)}`,bot.mode===value,
-    ()=>changeModels(c=>{c.bot.mode=value;})),`bot-${value}`);
+  for(const value of ['manual','automatic']){
+    const b=addChoice(mode,modelButton(titleLevel(value),`Bot ${titleLevel(value)}`,settings.bot.mode===value,
+      ()=>modelMutation(async()=>{modelPanel=await api('/api/bot-mode',{method:'PUT',body:JSON.stringify({mode:value,
+        revisions:Object.fromEntries(Object.entries(modelPanel.providers).map(([p,v])=>[p,v.settings.revision]))})});})),`bot-${value}`);
+    b.classList.add('effort-choice');
+  }
   const sections=$('bot-choices');sections.replaceChildren();
-  const models=modelRow(`Bot ${PROVIDER_NAMES[modelPanel.provider]} ${automatic?'allowed models':'model'}`);
-  for(const m of choices)addModel(models,m,`Bot ${automatic?'allow':'manual'} ${m.name}`,automatic?bot.policy[m.model].allowed:bot.manual.model===m.model,
-    ()=>changeModels(c=>{if(automatic)c.bot.policy[m.model].allowed=!c.bot.policy[m.model].allowed;else selectModel(c.bot.manual,m);}),!m.levels.length,`bot-model-${m.name}`);
-  sections.append(models);
-  if(automatic){
-    const policies=element('div',undefined,'model-policy-grid');
-    for(const m of choices){
-      const levels=modelRow(`Automatic ${m.name} effort allowances`);levels.classList.add('policy-efforts');
-      for(const e of ['low','medium','high'])addEffort(levels,e,`Automatic ${m.name} ${titleLevel(e)}`,bot.policy[m.model].levels[e],
-        ()=>changeModels(c=>{c.bot.policy[m.model].levels[e]=!c.bot.policy[m.model].levels[e];}),!m.levels.includes(e),`policy-${m.name}-${e}`);
-      policies.append(levels);
+  for(const provider of ['codex','claude']){
+    const {settings,choices}=modelPanel.providers[provider],bot=settings.bot;
+    const models=modelRow(`Bot ${PROVIDER_NAMES[provider]} ${automatic?'allowed models':'model'}`);
+    for(const m of choices)addModel(models,m,`Bot ${automatic?'allow':'manual'} ${m.name}`,automatic?bot.policy[m.model].allowed:bot.manual.model===m.model,
+      ()=>changeModels(c=>{c.bot.mode=automatic?'automatic':'manual';if(automatic)c.bot.policy[m.model].allowed=!c.bot.policy[m.model].allowed;else selectModel(c.bot.manual,m);},provider),!m.levels.length,`bot-model-${m.name}`);
+    sections.append(models);
+    if(automatic){
+      const policies=element('div',undefined,'model-policy-grid');
+      for(const m of choices){
+        const levels=modelRow(`Automatic ${m.name} effort allowances`);levels.classList.add('policy-efforts');
+        for(const e of ['low','medium','high'])addEffort(levels,e,`Automatic ${m.name} ${titleLevel(e)}`,bot.policy[m.model].levels[e],
+          ()=>changeModels(c=>{c.bot.mode='automatic';c.bot.policy[m.model].levels[e]=!c.bot.policy[m.model].levels[e];},provider),!m.levels.includes(e),`policy-${m.name}-${e}`);
+        policies.append(levels);
+      }
+      sections.append(policies);
+    }else{
+      const levels=modelRow(`Bot ${PROVIDER_NAMES[provider]} manual effort`),selected=choices.find(m=>m.model===bot.manual.model);
+      for(const e of ['low','medium','high'])addEffort(levels,e,`Bot manual ${PROVIDER_NAMES[provider]} ${titleLevel(e)}`,bot.manual.effort===e,
+        ()=>changeModels(c=>{c.bot.mode='manual';c.bot.manual.effort=e;},provider),!selected?.levels.includes(e),`bot-manual-${provider}-${e}`);
+      sections.append(levels);
     }
-    sections.append(policies);
-  }else{
-    const levels=modelRow('Bot manual effort'),selected=choices.find(m=>m.model===bot.manual.model);
-    for(const e of ['low','medium','high'])addEffort(levels,e,`Bot manual ${titleLevel(e)}`,bot.manual.effort===e,
-      ()=>changeModels(c=>{c.bot.manual.effort=e;}),!selected?.levels.includes(e),`bot-manual-${e}`);
-    sections.append(levels);
   }
   const favorites=$('manager-favorites');favorites.replaceChildren();
   const managerPair=providerView().settings.manager,canInsert=choices.some(m=>m.model===managerPair.model&&m.levels.includes(managerPair.effort));
@@ -82,14 +89,18 @@ function renderModels(){
     const insert=addChoice(row,modelButton('Insert',`Insert current Manager into favorite ${slot+1}`,false,
       ()=>modelMutation(async()=>{modelPanel.favorites=await api(`/api/manager-favorites/${slot}`,{method:'PUT'});}),!canInsert),`favorite-insert-${slot}`);
     insert.removeAttribute('aria-pressed');
-    const entry=addChoice(row,modelButton('',item?`Recall Manager favorite ${slot+1}`:`Empty Manager favorite ${slot+1}`,false,
+    const matching=!!item?.available&&item.provider===modelPanel.provider&&item.pair.model===managerPair.model&&item.pair.effort===managerPair.effort;
+    const entry=addChoice(row,modelButton('',item?`Recall Manager favorite ${slot+1}`:`Empty Manager favorite ${slot+1}`,matching,
       ()=>modelMutation(async()=>{modelPanel=await api(`/api/manager-favorites/${slot}/recall`,{method:'POST'});}),!item?.available),`favorite-recall-${slot}`);
-    entry.removeAttribute('aria-pressed');entry.classList.add('favorite-entry');
+    entry.classList.add('favorite-entry');
     if(item){
-      entry.append(element('span',titleLevel(item.pair.effort),'favorite-effort'));
+      const label=element('span',undefined,'favorite-label');
+      label.append(element('span',titleLevel(item.pair.effort),'favorite-effort'));
       const model=modelPanel.providers[item.provider]?.choices.find(m=>m.model===item.pair.model);
-      entry.append(element('span',model?.name||item.pair.model));
-      if(!item.available)entry.append(element('span','Unavailable','favorite-effort'));
+      label.append(element('span',model?.name||item.pair.model));
+      if(!item.available)label.append(element('span','Unavailable','favorite-effort'));
+      entry.append(label);
+      const logo=element('span',undefined,'favorite-logo');logo.innerHTML=PROVIDER_LOGOS[item.provider]||'';entry.append(logo);
     }else entry.append(element('span','Empty','favorite-effort'));
     favorites.append(row);
   }
@@ -98,7 +109,7 @@ function renderModels(){
 function titleLevel(value){return value[0].toUpperCase()+value.slice(1);}
 async function openModels(event){
   modelOpener=event?.currentTarget||$('model-settings-button');closeChatMenu();closeProjectMenu();
-  modelPanel=await api('/api/model-settings');setProviderIcon(modelPanel.provider);renderModels();$('model-error').textContent='';modelDialog.showModal();$('model-close').focus({preventScroll:true});
+  modelPanel=await api('/api/model-settings');setProviderIcon(modelPanel.provider);renderModels();$('model-error').textContent='';modelDialog.showModal();modelDialog.scrollTop=0;$('model-close').focus({preventScroll:true});
 }
 $('model-settings-button').onclick=action(openModels);
 $('load-models').onclick=action(openModels);
@@ -108,13 +119,13 @@ modelDialog.addEventListener('click',event=>{if(event.target===modelDialog){cons
 modelDialog.addEventListener('keydown',event=>{
   if(event.key==='Tab'){
     const buttons=[...modelDialog.querySelectorAll('button:not(:disabled)')],first=buttons[0],last=buttons.at(-1);
-    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus({preventScroll:true});}
-    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus({preventScroll:true});}
+    if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
+    else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
   }
   if(['ArrowRight','ArrowLeft','ArrowDown','ArrowUp','Home','End'].includes(event.key)&&document.activeElement.matches('[data-choice]')){
     const group=document.activeElement.parentElement,buttons=[...group.querySelectorAll('button:not(:disabled)')],index=buttons.indexOf(document.activeElement);
     if(!buttons.length)return;event.preventDefault();
     const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowLeft'||event.key==='ArrowUp'?-1:1)+buttons.length)%buttons.length;
-    buttons[next].focus({preventScroll:true});
+    buttons[next].focus();
   }
 });

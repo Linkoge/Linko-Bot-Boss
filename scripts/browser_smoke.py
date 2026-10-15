@@ -112,7 +112,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("#load-models").click()
                 page.locator("#model-dialog").wait_for(state="visible")
                 assert page.locator("#manager-choices > div").count() == 4
-                assert page.locator("#bot-choices .model-choice-row").count() == 2
+                assert page.locator("#bot-choices .model-choice-row").count() == 4
                 assert page.locator(".favorite-row").count() == 2
                 page.keyboard.press("Escape")
                 page.locator("#rename-project").click()

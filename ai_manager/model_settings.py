@@ -1,6 +1,7 @@
 """Global role choices and bot policy, using existing settings and task audit events."""
 import copy
 import json
+from contextlib import nullcontext
 
 from .model_families import PROVIDER_FAMILIES, family, latest, policy_item, resolve
 
@@ -122,7 +123,7 @@ def guidelines(provider):
             'Existing assignments retain their selected pair on continue.')
 
 
-def save(db, server, value, activate=False):
+def save(db, server, value, activate=False, connection=None):
     value = dict(value)
     provider = value.pop('provider', 'codex')
     if provider not in PROVIDERS:
@@ -146,7 +147,7 @@ def save(db, server, value, activate=False):
             raise ValueError('Each model and level needs an allow or deny state')
     if not permitted(value, server, provider):
         raise ValueError('Allow at least one supported model and level combination')
-    with db.transaction() as conn:
+    with (db.transaction() if connection is None else nullcontext(connection)) as conn:
         if current(db, server, provider)['revision'] != value['revision']:
             raise ValueError('Settings changed; reopen the panel before editing')
         value = {**value, 'revision': value['revision'] + 1}
@@ -255,3 +256,18 @@ def recall_favorite(db, server, slot):
     config = current(db, server, provider)
     config['manager'] = item['pair']
     return save(db, server, {**config, 'provider': provider}, activate=True)
+
+
+def save_bot_mode(db, server, mode, revisions):
+    """Update available providers together; a conflict must not leave different modes half-saved."""
+    if mode not in ('manual', 'automatic') or not isinstance(revisions, dict) or set(revisions) != set(PROVIDERS):
+        raise ValueError('Choose Manual or Automatic with current provider revisions')
+    with db.transaction() as conn:
+        for provider in PROVIDERS:
+            config = current(db, server, provider)
+            if type(revisions[provider]) is not int or config['revision'] != revisions[provider]:
+                raise ValueError('Settings changed; reopen the panel before editing')
+            if not any(m['levels'] for m in choices(server, provider)):
+                continue  # An unavailable provider must not prevent editing the usable one.
+            config['bot']['mode'] = mode
+            save(db, server, {**config, 'provider': provider}, connection=conn)

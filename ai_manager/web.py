@@ -419,6 +419,13 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             account_usage.invalidate()
         return result
 
+    @app.put("/api/bot-mode", dependencies=[Depends(require_owner)])
+    async def save_bot_selection_mode(body: dict):
+        from .model_settings import save_bot_mode
+        await chat.server.start()
+        save_bot_mode(db, chat.server, body.get('mode'), body.get('revisions'))
+        return await model_settings()
+
     @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
     async def insert_manager_favorite(slot: int):
         from .model_settings import insert_favorite

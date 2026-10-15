@@ -403,3 +403,49 @@ def test_provider_activation_rejects_stale_or_invalid_pair_atomically(system):
     with pytest.raises(ValueError):
         save(db, server, {**saved, 'provider': 'claude'}, activate=True)
     assert active(db) == 'codex'
+
+
+def test_bot_mode_both_providers_atomic_and_routes_remain_independent(tmp_path):
+    from test_claude_provider import BothServer
+
+    from ai_manager.model_settings import active, set_active
+
+    settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
+    app = create_app(settings, BothServer(settings), BothServer)
+    with TestClient(app, base_url='http://localhost') as client:
+        assert client.put('/api/bot-mode', json={}).status_code == 401
+        sign_in(client, app, settings)
+        panel = client.get('/api/model-settings').json()
+        revisions = {p: v['settings']['revision'] for p, v in panel['providers'].items()}
+        assert client.put('/api/bot-mode', json={'mode': 'automatic', 'revisions': revisions},
+                          headers={'X-CSRF-Token': 'bad'}).status_code == 403
+        response = client.put('/api/bot-mode', json={'mode': 'automatic', 'revisions': revisions})
+        response.raise_for_status()
+        panel = response.json()
+        assert active(app.state.db) == 'codex'
+        assert all(v['settings']['bot']['mode'] == 'automatic' for v in panel['providers'].values())
+        before = {p: v['settings'] for p, v in panel['providers'].items()}
+        revisions = {p: v['revision'] for p, v in before.items()}
+        # A stale second provider rolls back the already-written first provider too.
+        revisions['claude'] -= 1
+        assert client.put('/api/bot-mode', json={'mode': 'manual', 'revisions': revisions}).status_code == 409
+        after = client.get('/api/model-settings').json()
+        assert {p: v['settings'] for p, v in after['providers'].items()} == before
+        for provider, model in [('codex', MODELS['Luna']), ('claude', 'claude-haiku-5-5')]:
+            config = after['providers'][provider]['settings']
+            for name, item in config['bot']['policy'].items():
+                item['allowed'] = name == model
+                item['levels'] = {e: e == 'high' for e in ('low', 'medium', 'high')}
+            client.put('/api/model-settings', json={**config, 'provider': provider}).raise_for_status()
+            set_active(app.state.db, provider)
+            assert delegation(app.state.db, app.state.chat.server, {'model': model, 'effort': 'high'})['model'] == model
+            with pytest.raises(ValueError, match='denied'):
+                delegation(app.state.db, app.state.chat.server, {'model': model, 'effort': 'low'})
+        panel = client.get('/api/model-settings').json()
+        revisions = {p: v['settings']['revision'] for p, v in panel['providers'].items()}
+        panel = client.put('/api/bot-mode', json={'mode': 'manual', 'revisions': revisions}).json()
+        assert all(v['settings']['bot']['mode'] == 'manual' for v in panel['providers'].values())
+        for provider in ('codex', 'claude'):
+            set_active(app.state.db, provider)
+            pair = panel['providers'][provider]['settings']['bot']['manual']
+            assert {k: delegation(app.state.db, app.state.chat.server)[k] for k in pair} == pair

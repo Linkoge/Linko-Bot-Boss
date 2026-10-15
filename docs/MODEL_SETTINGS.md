@@ -5,21 +5,32 @@ not assert a deployment result. Detailed verification and limits: [redesign repo
 Earlier dated release/deployment notes below are historical.
 
 Manager shares its top line with Close. Its model/effort rows always show Codex Luna/Sol/Astra then
-Claude Haiku/Sonnet/Opus, with equal compact spacing and no provider logos inside the panel.
+Claude Haiku/Sonnet/Opus, with equal compact spacing and no provider logos in these choice rows.
 Names and supported efforts come from the existing provider family/catalog resolver; unavailable choices
 are disabled. Clicking a Manager model or effort saves that provider's Manager pair and activates its
 provider atomically. Choosing a model that lacks the retained effort explicitly selects its first supported
 Low/Medium/High effort. The navigation opener retains the active provider icon.
 
-Bot shares a line with Manual/Automatic and shows the active provider's independent settings. Manual
-has plain model and effort names in two rows. Automatic model buttons toggle model allowance directly;
-selected models light up. The three effort columns directly below the corresponding model buttons retain
-independent per-model effort allowances, including allowances on disabled models. There is no checkmark/X
-row. Both modes retain the saved manual pair. Backend validation rejects removing the last usable allowed
-pair and the UI restores the saved state with an accessible error. Existing delegation, pinned assignments,
-provider/thread ownership and execution behavior are unchanged.
+Bot shares a line with Manual/Automatic and always shows **both** Codex and Claude groups.
+The shared mode controls use text-only selected styling, just like effort controls. A mode change
+atomically saves both available providers with revision checks; an unavailable provider is skipped
+and its choices remain disabled. On initial load with legacy mixed modes, the active provider's saved
+mode determines the displayed controls. Editing another provider's choice also saves that displayed
+mode for its Bot. Bot edits never switch the active Manager provider: new execution continues through
+the active provider and its saved independent manual pair/policy. Both providers' settings remain
+visible and operable before and after switching the Manager provider.
 
-Every effort control keeps the same background, border, weight and shadow when selected; only text changes
+Manual has plain model and effort names in two rows per provider. Automatic model buttons toggle
+model allowance directly; selected models light up. Three effort columns directly below each provider's
+model buttons retain independent per-model allowances, including allowances on disabled models.
+There is no checkmark/X row. Both modes retain the saved manual pair. Backend validation rejects
+removing the last usable allowed pair for either provider, restoring saved state with an accessible error.
+Existing delegation, pinned assignments and provider/thread ownership remain unchanged.
+
+Choice buttons retain the pre-redesign comfortable 38px minimum height and 6px vertical padding.
+Close retains its rounded 9px border and distinct background at 36px on the Manager heading line.
+
+Every effort and mode control keeps the same background, border, weight and shadow when selected; only text changes
 to the existing reddish accent. Keyboard focus uses its own visible outline. Model buttons retain their
 selected gradient. Manager, Bot and Favorites use identical subtle, non-editable headings.
 
@@ -27,7 +38,12 @@ Favorites is a separate bottom section with exactly two global **Manager-only** 
 settings (`manager_favorites`, no schema change). Each row begins at the far left with Insert. Insert
 immediately replaces the slot with the currently saved active Manager provider/model/effort; no dialog or
 additional selector. The recall entry shows effort as plain text before model. Clicking it saves that Manager
-pair and activates its provider without altering either provider's Bot settings. Empty entries are disabled
+pair and activates its provider without altering either provider's Bot settings. A favorite is pressed
+and uses the same selected gradient/border as model buttons exactly when its available provider,
+resolved model and effort match the current active Manager selection. This is derived on every render,
+including recalls, other selectors, replacements and reloads. Its effort/model label is centered with
+readable spacing, with the existing authentic provider SVG at the far right. Logos appear only in
+favorite entries and the navigation opener; main Manager/Bot rows remain free of logos. Empty entries are disabled
 but Insert remains usable. Favorites persist across reloads and restarts. Recognized saved family versions
 resolve to the current supported model; missing families or unsupported saved efforts remain unavailable,
 with recall disabled until replaced through Insert. No silent cross-family or effort fallback on recall.
@@ -35,7 +51,8 @@ with recall disabled until replaced through Insert. No silent cross-family or ef
 Authenticated/CSRF-protected endpoints are GET/PUT `/api/model-settings`, PUT
 `/api/manager-favorites/{0|1}` (copy current Manager) and POST
 `/api/manager-favorites/{0|1}/recall`. Model-settings PUT accepts optional boolean `activate`;
-revision validation and provider activation commit with the settings. Existing provider and role APIs remain.
+revision validation and provider activation commit with the settings. PUT `/api/bot-mode` takes
+`mode` and both provider `revisions`, committing available providers together or rolling back on failure. Existing provider and role APIs remain.
 Responsive layouts keep controls within panel width; short viewports permit ordinary vertical modal scrolling.
 Native Enter/Space, arrow navigation, contained Tab/Shift+Tab, Escape and opener focus restoration remain.
 

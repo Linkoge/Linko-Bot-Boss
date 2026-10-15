@@ -1,3 +1,124 @@
+# Owner refinements — 2026-10-15
+
+**PASSED isolated candidate**, continuing the same assignment/workspace/branch/thread over
+`5c6e35bd24` (full prior commit is in Git). The owner reports that prior candidate deployed;
+this worker did not inspect shared runtime or independently establish its deployment status.
+The refinements below are committed for application-managed automatic delivery. They are not a
+claim that the new candidate has merged/deployed. The original implementation report follows below
+and remains historical evidence, including its durable repair counter and narrower first layout.
+
+## Refinements and design
+
+Read the retained source/feature contract, project/security/task/handoff instructions and original
+report; inspected the pre-redesign CSS at `ca0576c`. Kept the original 38px choice minimum height,
+6px vertical padding, 36px Close minimum and its existing 9px rounded border/distinct default
+background. Manual/Automatic now share effort controls' text-only selected style and independent
+focus outline. Main model rows remain free of provider logos.
+
+Both Bot provider groups are always rendered in either displayed mode. Manual has separate functional
+model/effort rows for Codex and Claude; Automatic has model toggles and independent supported effort
+allowances for both. Edits save to their respective provider settings without changing the Manager's
+active provider. This preserves the existing routing rule: new work uses the active provider's saved
+Bot configuration; pinned work retains its original exact provider/model/thread. The shared mode
+selector updates both available providers in one SQLite transaction, checking each provider revision;
+a stale second provider rolls back the first write and audit events. Completely unavailable provider
+groups remain disabled and are skipped by mode writes. Legacy mixed saved modes initially display
+the active provider's mode; editing the other provider also saves that displayed mode for its Bot.
+PUT `/api/bot-mode` uses the existing authentication/CSRF protections and accepts `mode` plus both
+provider `revisions`. No schema, new routing framework, service or dependency is introduced.
+
+Favorite `aria-pressed` and selected gradient/border derive from availability plus the active Manager
+provider, resolved model and effort on every render. Insert, recall, other Manager selectors, reload
+and replacement all recompute that match; no last-click marker is stored. The current favorite's
+surface matches the selected model button's surface. Effort/model text stays centered with an 8px
+readable gap; existing `PROVIDER_LOGOS` SVGs appear at the far right with a balanced opposite spacer.
+The far-left Insert still copies the current Manager selection immediately. Favorite storage/validation,
+obsolete-family handling and Manager-only recall semantics are unchanged. Main provider rows have no
+SVGs. Keyboard wrapping/arrow movement scroll focused controls into view; reopening starts at the top.
+
+Feature authority updated in [MODEL_SETTINGS.md](MODEL_SETTINGS.md) and MASTER_SPEC.
+No unrelated paused, cancelled or held work was resumed, no parallel workers or reviewer were used,
+and no shared checkout/database/service was changed. No push or deployment was performed.
+
+## Verification, commands and durable repair accounting
+
+Same retained workspace:
+`/home/codex/.local/share/linko-bot-manager/assignment-workspaces/4a985c35b51345ada354cd666acbf80e`.
+Raw stdout/stderr and browser evidence are retained under `.data/model-settings-refinements/`.
+Commands ran sequentially, using the existing development environment via
+`PATH=/home/codex/projects/Linko-Bot-Manager/.venv/bin:$PATH`. Disposable server/database/project
+fixtures used temporary directories and dynamically allocated loopback ports. No native inference.
+
+| Command | Output/result |
+| --- | --- |
+| `python -m pytest -q -m smoke` | **37 passed, 282 deselected**, 2.84s; once for these refinements |
+| `python -m pytest -q tests/test_model_settings.py tests/test_claude_provider.py` | **19 passed**, 2.73s; once |
+| `ruff check ai_manager/model_settings.py ai_manager/web.py tests/test_model_settings.py scripts/browser_model_scroll.py scripts/browser_smoke.py` | **All checks passed!** |
+| `node --check ai_manager/static/model-settings.js` | **Exit 0**, no output |
+| `LINKO_MODEL_EVIDENCE="$PWD/.data/model-settings-refinements" python scripts/browser_model_scroll.py` | Initial new Close geometry assertion failed; see repair below |
+| Same browser command, affected check after repair | **Settings persistence/policy/mobile/keyboard and manual scroll during sends/streams/polling passed** |
+| `LINKO_CHAT_EVIDENCE="$PWD/.data/model-settings-refinements/chat-smoke" python scripts/browser_smoke.py` | **Browser passed**, no page errors/overflow; once |
+| `ruff check scripts/browser_model_scroll.py` after repair | **All checks passed!** |
+| `node --check ai_manager/static/model-settings.js` after keyboard repair | **Exit 0**, no output |
+| `git diff --check` | **Passed** |
+
+Durable counter preserved conservatively: prior report **2 rounds used, 1 remaining**, despite the
+new request's machine metadata saying 1 used/2 remaining. Used only that remaining round here:
+
+- Browser first run stopped at `assert close_style == ['rgb(29, 37, 52)',
+  'rgb(43, 51, 69)', '9px', 36]`. The source restores the *minimum* 36px height; inherited 22px font
+  and line height make actual height slightly taller. Corrected the test to retain exact background,
+  border and radius checks and assert height **at least 36px**. Also made keyboard wrapping/arrow
+  focus scroll into view and reopening reset modal scroll, needed for the now taller mobile panel.
+- Reran only the affected browser script and its lint/JS syntax checks; all passed. Smoke, targeted
+  backend and broader browser smoke were not repeated. **3 durable rounds used, 0 remaining**.
+- The preexisting Starlette/httpx deprecation warning remains. Two logged empty-policy rejections
+  are intentional passing checks: `Allow at least one supported model and level combination`.
+
+Full backend suite remains reserved for the deployment script, per owner contract. No JS build step
+exists: assets are plain HTML/CSS/JS.
+
+## Behavioral and visual evidence
+
+Backend tests now also cover authenticated/CSRF-protected shared mode saves, rollback on a stale second
+provider revision, independent restricted Codex/Claude automatic routing (permitted High accepted,
+denied Low rejected), and unchanged retained Manual pairs after switching both modes. Existing tests
+cover saved favorites, family/catalog support, unavailable favorites, pinned execution/delegation and
+Manager-only recall.
+
+Real Chromium tests both Bot groups' Manual selections and effort updates, both groups' Automatic
+model/effort toggles, and the actual saved API policies without changing active Manager provider.
+They verify favorite highlight after Insert/recall, clearing after a different effort/model/provider,
+restoration when the same pair is selected elsewhere, replacement and reload persistence, and unchanged
+Bot choices through recall. Computed mode surfaces match unselected backgrounds/borders/shadows/weight;
+effort comparisons retain the prior exact values. Favorite selected gradient and border exactly match
+the selected Manager model. Close background/border/radius and comfortable choice heights pass.
+Both headings stay aligned with their controls, all label colors match, and main rows contain no logos.
+Exactly two favorite SVGs appear after filling slots, with centered label geometry and right padding
+between 5px and 12px. Far-left Insert, no dropdown/checkmark rows, keyboard focus outline/containment,
+visible wrap target, Enter/arrow/Escape and opener restoration pass.
+
+| Automatic viewport | Client / scroll width | Client / scroll height |
+| --- | --- | --- |
+| 1200×900 | 418 / 418 | 742 / 742 |
+| 393×851 | 359 / 359 | 742 / 742 |
+| 320×568 | 302 / 302 | 550 / 734 |
+
+Both Manual and Automatic were checked at all three sizes without horizontal overflow. The 320px
+panel uses normal vertical scrolling to preserve comfortable controls; focused wrapped controls scroll
+into view. Desktop and mobile-bottom screenshots were visually inspected. The broader browser smoke
+also passed login/chat/history/copy/archive/rename/recovery checks. Existing manual chat scroll checks
+passed sends, streams, refreshes, history-tail changes and Markdown rebuilds at all three viewport sizes.
+Physical Android/iOS testing and new live deployment success are not claimed.
+
+Evidence files: `smoke.txt`, `targeted.txt`, `lint.txt`, `lint-after-repair.txt`, `js-syntax.txt`,
+`js-syntax-after-repair.txt`, `browser.txt`, `browser-repair-3.txt`, `browser-smoke.txt`,
+`browser-results.json`, `panel-{1200,393,320}.png`, `favorites-{1200,393,320}.png`,
+`manual-{1200,393,320}.png`, and `chat-smoke/`. Test fixture runtime data was disposed normally;
+reports/screenshots/logs remain in this retained assignment workspace.
+
+---
+
 # Compact model settings implementation report — 2026-10-15
 
 Status: **PASSED candidate in the retained assignment branch**. Application-managed merge/deployment
