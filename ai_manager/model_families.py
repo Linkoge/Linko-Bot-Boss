@@ -36,13 +36,3 @@ def resolve(server, pair):
     name = family(pair.get('model'))
     # Unrecognized legacy routes stay exact, including fixture/custom models.
     return server.route(model=latest(server, name) if name else pair.get('model'), effort=pair.get('effort'))
-
-
-def policy_item(policy, model):
-    name = family(model)
-    items = [item for key, item in policy.items() if family(key) == name and name]
-    if not items:
-        return {'allowed': False, 'levels': {e: False for e in ('low', 'medium', 'high')}}
-    # Conflicting legacy keys cannot erase a deny during migration.
-    return {'allowed': all(i['allowed'] for i in items),
-            'levels': {e: all(i['levels'][e] for i in items) for e in ('low', 'medium', 'high')}}

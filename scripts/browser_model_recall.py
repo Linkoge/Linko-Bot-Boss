@@ -78,7 +78,7 @@ def main():
                 assert page.locator('#model-dialog').is_visible()  # Insert never recalls or closes.
                 choose('manager-Sol')
                 choose('manager-codex-low')
-                bots = page.evaluate('Object.fromEntries(Object.entries(modelPanel.providers).map(([p,v])=>[p,v.settings.bot]))')
+                bots = page.evaluate('modelPanel.settings.worker')
                 held = []
                 page.route('**/api/manager-favorites/0/recall', lambda route: held.append(route))
                 result = recall_synchronously()
@@ -98,7 +98,7 @@ def main():
                 choose('manager-Astra')
                 page.wait_for_function('()=>!state.execution')
                 assert last_route() == ('gpt-6-luna', 'high'), last_route()
-                assert page.evaluate('Object.fromEntries(Object.entries(modelPanel.providers).map(([p,v])=>[p,v.settings.bot]))') == bots
+                assert page.evaluate('modelPanel.settings.worker') == bots
                 results.append({'immediate_close': result, 'fast_send_route': last_route(), 'recall_requests': len(recalls)})
                 page.unroute('**/api/manager-favorites/0/recall')
 

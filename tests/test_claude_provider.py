@@ -4,65 +4,10 @@ import sys
 from types import SimpleNamespace
 
 import pytest
-from fastapi.testclient import TestClient
-from test_model_settings import CatalogServer, system  # noqa: F401
-from test_web import sign_in
 
-from ai_manager.claude_host import CATALOG
 from ai_manager.config import Settings
-from ai_manager.model_settings import current, delegation, manager_route, permitted, save, set_active
 from ai_manager.providers import ClaudeServer, ProviderServer, owns_pid
 from ai_manager.recovery import classify
-from ai_manager.web import create_app
-
-
-class BothServer(CatalogServer):
-    def __init__(self, settings, native=False):
-        super().__init__(settings, native)
-        self.catalog = self.catalog + [dict(m) for m in CATALOG]
-
-
-def test_claude_defaults_to_automatic_and_keeps_codex_settings(system):  # noqa: F811
-    db, *_ = system
-    server = BothServer(system[2])
-    codex = current(db, server)
-    assert current(db, server)['bot']['mode'] == 'manual'
-    set_active(db, 'claude')
-    config = current(db, server)
-    assert config['bot']['mode'] == 'automatic'
-    assert config['manager'] == {'model': 'claude-sonnet-5-5', 'effort': 'low'}
-    assert manager_route(db) == {'model': 'Sonnet', 'effort': 'low'}
-    assert len(permitted(config, server, 'claude')) == 9
-    assert delegation(db, server, {'model': 'claude-opus-5-5', 'effort': 'high'})['model'] == 'claude-opus-5-5'
-    with pytest.raises(ValueError, match='Haiku, Sonnet or Opus'):
-        delegation(db, server, {'model': 'gpt-6-luna', 'effort': 'low'})
-    config['bot']['policy']['claude-opus-5-5']['allowed'] = False
-    saved = save(db, server, {**config, 'provider': 'claude'})
-    with pytest.raises(ValueError, match='denied'):
-        delegation(db, server, {'model': 'claude-opus-5-5', 'effort': 'high'})
-    assert manager_route(db) == saved['manager']
-    set_active(db, 'codex')
-    assert current(db, server) == codex
-    with pytest.raises(ValueError, match='Codex or Claude'):
-        set_active(db, 'other')
-
-
-def test_provider_api_switches_and_reports_both(tmp_path):
-    settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
-    app = create_app(settings, BothServer(settings), BothServer)
-    with TestClient(app, base_url='http://localhost') as client:
-        sign_in(client, app, settings)
-        panel = client.get('/api/model-settings').json()
-        assert panel['provider'] == 'codex' and set(panel['providers']) == {'codex', 'claude'}
-        assert [c['name'] for c in panel['providers']['claude']['choices']] == ['Haiku', 'Sonnet', 'Opus']
-        assert client.put('/api/model-provider', json={'provider': 'claude'}).json() == {'provider': 'claude'}
-        assert client.get('/api/settings').json()['model_provider'] == 'claude'
-        panel = client.get('/api/model-settings').json()
-        assert panel['provider'] == 'claude' and panel['settings']['bot']['mode'] == 'automatic'
-        claude = {**panel['settings'], 'provider': 'claude'}
-        claude['bot']['mode'] = 'manual'
-        assert client.put('/api/model-settings', json=claude).json()['bot']['mode'] == 'manual'
-        assert client.get('/api/model-settings').json()['providers']['codex']['settings']['revision'] == 0
 
 
 class Backend:

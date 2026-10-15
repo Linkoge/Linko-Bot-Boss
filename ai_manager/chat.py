@@ -552,12 +552,8 @@ class Chat:
                     ("manager_tool_schema:" + conversation["id"], json.dumps(schema)),
                 )
             prompt, context = self.prompt(conversation, content, mode, execution_id, thread_id, prior)
-            from .model_settings import active, current, guidelines, permitted
-            provider = active(self.db)
-            model_config = current(self.db, self.server, provider)
-            prompt['bot_selection'] = {'mode': model_config['bot']['mode'],
-                'manual': model_config['bot']['manual'], 'permitted_pairs': permitted(model_config, self.server, provider),
-                'guidelines': guidelines(provider)}
+            from .model_settings import current
+            prompt['worker'] = current(self.db, self.server)['worker']  # new tasks run on exactly this pair
             execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
             if execution["retry_count"]:
                 prompt["recovery"] = (

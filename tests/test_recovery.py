@@ -18,7 +18,8 @@ from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.orchestration import Scheduler
 from ai_manager.pipeline import Pipeline
-from ai_manager.recovery import classify, delay, usage_limit
+from ai_manager.recovery import classify, delay
+from ai_manager.runner import usage_limit
 
 system = system_fixture
 

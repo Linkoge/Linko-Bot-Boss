@@ -21,7 +21,7 @@ from .account_usage import AccountUsage
 from .attachments import Attachments
 from .audio import Audio
 from .auth import Auth
-from .chat import ROLES, Chat
+from .chat import Chat
 from .codex import CodexError
 from .config import Settings
 from .core import Core, Tasks
@@ -76,11 +76,6 @@ class MessageBody(BaseModel):
     todos: list[TodoSelection] = Field(default_factory=list, max_length=200)
     conversation_id: str | None = None
     mode: Literal["conversation", "auto", "execute"] = "auto"
-
-
-class RouteBody(BaseModel):
-    model: str
-    effort: str
 
 
 class ChatResetBody(BaseModel):
@@ -408,33 +403,21 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings():
-        from .model_settings import PROVIDERS, active, choices, current, favorites
+        from .model_settings import PROVIDER_FAMILIES, active, choices, current, favorites
         try:
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
-        provider = active(db)
-        providers = {p: {"choices": choices(chat.server, p), "settings": current(db, chat.server, p)} for p in PROVIDERS}
-        return {"provider": provider, "providers": providers, "favorites": favorites(db, chat.server), **providers[provider]}
+        return {"provider": active(db), "settings": current(db, chat.server), "favorites": favorites(db, chat.server),
+                "providers": {p: {"choices": choices(chat.server, p)} for p in PROVIDER_FAMILIES}}
 
     @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
     async def save_model_settings(body: dict):
         from .model_settings import save
         await chat.server.start()
-        activate = body.pop('activate', False)
-        if type(activate) is not bool:
-            raise ValueError('Invalid provider activation')
-        result = save(db, chat.server, body, activate=activate)
-        if activate:
-            account_usage.invalidate()
+        result = save(db, chat.server, body)
+        account_usage.invalidate()
         return result
-
-    @app.put("/api/bot-mode", dependencies=[Depends(require_owner)])
-    async def save_bot_selection_mode(body: dict):
-        from .model_settings import save_bot_mode
-        await chat.server.start()
-        save_bot_mode(db, chat.server, body.get('mode'), body.get('revisions'))
-        return await model_settings()
 
     @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
     async def insert_manager_favorite(slot: int):
@@ -443,34 +426,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return insert_favorite(db, chat.server, slot)
 
     @app.post("/api/manager-favorites/{slot}/recall", dependencies=[Depends(require_owner)])
-    async def recall_manager_favorite(slot: int, body: dict | None = None):
+    async def recall_manager_favorite(slot: int):
         from .model_settings import recall_favorite
         await chat.server.start()
-        recall_favorite(db, chat.server, slot, expected=body)
+        recall_favorite(db, chat.server, slot)
         account_usage.invalidate()
         return await model_settings()
-
-    @app.put("/api/model-provider", dependencies=[Depends(require_owner)])
-    async def save_model_provider(body: dict):
-        from .model_settings import set_active
-        provider = set_active(db, body.get("provider"))
-        account_usage.invalidate()
-        return {"provider": provider}
-
-    @app.put("/api/models/{role}", dependencies=[Depends(require_owner)])
-    async def model_route(role: str, body: RouteBody):
-        if role not in ROLES:
-            raise ValueError("Unknown model role")
-        await chat.server.start()
-        route = chat.server.route(body.model, body.effort)
-        from .model_settings import current, save
-        config = current(db, chat.server)
-        if role == 'interactive':
-            config['manager'] = route
-        else:
-            config['bot']['manual'] = route
-        save(db, chat.server, config)
-        return route
 
     @app.put("/api/settings/instructions", dependencies=[Depends(require_owner)])
     def global_instructions(body: InstructionsBody):

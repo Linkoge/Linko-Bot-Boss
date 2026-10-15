@@ -38,7 +38,7 @@ recovery_chat=app.state.chat.conversation(recovery['id'])
 app.state.scheduler.tasks.add(recovery['id'],'Retain partial development during outage',recovery_chat['id'])
 recovery_task=app.state.scheduler.tasks.claim()
 with app.state.db.transaction() as conn:
-    conn.execute("UPDATE tasks SET state='queued',lease_owner=NULL,retry_at=?,waits=1,blocker='Waiting for the provider usage limit; retrying at 23:59 UTC' WHERE id=?",(time.time()+3600,recovery_task['id']))
+    conn.execute("UPDATE tasks SET state='queued',held=1,lease_owner=NULL,retry_at=?,waits=1,blocker='Waiting for the provider usage limit; retrying at 23:59 UTC' WHERE id=?",(time.time()+3600,recovery_task['id']))
     conn.execute("UPDATE executions SET status='waiting',finished_at=? WHERE id=?",(time.time(),recovery_task['lease_owner']))
     conn.execute("INSERT INTO executions(id,agent_id,status,started_at,conversation_id,retry_at,recovery_reason) VALUES('recovery-reply','manager','recovering',?,?,?,'connection')",(time.time(),recovery_chat['id'],time.time()+3600))
     conn.execute("INSERT INTO messages VALUES('recovery-message',?,'assistant','Partial response is preserved','waiting','recovery-reply',?)",(recovery_chat['id'],time.time()))
@@ -113,7 +113,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("#model-dialog").wait_for(state="visible")
                 page.wait_for_function("()=>!!modelPanel&&!modelOpening")
                 assert page.locator("#manager-choices > div").count() == 4
-                assert page.locator("#bot-choices .model-choice-row").count() == 4
+                assert page.locator("#worker-choices .model-choice-row").count() == 4
                 assert page.locator(".favorite-row").count() == 2
                 page.keyboard.press("Escape")
                 page.locator("#rename-project").click()

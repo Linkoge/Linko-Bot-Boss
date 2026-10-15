@@ -1,9 +1,12 @@
-"""Global role choices and bot policy, using existing settings and task audit events."""
+"""One manager choice and one worker choice, any provider/model/effort. What the panel shows is what is saved and
+dispatched: new tasks pin the saved worker pair, manager turns use the saved manager pair."""
 import copy
 import json
-from contextlib import nullcontext
 
-from .model_families import PROVIDER_FAMILIES, family, latest, policy_item, resolve
+from .model_families import PROVIDER_FAMILIES, family, latest, resolve
+from .providers import provider_of
+
+KEY = 'model_choice'
 
 
 class RouteBlocked(ValueError):
@@ -11,48 +14,27 @@ class RouteBlocked(ValueError):
 
 
 LEVELS = ('low', 'medium', 'high')
-PROVIDERS = tuple(PROVIDER_FAMILIES)
-# Routing guidance per provider: cheapest, workhorse, strongest reasoning.
-GUIDES = {'codex': ('Luna', 'Sol', 'Astra'), 'claude': ('Haiku', 'Sonnet', 'Opus')}
-# Legacy IDs for compatibility consumers only. Runtime selection uses authenticated catalog families.
-MODELS = {'Luna': 'gpt-6-luna', 'Sol': 'gpt-6.1-sol', 'Astra': 'gpt-6-astra'}
+DEFAULT = {'manager': {'effort': 'low'}, 'worker': {'effort': 'medium'}}  # no model yet: the provider's default model
 
 
 def active(db):
-    provider = db.setting('model_provider', 'codex')
-    return provider if provider in PROVIDERS else 'codex'
+    """The manager's provider: account usage and the provider-less default follow it."""
+    return provider_of(saved(db)['manager'].get('model'))
 
 
-def provider_of(model):
-    name = family(model)
-    return next((p for p, names in PROVIDER_FAMILIES.items() if name in names), 'codex')
+def saved(db):
+    """The saved choice; first run after the one-choice change adopts the most recently edited old per-provider store."""
+    if value := db.setting(KEY):
+        return value
+    olds = [v for v in (db.setting('model_settings'), db.setting('model_settings:claude')) if v]
+    if olds:
+        old = max(olds, key=lambda v: v['revision'])
+        return {'revision': 0, 'manager': old['manager'], 'worker': old['bot']['manual']}
+    routes = db.setting('model_routes', {})
+    return {'revision': 0, **{k: routes.get(r, DEFAULT[k]) for k, r in (('manager', 'interactive'), ('worker', 'execution'))}}
 
 
-def key(provider):
-    return 'model_settings' if provider == 'codex' else 'model_settings:' + provider
-
-
-def set_active(db, provider):
-    if provider not in PROVIDERS:
-        raise ValueError('Choose Codex or Claude')
-    with db.transaction() as conn:
-        conn.execute("INSERT INTO settings VALUES('model_provider',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                     (json.dumps(provider),))
-        db.event(conn, 'models.provider', {'provider': provider})
-    return provider
-
-
-def manager_route(db):
-    provider = active(db)
-    saved = db.setting(key(provider))
-    if saved:
-        return saved['manager']
-    if provider == 'claude':
-        return {'model': 'Sonnet', 'effort': 'low'}
-    return db.setting("model_routes", {}).get("interactive", {"effort": "low"})
-
-
-def choices(server, provider='codex'):
+def choices(server, provider):
     result = []
     for name in PROVIDER_FAMILIES[provider]:
         try:
@@ -66,139 +48,72 @@ def choices(server, provider='codex'):
     return result
 
 
-def current(db, server, provider=None):
-    provider = provider or active(db)
-    saved = db.setting(key(provider))
-    if saved:
-        saved = copy.deepcopy(saved)
-        for pair in (saved['manager'], saved['bot']['manual']):
-            name = family(pair['model'])
-            if name:
-                try:
-                    pair['model'] = latest(server, name)
-                except ValueError:
-                    pair['model'] = name  # Retain the chosen family visibly unavailable.
-        policy = saved['bot']['policy']
-        saved['bot']['policy'] = {m['model']: policy_item(policy, m['model']) for m in choices(server, provider)}
-        return saved
-    if provider == 'claude':
-        # Claude starts on Automatic with every supported pair available.
-        def pair(effort):
+def current(db, server=None):
+    """The saved choice with families projected to the newest installed model (kept visible when unavailable)."""
+    value = copy.deepcopy(saved(db))
+    for role in ('manager', 'worker'):
+        pair = value[role]
+        if not server:
+            continue
+        if not pair.get('model'):
             try:
-                return resolve(server, {'model': 'Sonnet', 'effort': effort})
+                value[role] = server.route(None, pair['effort'])
             except ValueError:
-                return {'model': 'Sonnet', 'effort': effort}  # Visible but unavailable until Claude starts.
-        return {'revision': 0, 'manager': pair('low'),
-                'bot': {'mode': 'automatic', 'manual': pair('medium'),
-                        'policy': {m['model']: {'allowed': True, 'levels': {e: e in m['levels'] for e in LEVELS}}
-                                   for m in choices(server, provider)}}}
-    routes = db.setting('model_routes', {})
-    return {'revision': 0, 'manager': resolve(server, routes.get('interactive', {'effort': 'low'})),
-            'bot': {'mode': 'manual', 'manual': resolve(server, routes.get('execution', {'effort': 'medium'})),
-                    'policy': {m['model']: {'allowed': m['name'] != 'Astra',
-                               'levels': {e: e in m['levels'] for e in LEVELS}} for m in choices(server)}}}
-
-
-def validate_pair(server, pair, provider='codex'):
-    if not isinstance(pair, dict) or set(pair) != {'model', 'effort'}:
-        raise ValueError('Choose an exact model and reasoning pair')
-    names = PROVIDER_FAMILIES[provider]
-    if not isinstance(pair['model'], str) or family(pair['model']) not in names or pair['effort'] not in LEVELS:
-        raise ValueError(f'Choose {", ".join(names[:-1])} or {names[-1]} and Low, Medium or High')
-    return resolve(server, pair)
-
-
-def permitted(config, server, provider=None):
-    provider = provider or provider_of(config['manager']['model'])
-    policy = config['bot']['policy']
-    return [{'model': m['model'], 'effort': e} for m in choices(server, provider) for e in m['levels']
-            if policy_item(policy, m['model'])['allowed'] and policy_item(policy, m['model'])['levels'][e]]
-
-
-def guidelines(provider):
-    small, work, strong = GUIDES[provider]
-    return ('Before delegate in Automatic choose worker_route from permitted_pairs by difficulty. '
-            f'Simple: {small} or {work} Low. Ordinary: {work} Medium. Hard: {work} High or {strong}. '
-            'Manual uses the saved pair; never override it. No extra routing call. '
-            'Existing assignments retain their selected pair on continue.')
-
-
-def save(db, server, value, activate=False, connection=None):
-    value = dict(value)
-    provider = value.pop('provider', 'codex')
-    if provider not in PROVIDERS:
-        raise ValueError('Choose Codex or Claude')
-    families = PROVIDER_FAMILIES[provider]
-    if (set(value) != {'revision', 'manager', 'bot'} or not isinstance(value['bot'], dict)
-            or set(value['bot']) != {'mode', 'manual', 'policy'} or type(value['revision']) is not int
-            or value['revision'] < 0):
-        raise ValueError('Invalid model settings')
-    validate_pair(server, value['manager'], provider)
-    validate_pair(server, value['bot']['manual'], provider)
-    if value['bot']['mode'] not in {'manual', 'automatic'}:
-        raise ValueError('Choose Manual or Automatic')
-    policy = value['bot']['policy']
-    if not isinstance(policy, dict) or len(policy) != len(families) or {family(k) for k in policy} != set(families):
-        raise ValueError('Policy must include every model')
-    for item in policy.values():
-        if (not isinstance(item, dict) or set(item) != {'allowed', 'levels'} or not isinstance(item['levels'], dict)
-                or type(item['allowed']) is not bool
-                or set(item['levels']) != set(LEVELS) or any(type(v) is not bool for v in item['levels'].values())):
-            raise ValueError('Each model and level needs an allow or deny state')
-    if not permitted(value, server, provider):
-        raise ValueError('Allow at least one supported model and level combination')
-    with (db.transaction() if connection is None else nullcontext(connection)) as conn:
-        if current(db, server, provider)['revision'] != value['revision']:
-            raise ValueError('Settings changed; reopen the panel before editing')
-        value = {**value, 'revision': value['revision'] + 1}
-        conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                     (key(provider), json.dumps(value)))
-        if provider == 'codex':
-            # Keep historical integrations reading the role routes compatible.
-            routes = {'interactive': value['manager'], 'execution': value['bot']['manual']}
-            conn.execute("INSERT INTO settings VALUES('model_routes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                         (json.dumps(routes),))
-        if activate:
-            conn.execute("INSERT INTO settings VALUES('model_provider',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                         (json.dumps(provider),))
-            db.event(conn, 'models.provider', {'provider': provider})
-        db.event(conn, 'models.saved', {**value, 'provider': provider})
+                pass
+        elif name := family(pair['model']):
+            try:
+                pair['model'] = latest(server, name)
+            except ValueError:
+                pair['model'] = name
     return value
 
 
-def delegation(db, server, requested=None):
-    provider = active(db)
-    if provider == 'codex' and not db.setting('model_settings'):
-        pair = resolve(server, db.setting('model_routes', {}).get('execution', {'effort': 'medium'}))
-        return {**pair, 'mode': 'manual', 'settings_revision': 0}
-    config = current(db, server, provider)
-    if config['bot']['mode'] == 'manual':
-        pair = resolve(server, config['bot']['manual'])
-    else:
-        pair = validate_pair(server, requested, provider)
-        allowed = permitted(config, server, provider)
-        if pair not in allowed:
-            raise ValueError('Bot pair is denied; choose from permitted pairs: ' + json.dumps(allowed))
-    return {**pair, 'mode': config['bot']['mode'], 'settings_revision': config['revision']}
+def validate_pair(server, pair):
+    if not isinstance(pair, dict) or set(pair) != {'model', 'effort'}:
+        raise ValueError('Choose an exact model and reasoning pair')
+    if not isinstance(pair['model'], str) or not family(pair['model']) or pair['effort'] not in LEVELS:
+        raise ValueError('Choose a Codex or Claude model and Low, Medium or High')
+    return resolve(server, pair)
+
+
+def save(db, server, value):
+    if (not isinstance(value, dict) or set(value) != {'revision', 'manager', 'worker'}
+            or type(value['revision']) is not int or value['revision'] < 0):
+        raise ValueError('Invalid model settings')
+    new = {'revision': value['revision'] + 1, 'manager': validate_pair(server, value['manager']),
+           'worker': validate_pair(server, value['worker'])}
+    with db.transaction() as conn:
+        if saved(db)['revision'] != value['revision']:
+            raise ValueError('Settings changed; reopen the panel before editing')
+        conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, json.dumps(new)))
+        # Other readers (chat routes, memory review) take the two roles from here.
+        routes = {'interactive': new['manager'], 'execution': new['worker']}
+        conn.execute("INSERT INTO settings VALUES('model_routes',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (json.dumps(routes),))
+        db.event(conn, 'models.saved', new)
+    return new
+
+
+def manager_route(db):
+    return saved(db)['manager']
+
+
+def delegation(db, server):
+    """The worker pair a new task pins: exactly the saved worker."""
+    return {**resolve(server, saved(db)['worker']), 'mode': 'manual', 'settings_revision': saved(db)['revision']}
 
 
 def assignment_route(db, server, task):
-    saved = db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.model_selected' ORDER BY seq DESC LIMIT 1",
-                   (task['id'],))
-    if saved:
-        selected = json.loads(saved['payload'])
+    """The pair pinned to this task (its first dispatch decides); a continued task keeps it."""
+    row = db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.model_selected' ORDER BY seq DESC LIMIT 1", (task['id'],))
+    if row:
+        selected = json.loads(row['payload'])
     else:
-        # Pre-feature/manual API assignments pin their first actual dispatch. Automatic
-        # work lacking a manager selection waits rather than inventing a route.
-        prior = db.one("SELECT model,effort FROM executions WHERE task_id=? AND model IS NOT NULL ORDER BY started_at LIMIT 1",
-                       (task['id'],))
-        if prior:
-            selected = {**prior, 'mode': 'manual', 'settings_revision': 0}
-        else:
-            try:
-                selected = delegation(db, server)
-            except ValueError as error:
-                raise RouteBlocked(str(error)) from error
+        prior = db.one("SELECT model,effort FROM executions WHERE task_id=? AND model IS NOT NULL ORDER BY started_at LIMIT 1", (task['id'],))
+        try:
+            selected = {**prior, 'mode': 'manual', 'settings_revision': 0} if prior else delegation(db, server)
+        except ValueError as error:
+            raise RouteBlocked(str(error)) from error
         with db.transaction() as conn:
             db.event(conn, 'task.model_selected', selected, task['project_id'], task['id'])
     pair = {k: selected[k] for k in ('model', 'effort')}
@@ -206,72 +121,42 @@ def assignment_route(db, server, task):
         server.route(**pair)
     except ValueError as error:
         raise RouteBlocked(str(error)) from error
-    if selected['mode'] == 'automatic':
-        item = policy_item(current(db, server, provider_of(pair['model']))['bot']['policy'], pair['model'])
-        if not item['allowed'] or not item['levels'].get(pair['effort'], False):
-            raise RouteBlocked('Saved bot pair is now denied or unavailable; enable it before resuming this assignment')
     return pair
 
 
 def favorites(db, server):
-    """Project saved families to the current catalog without silently replacing unavailable pairs."""
-    slots = db.setting('manager_favorites', [None, None])
+    """Saved manager favorites projected to the current catalog without silently replacing unavailable pairs."""
     result = []
-    for slot in slots[:2]:
-        if slot is None:
-            result.append(None)
-            continue
+    for slot in (db.setting('manager_favorites', [None, None]) + [None, None])[:2]:
         item = copy.deepcopy(slot)
-        try:
-            item['pair'] = validate_pair(server, item['pair'], item['provider'])
-            item['available'] = True
-        except (ValueError, KeyError):
-            item['available'] = False
+        if item:
+            try:
+                item['pair'] = validate_pair(server, item['pair'])
+                item['available'] = True
+            except (ValueError, KeyError):
+                item['available'] = False
         result.append(item)
-    return (result + [None, None])[:2]
+    return result
 
 
 def insert_favorite(db, server, slot):
     if slot not in (0, 1):
         raise ValueError('Choose favorite slot 1 or 2')
-    provider = active(db)
-    pair = validate_pair(server, current(db, server, provider)['manager'], provider)
+    pair = validate_pair(server, current(db, server)['manager'])
     with db.transaction() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key='manager_favorites'").fetchone()
         slots = json.loads(row[0]) if row else [None, None]
-        slots[slot] = {'provider': provider, 'pair': pair}
+        slots[slot] = {'provider': provider_of(pair['model']), 'pair': pair}
         conn.execute("INSERT INTO settings VALUES('manager_favorites',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                      (json.dumps(slots),))
         db.event(conn, 'models.favorite_inserted', {'slot': slot, **slots[slot]})
     return favorites(db, server)
 
 
-def recall_favorite(db, server, slot, expected=None):
+def recall_favorite(db, server, slot):
     if slot not in (0, 1):
         raise ValueError('Choose favorite slot 1 or 2')
     item = favorites(db, server)[slot]
     if not item or not item['available']:
         raise ValueError('Favorite unavailable; insert a supported Manager selection to replace it')
-    provider = item['provider']
-    config = current(db, server, provider)
-    if expected is not None and (not isinstance(expected, dict) or set(expected) != {'provider', 'pair', 'revision'}
-                                 or type(expected['revision']) is not int or expected['provider'] != provider
-                                 or expected['pair'] != item['pair'] or expected['revision'] != config['revision']):
-        raise ValueError('Favorite or settings changed; reopen settings before recalling')
-    config['manager'] = item['pair']
-    return save(db, server, {**config, 'provider': provider}, activate=True)
-
-
-def save_bot_mode(db, server, mode, revisions):
-    """Update available providers together; a conflict must not leave different modes half-saved."""
-    if mode not in ('manual', 'automatic') or not isinstance(revisions, dict) or set(revisions) != set(PROVIDERS):
-        raise ValueError('Choose Manual or Automatic with current provider revisions')
-    with db.transaction() as conn:
-        for provider in PROVIDERS:
-            config = current(db, server, provider)
-            if type(revisions[provider]) is not int or config['revision'] != revisions[provider]:
-                raise ValueError('Settings changed; reopen the panel before editing')
-            if not any(m['levels'] for m in choices(server, provider)):
-                continue  # An unavailable provider must not prevent editing the usable one.
-            config['bot']['mode'] = mode
-            save(db, server, {**config, 'provider': provider}, connection=conn)
+    return save(db, server, {**current(db, server), 'manager': item['pair']})
