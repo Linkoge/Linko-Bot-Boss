@@ -471,6 +471,40 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def todo_archive(body: TodoArchive):
         return Todos(db).archive(body.selected, body.project_id)
 
+    @app.post("/api/todos/{entry_id}/start", dependencies=[Depends(require_owner)])
+    async def todo_start(entry_id: str):
+        # Start is an explicit queue operation, not a request for an LLM to decide
+        # whether to delegate. Replay the durable handoff even after a lost reply.
+        def receipt():
+            handoff = db.setting("todo_handoff:" + entry_id)
+            return tasks.get(handoff["task_id"]) if handoff else None
+
+        task = receipt()
+        if not task:
+            from .model_settings import delegation
+
+            await chat.server.start()
+            task = receipt()
+            if not task:
+                entry = db.one("SELECT * FROM todos WHERE id=? AND archived_at IS NULL", (entry_id,))
+                if not entry:
+                    raise ValueError("To-Do not found (it may be archived); refresh before starting")
+                project_id = entry["project_id"]
+                if registry.get(project_id)["status"] == "removed":
+                    raise ValueError("Restore this To-Do's project before starting")
+                route = delegation(db, chat.server, project_id=project_id)
+                details = entry["details"].strip()
+                objective = entry["title"] + ("\n\n" + details if details else "")
+                # A maximum-length note still fits the task objective. The full
+                # title and details are retained in the atomic handoff source.
+                if len(objective) > 24000:
+                    objective = details
+                task = tasks.add(project_id, objective, chat.conversation(project_id)["id"],
+                                 request_key="todo-start:" + entry_id, model_route=route, todos=[entry_id],
+                                 selected={"selected_context": "To-Do " + entry_id + ": " + entry["title"]},
+                                 reuse_objective=False)
+        return {"result": "accepted", "task_id": task["id"], "status": task["status"]}
+
     @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
     def portfolio(project_id: str | None = None):
         if project_id:

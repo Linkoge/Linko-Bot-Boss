@@ -369,20 +369,20 @@ def main():
                 for width, height in [(1440, 1000), (393, 851), (320, 420)]:
                     page.set_viewport_size({'width': width, 'height': height})
                     start()
-                    boxes = [page.locator('#'+id).bounding_box() for id in ('attach','send','microphone')]
-                    assert all(box['width'] == box['height'] == 44 for box in boxes)
-                    assert boxes[0]['x'] == boxes[1]['x'] == boxes[2]['x']
-                    assert boxes[0]['y'] < boxes[2]['y'] < boxes[1]['y']
+                    boxes = [page.locator('#'+id).bounding_box() for id in ('microphone','audio-upload','audio-cancel','send')]
+                    assert all(box['height'] == 44 and box['width'] >= 44 for box in boxes)
+                    assert all(abs(box['y'] - boxes[-1]['y']) <= 1 for box in boxes)
+                    assert all(a['x']+a['width'] <= b['x'] for a,b in zip(boxes,boxes[1:]))
                     composer = page.locator('#chat-form').bounding_box()
-                    assert composer['height'] <= 202 and composer['y']+composer['height'] <= height
+                    assert composer['height'] <= 210 and composer['y']+composer['height'] <= height
                     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
-                    assert page.locator('#audio-stop').is_visible() and page.locator('#audio-cancel').is_visible()
+                    assert page.locator('#audio-stop').count() == 0 and page.locator('#audio-cancel').is_visible()
                     assert page.locator('#microphone').get_attribute('aria-label') == 'Stop recording and transcribe'
                     recording_controls=[page.locator('#'+id).bounding_box() for id in ('audio-upload','audio-cancel')]
                     assert all(box['height']>=44 and box['width']>=44 for box in recording_controls)
-                    panel=page.locator('#audio-panel').bounding_box()  # session controls live in the navigation shell
-                    assert panel['x'] >= 0 and panel['x']+panel['width'] <= width and panel['y'] < composer['y']
-                    assert all(page.evaluate('(id)=>{const b=$(id).getBoundingClientRect();return document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===$(id)}',id) for id in ('audio-cancel','audio-upload','attach','send','microphone'))
+                    panel=page.locator('#audio-panel').bounding_box()
+                    assert panel['x'] >= 0 and panel['x']+panel['width'] <= width and panel['y'] >= composer['y']
+                    assert all(page.evaluate('(id)=>{const b=$(id).getBoundingClientRect();return document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===$(id)}',id) for id in ('audio-cancel','audio-upload','send','microphone'))
                     page.screenshot(path=f'/tmp/linko-compact-composer-{width}.png')
                     geometry.append({'viewport': [width,height], 'composer': composer, 'controls': boxes, 'recording_controls': recording_controls})
                     page.locator('#audio-cancel').click()

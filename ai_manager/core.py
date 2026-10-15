@@ -154,7 +154,7 @@ class Tasks:
         return records
 
     def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None,
-            model_route=None, todos=None):
+            model_route=None, todos=None, reuse_objective=True):
         if not description.strip() or len(description) > 24000:
             raise ValueError("Objective must be 1–24000 characters")
         if not isinstance(acceptance, str) or len(acceptance) > 12000:
@@ -165,7 +165,7 @@ class Tasks:
                 """SELECT id,project_id FROM tasks WHERE request_key=? OR id=(
                     SELECT task_id FROM events WHERE kind='task.reused' AND json_extract(history_text(payload),'$.request_key')=?
                     ORDER BY seq DESC LIMIT 1)""", (request_key, request_key)).fetchone() if request_key else None
-            if not previous:
+            if not previous and reuse_objective:
                 previous = conn.execute(
                     """SELECT id,project_id FROM tasks WHERE project_id=? AND description=? AND origin_conversation IS ?
                     AND state IN ('queued','running') ORDER BY created_at DESC LIMIT 1""",

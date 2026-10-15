@@ -2,23 +2,40 @@
 const $ = id => document.getElementById(id);
 // Reload starts at the loaded chat bottom; browser restoration must not race it.
 if('scrollRestoration' in history)history.scrollRestoration='manual';
-let initialChatPosition=true,hiddenChatPosition=0;
+let initialChatPosition=true,chatPositionVersion=0;
 function preserveChatPosition(render){
   const messages=$('messages'),top=messages.scrollTop;
   try{return render();}finally{messages.scrollTop=top;}
 }
+function cancelInitialChat(){initialChatPosition=false;chatPositionVersion++;}
 async function positionInitialChat(selection){
-  if(!initialChatPosition)return;
-  await document.fonts.ready;
-  await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
-  if(selection!==state.selection||$('app').hidden||state.view!=='chat')return;
-  $('messages').scrollTop=$('messages').scrollHeight;
-  initialChatPosition=false;
+  if(!initialChatPosition||!state.history||state.view!=='chat')return;
+  const version=++chatPositionVersion,messages=$('messages');
+  const current=()=>initialChatPosition&&version===chatPositionVersion&&selection===state.selection&&!$('app').hidden&&state.view==='chat';
+  const bottom=()=>{if(current())messages.scrollTop=messages.scrollHeight;};
+  // Position through fonts, images and viewport/composer sizing, then release
+  // control. Routine updates retain the reader's deliberate position.
+  const observer=new ResizeObserver(bottom);
+  observer.observe(messages);for(const row of messages.children)observer.observe(row);
+  messages.addEventListener('load',bottom,true);bottom();
+  let deadline;
+  try{
+    await Promise.race([
+      Promise.allSettled([document.fonts.ready,...[...messages.querySelectorAll('img')].map(img=>img.decode())]),
+      new Promise(resolve=>{deadline=setTimeout(resolve,3000);})
+    ]);
+    await new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve)));
+    bottom();
+    await new Promise(resolve=>setTimeout(resolve,150));
+    bottom();
+    if(current())initialChatPosition=false;
+  }finally{clearTimeout(deadline);observer.disconnect();messages.removeEventListener('load',bottom,true);}
 }
-// A deliberate gesture during startup wins over delayed layout positioning.
+// A gesture wins even while fonts or attachment images are still pending.
 for(const type of ['wheel','touchstart','pointerdown','keydown']){
-  $('messages').addEventListener(type,()=>{initialChatPosition=false;},{passive:true});
+  $('messages').addEventListener(type,cancelInitialChat,{passive:true});
 }
+$('chat-older').addEventListener('pointerdown',cancelInitialChat,{passive:true});
 const draftRecovery=JSON.parse(sessionStorage.getItem('linko-drafts-v1')||'[]');
 const appliedTranscripts=new Set(draftRecovery.transcripts||[]);
 const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
@@ -67,7 +84,7 @@ async function api(path, options={}){
 }
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
-function showAuth(){$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
+function showAuth(){cancelInitialChat();initialChatPosition=true;$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
 let refreshVersion=0;
@@ -192,6 +209,7 @@ async function selectProject(id){
   $('agent-list').replaceChildren();
   if(state.draftContextReady){state.drafts.set(state.project,$('message-input').value);saveDrafts();}
   const selection=++state.selection;
+  cancelInitialChat();initialChatPosition=true;
   state.todoSelection=new Set();state.todos=[];renderTodos(true);
   state.project=id;state.detail=null;state.brief=null;clearTimeout(state.memoryTimer);renderMemory();renderMemoryReview();state.source?.close();state.source=null;
   state.execution=null;state.history=null;$('messages').replaceChildren();updateChatActions();
@@ -283,12 +301,13 @@ document.addEventListener('selectionchange',()=>{for(const output of document.qu
 function renderQuestions(){$('questions').replaceChildren();for(const q of state.portfolio.questions.filter(q=>!state.project||q.project_id===state.project)){const request=JSON.parse(q.request),form=element('form',undefined,'panel');form.append(element('h3','Codex needs your answer · '+projectName(q.project_id)));if(q.kind==='item/tool/requestUserInput'){for(const question of request.questions){const label=element('label',question.question),input=element('input');input.name=question.id;input.required=true;if(question.options)label.append(element('small',question.options.map(x=>x.label).join(' / ')));label.append(input);form.append(label);}form.append(element('button','Send answer','primary'));form.onsubmit=action(async event=>{event.preventDefault();await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:Object.fromEntries(new FormData(form))})});await refresh();});}else{form.append(element('pre',JSON.stringify(request,null,2)));for(const [label,approve] of [['Confirm exact action',true],['Decline',false]]){const b=element('button',label);b.type='button';b.onclick=action(async()=>{await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:{approve}})});await refresh();});form.append(b);}}$('questions').append(form);}}
 async function loadHistory(selection=state.selection,before=null){
   if(selection!==state.selection)return;
+  if(before)cancelInitialChat();
   const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);if(before)query.set('before',before);
   if(!before){state.source?.close();state.source=null;}
   const request=state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
   const history=await api(`/api/history?${query}`);if(selection!==state.selection||request!==state.loadHistoryRequest)return;
   const messages=$('messages'),fresh=state.history?.conversation.id!==history.conversation.id;
-  const previousTop=messages.scrollTop;
+  const previousTop=messages.scrollTop,previousHeight=messages.scrollHeight;
   history.messages=history.messages.filter(m=>!history.deleted_message_ids?.includes(m.id));
   if(!before)state.history=history;
   if(fresh||before||!state.olderLoaded)state.olderHasMore=history.has_more;
@@ -313,8 +332,9 @@ async function loadHistory(selection=state.selection,before=null){
     updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);renderMessageAttachments(row,m);renderMessageActions(row,m,history.conversation.id);
 
   }
+  if(before){messages.scrollTop=previousTop+messages.scrollHeight-previousHeight;return;}
   if(!fresh)messages.scrollTop=previousTop;
-  if(before)return;
+  if(fresh){initialChatPosition=true;positionInitialChat(selection);}
   const active=history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
   state.execution=active?.execution_id||null;
   $('stop-chat').hidden=!active;$('send').disabled=state.pending.has(state.project);
@@ -542,7 +562,7 @@ $('execution-history').onclick=action(()=>readHistory('executions'));
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
-function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')hiddenChatPosition=$('messages').scrollTop;const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning)$('messages').scrollTop=hiddenChatPosition;}
+function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')cancelInitialChat();const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning){initialChatPosition=true;positionInitialChat(state.selection);}}
 function editor(title,fields,onSave,reloadContext=true){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}
@@ -645,11 +665,12 @@ function updateComposer(){
   const form=$('chat-form'),input=$('message-input');
   const focused=document.activeElement===input,scroll=input.scrollTop;
   const mobile=mobileComposer();
-  const recording=typeof audioState!=='undefined'&&audioState.session?.project===state.project;
+  const recording=typeof audioState!=='undefined'&&!!audioState.session;
   const files=typeof attachmentState!=='undefined'&&(attachmentDraft(state.project).length||attachmentState.uploads.has(state.project));
   const active=!!input.value.length||!!files||recording||(composerKeyboard.active&&form.contains(document.activeElement)&&(!mobile||!composerKeyboard.closed));
   form.classList.toggle('composer-active',active);
-  form.classList.toggle('composer-recording',recording&&audioState.session?.phase==='recording');
+  form.classList.toggle('composer-audio',typeof audioState!=='undefined'&&!!audioState.session);
+  form.classList.toggle('composer-recording',typeof audioState!=='undefined'&&audioState.session?.phase==='recording');
   form.classList.toggle('composer-caret',focused&&!document.hidden&&(!mobile||(composerKeyboard.seen&&!composerKeyboard.closed)));
   $('send').hidden=!active;
   // Measure at the initial active size, independent of the previous overflow size.
@@ -719,30 +740,26 @@ function renderTodos(force=false){
     if(listFocused&&focusId)list.querySelector(`[data-todo="${focusId}"][type="${focusKind}"]`)?.focus({preventScroll:true});
   }
   for(const box of list.querySelectorAll('input[type=checkbox]'))box.checked=state.todoSelection.has(box.dataset.todo);
+  for(const button of list.querySelectorAll('[data-todo-start]'))button.disabled=todoStarts.has(button.dataset.todoStart);
   $('todo-delete').disabled=!state.todoSelection.size;
 }
-const todoStarts=new Map(JSON.parse(sessionStorage.getItem('linko-todo-starts-v1')||'[]'));
-function saveTodoStarts(){sessionStorage.setItem('linko-todo-starts-v1',JSON.stringify([...todoStarts]));}
+const todoStarts=new Map();
 async function startTodo(entry){
-  const selection=state.selection,key=entry.id;
-  let request=todoStarts.get(key);
-  if(!request){
-    const history=await api('/api/history?project_id='+encodeURIComponent(entry.project_id));
-    if(selection!==state.selection)throw new Error('Context changed. Select the To-Do again.');
-    request={project_id:entry.project_id,conversation_id:history.conversation.id,request_id:crypto.randomUUID(),todos:[entry.id],content:`Start this To-Do as one assignment. To-Do ID: ${entry.id}.\n${entry.title}\n\n${entry.details}`};
-    todoStarts.set(key,request);saveTodoStarts();
-  }
-  try{
-    await submitWithModelSelection(request);
-    todoStarts.delete(key);saveTodoStarts();
-  }catch(error){
-    // Keep the exact request across ambiguous network failures. A later deliberate
-    // Start after accepted manager failure gets a fresh request, never a stale receipt.
-    if(error.status>=400&&error.status<500&&![401,403,408,429].includes(error.status)){todoStarts.delete(key);saveTodoStarts();}
-    throw error;
-  }
-  notice('Start requested. The To-Do stays listed until an assignment is accepted.');
-  if(selection===state.selection)await refresh();
+  if(todoStarts.has(entry.id))return todoStarts.get(entry.id);
+  const selection=state.selection;
+  const pending=orderModelIntent(async()=>{
+    if(modelSelectionError)throw new Error('Choose model settings again before starting: '+modelSelectionError);
+    const result=await api('/api/todos/'+encodeURIComponent(entry.id)+'/start',{method:'POST'});
+    notice('To-Do started · Assignment '+result.task_id+' · '+result.status);
+    if(selection===state.selection){
+      state.todos=state.todos.filter(todo=>todo.id!==entry.id);state.todoSelection.delete(entry.id);renderTodos();
+      await refresh().catch(error=>updatesUnavailable(error));
+    }
+    return result;
+  });
+  todoStarts.set(entry.id,pending);renderTodos();
+  try{return await pending;}
+  finally{todoStarts.delete(entry.id);renderTodos();}
 }
 function editTodo(entry=null){
   const project=state.project,selection=state.selection;

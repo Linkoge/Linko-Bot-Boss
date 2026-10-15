@@ -93,7 +93,7 @@ def main():
                 def start():
                     page.locator('#microphone').click()
                     page.wait_for_function("()=>audioState.session?.phase==='recording'")
-                    assert 'Recording · 00:00' in page.locator('#audio-status').inner_text()
+                    assert page.locator('#audio-status').inner_text() == '00:00'
                     page.wait_for_function("()=>audioState.session?.message==='00:01'")
                     assert page.locator('#send').is_visible()
                     assert page.locator('#chat-form').evaluate("node=>node.classList.contains('composer-active')")
@@ -114,7 +114,7 @@ def main():
                 finish_stop()
                 assert page.locator('#message-input').input_value() == 'typed draft\nspoken transcript'
                 assert len(chats) == 0 and uploads[0].startswith('audio/webm')
-                assert page.evaluate("$('microphone').nextElementSibling.id") == 'send'
+                assert page.evaluate("$('audio-panel').nextElementSibling.id") == 'send'
 
                 # Capture and explicit whole-file Send while a real fixture manager turn is active.
                 page.locator('#message-input').fill('Busy recording')
@@ -123,7 +123,7 @@ def main():
                 assert page.locator('#microphone').is_enabled()
                 start()
                 assert page.evaluate('!!state.execution')
-                assert page.locator('#audio-stop').is_visible()
+                assert page.locator('#audio-stop').count() == 0 and page.locator('#microphone').is_visible()
                 before_chats = len(chats)
                 with page.expect_file_chooser():
                     page.locator('#audio-upload').click()
@@ -525,7 +525,7 @@ def main():
                 assert len(chats)==before and page.locator('#message-input').input_value()=='retain me\n\nretry for editing'
                 page.unroute('**/api/audio/transcribe')
                 assert not interrupts, interrupts
-                assert page.locator("#audio-stop").is_hidden()
+                assert page.locator("#audio-stop").count() == 0
                 assert not errors, errors
                 print(json.dumps({'result': 'passed', 'real_capture': True, 'provider': 'fixture only', 'uploads': len(uploads), 'chat_submissions': len(chats), 'viewports': [1440, 393, 320]}))
                 browser.close()

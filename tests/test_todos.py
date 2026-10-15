@@ -238,3 +238,114 @@ async def test_ui_start_binds_source_before_dispatch_and_replays_after_consumpti
     assert app.state.db.setting("todo_handoff:" + todo["id"])["task_id"] == task["id"]
     assert await app.state.chat.submit(project, "Explicit start", conversation, request_id="bound-start-000001", todos=selected) == receipt
     assert len(app.state.db.all("SELECT * FROM tasks")) == 1
+
+
+@pytest.mark.parametrize("details", ['Original details', 'x' * 24000, ' ' * 24000], ids=['normal', 'maximum', 'blank'])
+def test_start_endpoint_queues_once_with_source_and_worker_route(client, details):
+    browser, app, settings = client
+    assert browser.post('/api/todos/missing/start').status_code == 401
+    sign_in(browser, app, settings)
+    browser.portal.call(app.state.scheduler.close)
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    todo = Todos(app.state.db).save(project, 'Start exactly once', details)
+    path = '/api/todos/' + todo['id'] + '/start'
+    assert browser.post(path, headers={'X-CSRF-Token': 'wrong'}).status_code == 403
+    first = browser.post(path)
+    assert first.status_code == 200, first.text
+    receipt = first.json()
+    assert receipt['result'] == 'accepted' and receipt['status'] == 'queued'
+    task = app.state.scheduler.tasks.get(receipt['task_id'])
+    assert task['project_id'] == project
+    assert task['origin_conversation'] == app.state.chat.conversation(project)['id']
+    if details.strip():
+        assert details in task['description']
+    else:
+        assert task['description'] == todo['title']
+    assert task['worker_route']['model'] == 'test-model'
+    handoff = app.state.db.setting('todo_handoff:' + todo['id'])
+    assert handoff['source'] == todo and handoff['task_id'] == task['id']
+    assert browser.post(path).json() == receipt
+    assert len(app.state.db.all('SELECT * FROM tasks')) == 1
+    assert len(app.state.db.all("SELECT * FROM events WHERE kind='todo.consumed'")) == 1
+    assert not Todos(app.state.db).list(project)
+    assert not app.state.db.all('SELECT * FROM executions')  # no manager round-trip
+    assert not app.state.db.all('SELECT * FROM messages')
+
+
+def test_start_endpoint_dispatch_failure_rolls_back_and_retry_succeeds(client, monkeypatch):
+    from ai_manager.codex import CodexError
+
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    browser.portal.call(app.state.scheduler.close)
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    todo = Todos(app.state.db).save(project, 'Keep on failure', 'Keep source')
+    path = '/api/todos/' + todo['id'] + '/start'
+    original = app.state.db.event
+
+    def fail(conn, kind, *args, **kwargs):
+        if kind == 'todo.consumed':
+            raise CodexError('Dispatch persistence unavailable')
+        return original(conn, kind, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app.state.db, 'event', fail)
+        response = browser.post(path)
+        assert response.status_code == 503 and 'unavailable' in response.json()['detail']
+    assert Todos(app.state.db).list(project) == [todo]
+    assert not app.state.db.all('SELECT * FROM tasks')
+    assert not app.state.db.setting('todo_handoff:' + todo['id'])
+    assert browser.post(path).status_code == 200
+    assert len(app.state.db.all('SELECT * FROM tasks')) == 1
+
+
+def test_start_uses_source_project_worker_and_distinct_entries_are_distinct_tasks(client):
+    from concurrent.futures import ThreadPoolExecutor
+
+    from ai_manager.model_settings import save_project_worker
+
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    browser.portal.call(app.state.scheduler.close)
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    pair = {'model': 'test-model', 'effort': 'high'}
+    save_project_worker(app.state.db, app.state.chat.server, project,
+                        {'revision': 0, 'override': {'worker': pair, 'manual': pair}})
+    first, second = [Todos(app.state.db).save(project, 'Identical idea', 'Identical details') for _ in range(2)]
+    path = '/api/todos/' + first['id'] + '/start'
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        receipts = list(pool.map(lambda _: browser.post(path).json(), range(3)))
+    assert all(receipt == receipts[0] for receipt in receipts)
+    second_receipt = browser.post('/api/todos/' + second['id'] + '/start').json()
+    assert second_receipt['task_id'] != receipts[0]['task_id']
+    tasks = [app.state.scheduler.tasks.get(task['id']) for task in app.state.scheduler.tasks.list(project)]
+    assert len(tasks) == 2 and all(task['worker_route'] == pair for task in tasks)
+    assert not Todos(app.state.db).list(project)
+
+
+@pytest.mark.parametrize('failure', ['catalog', 'worker'])
+def test_start_catalog_or_worker_failure_preserves_source(client, monkeypatch, failure):
+    from ai_manager.codex import CodexError
+
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    browser.portal.call(app.state.scheduler.close)
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    todo = Todos(app.state.db).save(project, 'Try later', 'Full source')
+
+    async def fail_catalog():
+        raise CodexError('Catalog unavailable')
+
+    def fail_worker(*args, **kwargs):
+        raise ValueError('Selected worker unavailable')
+
+    with monkeypatch.context() as patch:
+        patch.setattr(app.state.chat.server, 'start' if failure == 'catalog' else 'route',
+                      fail_catalog if failure == 'catalog' else fail_worker)
+        response = browser.post('/api/todos/' + todo['id'] + '/start')
+    assert response.status_code == (503 if failure == 'catalog' else 409)
+    assert 'unavailable' in response.json()['detail']
+    assert Todos(app.state.db).list(project) == [todo]
+    assert not app.state.db.all('SELECT * FROM tasks')
+    assert not app.state.db.setting('todo_handoff:' + todo['id'])
+    assert browser.post('/api/todos/' + todo['id'] + '/start').status_code == 200

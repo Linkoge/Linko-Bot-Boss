@@ -8,8 +8,8 @@ function renderAudio(){
   const session=audioState.session,phase=session?.phase;
   const recording=phase==='recording',busy=['starting','stopping','transcribing','sending'].includes(phase);
   $('audio-panel').hidden=!session;
-  $('audio-status').textContent=recording?`${session.label} · ${session.muted?'Microphone paused; audio may be missing':'Recording'} · ${session.message}${session.background?' · Background capture may pause':''} · ${session.wakeLock?'Screen kept awake':'Screen may sleep'}`:session?`${session.label} · ${session.message||({starting:'Starting microphone…',recording:'Recording',stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
-  $('audio-stop').hidden=!recording;
+  $('audio-status').textContent=recording?(session.message||'00:00'):session?`${session.label} · ${session.message||({starting:'Starting microphone…',recording:'Recording',stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
+  $('audio-panel').title=session?`Recording for ${session.label}${session.interruptionReason?' · '+session.interruptionReason:''}`:'';
   $('audio-retry').hidden=phase!=='error'||!session?.blob;
   $('audio-cancel').disabled=phase==='sending';
   $('audio-download').hidden=!session?.blob;
@@ -189,7 +189,6 @@ document.addEventListener('visibilitychange',()=>{
 });
 document.addEventListener('freeze',()=>{const session=audioState.session;if(session?.phase==='starting')discardAudio();else if(session)interruptAudio(session,'Browser froze capture');});
 window.addEventListener('pagehide',()=>{const session=audioState.session;if(session?.phase==='starting')discardAudio();else if(session)interruptAudio(session,'Page left; capture interrupted');});
-$('audio-stop').onclick=()=>finishAudio(false);
 $('audio-retry').onclick=()=>{const session=audioState.session;if(session?.phase==='error'&&session.blob)transcribeAudio(session);};
 $('audio-cancel').onclick=discardAudio;
 $('audio-download').onclick=()=>{

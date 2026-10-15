@@ -31,13 +31,6 @@ from ai_manager.web import create_app
 from ai_manager.todos import Todos
 s=Settings();app=create_app(s,FakeServer(s))
 for name in ('Alpha','Beta'):app.state.registry.add(s.project_roots[0]/name)
-@app.post('/fixture/handoff')
-async def handoff():
- entry=Todos(app.state.db).list()[0]
- return await app.state.scheduler.manager_action(entry['project_id'],{{'tool':'manager_action',
- 'manager_execution_id':'fixture-accepted','conversation_id':app.state.chat.conversation(entry['project_id'])['id'],
- 'arguments':{{'action':'delegate','objective':entry['title']+' '+entry['details'],
- 'todos':[entry['id']]}}}})
 uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')'''
         env = {**os.environ, 'AI_MANAGER_DATA': str(root / 'data'),
                'AI_MANAGER_PROJECT_ROOTS': str(root / 'projects'), 'AI_MANAGER_SECURE_COOKIE': '0'}
@@ -77,23 +70,22 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')'''
                 page.wait_for_function("()=>state.todos[0].details==='Edited original details'")
                 assert not chats
                 page.evaluate("() => {$('message-input').value='unsent draft';state.drafts.set(state.project,'unsent draft');}")
-                page.route('**/api/chat', lambda route: route.fulfill(status=503, content_type='application/json', body='{"detail":"fixture dispatch unavailable"}'))
+                page.route('**/api/todos/*/start', lambda route: route.fulfill(status=503, content_type='application/json', body='{"detail":"fixture dispatch unavailable"}'))
                 page.locator('#todo-list button', has_text='Start').click()
                 page.wait_for_timeout(300)
                 assert page.locator('#todo-list article').count() == 1
-                page.unroute('**/api/chat')
+                page.unroute('**/api/todos/*/start')
                 page.locator('#todo-list button', has_text='Start').click()
                 page.wait_for_timeout(300)
-                page.wait_for_function('()=>!state.execution')
-                assert page.locator('#todo-list article').count() == 1  # owner message acceptance alone is not a task
-                assert page.locator('#message-input').input_value() == 'unsent draft'
-                task = page.evaluate("()=>api('/fixture/handoff',{method:'POST'})")
-                page.evaluate('()=>loadTodos()')
+                page.wait_for_function("()=>!todoStarts.size&&$('notice-text').textContent.includes('To-Do started')")
                 assert page.locator('#todo-list article').count() == 0
-                assert task['id']
+                assert page.locator('#message-input').input_value() == 'unsent draft'
+                tasks = page.evaluate("()=>api('/api/portfolio?project_id='+state.project)")['tasks']
+                assert len(tasks) == 1 and tasks[0]['description'] == 'Explicit start only\n\nEdited original details'
+                assert not chats
                 page.locator('[data-view=chat]').click()
-                page.evaluate('()=>loadHistory()')
-                page.wait_for_function('()=>state.history.messages.length>0&&!state.execution')
+                page.locator('#send').click()
+                page.wait_for_function('()=>state.history.messages.length>0&&!state.execution&&!state.pending.size')
 
                 def chat_action(control):
                     page.locator('#chat-menu-button').click()
@@ -204,7 +196,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')'''
                 assert not errors, errors
                 browser.close()
                 print(json.dumps({'status':'passed','widths':[1440,393,320], 'poll_updates':updates[0],
-                                  'todo_task':task['id'], 'screenshots':str(evidence), 'page_errors':errors}))
+                                  'todo_task':tasks[0]['id'], 'screenshots':str(evidence), 'page_errors':errors}))
         finally:
             process.terminate()
             process.wait(timeout=10)

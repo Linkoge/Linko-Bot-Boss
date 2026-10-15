@@ -270,19 +270,42 @@ probes, live database changes, service restarts or host installation are part of
   thread/turn arguments plus execution/task route evidence for separate projects. Evidence and the comparison with
   `81711bd`, `208554a` and `db292c6`: `docs/evidence/model-picker/` (`FINDINGS.md`, `side-by-side-*.png`).
 - Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
-  To-Do to a task); read-only project memory brief for the manager with owner-run review; chat clear/trash/archive/search.
+  To-Do directly to one queued task); read-only project memory brief for the manager with owner-run review;
+  chat clear/trash/archive/search.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
 - Security: Argon2 owner login, one-time setup token, revocable sessions, CSRF/origin/host checks, CSP, throttling.
   Workers run as the service user with broad access; the rules ask them to confirm before catastrophic destruction.
   That is an agent convention, not a sandbox.
 
+Chat opening (reload, context selection, reopening Conversation and authentication recovery)
+positions the loaded history at its latest end after fonts, images and composer sizing
+settle. A deliberate chat gesture cancels pending positioning. Subsequent streaming,
+polling and sends preserve the reader’s scroll position; loading older messages keeps
+the previously visible message in place. Permanent Chromium coverage lives in
+`tests/test_chat_open_start_browser.py`, including 155-message histories and delayed layout.
+
+To-Do **Start** uses authenticated, CSRF-protected `POST /api/todos/{id}/start` to queue
+one task directly, without waiting for manager interpretation. The backend resolves the
+source project’s effective worker selection (Automatic uses the provider default),
+retains the original conversation and complete source, and archives the entry in the
+same transaction that accepts the task. A durable per-entry handoff makes repeat clicks,
+concurrent requests and retries after a lost response return the original task. Catalog,
+model or persistence failure leaves the entry available for retry. The UI disables
+pending Start controls and displays either the assignment ID/status or an actionable
+error. `tests/test_todos.py` covers atomic failure/replay; the browser suite covers the
+full click-to-queue path, duplicate clicks and lost-response recovery.
+
 ## Whole-session audio recording
 
 Microphone capture requires a secure context (HTTPS, or localhost for development),
 MediaRecorder, microphone permission and a supported recording format. One app-level
-session retains its original project, conversation and mode across internal views,
-project switches and stashing. The persistent bar names that destination and exposes
-Stop, Discard, and (after interruption) Download/Retry. Stop transcribes the whole
+session retains its original project and conversation across internal views,
+project switches and stashing. In Conversation, the recording controls sit in the
+composer bottom row immediately left of Send: elapsed time only, Upload and Discard.
+The existing Record button toggles capture off; there is no second Stop button.
+The destination remains available in the controls’ tooltip; after interruption,
+Download/Retry and the recovery explanation appear in the same bottom row. Other
+views hide the composer while the same capture continues. Toggling Record off transcribes the whole
 recording once into the original draft; explicit composer Send retains the existing
 whole-recording send flow. Navigation suppresses automatic Send. Before insertion,
 the original conversation is checked; a replacement chat never receives its transcript.
@@ -291,24 +314,26 @@ Changing browser tabs/apps or document visibility does not stop capture. Delayed
 are not evidence that the microphone stopped. Where available, a screen wake lock is
 requested during visible recording, released on hide/stop/discard, and requested again
 on return. Denial, low-power policy and missing wake-lock support leave capture usable;
-the bar shows whether the screen is being kept awake. This API keeps a visible screen
+the recording timer remains the only active status text. This API keeps a visible screen
 awake; it does not grant background execution. See the
 [Screen Wake Lock specification](https://w3c.github.io/screen-wake-lock/).
 
 Recorder errors/stops, ended tracks and page freeze/departure retain captured audio
 for the existing review/retry flow and remove the active indicator. A muted microphone
-shows a pause warning, continues the same recorder where possible, and requires review
-on Stop because audio may be missing. All MediaRecorder data events are assembled into
-one Blob and one transcription request after capture ends: no separately transcribed
+records a pause warning in the controls’ tooltip, continues the same recorder where
+possible, and requires review after capture ends because audio may be missing. All
+MediaRecorder data events are assembled into one Blob and one transcription request after capture ends: no separately transcribed
 segments or partial transcript insertion. Existing IndexedDB recovery checkpoints are
 best effort; final data may never arrive if the browser/process is killed. Download
-important interrupted recordings before leaving. Stop/Discard releases microphone,
-timers and screen lock, including a lock granted after the session has ended.
+important interrupted recordings before leaving. Ending capture or Discard releases
+microphone, timers and screen lock, including a lock granted after the session has ended.
 
 Permanent regression coverage: `tests/test_audio_continuity.py` uses real headless
 Chromium capture with a fake microphone and transcription provider, internal navigation,
-a second browser tab, visibility events, recorder/track interruption, and simulated denied/unsupported wake
-locks. `scripts/browser_audio.py` additionally covers the existing upload, Send, retry,
+a second browser tab, visibility events, recorder/track interruption, and simulated
+denied/unsupported wake locks, plus timer-only bottom-row layout and Record-toggle
+stopping at 1200/393/320px. The browser suite generates disposable login credentials at runtime.
+`scripts/browser_audio.py` additionally covers upload, Send, retry,
 recovery and narrow-layout flows. Visibility simulation does not establish mobile OS
 background support. Mobile app switching, screen lock, browser freezing, calls,
 permission revocation and power policy can pause or terminate microphone capture.

@@ -1,4 +1,4 @@
-"""Deferred project ideas. These records never enter the execution queue."""
+"""Deferred project ideas; explicit Start atomically hands their source to a queued task."""
 
 import json
 import time

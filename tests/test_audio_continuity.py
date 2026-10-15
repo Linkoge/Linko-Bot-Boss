@@ -2,6 +2,7 @@
 import json
 import os
 import runpy
+import secrets
 import socket
 import subprocess
 import sys
@@ -47,12 +48,25 @@ def audio_server(tmp_path_factory):
             process.wait(timeout=5)
 
 
+@pytest.fixture(scope='module')
+def audio_auth(audio_server):
+    url, root = audio_server
+    credentials = {'username': 'owner', 'password': secrets.token_urlsafe(24)}
+    with httpx.Client(base_url=url, timeout=5) as client:
+        response = client.post('/api/setup', json={**credentials, 'token': (root / 'data/setup-token').read_text()})
+        assert response.status_code == 200
+        response = client.post('/api/login', json=credentials)
+        assert response.status_code == 200
+        return [{'name': name, 'value': value, 'url': url} for name, value in client.cookies.items()]
+
+
 @pytest.fixture
-def audio_page(audio_server):
+def audio_page(audio_server, audio_auth):
     url, root = audio_server
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
         context = browser.new_context(viewport={'width': 393, 'height': 851})
+        context.add_cookies(audio_auth)
         page = context.new_page()
         page.set_default_timeout(10000)
         errors = []
@@ -71,11 +85,6 @@ def audio_page(audio_server):
           navigator.mediaDevices.getUserMedia=(...args)=>{captureRequests++;return capture(...args);};
         ''')
         page.goto(url)
-        page.locator('#username').fill('owner')
-        page.locator('#password').fill('disposable-browser-password')
-        if page.locator('#setup-token').is_visible():
-            page.locator('#setup-token').fill((root / 'data/setup-token').read_text())
-        page.locator('#login-button').click()
         page.wait_for_function('()=>state.ready && state.history && !audioState.loading')
         try:
             yield page
@@ -97,12 +106,12 @@ def test_navigation_background_single_whole_upload(audio_page, audio_server):
     origin = page.evaluate('({project:audioState.session.project,conversation:audioState.session.conversation,id:audioState.session.id})')
     page.evaluate("window.originalRecorder=audioState.session.recorder;window.originalStream=audioState.session.stream")
     page.locator('[data-view=tasks]').click()
-    assert page.locator('#audio-stop').is_visible()
-    assert 'Recording' in page.locator('#audio-status').inner_text()
+    assert page.locator('#audio-panel').is_hidden()
+    assert page.evaluate("audioState.session.phase==='recording'")
     page.evaluate("notice('Test notification');const tall=document.createElement('div');tall.style.height='1600px';$('view-tasks').append(tall)")
     page.evaluate('window.scrollTo(0, 800)')
     page.wait_for_timeout(100)
-    assert page.locator('#audio-stop').evaluate('node=>{const r=node.getBoundingClientRect();return r.top>=0 && document.elementFromPoint(r.x+r.width/2,r.y+r.height/2)===node;}')
+
     other = page.evaluate('state.portfolio.projects.find(p=>p.id!==state.project).id')
     page.evaluate('(id)=>selectProject(id)', other)
     page.wait_for_function('(id)=>state.project===id && state.history', arg=other)
@@ -127,7 +136,8 @@ def test_navigation_background_single_whole_upload(audio_page, audio_server):
     page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))")
     page.wait_for_function('()=>wakeRequests===2 && !!audioState.session.wakeLock')
     assert uploads == []
-    page.locator('#audio-stop').click()
+    page.locator('[data-view=chat]').click()
+    page.locator('#microphone').click()
     page.wait_for_function('()=>!audioState.session')
     assert len(uploads) == 1
     received = json.loads((audio_server[1] / 'data/audio-provider-last.json').read_text())
@@ -156,6 +166,7 @@ def test_wake_failure_cancel_and_late_permission(audio_page, capability):
     page.locator('[data-view=tasks]').click()
     page.evaluate('allowCapture()')
     page.wait_for_function("()=>audioState.session?.phase==='recording'")
+    page.locator('[data-view=chat]').click()
     page.locator('#audio-cancel').click()
     assert page.evaluate('!audioState.session')
 
@@ -176,17 +187,18 @@ def test_interruption_retains_whole_audio_truthful_ui(audio_page, interruption):
       if(kind==='mute')track.dispatchEvent(new Event('mute'));
     }''', interruption)
     if interruption == 'mute':
-        assert 'Microphone paused' in page.locator('#audio-status').inner_text()
+        assert 'Microphone was paused' in page.locator('#audio-panel').get_attribute('title')
+        assert page.locator('#audio-status').inner_text().count(':') == 1
         assert page.evaluate("audioState.session.phase==='recording'")
         before = page.evaluate('audioState.session.bytes')
         page.evaluate("audioState.session.stream.getAudioTracks()[0].dispatchEvent(new Event('unmute'))")
         page.wait_for_function('(before)=>audioState.session.bytes>before', arg=before)
         assert page.evaluate("audioState.session.phase==='recording'")
-        page.locator('#audio-stop').click()
+        page.locator('#microphone').click()
     page.wait_for_function("()=>audioState.session?.phase==='error' && audioState.session.blob?.size>0")
     assert uploads == []
     assert page.evaluate('audioState.session.blob.size===audioState.session.bytes')
-    assert page.locator('#audio-stop').is_hidden()
+    assert page.locator('#audio-stop').count() == 0
     assert page.locator('#audio-download').is_visible()
     assert 'Captured audio kept' in page.locator('#audio-status').inner_text()
     assert page.evaluate("stream.getTracks().every(t=>t.readyState==='ended') && !audioState.session.wakeLock")
@@ -208,3 +220,31 @@ def test_late_wake_lock_is_released_and_start_is_single(audio_page):
     page.evaluate('grantWake()')
     page.wait_for_function('()=>wakeReleases===1')
     assert page.evaluate('!audioState.session')
+
+
+@pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640)])
+def test_recording_bottom_row_timer_and_toggle(audio_page, width, height):
+    import re
+
+    page = audio_page
+    page.set_viewport_size({'width': width, 'height': height})
+    uploads = []
+    page.on('request', lambda r: uploads.append(r) if r.url.endswith('/api/audio/transcribe') else None)
+    start(page)
+    page.wait_for_function("()=>$('audio-status').textContent!=='00:00'")
+    assert re.fullmatch(r'\d+:\d{2}', page.locator('#audio-status').inner_text())
+    assert page.locator('#audio-stop').count() == 0
+    assert page.locator('#audio-panel').evaluate("n=>n.parentElement.classList.contains('composer-footer')")
+    boxes = [page.locator(selector).bounding_box() for selector in
+             ('#microphone', '#audio-status', '#audio-upload', '#audio-cancel', '#send')]
+    for box in boxes:
+        assert 0 <= box['x'] and box['x'] + box['width'] <= width
+        assert box['y'] + box['height'] <= height
+        assert abs(box['y'] + box['height']/2 - boxes[-1]['y'] - boxes[-1]['height']/2) <= 1
+    assert all(a['x'] + a['width'] <= b['x'] + 1 for a, b in zip(boxes, boxes[1:]))
+    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    assert page.locator('#audio-retry').is_hidden() and page.locator('#audio-download').is_hidden()
+    page.locator('#microphone').click()
+    page.wait_for_function('()=>!audioState.session')
+    assert len(uploads) == 1
+    assert page.locator('#message-input').input_value() == 'spoken transcript'

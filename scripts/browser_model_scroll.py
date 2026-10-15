@@ -234,8 +234,9 @@ def main():
                 page.evaluate("()=>{const n=document.querySelector('.message-content');updateMessageContent(n,n._messageSource+' extra','assistant');}")
                 assert abs(page.locator('#messages').evaluate('(n)=>n.scrollTop')-before)<=1
                 page.evaluate("()=>{showView('settings');showView('chat');}")
-                assert abs(page.locator('#messages').evaluate('(n)=>n.scrollTop')-before)<=1
-                results.append({'markdown_rebuild_and_view_return':before})
+                page.wait_for_function('()=>!initialChatPosition')
+                assert page.locator('#messages').evaluate('(n)=>Math.abs(n.scrollTop+n.clientHeight-n.scrollHeight)<=1')
+                results.append({'markdown_rebuild_preserved':before,'view_return':'latest end'})
                 # User scrolling continues normally; mutations above the viewport don't anchor.
                 page.locator('#messages').evaluate('(n)=>n.scrollTop=800')
                 page.locator('#messages').hover()

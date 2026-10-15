@@ -220,10 +220,18 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .message-actions:not([open])>.message-action-buttons{display:none}
 .message-action-buttons button{font-size:11px;padding:3px 9px;min-height:32px;color:var(--muted)}
 
-/* Session controls stay in the navigation shell, outside transient views. */
-.navigation > .audio-panel{background:var(--panel);padding:6px 10px;max-height:none;flex-wrap:wrap;border-bottom:1px solid var(--border)}
-.navigation > .audio-panel #audio-status{flex:1 1 160px;max-width:none}
-.navigation > .audio-panel .audio-actions{flex-wrap:wrap}
+/* Recording controls use one bottom row, immediately before Send. */
+.composer.composer-audio{flex-direction:column}
+.composer-audio .composer-input{flex:none}
+.composer-audio .composer-footer{flex-direction:row;align-items:center;gap:4px;min-width:0}
+.composer-audio .audio-panel{flex:1 1 auto;min-width:0;max-height:none;overflow:visible;justify-content:flex-end}
+.composer-audio .audio-panel #audio-status{flex:1 1 auto;max-width:none;margin:0;white-space:normal}
+.composer-recording .audio-panel #audio-status{flex:0 0 auto;font-variant-numeric:tabular-nums;white-space:nowrap}
+.composer-audio .audio-actions{flex-wrap:wrap;justify-content:flex-end}
+.composer-recording .audio-actions{flex-wrap:nowrap}
+.composer-recording .audio-panel{gap:4px}
+.composer-recording #attach{display:none}
+@media(max-width:340px){.composer-recording .audio-panel button{padding:0 5px}.composer-recording .composer-footer{gap:3px}}
 
 #history-reader{width:min(90vw,70rem);max-height:85vh;overflow:auto}
 #reader-content pre{white-space:pre-wrap;overflow-wrap:anywhere}
