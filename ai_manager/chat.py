@@ -534,7 +534,7 @@ class Chat:
                     ("manager_tool_schema:" + conversation["id"], json.dumps(schema)),
                 )
             prompt, context = self.prompt(conversation, content, execution_id, thread_id, prior)
-            prompt['worker'] = worker_context(self.db, self.server)  # new tasks run on exactly this pair, or the manager picks
+            prompt['worker'] = worker_context(self.db, self.server)  # new tasks run on exactly this pair
             execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
             if execution["retry_count"]:
                 prompt["recovery"] = (

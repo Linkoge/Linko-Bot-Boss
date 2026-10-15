@@ -155,15 +155,18 @@ probes, live database changes, service restarts or host installation are part of
 
 - Chat has no modes: the manager does what is asked. Composer with recording/transcription,
   Discard/Upload, arbitrary attachments (only verified raster images become native image input), drafts and sequential Send.
-- Model settings: one manager choice and one worker choice. Dispatch accepts any model and effort the provider catalogs
-  offer (no restriction beyond the catalog); what the panel shows is what is saved (`model_choice`) and what is dispatched.
-  The picker itself stays compact: per provider the three families in fixed order (Codex Luna, Sol, Astra; Claude Haiku,
+- Model settings: one manager choice and one worker choice. The picker is the UI deployed at `208554a` (the revision before
+  the simplification commit `c530e94`), pinned by `tests/test_model_picker_ui.py`: Manager, Worker and Favorites sections;
+  per provider a model row and an effort row, the three families in fixed order (Codex Luna, Sol, Astra; Claude Haiku,
   Sonnet, Opus), each as its newest installed model, with Low/Medium/High (`model_settings.choices`; a family missing from
-  the catalog shows disabled). The catalog is never dumped into the panel. A saved or favorited model outside those
-  families (for example set through `PUT /api/model-settings`) is added as one extra button while it is selected or
-  favorited; a brand-new family is reached through the **Automatic** worker. Automatic lets the manager pick any catalog
-  model and effort for each task (provider default if it names none). A task keeps the pair it first ran on, and each run
-  records the model and effort actually used. Two manager favorites.
+  the catalog shows disabled). There is no Automatic worker. Dispatch itself accepts any model and effort the provider
+  catalog offers (`PUT /api/model-settings`); what the panel shows is what is saved (`model_choice`) and what is
+  dispatched. Deviation from `208554a`: a saved or favorited model outside the families is added as one extra button
+  (with its own efforts) while it is selected, so it never goes unseen; the normal picker never shows it. A worker saved
+  as null while Automatic existed reads and runs as the default worker (Medium, provider default model). A task keeps the
+  pair it first ran on, and each run records the model and effort actually used. Two manager favorites. Evidence:
+  `docs/evidence/model-picker/picker-{1200,393,320}.png` are byte-identical to screenshots of `208554a` rendered with the
+  same fixture (Chromium, same saved state); the `2ae5229` rendering differed (extra Automatic row).
 - Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
   To-Do to a task); read-only project memory brief for the manager with owner-run review; chat clear/trash/archive/search.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.

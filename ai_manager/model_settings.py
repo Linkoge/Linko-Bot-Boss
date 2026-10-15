@@ -1,6 +1,6 @@
 """One manager choice and one worker choice, any provider, model and effort the catalog offers. What the panel shows is
-what is saved and dispatched: manager turns use the saved manager pair; a new task runs on the saved worker pair, or, when
-the worker is Automatic (null), on whatever the manager picks for it. A task keeps the pair it first ran on."""
+what is saved and dispatched: manager turns use the saved manager pair and a new task runs on the saved worker pair. A task
+keeps the pair it first ran on."""
 import copy
 import json
 import re
@@ -25,7 +25,8 @@ def active(db):
 def saved(db):
     """The saved choice; first run after the one-choice change adopts the most recently edited old per-provider store."""
     if value := db.setting(KEY):
-        return value
+        # The short-lived Automatic worker (null) is gone from the panel: it reads as the default worker, shown and run as such.
+        return {**value, 'worker': value['worker'] or DEFAULT['worker']}
     olds = [v for v in (db.setting('model_settings'), db.setting('model_settings:claude')) if v]
     if olds:
         old = max(olds, key=lambda v: v['revision'])
@@ -72,7 +73,7 @@ def current(db, server=None):
     """The saved choice; a role saved without a model shows the provider's default model."""
     value = copy.deepcopy(saved(db))
     for role in ('manager', 'worker'):
-        if server and value[role] and not value[role].get('model'):
+        if server and not value[role].get('model'):
             try:
                 value[role] = server.route(None, value[role]['effort'])
             except ValueError:
@@ -91,7 +92,7 @@ def save(db, server, value):
             or type(value['revision']) is not int or value['revision'] < 0):
         raise ValueError('Invalid model settings')
     new = {'revision': value['revision'] + 1, 'manager': validate_pair(server, value['manager']),
-           'worker': None if value['worker'] is None else validate_pair(server, value['worker'])}
+           'worker': validate_pair(server, value['worker'])}
     with db.transaction() as conn:
         if saved(db)['revision'] != value['revision']:
             raise ValueError('Settings changed; reopen the panel before editing')
@@ -104,20 +105,15 @@ def manager_route(db):
     return saved(db)['manager']
 
 
-def delegation(db, server, model=None, effort=None):
-    """The pair a new task runs on: the saved worker, or, when the worker is Automatic, the manager's pick
-    (the provider's default model and effort for whatever it leaves out)."""
-    if worker := saved(db)['worker']:
-        model, effort = worker.get('model'), worker['effort']
-    return server.route(model, effort)
+def delegation(db, server):
+    """The pair a new task runs on: exactly the saved worker."""
+    worker = saved(db)['worker']
+    return server.route(worker.get('model'), worker['effort'])
 
 
 def worker_context(db, server):
-    """What the manager is told about the worker: the fixed pair, or the catalog to pick from when Automatic."""
-    return current(db, server)['worker'] or {
-        'automatic': 'pass model and effort to delegate; leave them out for the provider default',
-        'available': {m['model']: [e['reasoningEffort'] for e in m['supportedReasoningEfforts']]
-                      for m in server.catalog if not m.get('hidden')}}
+    """What the manager is told about the worker: its fixed pair."""
+    return current(db, server)['worker']
 
 
 def assignment_route(db, server, task):

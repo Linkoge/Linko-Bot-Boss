@@ -113,7 +113,7 @@ uvicorn.run(app,host='127.0.0.1',port=18879,log_level='error')
                 page.locator("#model-dialog").wait_for(state="visible")
                 page.wait_for_function("()=>!!modelPanel&&!modelOpening")
                 assert page.locator("#manager-choices > div").count() == 4
-                assert page.locator("#worker-choices .model-choice-row").count() == 5  # Automatic plus two rows per provider
+                assert page.locator("#worker-choices .model-choice-row").count() == 4
                 assert page.locator(".favorite-row").count() == 2
                 page.keyboard.press("Escape")
                 page.locator("#rename-project").click()

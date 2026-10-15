@@ -151,13 +151,16 @@ def test_a_newer_family_version_replaces_the_older_one_numerically(system):
 
 
 @pytest.mark.asyncio
-async def test_automatic_worker_lets_the_manager_pick_any_model_and_the_task_records_what_ran(system):
+async def test_there_is_no_automatic_worker_a_fixed_pair_runs_every_task_and_the_manager_cannot_override_it(system):
     db, registry, _, server, chat, workers, scheduler = system
     project = registry.list()[0]['id']
-    save(db, server, {**current(db, server), 'worker': None})
-    assert current(db, server)['worker'] is None
-    context = worker_context(db, server)
-    assert 'automatic' in context and set(context['available']) == {m['model'] for m in server.catalog}
+    # A worker saved as null while Automatic briefly existed reads, shows and runs as the default worker pair.
+    db.set_setting('model_choice', {'revision': 3, 'manager': {'model': SOL, 'effort': 'low'}, 'worker': None})
+    assert current(db, server)['worker'] == {'model': SOL, 'effort': 'medium'}
+    assert worker_context(db, server) == {'model': SOL, 'effort': 'medium'}
+    with pytest.raises(ValueError, match='Invalid|exact'):
+        save(db, server, {**current(db, server), 'worker': None})
+    save(db, server, {**current(db, server), 'worker': {'model': SONNET, 'effort': 'low'}})
 
     async def delegate(objective, **picks):
         params = {'tool': 'manager_action', 'callId': objective, 'manager_execution_id': 'm-' + objective,
@@ -165,24 +168,12 @@ async def test_automatic_worker_lets_the_manager_pick_any_model_and_the_task_rec
                   'arguments': {'action': 'delegate', 'objective': objective, **picks}}
         return await scheduler.manager_action(project, params)
 
-    picked = await delegate('picked', model=MODELS['Luna'], effort='high')
-    assert picked['worker_route'] == {'model': MODELS['Luna'], 'effort': 'high'}
-    default = await delegate('default')
-    assert default['worker_route']['model'] == SOL  # nothing asked for: the provider default
-    with pytest.raises(ValueError, match='not in the installed'):
-        await delegate('bad pick', model='nope')
+    assert (await delegate('fixed', model=MODELS['Luna'], effort='high'))['worker_route'] == {'model': SONNET, 'effort': 'low'}
     CatalogServer.turns.clear()
-    for expected in (MODELS['Luna'], SOL):
-        task = Tasks(db).claim()
-        await workers._run(task)
-        execution = db.one('SELECT * FROM executions WHERE id=?', (task['lease_owner'],))
-        assert execution['model'] == expected and CatalogServer.turns[-1]['model'] == expected  # what actually ran
-        assert Tasks(db).get(task['id'])['worker_route']['model'] == expected
-    # A fixed worker setting wins: the manager's pick is ignored.
-    save(db, server, {**current(db, server), 'worker': {'model': SONNET, 'effort': 'low'}})
-    assert worker_context(db, server) == {'model': SONNET, 'effort': 'low'}
-    fixed = await delegate('fixed', model=MODELS['Luna'], effort='high')
-    assert fixed['worker_route'] == {'model': SONNET, 'effort': 'low'}
+    task = Tasks(db).claim()
+    await workers._run(task)
+    execution = db.one('SELECT * FROM executions WHERE id=?', (task['lease_owner'],))
+    assert execution['model'] == SONNET and CatalogServer.turns[-1]['model'] == SONNET  # what actually ran
 
 
 def test_old_per_provider_settings_migrate_to_the_most_recently_edited_choice(system):
@@ -231,8 +222,7 @@ def test_api_saves_exactly_what_the_panel_sent(tmp_path):
         assert panel['provider'] == 'claude' and panel['settings']['worker'] == {'model': SOL, 'effort': 'medium'}
         assert client.put('/api/model-settings', json=choice).status_code == 409  # stale revision
         auto = {**client.get('/api/model-settings').json()['settings'], 'worker': None}
-        assert client.put('/api/model-settings', json=auto).json()['worker'] is None
-        assert client.get('/api/model-settings').json()['settings']['worker'] is None
+        assert client.put('/api/model-settings', json=auto).status_code == 409  # no Automatic worker: a pair is required
         assert client.get('/api/models').status_code == 404  # the unused models endpoint is gone
         # A saved or favorited model outside the three families stays visible; nothing else is added to the picker.
         now = client.get('/api/model-settings').json()

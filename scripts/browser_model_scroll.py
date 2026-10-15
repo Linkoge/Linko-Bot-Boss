@@ -102,7 +102,7 @@ def main():
                 assert not pressed('favorite-recall-0')
                 choice('manager-codex-high')
                 assert pressed('favorite-recall-0')
-                assert page.locator('#worker-choices [data-choice^="worker-"]').count() == 13
+                assert page.locator('#worker-choices [data-choice^="worker-"]').count() == 12
                 choice('worker-Haiku')
                 choice('worker-claude-medium')
                 assert page.evaluate('modelPanel.provider') == 'codex'  # the worker never changes the manager's provider
@@ -112,12 +112,6 @@ def main():
                 assert page.evaluate('modelPanel.settings.worker') == {'model': 'gpt-6.1-sol', 'effort': 'high'}
                 assert page.evaluate("async()=> (await api('/api/model-settings')).settings.worker") == {'model': 'gpt-6.1-sol', 'effort': 'high'}
                 assert pressed('worker-Sol') and pressed('worker-codex-high')
-                choice('worker-auto')  # Automatic: the manager picks per task; no model button is pressed
-                assert bot_snapshot() is None and pressed('worker-auto') and not pressed('worker-Sol')
-                assert page.evaluate("async()=> (await api('/api/model-settings')).settings.worker") is None
-                choice('worker-Sol')
-                choice('worker-codex-high')
-                assert not pressed('worker-auto') and pressed('worker-Sol')
                 bots = bot_snapshot()
                 choice('manager-Sonnet')
                 choice('manager-claude-medium')
@@ -194,8 +188,8 @@ def main():
                     results.append({'width': width, 'panel': geometry, 'style': style})
                 for width,height in [(1200,900),(393,851),(320,568)]:
                     page.set_viewport_size({'width':width,'height':height})
-                    assert page.locator('#worker-choices > .model-choice-row').count() == 5
-                    assert page.locator('#worker-choices [data-choice^="worker-"]').count() == 13
+                    assert page.locator('#worker-choices > .model-choice-row').count() == 4
+                    assert page.locator('#worker-choices [data-choice^="worker-"]').count() == 12
                     assert page.locator('#model-dialog').evaluate('(d)=>d.scrollWidth<=d.clientWidth')
                     page.locator('#model-dialog').evaluate('(d)=>d.scrollTop=0')
                     page.screenshot(path=str(evidence / f'manual-{width}.png'))
