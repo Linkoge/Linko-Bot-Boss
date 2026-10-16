@@ -206,7 +206,7 @@ class Host:
         if thread['native']:
             args += ['--permission-mode', 'bypassPermissions']
         else:
-            # Manager: read-only file access for attachments plus its application tools.
+            # Manager: Read for repository files/attachments, plus read/search application actions; no execution/editing.
             allowed = ['Read'] + [f"mcp__{MCP_SERVER}__{t['name']}" for t in thread['tools']]
             args += ['--tools', 'Read', '--allowedTools', *allowed]
         if thread['tools']:

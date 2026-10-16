@@ -163,6 +163,44 @@ async def test_claude_host_translates_turns_resume_interrupt_and_limits(tmp_path
         await server.close()
 
 
+@pytest.mark.asyncio
+async def test_claude_manager_has_only_read_tools_in_the_real_project_directory(tmp_path):
+    repo = tmp_path / 'shop'
+    repo.mkdir()
+    source = repo / 'shop.py'
+    source.write_text('shop-specific behavior')
+    recorded = tmp_path / 'invocation.json'
+    fake = tmp_path / 'claude'
+    fake.write_text(f'''#!{sys.executable}
+import json, os, pathlib, sys
+args = sys.argv[1:]
+pathlib.Path({str(recorded)!r}).write_text(json.dumps({{'args': args, 'cwd': os.getcwd(),
+    'content': pathlib.Path('shop.py').read_text()}}))
+sys.stdin.read()
+print(json.dumps({{'type': 'result', 'is_error': False, 'result': 'Read code'}}), flush=True)
+''')
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    settings = Settings(data_dir=tmp_path / 'data', claude_bin=str(fake))
+    settings.prepare()
+    server = ClaudeServer(settings)  # Real manager transport; native worker privileges must stay off.
+    from ai_manager.orchestration import MANAGER_TOOL
+
+    try:
+        thread = await server.thread(repo, 'Read the repository; never change it', model='claude-haiku-5-5',
+                                     dynamic_tools=[MANAGER_TOOL])
+        _, events = await run_turn(server, thread, 'Explain the code')
+        assert events[-1]['params']['turn']['status'] == 'completed'
+        invocation = json.loads(recorded.read_text())
+        assert invocation['cwd'] == str(repo) and invocation['content'] == 'shop-specific behavior'
+        args = invocation['args']
+        assert args[args.index('--tools') + 1:args.index('--mcp-config')] == [
+            'Read', '--allowedTools', 'Read', 'mcp__linko__manager_action']
+        assert '--strict-mcp-config' in args and '--permission-mode' not in args
+        assert source.read_text() == 'shop-specific behavior'
+    finally:
+        await server.close()
+
+
 def test_claude_model_list_comes_from_the_environment_with_names_derived_from_ids():
     def catalog(**env):
         out = subprocess.run([sys.executable, '-c', 'import json,ai_manager.claude_host as h;print(json.dumps(h.CATALOG))'],

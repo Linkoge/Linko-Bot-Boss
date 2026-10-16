@@ -47,6 +47,22 @@ including when resuming the retained thread. `acceptance` appends criteria witho
 A worker may ask the owner a question; the task stays running and says so.
 Finished results return to the originating chat automatically.
 
+Project manager chats receive the registered repository's real `project.path` and use that directory as their
+working directory, including projects other than Linko Bot Boss. All Projects includes each repository path and
+requires `project_id` for code inspection. Questions and advice are answered directly after reading the relevant code;
+only changes, tests or other execution work are delegated to the worker queue.
+
+Both providers use the same read-only `manager_action` file actions: `list_files` lists one directory,
+`search_code` searches literal, case-sensitive text with file/line references, and `read_document` reads source or docs
+in 12,000-character pages (including files over 100KB). Paths may be relative or absolute inside the selected
+repository; traversal and symlinks escaping it are rejected. Listing/search pages have 50 entries. Search skips binary
+files and generated/dependency directories (`.git`, `.venv`, `venv`, `node_modules`, `__pycache__`, `vendor`, `build`,
+`dist`) and has a five-second budget; narrow `path` when needed. Explicit reads/listings can still inspect these
+directories. Manager tools cannot edit files, commit, or execute project code. Codex uses its read-only sandbox with
+shell and patch tools disabled; Claude exposes only Read (also used for attachments) and the application tools.
+The project brief and repository path travel together. The scratch directory is used only for All Projects and
+attachment storage. Permanent coverage: `tests/test_manager_repository.py` and `tests/test_claude_provider.py`.
+
 ## Architecture design principles
 
 This section is included verbatim in the manager prompt. It is advisory only: briefly evaluate each new feature

@@ -10,12 +10,13 @@ from .core import Tasks
 from .history import Maintenance
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
+from .repository import inspect_repository
 from .todos import Todos
 
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Record deferred ideas (To-Dos), delegate and control tasks and projects, or retrieve scoped evidence/history. Passing work is merged and deployed automatically; use deploy only when the owner asks to deploy now (optionally with task_id of a finished task whose branch was never merged). model and effort apply to delegate only when the worker setting is Automatic. Read actions support offset pagination.",
+    "description": "Read project code directly with list_files, search_code and read_document (read-only; no execution). Record deferred ideas (To-Dos), delegate and control tasks and projects, or retrieve scoped evidence/history. Passing work is merged and deployed automatically; use deploy only when the owner asks to deploy now (optionally with task_id of a finished task whose branch was never merged). model and effort apply to delegate only when the worker setting is Automatic. Read actions support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -34,6 +35,8 @@ MANAGER_TOOL = {
                     "release",
                     "cancel",
                     "read_document",
+                    "list_files",
+                    "search_code",
                     "read_memory",
                     "read_project",
                     "list_memory",
@@ -303,7 +306,7 @@ class Scheduler:
                 "content": content[offset : offset + 12000],
                 "next_offset": offset + 12000 if len(content) > offset + 12000 else None,
             }
-        if action == "read_document":
+        if action in {"read_document", "list_files", "search_code"}:
             root = self.registry.allowed_path(project["path"])
             if args.get('task_id'):
                 task = self.tasks.get(args['task_id'])
@@ -311,12 +314,7 @@ class Scheduler:
                     raise ValueError('Task document belongs to another project')
                 if task['workspace']:
                     root = self.core.workspace(task, project)
-            path = (root / args["path"]).resolve()
-            if not path.is_relative_to(root) or not path.is_file() or path.stat().st_size > 100000:
-                raise ValueError("Read a project text document smaller than 100KB")
-            content = path.read_text(errors="replace")
-            return {"path": args["path"], "content": content[offset:offset+12000],
-                    "next_offset": offset+12000 if len(content)>offset+12000 else None}
+            return inspect_repository(root, action, args.get("path", "."), args.get("query", ""), offset)
         raise ValueError("Unsupported action")
 
     async def tick(self):

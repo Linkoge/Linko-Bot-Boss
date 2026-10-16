@@ -355,7 +355,7 @@ class Chat:
         if not project_id:
             return {
                 "projects": [
-                    {k: p[k] for k in ("id", "name", "objective", "status")}
+                    {k: p[k] for k in ("id", "name", "path", "objective", "status")}
                     for p in sorted(self.registry.list(), key=lambda p: p["id"])
                 ],
                 "instructions": self.db.setting("global_instructions", ""),
@@ -364,7 +364,7 @@ class Chat:
         p = self.registry.get(project_id)
         memory = ProjectMemory(self.db, self.registry).snapshot(project_id)
         context = {
-            "project": {k: p[k] for k in ("id", "name")},
+            "project": {k: p[k] for k in ("id", "name", "path")},
             "project_brief": memory["brief"],
             "memory_reference": memory["active"],
         }
@@ -582,8 +582,10 @@ class Chat:
             prior = conversation["thread_id"]
             if self.db.setting("manager_tool_schema:" + conversation["id"]) != schema:
                 prior = None
+            cwd = (self.registry.allowed_path(self.registry.get(conversation["project_id"])["path"])
+                   if conversation["project_id"] else self.workspace)
             thread_id = await self.server.thread(
-                self.workspace, MANAGER_INSTRUCTIONS, prior, route["model"], dynamic_tools=[MANAGER_TOOL]
+                cwd, MANAGER_INSTRUCTIONS, prior, route["model"], dynamic_tools=[MANAGER_TOOL]
             )
             queue = asyncio.Queue()
             self.server.queues[thread_id] = queue
