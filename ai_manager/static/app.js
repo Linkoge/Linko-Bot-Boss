@@ -676,7 +676,9 @@ function updateComposer(){
   // Measure at the initial active size, independent of the previous overflow size.
   form.style.setProperty('--composer-height',(active?140:92)+'px');
   form.classList.toggle('composer-overflow',false);
-  if(active&&input.scrollHeight>input.clientHeight+1){
+  // Audio reserves a bottom row inside the existing height, without expanding the composer.
+  const audioRow=parseFloat(getComputedStyle(input.parentElement).paddingBottom)||0;
+  if(active&&input.scrollHeight>input.clientHeight+audioRow+1){
     form.style.setProperty('--composer-height','188px');
     form.classList.add('composer-overflow');
   }

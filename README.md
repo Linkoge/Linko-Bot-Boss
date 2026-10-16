@@ -327,7 +327,10 @@ MediaRecorder, microphone permission and a supported recording format. One app-l
 session retains its original project and conversation across internal views,
 project switches and stashing. In Conversation, the recording controls sit in the
 composer bottom row immediately left of Send: elapsed time only, Upload and Discard.
-The existing Record button toggles capture off; there is no second Stop button.
+Record, Attach file and Send retain their right-hand stack, size and visibility during
+capture on desktop and mobile. The existing Record button toggles capture off; there
+is no second Stop button. `tests/test_audio_continuity.py` checks unchanged button
+bounds and the bottom recording row in real Chromium at desktop and mobile widths.
 The destination remains available in the controls’ tooltip; after interruption,
 Download/Retry and the recovery explanation appear in the same bottom row. Other
 views hide the composer while the same capture continues. Toggling Record off transcribes the whole

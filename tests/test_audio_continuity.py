@@ -222,21 +222,41 @@ def test_late_wake_lock_is_released_and_start_is_single(audio_page):
     assert page.evaluate('!audioState.session')
 
 
-@pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640)])
-def test_recording_bottom_row_timer_and_toggle(audio_page, width, height):
+@pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640), (320, 420)])
+@pytest.mark.parametrize('draft', [
+    pytest.param('', id='empty'),
+    pytest.param('Retained draft', id='short'),
+    pytest.param('\n'.join(['Long draft'] * 40), id='overflow'),
+])
+def test_recording_bottom_row_timer_and_toggle(audio_page, width, height, draft):
     import re
 
     page = audio_page
     page.set_viewport_size({'width': width, 'height': height})
+    page.locator('#message-input').fill(draft)
+    page.locator('#message-input').focus()
+    controls = ('#attach', '#microphone', '#send')
+    before = {selector: page.locator(selector).bounding_box() for selector in controls}
     uploads = []
     page.on('request', lambda r: uploads.append(r) if r.url.endswith('/api/audio/transcribe') else None)
     start(page)
+    for selector in controls:
+        button = page.locator(selector)
+        assert button.is_visible()
+        assert button.bounding_box() == before[selector]
+        assert before[selector]['width'] == before[selector]['height'] == 44
+        assert button.evaluate('''n=>{const b=n.getBoundingClientRect();
+          return document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===n;}''')
+    # The general file picker remains usable while the microphone is capturing.
+    with page.expect_file_chooser():
+        page.locator('#attach').click()
+    assert page.evaluate("audioState.session.phase==='recording'")
     page.wait_for_function("()=>$('audio-status').textContent!=='00:00'")
     assert re.fullmatch(r'\d+:\d{2}', page.locator('#audio-status').inner_text())
     assert page.locator('#audio-stop').count() == 0
     assert page.locator('#audio-panel').evaluate("n=>n.parentElement.classList.contains('composer-footer')")
     boxes = [page.locator(selector).bounding_box() for selector in
-             ('#microphone', '#audio-status', '#audio-upload', '#audio-cancel', '#send')]
+             ('#audio-status', '#audio-upload', '#audio-cancel', '#send')]
     for box in boxes:
         assert 0 <= box['x'] and box['x'] + box['width'] <= width
         assert box['y'] + box['height'] <= height
@@ -247,4 +267,4 @@ def test_recording_bottom_row_timer_and_toggle(audio_page, width, height):
     page.locator('#microphone').click()
     page.wait_for_function('()=>!audioState.session')
     assert len(uploads) == 1
-    assert page.locator('#message-input').input_value() == 'spoken transcript'
+    assert page.locator('#message-input').input_value() == (draft + '\n\n' if draft else '') + 'spoken transcript'

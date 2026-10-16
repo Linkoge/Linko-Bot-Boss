@@ -368,8 +368,11 @@ def main():
                 geometry = []
                 for width, height in [(1440, 1000), (393, 851), (320, 420)]:
                     page.set_viewport_size({'width': width, 'height': height})
+                    page.locator('#message-input').focus()
+                    before = {id: page.locator('#'+id).bounding_box() for id in ('attach','microphone','send')}
                     start()
-                    boxes = [page.locator('#'+id).bounding_box() for id in ('microphone','audio-upload','audio-cancel','send')]
+                    assert all(page.locator('#'+id).is_visible() and page.locator('#'+id).bounding_box() == box for id, box in before.items())
+                    boxes = [page.locator('#'+id).bounding_box() for id in ('audio-upload','audio-cancel','send')]
                     assert all(box['height'] == 44 and box['width'] >= 44 for box in boxes)
                     assert all(abs(box['y'] - boxes[-1]['y']) <= 1 for box in boxes)
                     assert all(a['x']+a['width'] <= b['x'] for a,b in zip(boxes,boxes[1:]))

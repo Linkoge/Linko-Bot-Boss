@@ -208,8 +208,6 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #stop-chat{top:6px;right:56px;max-width:calc(100% - 112px)}
 @media(max-width:340px){.audio-panel{gap:3px}.audio-actions{gap:3px}.audio-panel button{padding:0 5px;font-size:11px}}
 
-.composer-recording .audio-panel #audio-status{flex:0 1 auto;max-width:calc(100% - 116px)}
-
 /* One unobtrusive disclosure after the whole message, including attachments. */
 .message-actions{display:flex;flex-direction:column;align-items:flex-end;margin-top:2px}
 .message-actions>summary{align-self:flex-end;list-style:none;cursor:pointer;font-size:13px;line-height:24px;min-width:28px;text-align:center;opacity:.32;border-radius:4px}
@@ -220,18 +218,15 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .message-actions:not([open])>.message-action-buttons{display:none}
 .message-action-buttons button{font-size:11px;padding:3px 9px;min-height:32px;color:var(--muted)}
 
-/* Recording controls use one bottom row, immediately before Send. */
-.composer.composer-audio{flex-direction:column}
-.composer-audio .composer-input{flex:none}
-.composer-audio .composer-footer{flex-direction:row;align-items:center;gap:4px;min-width:0}
-.composer-audio .audio-panel{flex:1 1 auto;min-width:0;max-height:none;overflow:visible;justify-content:flex-end}
+/* Keep the right stack fixed; audio uses the bottom row immediately left of Send. */
+.composer-audio .composer-input{padding-bottom:48px}
+.composer-audio .audio-panel{position:absolute;left:8px;right:60px;bottom:6px;min-width:0;max-height:88px;overflow:auto;justify-content:flex-end}
 .composer-audio .audio-panel #audio-status{flex:1 1 auto;max-width:none;margin:0;white-space:normal}
 .composer-recording .audio-panel #audio-status{flex:0 0 auto;font-variant-numeric:tabular-nums;white-space:nowrap}
 .composer-audio .audio-actions{flex-wrap:wrap;justify-content:flex-end}
 .composer-recording .audio-actions{flex-wrap:nowrap}
 .composer-recording .audio-panel{gap:4px}
-.composer-recording #attach{display:none}
-@media(max-width:340px){.composer-recording .audio-panel button{padding:0 5px}.composer-recording .composer-footer{gap:3px}}
+@media(max-width:340px){.composer-recording .audio-panel button{padding:0 5px}}
 
 #history-reader{width:min(90vw,70rem);max-height:85vh;overflow:auto}
 #reader-content pre{white-space:pre-wrap;overflow-wrap:anywhere}
