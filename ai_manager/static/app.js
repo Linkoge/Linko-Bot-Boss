@@ -836,9 +836,9 @@ async function startTodo(entry){
   const pending=orderModelIntent(async()=>{
     if(modelSelectionError)throw new Error('Choose model settings again before starting: '+modelSelectionError);
     const result=await api('/api/todos/'+encodeURIComponent(entry.id)+'/start',{method:'POST'});
-    notice('To-Do started · Assignment '+result.task_id+' · '+result.status);
+    notice(result.task_id?'To-Do started · Assignment '+result.task_id+' · '+result.status:'Manager is expanding the draft before dispatch.');
     if(selection===state.selection){
-      state.todos=state.todos.filter(todo=>todo.id!==entry.id);state.todoSelection.delete(entry.id);renderTodos();
+      if(result.task_id){state.todos=state.todos.filter(todo=>todo.id!==entry.id);state.todoSelection.delete(entry.id);renderTodos();}
       await refresh().catch(error=>updatesUnavailable(error));
     }
     return result;

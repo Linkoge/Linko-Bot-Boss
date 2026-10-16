@@ -318,7 +318,8 @@ the previously visible message in place. Permanent Chromium coverage lives in
 `tests/test_chat_open_start_browser.py`, including 155-message histories and delayed layout.
 
 To-Do **Start** uses authenticated, CSRF-protected `POST /api/todos/{id}/start` to queue
-one task directly, without waiting for manager interpretation. The backend resolves the
+one task directly with its full title and details verbatim in the worker objective,
+including multi-paragraph text and whitespace at the maximum saved length. The backend resolves the
 source project’s effective worker selection (Automatic uses the provider default),
 retains the original conversation and complete source, and archives the entry in the
 same transaction that accepts the task. A durable per-entry handoff makes repeat clicks,
@@ -327,6 +328,17 @@ model or persistence failure leaves the entry available for retry. The UI disabl
 pending Start controls and displays either the assignment ID/status or an actionable
 error. `tests/test_todos.py` covers atomic failure/replay; the browser suite covers the
 full click-to-queue path, duplicate clicks and lost-response recovery.
+
+The manager's `save_todo` instructions in `ai_manager/codex.py` require complete worker
+briefs with the goal, observed problem and why, all agreed chat decisions, concrete
+details, acceptance criteria and relevant ordering. Workers do not receive the chat.
+Each To-Do is one task; larger work uses numbered family parts (`1/3 <family>: <part>`),
+each self-contained with its own criteria and order note, started individually by the
+owner. Later refinements rewrite the existing entry and affected siblings by ID.
+Only quick captures titled `Draft:` may be short. Starting one sends it through the
+existing manager conversation to expand and rewrite that entry before dispatch;
+repeat clicks reuse the pending manager turn. Drafts stay in the same list until the
+task is accepted, with no additional UI sections, states or approval steps.
 
 ## Whole-session audio recording
 

@@ -257,10 +257,7 @@ def test_start_endpoint_queues_once_with_source_and_worker_route(client, details
     task = app.state.scheduler.tasks.get(receipt['task_id'])
     assert task['project_id'] == project
     assert task['origin_conversation'] == app.state.chat.conversation(project)['id']
-    if details.strip():
-        assert details in task['description']
-    else:
-        assert task['description'] == todo['title']
+    assert task['description'] == todo['title'] + '\n\n' + details
     assert task['worker_route']['model'] == 'test-model'
     handoff = app.state.db.setting('todo_handoff:' + todo['id'])
     assert handoff['source'] == todo and handoff['task_id'] == task['id']
@@ -270,6 +267,96 @@ def test_start_endpoint_queues_once_with_source_and_worker_route(client, details
     assert not Todos(app.state.db).list(project)
     assert not app.state.db.all('SELECT * FROM executions')  # no manager round-trip
     assert not app.state.db.all('SELECT * FROM messages')
+
+
+@pytest.mark.smoke
+def test_start_dispatches_maximum_multi_paragraph_brief_verbatim_to_worker(client):
+    import json
+
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    browser.portal.call(app.state.scheduler.close)
+    project = app.state.registry.add(settings.project_roots[0] / 'one')
+    title = '1/3 Complete worker brief: ' + '界' * 173
+    assert len(title) == 200
+    paragraph = ('\n\nGoal: preserve all agreed decisions.\nObserved problem: thin instructions lose context.\n'
+                 'Decision: preserve Unicode — ქართული — and concrete examples.\n'
+                 'Acceptance: keep every paragraph, including the last one.\n')
+    details = ('  \n' + paragraph * 150)[:23940] + '\n\nFinal acceptance: preserve this tail verbatim.\n  '
+    details += ' ' * (24000 - len(details))
+    todo = Todos(app.state.db).save(project['id'], title, details)
+    response = browser.post('/api/todos/' + todo['id'] + '/start')
+    assert response.status_code == 200, response.text
+    task = app.state.scheduler.tasks.get(response.json()['task_id'])
+    # Exercise the same prompt builder used at worker dispatch, not the handoff archive.
+    prompt = app.state.core.prompt(task, project, settings.project_roots[0] / 'one', 'work')
+    objective = json.loads(json.dumps(prompt, ensure_ascii=False))['objective']
+    assert objective == title + '\n\n' + details
+    assert details in objective
+    assert len(objective) == 24202
+
+
+@pytest.mark.asyncio
+async def test_draft_start_expands_in_existing_manager_flow_before_worker_dispatch(client, monkeypatch):
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    browser.portal.call(app.state.scheduler.close)
+    # Hold the fixture manager turn so we can exercise its actions explicitly.
+    monkeypatch.setattr(app.state.chat, 'launch', lambda *args: None)
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    todos = Todos(app.state.db)
+    draft = todos.save(project, 'Draft: Worker briefs', 'Keep chat decisions')
+    sibling = todos.save(project, '2/2 Worker briefs: follow-up', 'Owner starts this separately')
+    path = '/api/todos/' + draft['id'] + '/start'
+    response = browser.post(path)
+    assert response.status_code == 200, response.text
+    receipt = response.json()
+    assert receipt['execution_id'] and 'task_id' not in receipt
+    assert not app.state.db.all('SELECT * FROM tasks')
+    assert todos.list(project) == [draft, sibling]
+    assert browser.post(path).json() == receipt
+    execution = app.state.db.one('SELECT * FROM executions WHERE id=?', (receipt['execution_id'],))
+    assert draft['title'] + '\n\n' + draft['details'] in execution['input']
+    params = {'tool': 'manager_action', 'manager_execution_id': receipt['execution_id'],
+              'conversation_id': execution['conversation_id'],
+              'arguments': {'action': 'delegate', 'objective': 'Thin draft'}}
+    with pytest.raises(ValueError, match='Expand the draft'):
+        await app.state.scheduler.manager_action(project, params)
+    details = ('Goal: make worker briefs complete.\n\nProblem: workers cannot see chat decisions.\n\n'
+               'Decision: preserve the full title and details.\nAcceptance: verify the worker objective.\n'
+               'Order: first of two; the owner starts part two individually.')
+    params['arguments'] = {'action': 'save_todo', 'todo_id': draft['id'],
+                           'title': '1/2 Worker briefs: complete instructions', 'details': details}
+    expanded = await app.state.scheduler.manager_action(project, params)
+    assert browser.post(path).json() == receipt  # rewritten title must not bypass the pending manager
+    params['arguments'] = {'action': 'delegate', 'objective': expanded['title'] + '\n\n' + details}
+    task = await app.state.scheduler.manager_action(project, params)
+    assert task['description'] == expanded['title'] + '\n\n' + details
+    assert todos.list(project) == [sibling]
+    assert browser.post(path).json()['task_id'] == task['id']
+    assert len(app.state.db.all('SELECT * FROM tasks')) == 1
+    assert len(app.state.db.all('SELECT * FROM executions')) == 1
+
+
+def test_draft_start_retries_after_failed_expansion_without_consuming_source(client, monkeypatch):
+    import time
+
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    browser.portal.call(app.state.scheduler.close)
+    monkeypatch.setattr(app.state.chat, 'launch', lambda *args: None)
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    draft = Todos(app.state.db).save(project, 'Draft: Retry expansion', 'Preserve this idea')
+    path = '/api/todos/' + draft['id'] + '/start'
+    first = browser.post(path).json()
+    with app.state.db.transaction() as conn:
+        conn.execute("UPDATE executions SET status='failed',finished_at=? WHERE id=?",
+                     (time.time(), first['execution_id']))
+    retry = browser.post(path).json()
+    assert retry['execution_id'] != first['execution_id']
+    assert browser.post(path).json() == retry
+    assert Todos(app.state.db).list(project) == [draft]
+    assert not app.state.db.all('SELECT * FROM tasks')
 
 
 def test_start_endpoint_dispatch_failure_rolls_back_and_retry_succeeds(client, monkeypatch):

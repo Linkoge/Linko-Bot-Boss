@@ -96,7 +96,8 @@ def test_start_failure_duplicate_clicks_and_lost_response_keep_one_task(page, br
     # Pause this disposable project's runner so assertions observe the queued task.
     with db.transaction() as conn:
         conn.execute("UPDATE projects SET status='paused' WHERE id=?", (project,))
-    todo = page.evaluate("project=>api('/api/todos',{method:'POST',body:JSON.stringify({project_id:project,title:'Explicit start',details:'Keep all original source'})})", project)
+    details = ('\n\nPreserve every agreed decision and acceptance criterion.\n' * 500)[:23980] + '\nFinal criterion.\n  '
+    todo = page.evaluate("({project,details})=>api('/api/todos',{method:'POST',body:JSON.stringify({project_id:project,title:'Explicit start',details})})", {'project': project, 'details': details})
     page.evaluate('()=>refresh()')
     page.locator('[data-view=todo]').click()
     button = page.locator('[data-todo-start="' + todo['id'] + '"]')
@@ -131,7 +132,28 @@ def test_start_failure_duplicate_clicks_and_lost_response_keep_one_task(page, br
     assert button.count() == 0
     tasks = db.all('SELECT * FROM tasks WHERE project_id=?', (project,))
     assert len(tasks) == 1 and tasks[0]['id'] == task_id and tasks[0]['state'] == 'queued'
-    assert tasks[0]['description'] == 'Explicit start\n\nKeep all original source'
+    assert tasks[0]['description'] == 'Explicit start\n\n' + details
     assert db.setting('todo_handoff:' + todo['id'])['source'] == todo
     assert len(db.all("SELECT * FROM events WHERE kind='todo.consumed' AND task_id=?", (task_id,))) == 1
     assert json.loads(db.one("SELECT payload FROM events WHERE kind='task.model_selected' AND task_id=?", (task_id,))['payload'])['model']
+
+
+def test_draft_start_keeps_entry_visible_while_manager_expands_it(page, browser_context):
+    _, _, root = browser_context
+    project_path = root / 'projects' / uuid.uuid4().hex
+    project_path.mkdir()
+    db = Database(root / 'data/manager.sqlite3')
+    project = Registry(db, (root / 'projects',)).add(project_path)['id']
+    todo = page.evaluate("project=>api('/api/todos',{method:'POST',body:JSON.stringify({project_id:project,title:'Draft: Complete briefs',details:'Retain decisions'})})", project)
+    page.evaluate('()=>refresh()')
+    page.evaluate('project=>selectProject(project)', project)
+    page.locator('[data-view=todo]').click()
+    button = page.locator('[data-todo-start="' + todo['id'] + '"]')
+    button.click()
+    page.wait_for_function("()=>!todoStarts.size&&$('notice-text').textContent.includes('expanding the draft')")
+    assert button.count() == 1
+    assert 'undefined' not in page.locator('#notice-text').inner_text()
+    assert not db.all('SELECT * FROM tasks WHERE project_id=?', (project,))
+    assert db.one('SELECT archived_at FROM todos WHERE id=?', (todo['id'],))['archived_at'] is None
+    execution = db.one("SELECT * FROM executions WHERE project_id=? AND agent_id='manager'", (project,))
+    assert todo['title'] + '\n\n' + todo['details'] in execution['input']

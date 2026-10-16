@@ -105,6 +105,10 @@ class Scheduler:
             raise ValueError('Worker result notices are not explicit owner authorization; the owner decides what happens next')
         if args.get("todos") and action not in {"delegate", "continue"}:
             raise ValueError("To-Do ids go only with delegate or continue, when the owner asks to start them")
+        for entry_id in args.get("todos", []):
+            entry = self.db.one("SELECT title FROM todos WHERE id=? AND archived_at IS NULL", (entry_id,))
+            if entry and entry["title"].startswith("Draft:"):
+                raise ValueError("Expand the draft into a complete worker brief with save_todo before dispatch")
         if action in {'emergency_repair', 'repair_status'}:
             from scripts.emergency_repair import Repair
 

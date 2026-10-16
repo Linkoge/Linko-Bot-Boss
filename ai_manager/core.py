@@ -32,6 +32,8 @@ from .secret_check import failures as secret_failures
 from .secret_check import scan as scan_secrets
 
 REPAIR_ROUNDS = 5
+# A To-Do can contain a 200-character title, a separator and 24000 characters of details.
+MAX_OBJECTIVE_CHARS = 24202
 SMOKE_SECONDS, SUITE_SECONDS, PROBE_SECONDS = 180, 600, 60
 WORKER_INSTRUCTIONS = RULES + "\nYou are a worker. The application runs the permanent checks and merges; you implement.\n"
 TEST_FILE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
@@ -170,8 +172,8 @@ class Tasks:
 
     def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None,
             model_route=None, todos=None, reuse_objective=True):
-        if not description.strip() or len(description) > 24000:
-            raise ValueError("Objective must be 1–24000 characters")
+        if not description.strip() or len(description) > MAX_OBJECTIVE_CHARS:
+            raise ValueError(f"Objective must be 1–{MAX_OBJECTIVE_CHARS} characters")
         if not isinstance(acceptance, str) or len(acceptance) > 12000:
             raise ValueError("Acceptance criteria must be at most 12000 characters")
         now, task_id = time.time(), new_id()
@@ -184,7 +186,7 @@ class Tasks:
                 previous = conn.execute(
                     """SELECT id,project_id FROM tasks WHERE project_id=? AND description=? AND origin_conversation IS ?
                     AND state IN ('queued','running') ORDER BY created_at DESC LIMIT 1""",
-                    (project_id, description.strip(), origin_conversation)).fetchone()
+                    (project_id, description, origin_conversation)).fetchone()
                 if previous and request_key:
                     self.db.event(conn, "task.reused", {"request_key": request_key}, project_id, previous["id"])
             if previous:
@@ -197,7 +199,7 @@ class Tasks:
             conn.execute(
                 """INSERT INTO tasks(id,project_id,description,acceptance,created_at,updated_at,queued_at,state,
                 origin_conversation,request_key) VALUES(?,?,?,?,?,?,?,'queued',?,?)""",
-                (task_id, project_id, description.strip(), acceptance, now, now, now, origin_conversation, request_key))
+                (task_id, project_id, description, acceptance, now, now, now, origin_conversation, request_key))
             self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
             if model_route:
                 self.db.event(conn, "task.model_selected", model_route, project_id, task_id)
@@ -241,7 +243,7 @@ class Tasks:
                     text += "\n\nAdditional instructions (preserve prior requirements):\n" + additions.strip()
                 if acceptance.strip() and acceptance.strip() not in extra:
                     extra += ("\n\n" if extra else "") + acceptance.strip()
-                if len(text) > 24000 or len(extra) > 12000:
+                if len(text) > MAX_OBJECTIVE_CHARS or len(extra) > 12000:
                     raise ValueError("Added instructions exceed task limits; prior requirements remain intact")
                 fields = {"description": text, "acceptance": extra, "held": 0}
                 if state in {"done", "failed"}:  # counters stay: repair rounds are never reset
