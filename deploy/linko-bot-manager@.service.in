@@ -1,0 +1,22 @@
+[Unit]
+Description=Linko Bot Boss restricted work instance %i (one fixed project, own data directory and port)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=@REPO@
+ExecStart=@PYTHON@ -m ai_manager.cli serve
+Environment=PYTHONUNBUFFERED=1
+Environment=AI_MANAGER_CODEX=@CODEX@
+Environment=AI_MANAGER_SECURE_COOKIE=1
+EnvironmentFile=%h/.config/linko-bot-manager-%i.env
+UMask=0077
+NoNewPrivileges=yes
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillMode=control-group
+
+[Install]
+WantedBy=default.target

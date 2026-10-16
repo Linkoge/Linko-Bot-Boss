@@ -17,6 +17,7 @@ from .deploy_setup import validate_setup
 from .fence import Busy, main_branch
 from .github_backup import GitHubBackup
 
+RESTRICTED = 'Not available on a restricted instance'
 DEPLOY_WAIT = 1800  # a pending deploy request holds the queue at most this long, then it is withdrawn
 IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
 
@@ -65,13 +66,15 @@ def merge_into_main(root, commit):
 
 
 class Pipeline:
-    def __init__(self, db, registry):
-        self.db, self.registry, self.job = db, registry, None
+    def __init__(self, db, registry, restricted=False):
+        self.db, self.registry, self.job, self.restricted = db, registry, None, restricted
         self.root = db.path.parent / 'deploy'
         self.backups = GitHubBackup(db, registry)
 
     def setup(self, project_id):
         project = self.registry.get(project_id)
+        if self.restricted:
+            return None  # restricted instances merge only; they never deploy
         key = 'deploy_setup:' + project_id
         saved = self.db.setting(key, 'unmigrated')
         if saved != 'unmigrated':
@@ -86,6 +89,8 @@ class Pipeline:
 
     def save_setup(self, project_id, setup):
         self.registry.get(project_id)
+        if self.restricted:
+            raise ValueError(RESTRICTED)
         setup = validate_setup(setup) if setup is not None else None
         with fence.hold(self.db.path.parent, exclusive=True):
             if self.pending():

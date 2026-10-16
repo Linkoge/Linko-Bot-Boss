@@ -1,7 +1,6 @@
 import argparse
 import getpass
 import json
-import os
 from pathlib import Path
 
 from .config import Settings
@@ -33,7 +32,7 @@ def main():
         Database.restore(args.source, args.destination)
         return
     db = Database(settings.db_path)
-    registry = Registry(db, settings.project_roots)
+    registry = Registry(db, settings.project_roots, settings.fixed_project)
     if args.command == "discover":
         print(json.dumps(registry.discover(), indent=2))
     elif args.command == "overview":
@@ -66,7 +65,7 @@ def main():
         import uvicorn
 
         uvicorn.run(
-            "ai_manager.web:create_app", factory=True, host="127.0.0.1", port=int(os.getenv("AI_MANAGER_PORT", "8787")), workers=1, proxy_headers=False
+            "ai_manager.web:create_app", factory=True, host="127.0.0.1", port=settings.port, workers=1, proxy_headers=False
         )
 
 

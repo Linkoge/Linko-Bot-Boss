@@ -1,6 +1,7 @@
 """Manager actions and the scheduler loop that drives the task core."""
 
 import asyncio
+import copy
 import hashlib
 import json
 import logging
@@ -8,6 +9,7 @@ import logging
 from .chat import internal_result
 from .core import Tasks
 from .history import Maintenance
+from .pipeline import RESTRICTED
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
 from .repository import inspect_repository
@@ -85,7 +87,20 @@ MANAGER_TOOL = {
 }
 
 
+RESTRICTED_ACTIONS = {"deploy", "deployment_status", "save_deploy_setup", "emergency_repair", "repair_status"}
+RESTRICTED_TOOL = copy.deepcopy(MANAGER_TOOL)
+RESTRICTED_TOOL["description"] = (
+    "Read project files directly with list_files, search_code and read_document (read-only; no execution). Inspect a page "
+    "with screenshot. Record To-Dos, delegate/control tasks, or retrieve evidence/history for the one project. "
+    "model/effort apply to delegate when the worker setting is Automatic. Reads support offset pagination.")
+RESTRICTED_TOOL["inputSchema"]["properties"]["action"]["enum"] = [
+    a for a in MANAGER_TOOL["inputSchema"]["properties"]["action"]["enum"] if a not in RESTRICTED_ACTIONS]
+del RESTRICTED_TOOL["inputSchema"]["properties"]["setup"]
+
+
 class Scheduler:
+    restricted = False
+
     def __init__(self, db, registry, settings, core, chat, pipeline=None):
         self.db, self.registry, self.settings, self.core, self.chat = db, registry, settings, core, chat
         self.observer = SilentObserver(db)
@@ -94,6 +109,7 @@ class Scheduler:
         self.lock = asyncio.Lock()
         self.error = ""
         self.pipeline = pipeline or core.pipeline
+        self.restricted = settings.restricted
 
     async def manager_action(self, selected_project, params):
         args = params["arguments"]
@@ -102,6 +118,8 @@ class Scheduler:
         if params["tool"] != "manager_action":
             raise ValueError("Unknown manager action")
         action = args["action"]
+        if self.restricted and action in RESTRICTED_ACTIONS:
+            raise ValueError(RESTRICTED)
         execution = self.db.one(
             "SELECT stop_requested,finished_at,rowid AS queue_position FROM executions WHERE id=?", (params.get("manager_execution_id"),)
         )

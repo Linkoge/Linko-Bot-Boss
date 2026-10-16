@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .attachments import native_image
-from .codex import MANAGER_INSTRUCTIONS, AppServer, CodexError, TurnUsage, process_start
+from .codex import MANAGER_INSTRUCTIONS, RESTRICTED_INSTRUCTIONS, AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
 from .history import CHAT_WINDOW
 from .model_settings import manager_route, worker_context
@@ -55,6 +55,7 @@ class Chat:
         self.db, self.registry, self.server = db, registry, server
         self.jobs = {}
         self.action_handler = None
+        self.restricted = False
         self.attachments = None
         self.workspace = db.path.parent / "chat-workspace"
         self.workspace.mkdir(exist_ok=True, mode=0o700)
@@ -587,16 +588,18 @@ class Chat:
                     "UPDATE executions SET model=?,effort=?,status='queued',retry_at=NULL WHERE id=?",
                     (route["model"], route["effort"], execution_id),
                 )
-            from .orchestration import MANAGER_TOOL
+            from .orchestration import MANAGER_TOOL, RESTRICTED_TOOL
 
-            schema = hashlib.sha256((MANAGER_INSTRUCTIONS + json.dumps(MANAGER_TOOL, sort_keys=True)).encode()).hexdigest()
+            tool, instructions = (RESTRICTED_TOOL, RESTRICTED_INSTRUCTIONS) if self.restricted else (
+                MANAGER_TOOL, MANAGER_INSTRUCTIONS)
+            schema = hashlib.sha256((instructions + json.dumps(tool, sort_keys=True)).encode()).hexdigest()
             prior = conversation["thread_id"]
             if self.db.setting("manager_tool_schema:" + conversation["id"]) != schema:
                 prior = None
             cwd = (self.registry.allowed_path(self.registry.get(conversation["project_id"])["path"])
                    if conversation["project_id"] else self.workspace)
             thread_id = await self.server.thread(
-                cwd, MANAGER_INSTRUCTIONS, prior, route["model"], dynamic_tools=[MANAGER_TOOL]
+                cwd, instructions, prior, route["model"], dynamic_tools=[tool]
             )
             queue = asyncio.Queue()
             self.server.queues[thread_id] = queue

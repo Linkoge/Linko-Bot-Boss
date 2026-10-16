@@ -44,9 +44,10 @@ def safe_remote(value: str) -> str:
 
 
 class Registry:
-    def __init__(self, db: Database, roots: tuple[Path, ...]):
+    def __init__(self, db: Database, roots: tuple[Path, ...], fixed: Path | None = None):
         self.db = db
         self.roots = tuple(p.resolve() for p in roots)
+        self.fixed = fixed.resolve() if fixed else None  # restricted instance: the one and only project
 
     def allowed_path(self, path: str | Path) -> Path:
         resolved = Path(path).expanduser().resolve()
@@ -59,6 +60,8 @@ class Registry:
     def add(self, path: str | Path, name: str | None = None) -> dict:
         name = validate_display_name(name)
         path = self.allowed_path(path)
+        if self.fixed and path != self.fixed:
+            raise ValueError("This instance has one fixed project")
         existing = self.db.one("SELECT * FROM projects WHERE path=?", (str(path),))
         if existing:
             return self.get(existing["id"])
@@ -82,6 +85,10 @@ class Registry:
         return self.get(project_id)
 
     def discover(self) -> list[dict]:
+        if self.fixed:
+            for other in self.db.all("SELECT id FROM projects WHERE path!=? AND status!='removed'", (str(self.fixed),)):
+                self.update(other["id"], self.get(other["id"])["revision"], {"status": "removed"}, force=True)
+            return [self.add(self.fixed)]
         found = []
         # Bounded traversal skips dependencies, build artifacts and worktrees under hidden dirs.
         skip = {"node_modules", "build", "dist", "vendor", "__pycache__"}
@@ -134,12 +141,14 @@ class Registry:
             self.db.event(conn, "project.visibility_changed", {"visible": visible}, project_id)
         return self.get(project_id)
 
-    def update(self, project_id: str, revision: int, changes: dict):
+    def update(self, project_id: str, revision: int, changes: dict, force=False):
         allowed = {"display_name", "description", "objective", "success_criteria", "instructions", "priority", "status"}
         if not changes or not set(changes) <= allowed:
             raise ValueError("Unsupported project update")
         if "status" in changes and changes["status"] not in {"active", "paused", "archived", "removed"}:
             raise ValueError("Invalid project status")
+        if self.fixed and not force and changes.get("status") in {"archived", "removed"}:
+            raise ValueError("This instance has one fixed project; it cannot be removed")
         if "display_name" in changes:
             changes = {**changes, "display_name": validate_display_name(changes["display_name"])}
         with self.db.transaction() as conn:

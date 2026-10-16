@@ -3,6 +3,8 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+CODE_ROOT = Path(__file__).resolve().parents[1]
+
 
 @dataclass
 class Settings:
@@ -14,6 +16,12 @@ class Settings:
             Path(p).expanduser() for p in os.getenv("AI_MANAGER_PROJECT_ROOTS", "~/projects").split(os.pathsep)
         )
     )
+    # Restricted "work" instance: exactly one fixed project, no deploy, self-edit or host-agent actions.
+    restricted: bool = field(default_factory=lambda: os.getenv("AI_MANAGER_RESTRICTED", "0") == "1")
+    project_path: Path | None = field(
+        default_factory=lambda: Path(p).expanduser() if (p := os.getenv("AI_MANAGER_PROJECT")) else None
+    )
+    port: int = field(default_factory=lambda: int(os.getenv("AI_MANAGER_PORT", "8787")))
     codex_bin: str = field(default_factory=lambda: os.getenv("AI_MANAGER_CODEX", "codex"))
     # Services often lack ~/.local/bin on PATH, where the Claude Code installer puts it.
     claude_bin: str = field(default_factory=lambda: os.getenv("AI_MANAGER_CLAUDE") or shutil.which("claude")
@@ -30,6 +38,21 @@ class Settings:
             os.getenv("AI_MANAGER_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",")
         )
     )
+
+    def __post_init__(self):
+        if not self.restricted:
+            return
+        if not self.project_path or not self.project_path.is_dir():
+            raise ValueError("Restricted mode needs AI_MANAGER_PROJECT: an existing project directory")
+        project, data = self.project_path.resolve(), self.data_dir.expanduser().resolve()
+        for other in (CODE_ROOT, data):  # the app's own code is never a restricted project (no self-edit)
+            if project.is_relative_to(other) or other.is_relative_to(project):
+                raise ValueError("Restricted project must not contain or sit inside the application code or data directory")
+        self.project_path, self.project_roots = project, (project,)
+
+    @property
+    def fixed_project(self) -> Path | None:
+        return self.project_path if self.restricted else None
 
     @property
     def db_path(self) -> Path:

@@ -28,7 +28,7 @@ from .core import Core, Tasks
 from .db import Database
 from .execution_ui import event_page, execution_page, execution_summary
 from .orchestration import Scheduler
-from .pipeline import Pipeline
+from .pipeline import RESTRICTED, Pipeline
 from .project_memory import MemoryReviews, ProjectMemory
 from .registry import Registry, git
 from .todos import Todos
@@ -146,7 +146,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     settings = settings or Settings()
     settings.prepare()
     db = Database(settings.db_path)
-    registry, tasks, auth = Registry(db, settings.project_roots), Tasks(db), Auth(db, settings)
+    restricted = settings.restricted
+    registry = Registry(db, settings.project_roots, settings.fixed_project)
+    tasks, auth = Tasks(db), Auth(db, settings)
     from .model_settings import active
     from .providers import ProviderServer
 
@@ -164,10 +166,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     audio = Audio(settings)
     attachments = Attachments(db, settings)
     chat.attachments = attachments
-    pipeline = Pipeline(db, registry)
+    pipeline = Pipeline(db, registry, restricted)
     core = Core(db, registry, settings, pipeline, worker_factory)
     scheduler = Scheduler(db, registry, settings, core, chat, pipeline)
     chat.action_handler = scheduler.manager_action
+    chat.restricted = restricted
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
     release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
@@ -218,6 +221,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         response.headers.setdefault("Cache-Control", "no-store")
         return response
 
+    def unrestricted():
+        if restricted:
+            raise HTTPException(403, RESTRICTED)
+
+    def scope(project_id):
+        """Restricted instance: every project-scoped request is the one fixed project (no All Projects, no other id)."""
+        if not restricted:
+            return project_id
+        fixed_id = registry.add(settings.project_path)["id"]
+        if project_id not in (None, "", fixed_id):
+            raise HTTPException(403, RESTRICTED)
+        return fixed_id
+
     def require_owner(request: Request):
         session = auth.session(request.cookies.get("ai_manager_session"))
         if not session:
@@ -242,15 +258,16 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "authenticated": bool(session),
             "csrf": session["csrf"] if session else None,
             "release_commit": release_commit,
+            "restricted": restricted,
             "scheduler_running": bool(scheduler.job and not scheduler.job.done()),
         }
 
-    @app.get('/api/repair', dependencies=[Depends(require_owner)])
+    @app.get('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def repair_status():
         from scripts.emergency_repair import Repair
         return Repair(settings.data_dir).records()
 
-    @app.post('/api/repair', dependencies=[Depends(require_owner)])
+    @app.post('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def request_repair(body: dict):
         from scripts.emergency_repair import Repair
         conversation = body.get('conversation_id')
@@ -259,19 +276,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return Repair(settings.data_dir).submit(body.get('request_id'), body.get('instructions', ''), conversation,
                                                 body.get('provider'), body.get('model'))
 
-    @app.get('/api/deployment', dependencies=[Depends(require_owner)])
+    @app.get('/api/deployment', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def deployment_status():
         return scheduler.pipeline.status()
 
-    @app.post('/api/deployment/cancel', dependencies=[Depends(require_owner)])
+    @app.post('/api/deployment/cancel', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def cancel_deployment():
         return {'cancelled': scheduler.pipeline.cancel()}
 
-    @app.get('/api/projects/{project_id}/deploy-setup', dependencies=[Depends(require_owner)])
+    @app.get('/api/projects/{project_id}/deploy-setup', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def project_deploy_setup(project_id: str):
         return scheduler.pipeline.status(project_id)
 
-    @app.put('/api/projects/{project_id}/deploy-setup', dependencies=[Depends(require_owner)])
+    @app.put('/api/projects/{project_id}/deploy-setup', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def save_project_deploy_setup(project_id: str, body: dict):
         if 'setup' not in body:
             raise ValueError('Provide setup (or null to remove)')
@@ -327,7 +344,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.get("/api/history", dependencies=[Depends(require_owner)])
     def history(project_id: str | None = None, search: str = "", before: str | None = None,
                 since: str | None = None, watch: str = ""):
-        return chat.history(project_id, search, before, since, watch.split(',') if watch else ())
+        return chat.history(scope(project_id), search, before, since, watch.split(',') if watch else ())
 
     @app.get("/api/chat-history", dependencies=[Depends(require_owner)])
     def search_history(
@@ -335,7 +352,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         search: str = Query(default="", max_length=500),
         offset: int = Query(default=0, ge=0),
     ):
-        return chat.search_history(project_id, search, offset)
+        return chat.search_history(scope(project_id), search, offset)
 
     @app.get("/api/chat-history/{conversation_id}", dependencies=[Depends(require_owner)])
     def saved_history(
@@ -344,26 +361,31 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         before: str | None = None,
         search: str = Query(default="", max_length=500),
     ):
-        return chat.saved_history(conversation_id, project_id, before, search)
+        return chat.saved_history(conversation_id, scope(project_id), before, search)
 
     @app.post("/api/chat/message/delete", dependencies=[Depends(require_owner)])
     def delete_chat_message(body: ChatMessageDeleteBody):
+        body.project_id = scope(body.project_id)
         return chat.delete_message(**body.model_dump())
 
     @app.post("/api/chat/clear", dependencies=[Depends(require_owner)])
     def clear_chat(body: ChatResetBody):
+        body.project_id = scope(body.project_id)
         return chat.reset(body.project_id, body.conversation_id, body.last_message_id, body.confirmed)
 
     @app.post("/api/chat/trash/restore", dependencies=[Depends(require_owner)])
     def restore_trash(body: ChatTrashBody):
+        body.project_id = scope(body.project_id)
         return chat.change_trash(**body.model_dump(), restore=True)
 
     @app.post("/api/chat/trash/empty", dependencies=[Depends(require_owner)])
     def empty_trash(body: ChatTrashBody):
+        body.project_id = scope(body.project_id)
         return chat.change_trash(**body.model_dump())
 
     @app.post("/api/chat/archive", dependencies=[Depends(require_owner)])
     def archive_chat(body: ChatArchiveBody):
+        body.project_id = scope(body.project_id)
         return chat.reset(
             body.project_id, body.conversation_id, body.last_message_id, body.confirmed, archive=True, title=body.title, keep_last=body.keep_last
         )
@@ -424,7 +446,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.post('/api/attachments', dependencies=[Depends(require_owner)])
     async def upload_attachment(request: Request, name: str, conversation_id: str, project_id: str | None = None):
-        return await attachments.upload(request, name, project_id, conversation_id)
+        return await attachments.upload(request, name, scope(project_id), conversation_id)
 
     @app.get('/api/attachments/{identifier}', dependencies=[Depends(require_owner)])
     def download_attachment(identifier: str):
@@ -454,6 +476,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.put("/api/projects/{project_id}/model-lock", dependencies=[Depends(require_owner)])
     async def save_repo_lock(project_id: str, body: dict):
+        scope(project_id)
         from .model_settings import set_lock
         set_lock(db, project_id, body, chat.server)
         return await model_settings(project_id)
@@ -491,20 +514,24 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/todos", dependencies=[Depends(require_owner)])
     def todo_list(project_id: str | None = None):
+        project_id = scope(project_id)
         if project_id:
             registry.get(project_id)
         return {"entries": Todos(db).list(project_id)}
 
     @app.post("/api/todos", dependencies=[Depends(require_owner)])
     def todo_add(body: TodoBody):
+        body.project_id = scope(body.project_id)
         return Todos(db).save(body.project_id, body.title, body.details)
 
     @app.patch("/api/todos/{entry_id}", dependencies=[Depends(require_owner)])
     def todo_update(entry_id: str, body: TodoBody):
+        body.project_id = scope(body.project_id)
         return Todos(db).save(body.project_id, body.title, body.details, entry_id)
 
     @app.post("/api/todos/archive", dependencies=[Depends(require_owner)])
     def todo_archive(body: TodoArchive):
+        body.project_id = scope(body.project_id)
         return Todos(db).archive(body.selected, body.project_id)
 
     @app.post("/api/todos/{entry_id}/start", dependencies=[Depends(require_owner)])
@@ -560,6 +587,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
     def portfolio(project_id: str | None = None, task_through: str | None = None,
                   execution_through: str | None = None, older: str | None = None):
+        project_id = scope(project_id)
         if project_id:
             registry.get(project_id)
         if older not in (None, 'tasks', 'executions'):
@@ -583,24 +611,27 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "storage_free": shutil.disk_usage(settings.data_dir).free,
         }
 
-    @app.post("/api/projects/discover", dependencies=[Depends(require_owner)])
+    @app.post("/api/projects/discover", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def discover():
         return registry.discover()
 
-    @app.post("/api/projects", dependencies=[Depends(require_owner)])
+    @app.post("/api/projects", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def add_project(body: ProjectBody):
         return registry.add(body.path, body.name)
 
     @app.patch("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
     def update_project(project_id: str, body: ProjectUpdate):
+        scope(project_id)
         return registry.update(project_id, body.revision, body.model_dump(exclude={"revision"}, exclude_none=True))
 
     @app.put("/api/projects/{project_id}/visibility", dependencies=[Depends(require_owner)])
     def project_visibility(project_id: str, body: ProjectVisibility):
+        scope(project_id)
         return registry.set_visibility(project_id, body.visible)
 
     @app.get("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
     def detail(project_id: str):
+        scope(project_id)
         return {
             "project": registry.get(project_id),
             "memory": registry.memory(project_id),
@@ -609,6 +640,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/projects/{project_id}/brief", dependencies=[Depends(require_owner)])
     def memory_brief(project_id: str):
+        scope(project_id)
         snapshot = memory.snapshot(project_id)
         return {**snapshot, "review_records": [
             {"reference": ref, **memory.get(project_id, ref)} for ref in reversed(snapshot["reviews"])
@@ -616,6 +648,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/projects/{project_id}/brief/version", dependencies=[Depends(require_owner)])
     def memory_version(project_id: str, reference: str):
+        scope(project_id)
         snapshot = memory.snapshot(project_id)
         if reference not in snapshot["versions"]:
             raise ValueError("Unknown version in this project")
@@ -623,22 +656,27 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.post("/api/projects/{project_id}/brief/review", dependencies=[Depends(require_owner)])
     async def memory_review(project_id: str, body: MemoryStart):
+        scope(project_id)
         return reviews.start(project_id, body.confirmed)
 
     @app.post("/api/projects/{project_id}/brief/cancel", dependencies=[Depends(require_owner)])
     async def memory_cancel(project_id: str, body: MemoryCancel):
+        scope(project_id)
         return await reviews.cancel(project_id, body.review)
 
     @app.post("/api/projects/{project_id}/brief/apply", dependencies=[Depends(require_owner)])
     def memory_apply(project_id: str, body: MemoryApply):
+        scope(project_id)
         return memory.apply(project_id, body.review, body.revision, body.resolutions)
 
     @app.post("/api/projects/{project_id}/brief/rollback", dependencies=[Depends(require_owner)])
     def memory_rollback(project_id: str, body: MemoryRollback):
+        scope(project_id)
         return memory.rollback(project_id, body.version, body.revision)
 
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
+        body.project_id = scope(body.project_id)
         return await chat.submit(
             body.project_id, body.content, body.conversation_id, request_id=body.request_id,
             attachment_ids=body.attachment_ids, todos=body.todos
@@ -674,6 +712,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get('/api/execution-history', dependencies=[Depends(require_owner)])
     def execution_history(project_id: str | None = None, offset: int = 0, before_execution: str | None = None):
+        project_id = scope(project_id)
         return execution_page(db, project_id=project_id, offset=offset, before=before_execution)
 
     @app.get('/api/executions/{execution_id}/history', dependencies=[Depends(require_owner)])

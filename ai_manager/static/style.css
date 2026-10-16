@@ -262,3 +262,5 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #repo-lock-container button{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px}
 #manager-heading{flex-shrink:0}
 #model-dialog section:first-child .model-section-head{gap:6px}
+
+.restricted #all-projects,.restricted #project-menu-button,.restricted #discover,.restricted #add-project,.restricted #deployment-panel{display:none}

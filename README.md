@@ -249,6 +249,7 @@ A request past its backup finishes or rolls back by itself. One-time operator bo
 The existing installed runtime is migrated once to its registered project's saved setup; explicit removal stays removed.
 The host CLI's `--now` targets the installed runtime's registered project and respects its saved setup, including
 replacement or removal; before registration it uses the bootstrap installation. Other project deploys use `deploy`.
+Additional instances of the same code are restarted and health-checked by the same deploy; see Multiple instances.
 
 Each project has one setup in SQLite (`deploy_setup:<project-id>`), read through `deployment_status` and replaced with
 `manager_action` action `save_deploy_setup`, `project_id` and `setup`. The owner API has the same contract:
@@ -287,6 +288,67 @@ held and retry-delayed tasks remain durable and do not block restart; unfinished
 tasks, streaming messages and running deliveries do. Stale leases are reconciled by the queue runner only after
 both the runner and its recorded process are gone, preserving workspaces and limiting recovery retries.
 
+
+## Multiple instances and the restricted work instance
+
+One shared copy of the code can serve several instances. Each instance is only settings: its own data directory (database,
+login, workspaces, setup token), port, systemd unit and env file. There is no per-user routing inside the app, so each
+instance has one owner login (`python -m ai_manager.cli setup-owner` with that instance's env). The main instance
+(coding) needs no new setting and behaves exactly as before: all values default to `AI_MANAGER_DATA`
+`~/.local/share/linko-bot-manager`, `AI_MANAGER_PORT` 8787, `AI_MANAGER_PROJECT_ROOTS` `~/projects`. The audit found no
+other hard-coded port, path or hostname: the Tailscale name above is documentation, and `scripts/install_service.py`
+only asks Tailscale for a hostname when `--hostname` is not given.
+
+A **restricted** instance (`AI_MANAGER_RESTRICTED=1`, the single mode setting) is for work that is not coding: Word
+documents, essays, forms, email, browsing. It requires `AI_MANAGER_PROJECT`, one existing folder, and refuses to start if
+that folder contains or sits inside the application code or the instance's data directory (no self-edit). Workers still
+run in their usual branch/worktree flow on that one project (a Git repository). The application, not the prompt, enforces:
+
+- **One project.** `POST /api/projects`, `POST /api/projects/discover` and a status change to `archived`/`removed` are
+  rejected; startup registers only the fixed project and hides any other project left in an older database. There is no
+  All Projects view: every project-scoped request (portfolio, chat, history, To-Dos, attachments, project routes) is
+  the fixed project when `project_id` is omitted and a 403 for any other id.
+- **No deploy.** Deployment status/cancel, deploy-setup read/save, and the manager actions `deploy`,
+  `deployment_status`, `save_deploy_setup` are rejected; a stored setup is ignored, so merges are merges only.
+- **No host agent.** `GET/POST /api/repair` and the manager actions `emergency_repair`/`repair_status` are rejected; no
+  host-repair spool is written. Do not install `scripts/install_repair.py` for such an instance.
+- The manager is offered a tool without those actions, and manager and workers get a short restricted note
+  (`RESTRICTED_NOTE` in `ai_manager/codex.py`). `/api/auth-status` reports `restricted`, and the UI then hides All
+  Projects, the project menu, Discover/Add project and the Deployment panel. Word editing and browsing tools stay
+  allowed. Rejections use `Not available on a restricted instance` (HTTP 403, or a rejected manager action).
+
+The per-project GitHub backup keeps working through the existing path and its secret check stays on. The synced folder is
+a Git repository only for that: put `.git` in the folder's Syncthing ignore list (a `.stignore` file in the folder root
+containing `.git`) so Syncthing never syncs repository internals, and add large binaries to `.gitignore` so they are
+neither committed nor pushed.
+
+**Create an instance** (the host side, such as its Linux user, the Syncthing folder, Cloudflare Tunnel and Access, is set
+up separately and is not done by the application):
+
+1. Make the folder a Git repository with a `main` branch and an `origin` on GitHub if backups are wanted.
+2. Copy `deploy/instance.env.example` to `~/.config/linko-bot-manager-NAME.env` and set `AI_MANAGER_PROJECT`,
+   `AI_MANAGER_DATA`, `AI_MANAGER_PORT` (a free port, not 8787) and `AI_MANAGER_ALLOWED_HOSTS` (its public hostname).
+3. `python3 scripts/install_service.py --instance NAME --start` installs the template unit
+   `linko-bot-manager@.service` (from `deploy/linko-bot-manager@.service.in`) and enables
+   `linko-bot-manager@NAME.service`. Create its login with the env file loaded
+   (`set -a; . ~/.config/linko-bot-manager-NAME.env; set +a; python -m ai_manager.cli setup-owner`).
+4. `python3 scripts/install_deploy.py --instance NAME` adds it to the deploy list (see below).
+5. Daily database backup of an instance: run `scripts/backup_daily.py` with that env file loaded.
+
+**Deploys cover every instance.** `DATA/deploy/installed.json` (the saved runtime setup of the main instance) gets an
+`instances` list: `{"name", "service", "data", "url"}` for each, written by `install_deploy.py --instance NAME` from that
+instance's env file, and kept on re-runs (edit the file to remove one). One deploy request then: waits for idle in
+every instance database (blockers are labelled `NAME:`); holds every instance's checkout fence from the final idle check
+until all are healthy again; snapshots every database (`backups/<id>/NAME/before.sqlite3`, `stopped.sqlite3`); stops the
+main service and every instance, updates the shared checkout, starts them all; and health-checks each one with its own
+URL and database (scheduler running, expected commit, authentication boundary, working session). Any failed check rolls
+back the shared code and restores every database, restarts all and checks them again. The 30-minute bounded wait,
+cancellation and receipts are unchanged. An instance under another Linux user cannot be controlled by `systemctl --user`:
+give its entry `"service_cmds": {"stop": [...], "start": [...]}` (for example `sudo -n systemctl ...` with a matching
+sudoers rule) in `installed.json`. Deploys of other projects never touch instances.
+
+Permanent coverage: `tests/test_restricted.py` (settings, server-side rejections, default behavior) and
+`tests/test_deploy_instances.py` (multi-instance deploy, rollback, installers, unit template).
 
 ## Emergency host repair
 
@@ -559,7 +621,7 @@ PYTHONPATH=. uv run python scripts/browser_smoke.py   # also browser_tasks.py an
 ```
 
 Configuration: `AI_MANAGER_DATA` (default `~/.local/share/linko-bot-manager`), `AI_MANAGER_PORT` (8787),
-`AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE`, `AI_MANAGER_CODEX`,
+`AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_RESTRICTED` and `AI_MANAGER_PROJECT` (restricted work instance, see Multiple instances), `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE`, `AI_MANAGER_CODEX`,
 `AI_MANAGER_CLAUDE`, `AI_MANAGER_CLAUDE_MODELS` (comma-separated Claude model ids offered in the picker, default
 `claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5`; any id the installed `claude` accepts), `AI_MANAGER_REPO` (live checkout, tests only). Daily database backup: `scripts/backup_daily.py`
 (restore only to a fresh path with the service stopped; native thread storage and project files are backed up separately).

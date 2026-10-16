@@ -36,3 +36,7 @@ One short file, read by the manager and by every worker.
    changes such as installs, moving files with a kept copy, permissions scoped to the needed user, services and users
    need no confirmation. A worker implementing that capability still follows
    rule 3; implementation is not permission to activate it or operate the live host.
+
+9. A restricted work instance (`AI_MANAGER_RESTRICTED=1`) has exactly one fixed project and no deploy, deploy setup,
+   host agent or self-edit: the application rejects those with "Not available on a restricted instance". Report that
+   plainly instead of looking for a way around it. Documents, forms, email drafts and browsing are normal work there.

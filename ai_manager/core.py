@@ -20,7 +20,7 @@ from pathlib import Path
 
 from . import fence
 from .attachments import native_image
-from .codex import RULES, AppServer, CodexError, TurnUsage, process_start
+from .codex import RESTRICTED_NOTE, RULES, AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
 from .fence import Busy, main_branch
 from .listing import CARD_WINDOW, bounded_listing
@@ -374,7 +374,8 @@ class Core:
         root = self.workspace(task, project)
         await server.start()
         route = assignment_route(self.db, server, task)
-        thread_id = await server.thread(root, WORKER_INSTRUCTIONS, task["native_thread"], route["model"])
+        instructions = WORKER_INSTRUCTIONS + (RESTRICTED_NOTE if self.settings.restricted else "")
+        thread_id = await server.thread(root, instructions, task["native_thread"], route["model"])
         queue = server.queues[thread_id] = asyncio.Queue()
         server.question_handlers[thread_id] = lambda method, params: self.question(eid, method, params)
         self.db.run("UPDATE executions SET pid=?,process_start=?,model=?,effort=?,thread_id=? WHERE id=?",

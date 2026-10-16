@@ -442,3 +442,12 @@ on demand. The owner runs brief reviews. Assignments carry objective, acceptance
 selected_context only; never paste the brief or transcripts into them. Fresh chats exclude archived transcripts;
 list_history/read_history retrieve them explicitly.
 """ + "\n" + ARCHITECTURE_GUIDE
+
+RESTRICTED_NOTE = """
+This is a restricted work instance with exactly one fixed project: its folder is the only place you work in. There is no
+All Projects view, no project add/remove, no deploy, deployment_status, save_deploy_setup, emergency_repair or
+repair_status (ignore every earlier mention of them; the application rejects them), and the application's own code is
+not editable here. Passing work only merges into the project's main branch. Documents, forms, essays, email drafts and
+browsing are normal work here.
+"""
+RESTRICTED_INSTRUCTIONS = MANAGER_INSTRUCTIONS + RESTRICTED_NOTE

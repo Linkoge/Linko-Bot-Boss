@@ -78,6 +78,11 @@ class Deploy:
         service = config.get('service', 'linko-bot-manager.service')
         self.commands = {'stop': [*systemctl, 'stop', service], 'start': [*systemctl, 'start', service],
                          **config.get('service_cmds', {})}
+        # Other instances of this one code copy (README "Multiple instances"): restarted and health-checked with it,
+        # each with its own data directory, database snapshot, checkout fence and port.
+        self.instances = [{'name': i['name'], 'data': Path(i['data']), 'url': i['url'], 'cmds': i.get('service_cmds') or {
+            action: [*systemctl, action, i['service']] for action in ('stop', 'start')}}
+            for i in config.get('instances', [])]
         self.id = None
         self.setup = None  # installed runtime adapter until a project request selects its saved setup
 
@@ -107,10 +112,11 @@ class Deploy:
                 raise ValueError('Deploy setup repository mismatch')
             # Keep host timing overrides; all runtime operations use the saved installation.
             self.__init__({**runtime, **{k: v for k, v in self.config.items()
-                                      if k in {'health_seconds', 'poll_seconds', 'idle_seconds', 'test_seconds'}}}, self.sleep)
+                                      if k in {'health_seconds', 'poll_seconds', 'idle_seconds', 'test_seconds', 'instances'}}}, self.sleep)
             self.id = request['id']
             return
         self.setup = validate_setup(setup)
+        self.instances = []  # an external project's deploy never restarts this application's instances
         if request.get('emergency'):
             raise ValueError('Normal project deploys cannot use host emergency mode')
         self.repo = Path(request['repo'])
@@ -132,7 +138,26 @@ class Deploy:
     def service(self, action):
         if self.setup and action == 'start' and self.setup.get('deploy_command'):
             return self.hook('deploy_command')
-        return run(self.commands[action], cwd=self.repo, timeout=120)
+        result = run(self.commands[action], cwd=self.repo, timeout=120)
+        for instance in self.instances:
+            run(instance['cmds'][action], cwd=self.repo, timeout=120)
+        return result
+
+    def databases(self):
+        """(label, path) of every database this deploy must keep idle, back up and restore: main first."""
+        return [('', self.db)] + [(i['name'] + ':', i['data'] / 'manager.sqlite3') for i in self.instances
+                                  if (i['data'] / 'manager.sqlite3').is_file()]
+
+    def fences(self, wait):
+        """The checkout fence of this application and of every instance, so no work starts in any of them."""
+        stack = ExitStack()
+        try:
+            for data in [self.data, *(i['data'] for i in self.instances)]:
+                stack.enter_context(fence.hold(data, True, wait=wait))
+        except BaseException:
+            stack.close()
+            raise
+        return stack
 
     @property
     def branch(self):
@@ -182,9 +207,12 @@ class Deploy:
 
     def busy(self):
         # One SQLite snapshot; queued/held/retry-waiting tasks are durable, not active writers.
-        with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=10) as conn:
-            conn.execute('BEGIN')
-            return {name: n for name, sql in IDLE.items() if (n := conn.execute(sql).fetchone()[0])}
+        busy = {}
+        for label, db in self.databases():
+            with sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=10) as conn:
+                conn.execute('BEGIN')
+                busy.update({label + name: n for name, sql in IDLE.items() if (n := conn.execute(sql).fetchone()[0])})
+        return busy
 
     def blockers(self):
         """Bounded identities only: never log task input, output or credentials."""
@@ -195,10 +223,13 @@ class Deploy:
                      "WHERE lease_owner IS NOT NULL OR state='running' LIMIT 20",
             'messages': "SELECT id,execution_id,status FROM messages WHERE status IN ('queued','streaming') LIMIT 20",
         }
-        with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=10) as conn:
-            conn.row_factory = sqlite3.Row
-            conn.execute('BEGIN')
-            return {name: [dict(row) for row in conn.execute(sql)] for name, sql in checks.items()}
+        found = {}
+        for label, db in self.databases():
+            with sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=10) as conn:
+                conn.row_factory = sqlite3.Row
+                conn.execute('BEGIN')
+                found.update({label + name: [dict(row) for row in conn.execute(sql)] for name, sql in checks.items()})
+        return found
 
     def check_request(self, request):
         """A withdrawn request or a paused project stops the deploy before anything changes."""
@@ -213,8 +244,8 @@ class Deploy:
             if not status or status[0] != 'active':
                 raise Stop('cancelled', 'project is paused or removed')
 
-    def http(self, path, cookie=None):
-        req = urllib.request.Request(self.url + path)
+    def http(self, path, cookie=None, url=None):
+        req = urllib.request.Request((url or self.url) + path)
         if cookie:
             req.add_header('Cookie', 'ai_manager_session=' + cookie)
         try:
@@ -242,23 +273,31 @@ class Deploy:
                     if not 200 <= response.status < 300:
                         raise RuntimeError('unhealthy HTTP status: ' + str(response.status))
             return
-        status, body = self.http('/api/auth-status')
+        self.check(self.url, self.db, commit)
+        for instance in self.instances:  # each instance has its own health check; any failure rolls the deploy back
+            try:
+                self.check(instance['url'], instance['data'] / 'manager.sqlite3', commit)
+            except Exception as error:
+                raise RuntimeError(f"instance {instance['name']}: {error}") from error
+
+    def check(self, url, db, commit):
+        status, body = self.http('/api/auth-status', url=url)
         info = json.loads(body)
         if status != 200 or not info.get('scheduler_running'):
             raise RuntimeError('auth-status unhealthy or scheduler not running')
         if commit and info.get('release_commit') != commit:
             raise RuntimeError(f"service runs {str(info.get('release_commit'))[:10]}, expected {commit[:10]}")
-        if self.http('/api/portfolio')[0] != 401:
+        if self.http('/api/portfolio', url=url)[0] != 401:
             raise RuntimeError('authentication boundary failed')
         token = secrets.token_urlsafe(32)
         digest = hashlib.sha256(token.encode()).hexdigest()
-        with sqlite3.connect(self.db, timeout=10) as conn:
+        with sqlite3.connect(db, timeout=10) as conn:
             conn.execute('INSERT INTO sessions VALUES(?,?,?)', (digest, secrets.token_hex(16), time.time() + 60))
         try:
-            if self.http('/api/portfolio', token)[0] != 200:
+            if self.http('/api/portfolio', token, url=url)[0] != 200:
                 raise RuntimeError('authenticated request failed')
         finally:
-            with sqlite3.connect(self.db, timeout=10) as conn:
+            with sqlite3.connect(db, timeout=10) as conn:
                 conn.execute('DELETE FROM sessions WHERE token_hash=?', (digest,))
 
     def wait_health(self, commit):
@@ -281,25 +320,32 @@ class Deploy:
                                                             'repo': str(self.repo), 'setup': self.setup})
                 self.hook('backup_command', backup=destination.parent)
             return
-        with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=30) as src, sqlite3.connect(destination) as dst:
-            src.backup(dst)
-            if dst.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
-                raise RuntimeError('backup failed the integrity check')
-        os.chmod(destination, 0o600)
+        for (_, db), target in zip(self.databases(), self.copies(destination)):
+            target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            with sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=30) as src, sqlite3.connect(target) as dst:
+                src.backup(dst)
+                if dst.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                    raise RuntimeError('backup failed the integrity check')
+            os.chmod(target, 0o600)
+
+    def copies(self, path):
+        """Where each database's snapshot lives: main at `path`, instances in a folder named after them beside it."""
+        return [path if not label else path.parent / label[:-1] / path.name for label, _ in self.databases()]
 
     def restore(self, source):
         if self.setup:
             self.hook('rollback_command', backup=source.parent, commit=self.previous)
             return
-        temp = self.db.with_name(self.db.name + '.restore')
-        temp.unlink(missing_ok=True)
-        with sqlite3.connect(source) as src, sqlite3.connect(temp) as dst:
-            src.backup(dst)
-            if dst.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
-                raise RuntimeError('backup to restore is corrupt')
-        for suffix in ('-wal', '-shm'):
-            Path(str(self.db) + suffix).unlink(missing_ok=True)
-        os.replace(temp, self.db)
+        for (_, db), snapshot in zip(self.databases(), self.copies(source)):
+            temp = db.with_name(db.name + '.restore')
+            temp.unlink(missing_ok=True)
+            with sqlite3.connect(snapshot) as src, sqlite3.connect(temp) as dst:
+                src.backup(dst)
+                if dst.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                    raise RuntimeError('backup to restore is corrupt')
+            for suffix in ('-wal', '-shm'):
+                Path(str(db) + suffix).unlink(missing_ok=True)
+            os.replace(temp, db)
 
     def prune(self):
         directory = self.root / 'backups'
@@ -342,13 +388,15 @@ class Deploy:
             nonlocal stopped
             # Explicit host-only escape hatch: stop the app under the existing checkout fence,
             # then ignore stale queue records. Never race a still-live native worker.
-            fenced.enter_context(fence.hold(self.data, True, wait=5))
+            fenced.enter_context(self.fences(5))
             self.state('emergency_backing_up')
             self.backup(backups / 'before.sqlite3')
             stopped = True
             self.service('stop')
-            with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=10) as conn:
-                pids = conn.execute('SELECT pid,process_start FROM executions WHERE pid IS NOT NULL').fetchall()
+            pids = []
+            for _, db in self.databases():
+                with sqlite3.connect(f'file:{db}?mode=ro', uri=True, timeout=10) as conn:
+                    pids += conn.execute('SELECT pid,process_start FROM executions WHERE pid IS NOT NULL').fetchall()
             def process_start(pid):
                 try:
                     fields = Path(f'/proc/{pid}/stat').read_text().rsplit(')', 1)[1].split()
@@ -401,7 +449,7 @@ class Deploy:
                     if request.get('emergency'):
                         break
                     try:
-                        fenced.enter_context(fence.hold(self.data, True, wait=5))
+                        fenced.enter_context(self.fences(5))
                         if not (busy := self.busy()):
                             break
                         fenced.close()
