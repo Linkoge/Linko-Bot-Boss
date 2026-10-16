@@ -175,13 +175,13 @@ def main():
                 owner = page.locator('#messages .message.user')
                 assert assistant.locator('.message-actions').count() == 1
                 assert assistant.locator('.message-content > *').count() > 8
-                assert assistant.locator('button', has_text='Copy').is_hidden()
+                assert assistant.locator('.message-actions button', has_text='Copy').is_hidden()
                 assert float(assistant.locator('summary').evaluate('n=>getComputedStyle(n).opacity')) < .5
                 assert assistant.locator('button', has_text='Edit').count() == 0
                 for row, expected in ((assistant, TEXT), (owner, 'Render Markdown')):
                     row.locator('summary').focus()
                     page.keyboard.press('Enter')
-                    row.get_by_role('button', name='Copy', exact=True).click()
+                    row.locator('.message-actions').get_by_role('button', name='Copy', exact=True).click()
                     assert page.evaluate('copied.at(-1)') == expected
                 deletes = []
                 page.on('request', lambda r: deletes.append(r.post_data_json) if r.url.endswith('/api/chat/message/delete') else None)

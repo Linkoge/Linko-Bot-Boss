@@ -6,6 +6,17 @@ function safeChatLink(value){
   // The URL parser also rejects disguised schemes using whitespace/control chars.
   try{const url=new URL(value,location.href);return ['http:','https:','mailto:'].includes(url.protocol)?value:null;}catch{return null;}
 }
+function codeCopyButton(text){
+  const button=document.createElement('button');button.type='button';button.className='code-copy';button.textContent='Copy';
+  button.setAttribute('aria-label','Copy code block');
+  // copyText (app.js) uses the Clipboard API and falls back to a hidden textarea on non-secure pages.
+  button.onclick=async()=>{
+    let label='Copied';
+    try{await copyText(text);}catch{label='Copy failed';}
+    button.textContent=label;clearTimeout(button._reset);button._reset=setTimeout(()=>{button.textContent='Copy';},1500);
+  };
+  return button;
+}
 function renderChatMarkdown(source){
   const fragment=document.createDocumentFragment();
   function append(tokens,parent){
@@ -32,7 +43,8 @@ function renderChatMarkdown(source){
       }
       if(['fence','code_block'].includes(token.type)){
         const pre=document.createElement('pre'),code=document.createElement('code');
-        code.textContent=token.content;pre.tabIndex=0;pre.setAttribute('aria-label','Code block');pre.append(code);current.append(pre);
+        code.textContent=token.content;pre.tabIndex=0;pre.setAttribute('aria-label','Code block');pre.append(code);
+        const block=document.createElement('div');block.className='code-block';block.append(pre,codeCopyButton(token.content));current.append(block);
       }else if(token.type==='code_inline'){
         const code=document.createElement('code');code.textContent=token.content;current.append(code);
       }else if(token.type==='hardbreak')current.append(document.createElement('br'));

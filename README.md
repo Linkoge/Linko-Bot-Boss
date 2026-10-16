@@ -531,6 +531,14 @@ execution output, tasks and attachments; this is not provider-side erasure. Poll
 while preserving older undeleted rows outside the rolling history tail. Clear/archive/trash confirmation
 uses the visible tail after deletion.
 
+## Code block Copy
+
+Every fenced code block in an assistant or worker message shows a small Copy button at its top-right. It copies
+the block's exact text (not the rest of the message) and shows "Copied" for about a second and a half. It uses the
+Clipboard API and falls back to a hidden textarea with `execCommand('copy')` on non-secure pages. The button is
+created by the Markdown renderer, so streamed, polled, cached and saved-history messages all get it.
+Permanent check: `tests/test_code_copy_browser.py`.
+
 Permanent checks: `tests/test_message_actions.py`, `tests/test_chat_history.py` and
 `scripts/browser_markdown.py` (streamed multi-block responses, owner/assistant copying, Cancel/confirm,
 reload, saved-reader removal, keyboard and narrow layouts). Historical source and assignment evidence:
