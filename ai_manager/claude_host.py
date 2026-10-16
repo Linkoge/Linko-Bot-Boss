@@ -359,7 +359,7 @@ class Host:
                 'threadId': request['thread'], 'turnId': state['turn'], 'callId': str(uuid.uuid4()),
                 'tool': request['tool'], 'arguments': request.get('arguments') or {}})
             text = '\n'.join(i.get('text', '') for i in result.get('contentItems', []))
-            reply = {'success': bool(result.get('success')), 'text': text}
+            reply = {'success': bool(result.get('success')), 'text': text, 'contentItems': result.get('contentItems', [])}
         except Exception as error:
             reply = {'success': False, 'text': str(error)[:2000]}
         writer.write((json.dumps(reply) + '\n').encode())

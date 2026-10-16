@@ -6,6 +6,7 @@ dependencies = [
     "argon2-cffi>=25.1.0",
     "fastapi>=0.143.0",
     "uvicorn>=0.54.0",
+    "playwright>=1.63.0",
 ]
 
 [tool.pytest.ini_options]
@@ -21,7 +22,6 @@ select = ["E4", "E7", "E9", "F", "I"]
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
-    "playwright>=1.63.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.10",

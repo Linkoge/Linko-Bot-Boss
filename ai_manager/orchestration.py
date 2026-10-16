@@ -11,12 +11,13 @@ from .history import Maintenance
 from .project_memory import ProjectMemory
 from .recovery import SilentObserver
 from .repository import inspect_repository
+from .screenshots import screenshot
 from .todos import Todos
 
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Read project code directly with list_files, search_code and read_document (read-only; no execution). Record deferred ideas (To-Dos), delegate and control tasks and projects, or retrieve scoped evidence/history. Passing work is merged and deployed automatically; use deploy only when the owner asks to deploy now (optionally with task_id of a finished task whose branch was never merged). model and effort apply to delegate only when the worker setting is Automatic. Read actions support offset pagination.",
+    "description": "Read project code directly with list_files, search_code and read_document (read-only; no execution). Inspect actual UI with screenshot (overview, selected viewport tiles or selector). Record deferred ideas (To-Dos), delegate and control tasks and projects, or retrieve scoped evidence/history. Passing work is merged and deployed automatically; use deploy only when the owner asks to deploy now (optionally with task_id of a finished task whose branch was never merged). model and effort apply to delegate only when the worker setting is Automatic. Read actions support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -37,6 +38,7 @@ MANAGER_TOOL = {
                     "read_document",
                     "list_files",
                     "search_code",
+                    "screenshot",
                     "read_memory",
                     "read_project",
                     "list_memory",
@@ -49,6 +51,10 @@ MANAGER_TOOL = {
                     "resume_project",
                 ],
             },
+            "url": {"type": "string", "description": "HTTP(S) page reachable by the server, including Tailscale; no login."},
+            "device": {"type": "string", "enum": ["desktop", "mobile"]},
+            "tiles": {"type": "string", "description": "One-based indexes/ranges: 1-3,8,last. Maximum 8 per call. Omit for overview."},
+            "selector": {"type": "string", "description": "One CSS selector or exact accessible name/text, centered in a tile; omit tiles."},
             "project_id": {"type": "string"},
             "conversation_id": {"type": "string"},
             "acceptance": {"type": "string"},
@@ -207,6 +213,9 @@ class Scheduler:
         if not project_id or (selected_project and selected_project != project_id):
             raise ValueError("Select the intended project; cross-project work requires All Projects context")
         project = self.registry.get(project_id)
+        if action == 'screenshot':
+            return await screenshot(args.get('url', ''), args.get('device', 'desktop'),
+                                    args.get('tiles', ''), args.get('selector', ''))
         if action == "save_todo":
             # Recording a To-Do never calls Tasks.add/control.
             return Todos(self.db).save(project_id, args["title"], args.get("details", ""), args.get("todo_id"))

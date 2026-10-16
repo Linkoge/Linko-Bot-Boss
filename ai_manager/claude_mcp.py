@@ -40,7 +40,15 @@ def main():
                 result = {'tools': host(sock_path, {'op': 'list', 'thread': thread})['tools']}
             elif method == 'tools/call':
                 reply = host(sock_path, {'thread': thread, 'tool': params['name'], 'arguments': params.get('arguments')})
-                result = {'content': [{'type': 'text', 'text': reply['text']}], 'isError': not reply['success']}
+                content = []
+                for item in reply.get('contentItems', []):
+                    if item['type'] == 'inputText':
+                        content.append({'type': 'text', 'text': item['text']})
+                    elif item['type'] == 'inputImage':
+                        header, data = item['imageUrl'].split(',', 1)
+                        content.append({'type': 'image', 'mimeType': header[5:].split(';', 1)[0], 'data': data})
+                result = {'content': content or [{'type': 'text', 'text': reply['text']}],
+                          'isError': not reply['success']}
             elif method == 'ping':
                 result = {}
             else:

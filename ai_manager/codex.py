@@ -9,6 +9,7 @@ import tomllib
 from pathlib import Path
 
 from .config import Settings
+from .tool_content import ImageResult
 
 RULES = (Path(__file__).resolve().parents[1] / "RULES.md").read_text()
 # Keep the owner-facing guide and manager advice in one place; omit the rest of the README from the prompt.
@@ -297,7 +298,8 @@ class AppServer:
             if not handler:
                 raise ValueError("No enabled capabilities for this thread")
             content = await handler(params)
-            response = {"success": True, "contentItems": [{"type": "inputText", "text": json.dumps(content)}]}
+            response = {"success": True, "contentItems": (content.content_items() if isinstance(content, ImageResult)
+                        else [{"type": "inputText", "text": json.dumps(content)}])}
         except Exception as error:
             response = {"success": False, "contentItems": [{"type": "inputText", "text": str(error)[:2000]}]}
         await self.send({"id": message["id"], "result": response})
@@ -375,7 +377,7 @@ is read-only: never edit files, commit, run project code or commands there. In A
 Actions: delegate (one complete objective with relevant decisions; reuse an unfinished task instead of duplicating it),
 hold / release (a queued task), cancel (queued or running; the branch is kept), continue (task_id plus added instructions:
 appended to a queued/held task, or re-queues a done/failed task; repair rounds are never reset), list_tasks / read_task /
-read_result / list_files / search_code / read_document / read_project / read_memory / list_memory / list_history / read_history (inspect),
+read_result / list_files / search_code / read_document / screenshot / read_project / read_memory / list_memory / list_history / read_history (inspect),
 pause_project / resume_project, deploy, deployment_status, emergency_repair, repair_status, save_todo / list_todos.
 list_tasks returns compact summaries: all matching unfinished tasks plus the latest five terminal tasks by default.
 Use next_offset for older terminal pages, query/status to filter in SQL, and read_task/read_result for full objectives,
@@ -384,6 +386,15 @@ list_files lists one directory (path defaults to .); search_code finds literal, 
 under path (default .), returning file paths and line numbers. Narrow path if a search exceeds its time budget.
 read_document reads any project text file, including source code. These actions accept repository-relative or absolute
 paths inside the selected project, and offset for more results. They cannot write files or execute code.
+Before giving UI/design advice, read the relevant code AND take screenshots of the actual page.
+screenshot accepts url (HTTP(S), reachable from the server including Tailscale), device (desktop default or mobile),
+and either tiles (one-based indexes/ranges such as "1-3,8,last") or selector (CSS or exact element name).
+Omit tiles and selector for a small whole-page layout overview with page_height and screen_count.
+Then inspect relevant top, middle and end tiles. Desktop is 1920x1080; mobile is 390x845 at 2x (780x1690).
+At most 8 tiles per call, not per page: review 15 screens in two calls. One screen per tile preserves detail.
+Cost is approximately 1.5-2k tokens per tile: quick check = overview + 1-2 tiles; full review = all tiles.
+Captures have a 60-second hard timeout. Sticky headers may repeat. Login-protected pages are out of scope.
+If a page is unreachable or capture fails, explain that limitation; do not claim to have seen it.
 To refine a queued task, continue it with only the added instructions in objective and/or details; both are preserved
 in the worker's objective. acceptance appends criteria. A running task cannot be edited: delegate the
 new work (it runs next) or cancel and continue.

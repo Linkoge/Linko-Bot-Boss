@@ -63,6 +63,60 @@ shell and patch tools disabled; Claude exposes only Read (also used for attachme
 The project brief and repository path travel together. The scratch directory is used only for All Projects and
 attachment storage. Permanent coverage: `tests/test_manager_repository.py` and `tests/test_claude_provider.py`.
 
+## Manager screenshots
+
+Before giving UI/design advice, the manager reads the relevant project code and takes screenshots of the actual
+page with `manager_action` action `screenshot`. Both Codex and Claude receive native image blocks, not image paths
+or base64 embedded in text. Select a project (`project_id` is required in All Projects) and provide an HTTP(S) `url`.
+Only pages reachable from the server can be captured, including localhost previews and Tailscale sites when the
+host has access. Login-protected pages, session/cookie import and automated login are out of scope.
+
+The screenshot engine is the existing Dev Panel feature reworked into `ai_manager/screenshots.py`: real viewport
+scrolling, lazy-content preparation, image/font readiness, and the panel's session image contract are retained.
+There is one browser engine shared by the manager and the Dev Panel compatibility launcher. No server-side
+project code or shell command supplied by the model runs; Chromium renders the requested page in a fresh context.
+
+| Request fields (plus `action: "screenshot"` and `url`) | Result |
+| --- | --- |
+| Omit `tiles` and `selector` | One small whole-page layout thumbnail (at most 320×900), CSS-pixel `page_height`, `screen_count`, and viewport size/scale |
+| `tiles: "1-3,8,last"` | One viewport image for each selected one-based index; inclusive ranges and comma-separated indexes; `last` always reaches the end |
+| `selector: "#product-grid"` or `selector: "product grid"` | One viewport centered on a unique visible CSS match, accessible landmark/heading/control name, common id/class name or exact text |
+| `selector: "footer"` | The footer's centered viewport, clamped at the page end |
+| `device: "mobile"` | 390×845 CSS pixels at 2×, producing 780×1690 images |
+
+Desktop defaults to **1920×1080**, one screen per tile. The last tile clamps to the page end and can overlap the
+previous tile. Named elements must be unique; use a specific CSS selector for ambiguity. Sticky headers may repeat.
+The model downscales images to about 1500 pixels on the long side, so taller multi-screen tiles would lose detail.
+At most **8 tiles per call**, with no eight-tile limit on the page: a 15-screen review uses `1-8` then `9-15`.
+Each call renders the current page again; repeat the overview if content/layout changed between requests.
+
+Approximate image cost is **1.5–2k tokens per tile**. A quick check is the overview plus 1–2 relevant tiles;
+a full review reads all tiles (about 22.5–30k tokens for 15). The small overview is for layout only, not text/detail
+judgment. Select middle and end tiles as needed, rather than judging only the first screen.
+
+Every call has a **60-second hard wall-clock timeout**, including browser startup, navigation, preparation and
+capture. Timeout/cancellation kills the owned browser process group and discards temporary files. The manager
+receives a clear failure; a page that keeps growing or exceeds the finite 100-screen preparation walk fails explicitly.
+Failures do not enqueue work or block the sequential worker queue. Images are returned to the model and temporary
+capture files are removed; they are not saved as project files or login sessions.
+
+Install the runtime dependencies with `uv sync --locked` and Chromium with `uv run playwright install chromium`.
+An existing Chrome executable can be selected with the retained `LINKO_PANEL_CHROME` environment variable.
+To switch the installed Dev Panel to this **same** engine at deployment, set its existing screenshot executable
+setting to the absolute executable launcher path, for example in its service environment:
+
+```ini
+Environment=LINKO_PANEL_NODE=/home/codex/projects/Linko-Bot-Manager/scripts/dev_panel_capture.py
+```
+
+The launcher accepts the panel's existing `node capture.mjs` invocation and stdin/stdout JSON contract; it runs the
+shared engine instead of executing the old `capture.mjs`. It selects Boss's `.venv/bin/python` and enforces the same
+hard timeout. The panel keeps its configured pages, overlap/sticky-stage sampling, saved sessions, duplicate filtering,
+selection/download interface and latest-success recovery. Its existing Node/Chrome availability checks and terminal
+Node dependencies still apply. Apply this setting when deploying the feature so the old engine is no longer used;
+do not maintain a second capture implementation in Dev Panel. Permanent coverage is `tests/test_screenshots.py` (real local Chromium pages, transport,
+Dev Panel compatibility, selection, per-call limits, and a stuck-page timeout).
+
 ## Architecture design principles
 
 This section is included verbatim in the manager prompt. It is advisory only: briefly evaluate each new feature
@@ -431,7 +485,7 @@ reload, saved-reader removal, keyboard and narrow layouts). Historical source an
 
 ```bash
 uv sync --locked
-uv run playwright install chromium               # required by audio browser regression tests
+uv run playwright install chromium               # manager screenshots and browser regression tests
 # browser_pwa.py opens a headed Chromium app window: on a display-less host run it as `xvfb-run -a uv run python scripts/browser_pwa.py`
 uv run python -m ai_manager.cli setup-owner     # first time only
 uv run pytest -q -m smoke                       # the fixed smoke suite, every task
