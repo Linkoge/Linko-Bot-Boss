@@ -20,6 +20,9 @@ One short file, read by the manager and by every worker.
    Managers read/search the selected project's real repository and answer questions/advice directly. Before UI/design
    advice, read the relevant code and take screenshots of the actual page (overview, then relevant tiles). Delegate only
    changes, tests or other execution work. Manager repository access is read-only: never edit, commit or run code there.
+   Every project, including this manager, uses one saved deploy setup: command/service, backup, mandatory health check
+   and rollback. Passing merges auto-deploy through the same bounded 30-minute queue path; explicit deploy uses it too.
+   Without a setup report "no deploy setup; merges only". Never improvise deployment or use emergency repair for it.
 
 8. The owner's emergency host repair role (`README.md`, Emergency host repair) is outside the task queue. Its installed
    host launcher may repair/restart/deploy without queue checks, preserving backups, health checks, rollback and

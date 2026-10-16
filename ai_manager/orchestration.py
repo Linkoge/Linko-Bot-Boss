@@ -17,7 +17,7 @@ from .todos import Todos
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Read project code directly with list_files, search_code and read_document (read-only; no execution). Inspect actual UI with screenshot (overview, selected viewport tiles or selector). Record deferred ideas (To-Dos), delegate and control tasks and projects, or retrieve scoped evidence/history. Passing work is merged and deployed automatically; use deploy only when the owner asks to deploy now (optionally with task_id of a finished task whose branch was never merged). model and effort apply to delegate only when the worker setting is Automatic. Read actions support offset pagination.",
+    "description": "Read project code directly with list_files, search_code and read_document (read-only; no execution). Inspect UI with screenshot. Record To-Dos, delegate/control tasks and projects, or retrieve evidence/history. Passing work always merges and deploys if the project has a saved setup; otherwise report no deploy setup. Use deploy for an owner-requested deploy, save_deploy_setup to replace one setup, deployment_status to inspect it. Emergency repair is only for an explicitly owner-requested host emergency, never a normal deploy. model/effort apply to delegate when the worker setting is Automatic. Reads support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -26,6 +26,7 @@ MANAGER_TOOL = {
                 "enum": [
                     "deploy",
                     "deployment_status",
+                    "save_deploy_setup",
                     "emergency_repair",
                     "repair_status",
                     "list_todos",
@@ -56,6 +57,7 @@ MANAGER_TOOL = {
             "tiles": {"type": "string", "description": "One-based indexes/ranges: 1-3,8,last. Maximum 8 per call. Omit for overview."},
             "selector": {"type": "string", "description": "One CSS selector or exact accessible name/text, centered in a tile; omit tiles."},
             "project_id": {"type": "string"},
+            "setup": {"type": ["object", "null"], "description": "One deploy setup, or null to remove. Command fields are argv arrays: deploy_command (or service name), backup_command, health_command (or health_url), rollback_command. Backup, health and rollback are mandatory. Commands run in the project repository; DEPLOY_BACKUP_DIR, DEPLOY_REPO, DEPLOY_COMMIT and DEPLOY_PREVIOUS are provided. No shell expansion."},
             "conversation_id": {"type": "string"},
             "acceptance": {"type": "string"},
             "constraints": {"type": "array", "items": {"type": "string"}},
@@ -110,7 +112,7 @@ class Scheduler:
             sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
             if sources:
                 args = {**args, 'todos': sources}
-        if internal and action in {'delegate', 'continue', 'hold', 'release', 'cancel', 'resume_project', 'deploy', 'emergency_repair'}:
+        if internal and action in {'delegate', 'continue', 'hold', 'release', 'cancel', 'resume_project', 'deploy', 'save_deploy_setup', 'emergency_repair'}:
             raise ValueError('Worker result notices are not explicit owner authorization; the owner decides what happens next')
         if args.get("todos") and action not in {"delegate", "continue"}:
             raise ValueError("To-Do ids go only with delegate or continue, when the owner asks to start them")
@@ -126,19 +128,27 @@ class Scheduler:
                 return repair.records()
             return repair.submit('manager:' + str(params.get('manager_execution_id')), args.get('objective', ''),
                                  params['conversation_id'])
-        if action == 'deployment_status':
-            return self.pipeline.status()
+        if action in {'deployment_status', 'save_deploy_setup'}:
+            project_id = args.get('project_id') or selected_project
+            if selected_project and project_id != selected_project:
+                raise ValueError('Deploy setup belongs to another project')
+            if action == 'deployment_status':
+                return self.pipeline.status(project_id)
+            if not project_id or 'setup' not in args:
+                raise ValueError('Select a project and provide setup (or null to remove)')
+            return self.pipeline.save_setup(project_id, args['setup'])
         if action == 'deploy':
             project_id = args.get('project_id') or selected_project
             if not project_id or (selected_project and project_id != selected_project):
-                raise ValueError('Select the manager project to deploy')
+                raise ValueError('Select the project to deploy')
             if args.get('task_id'):
                 task = self.tasks.get(args['task_id'])
                 if task['project_id'] != project_id:
                     raise ValueError('Task belongs to another project')
                 self.tasks.request_merge(task['id'])
                 return {'merge': 'requested', 'task_id': task['id'],
-                        'next': 'the worker merges it and a deploy is requested when the merge succeeds'}
+                        'next': ('the worker merges it and requests deploy' if self.pipeline.deployable(project_id)
+                                 else 'no deploy setup; merges only')}
             return self.pipeline.request(project_id, 'owner', args.get('task_id'), params['conversation_id'],
                                          args.get('reason', 'owner requested deploy'))
         offset = args.get("offset", 0)

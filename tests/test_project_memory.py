@@ -329,9 +329,13 @@ def test_stale_candidate_cannot_overwrite_a_newer_version(system):
 
 def test_long_deployment_result_is_summarised_in_the_manager_context(system):
     project, _, _ = ready(system)
+    Pipeline(system[0], system[1]).save_setup(project, {
+        'deploy_command': ['true'], 'backup_command': ['true'],
+        'health_command': ['true'], 'rollback_command': ['true'],
+    })
     atomic(
         system[0].path.parent / "deploy" / "result.json",
-        {"id": "0123456789abcdef", "status": "success", "reason": "historical bulk " * 10000},
+        {"id": "0123456789abcdef", "project_id": project, "status": "success", "reason": "historical bulk " * 10000},
     )
     chat = system[2]
     prompt, _ = chat.prompt(chat.conversation(project), "hello", "execution", "new-thread", None)

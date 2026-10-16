@@ -267,6 +267,16 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def cancel_deployment():
         return {'cancelled': scheduler.pipeline.cancel()}
 
+    @app.get('/api/projects/{project_id}/deploy-setup', dependencies=[Depends(require_owner)])
+    def project_deploy_setup(project_id: str):
+        return scheduler.pipeline.status(project_id)
+
+    @app.put('/api/projects/{project_id}/deploy-setup', dependencies=[Depends(require_owner)])
+    def save_project_deploy_setup(project_id: str, body: dict):
+        if 'setup' not in body:
+            raise ValueError('Provide setup (or null to remove)')
+        return scheduler.pipeline.save_setup(project_id, body['setup'])
+
     @app.post("/api/setup")
     async def setup(body: SetupBody, request: Request):
         # Bootstrap token checks are also throttled, with no remote password reset path.

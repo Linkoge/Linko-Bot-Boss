@@ -1,7 +1,7 @@
 """Merge into main and the deploy request/result protocol. Contract: README.md.
 
 The worker (core.py) merges a passed branch into main one at a time, then asks the single deploy script
-(scripts/deploy.py) to deploy main; passing work always does both. The deploy script itself waits for idle, backs up,
+(scripts/deploy.py) to deploy main when the project has a saved setup. The script itself waits for idle, backs up,
 restarts, health-checks and rolls back; this module only writes its request file and reports its short result. A pending
 request holds new work and merges for at most DEPLOY_WAIT seconds. No AI call decides anything here.
 """
@@ -13,11 +13,11 @@ import time
 from pathlib import Path
 
 from . import fence
+from .deploy_setup import validate_setup
 from .fence import Busy, main_branch
 from .github_backup import GitHubBackup
 
 DEPLOY_WAIT = 1800  # a pending deploy request holds the queue at most this long, then it is withdrawn
-ROOT = Path(os.getenv('AI_MANAGER_REPO') or Path(__file__).resolve().parents[1]).resolve()  # live code checkout
 IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
 
 
@@ -70,9 +70,33 @@ class Pipeline:
         self.root = db.path.parent / 'deploy'
         self.backups = GitHubBackup(db, registry)
 
-    def deployable(self, path):
-        # Only the manager's own repository has the deploy script wiring.
-        return Path(path).resolve() == ROOT
+    def setup(self, project_id):
+        project = self.registry.get(project_id)
+        key = 'deploy_setup:' + project_id
+        saved = self.db.setting(key, 'unmigrated')
+        if saved != 'unmigrated':
+            return saved
+        # Migrate the existing installation once, without inventing a setup for other repositories.
+        installed = read(self.root / 'installed.json') or {}
+        if installed.get('repo') and Path(installed['repo']).resolve() == Path(project['path']).resolve():
+            saved = {'runtime': installed}
+            self.db.run('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)', (key, json.dumps(saved)))
+            return self.db.setting(key)
+        return None
+
+    def save_setup(self, project_id, setup):
+        self.registry.get(project_id)
+        setup = validate_setup(setup) if setup is not None else None
+        with fence.hold(self.db.path.parent, exclusive=True):
+            if self.pending():
+                raise ValueError('Finish or cancel the pending deploy before changing a setup')
+            self.db.set_setting('deploy_setup:' + project_id, setup)
+            with self.db.transaction() as conn:
+                self.db.event(conn, 'deployment.setup_saved', {'configured': setup is not None}, project_id)
+        return self.status(project_id)
+
+    def deployable(self, project_id):
+        return self.setup(project_id) is not None
 
     # ---- deploy protocol (files shared with scripts/deploy.py) ---------------------------------------------
     def installed(self):
@@ -81,32 +105,60 @@ class Pipeline:
     def pending(self):
         return (self.root / 'request.json').is_file()
 
-    def status(self):
+    def status(self, project_id=None):
+        last = read(self.root / 'result.json')
+        if project_id:
+            key = hashlib.sha256(project_id.encode()).hexdigest()
+            last = read(self.root / 'project-results' / (key + '.json')) or (
+                last if last and last.get('project_id') == project_id else None)
+        setup = self.setup(project_id) if project_id else None
         return {'installed': self.installed(), 'request': read(self.root / 'request.json'),
                 'state': read(self.root / 'state.json') if self.pending() else None,
-                'last_result': read(self.root / 'result.json')}
+                'last_result': last,
+                **({'setup': setup, 'deployment': 'deploy setup saved' if setup is not None
+                    else 'no deploy setup; merges only'} if project_id else {})}
 
-    def summary(self):
+    def summary(self, project_id=None):
         """Short fact for the manager prompt."""
-        value = self.status()
+        value = self.status(project_id)
+        if project_id and not value['setup']:
+            return 'no deploy setup; merges only'
         if value['request']:
+            if project_id and value['request'].get('project_id') != project_id:
+                return "another project's deploy holds the queue"
             return 'deploy requested; ' + ((value['state'] or {}).get('phase') or 'queued')
         last = value['last_result']
         return (last['status'] + ': ' + last['reason'])[:200] if last else 'no deploy yet'
 
     def request(self, project_id, source='auto', task_id=None, conversation_id=None, reason=''):
-        if not self.deployable(self.registry.get(project_id)['path']):
-            raise ValueError('Deploy is available only for the manager project')
+        with fence.hold(self.db.path.parent, exclusive=True, wait=5):
+            return self._request(project_id, source, task_id, conversation_id, reason)
+
+    def _request(self, project_id, source, task_id, conversation_id, reason):
+        project = self.registry.get(project_id)
+        setup = self.setup(project_id)
+        if setup is None:
+            return {'status': 'no deploy setup', 'reason': 'no deploy setup; merges only', 'project_id': project_id}
         if self.pending():
-            return read(self.root / 'request.json')
+            pending = read(self.root / 'request.json')
+            if pending.get('project_id') != project_id:
+                raise ValueError('Another project has a pending deploy; retry after it finishes')
+            return pending
         value = {'id': hashlib.sha256(os.urandom(16)).hexdigest()[:16], 'project_id': project_id, 'source': source,
                  'task_id': task_id, 'conversation_id': conversation_id, 'reason': reason[:300],
-                 'requested_at': time.time()}
+                 'requested_at': time.time(), 'repo': str(self.registry.allowed_path(project['path'])), 'setup': setup}
         atomic(self.root / 'request.json', value)
         return value
 
     def cancel(self, project_id=None):
         """Withdraw a request that has not yet reached backup/restart; the script re-checks before it stops anything."""
+        try:
+            with fence.hold(self.db.path.parent, exclusive=True):
+                return self._cancel(project_id)
+        except Busy:
+            raise ValueError('Deploy holds the checkout; it finishes or rolls back automatically') from None
+
+    def _cancel(self, project_id):
         request = read(self.root / 'request.json')
         if not request or (project_id and request.get('project_id') != project_id):
             return False
@@ -134,7 +186,7 @@ class Pipeline:
             payload = {k: result.get(k) for k in ('id', 'status', 'reason', 'commit', 'previous')}
             self.db.event(conn, 'deployment.result', payload, result.get('project_id'), result.get('task_id'))
             text = {'success': 'Deploy succeeded', 'failed': 'Deploy failed; nothing changed',
-                    'rolled_back': 'Deploy failed its health check and was rolled back (code and database)',
+                    'rolled_back': 'Deploy failed and was rolled back',
                     'rollback_failed': 'Deploy failed and could not be rolled back; the service needs attention',
                     'cancelled': 'Deploy cancelled'}.get(result['status'], 'Deploy ' + result['status'])
             self.post(conn, result.get('conversation_id'), key, f"{text}: {result['reason']}"[:600])
@@ -155,6 +207,13 @@ class Pipeline:
     def expire(self, max_age=DEPLOY_WAIT):
         """A deploy request that has not finished in time (script not installed, stuck unit, endless idle wait) must not
         hold the queue: withdraw it while that is still safe. Past the backup it finishes or rolls back by itself."""
+        try:
+            with fence.hold(self.db.path.parent, exclusive=True):
+                return self._expire(max_age)
+        except Busy:
+            return False
+
+    def _expire(self, max_age):
         request = read(self.root / 'request.json')
         if not request or time.time() - request.get('requested_at', time.time()) <= max_age:
             return False

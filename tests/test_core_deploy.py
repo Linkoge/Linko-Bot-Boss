@@ -13,7 +13,6 @@ from test_core import git as git_
 from test_deploy_script import deploy_script, git
 from test_deploy_script import runtime as runtime_fixture
 
-from ai_manager import pipeline as pipeline_module
 from ai_manager.config import Settings
 from ai_manager.core import Core
 from ai_manager.db import Database
@@ -32,7 +31,7 @@ class Flow:
         self.db = Database(runtime.data / "core.sqlite3")  # not the service's database; same directory
         registry = Registry(self.db, (runtime.root,))
         self.project = registry.add(runtime.repo)
-        monkeypatch.setattr(pipeline_module, "ROOT", runtime.repo.resolve())
+        deploy_script.atomic(runtime.data / 'deploy' / 'installed.json', runtime.config)
         self.pipeline = Pipeline(self.db, registry)
         # scripts/deploy.py reads the service database for the project status.
         with sqlite3.connect(runtime.data / "manager.sqlite3") as conn:

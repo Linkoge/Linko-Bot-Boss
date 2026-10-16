@@ -375,7 +375,7 @@ class Chat:
     def prompt(self, conversation, content, execution_id, thread_id, prior):
         context = self.context(conversation["project_id"])
         from .pipeline import Pipeline
-        context['deployment'] = Pipeline(self.db, self.registry).summary()
+        context['deployment'] = Pipeline(self.db, self.registry).summary(conversation['project_id'])
         if conversation['project_id']:
             from .project_memory import encode
             if len(encode({k: v for k, v in context.items() if k != 'instructions'}).encode()) > 2000:

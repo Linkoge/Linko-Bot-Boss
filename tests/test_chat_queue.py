@@ -175,6 +175,6 @@ async def test_active_history_tool_cannot_consume_future_queued_request(system):
     future = db.one("SELECT id FROM messages WHERE execution_id=? AND role='user'", (second['execution_id'],))['id']
     with pytest.raises(ValueError, match='Unknown message'):
         await scheduler.manager_action(None, params | {'arguments': {'action': 'read_history', 'message_id': future}})
-    with pytest.raises(ValueError, match='Select the manager project'):
+    with pytest.raises(ValueError, match='Select the project'):
         await scheduler.manager_action(None, params | {'arguments': {'action': 'deploy', 'project_id': None}})
     assert not scheduler.pipeline.pending()

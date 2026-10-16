@@ -74,7 +74,7 @@ async def main():
                 if result:
                     assert len(tasks) == 1
                     assert tasks[0]["status"] == "done", tasks[0]
-                    # The fixture project is not the manager's own: it is merged into main but never deployed.
+                    # The fixture project has no saved deploy setup: passing work merges only.
                     work = Path(tasks[0]["workspace"])
                     assert (work / "calculator.py").read_text().find("a + b") >= 0
                     check = subprocess.run(

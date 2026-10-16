@@ -101,13 +101,15 @@ def world(tmp_path, monkeypatch):
     db = Database(settings.db_path)
     registry = Registry(db, (projects,))
     project = registry.add(app)
-    monkeypatch.setattr(pipeline_module, "ROOT", app.resolve())  # the manager's own project: deployable
     pipeline = Pipeline(db, registry)
     lab = Lab()
     core = Core(db, registry, settings, pipeline, lab.factory, gate=lab.gate)
 
-    def deployable(flag):  # merging always happens; only the manager's own project also asks for a deploy
-        monkeypatch.setattr(pipeline_module, "ROOT", app.resolve() if flag else tmp_path.resolve())
+    def deployable(flag):
+        pipeline.save_setup(project['id'], {'deploy_command': ['true'], 'backup_command': ['true'],
+                                             'health_command': ['true'], 'rollback_command': ['true']} if flag else None)
+
+    deployable(True)
 
     return SimpleNamespace(db=db, registry=registry, settings=settings, project=project, app=app, pipeline=pipeline,
                            lab=lab, core=core, tasks=core.tasks, deployable=deployable)
@@ -276,12 +278,14 @@ async def test_worker_runs_in_isolated_branch_then_merges_and_requests_one_deplo
 
 
 @pytest.mark.asyncio
-async def test_passing_work_always_merges_and_a_project_without_deploy_wiring_is_merged_but_not_deployed(world):
-    world.deployable(False)  # not the manager's own project: no deploy script wiring
+async def test_passing_work_always_merges_and_a_project_without_setup_reports_merges_only(world):
+    world.deployable(False)
     world.tasks.add(world.project["id"], "merge only")
     done = await run_next(world)
     assert done["state"] == "done" and done["merge"]["state"] == "merged" and done["merge"]["deploy"] is False
     assert (world.app / "change-1.txt").exists() and not world.pipeline.pending()
+    assert done['merge']['deployment'] == world.pipeline.summary(world.project['id']) == 'no deploy setup; merges only'
+    assert world.pipeline.request(world.project['id'])['status'] == 'no deploy setup'
     assert "auto_deploy" not in json.dumps([dict(r) for r in world.db.all("SELECT key FROM settings")])
 
 

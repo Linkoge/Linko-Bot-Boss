@@ -3,7 +3,7 @@
 States: queued -> running -> done | failed. `held` is a flag on a queued task (skipped until released); order is the
 only dependency. A worker implements on an isolated branch, the application runs the permanent checks (the fixed smoke
 suite plus the test files the branch added or changed), repairs happen in durable rounds (at most 5, then the task stops
-and reports), and a passing branch is always merged into main, which asks the deploy script to deploy.
+and reports). A passing branch always merges into main; a saved project setup requests the shared deploy script.
 """
 
 import asyncio
@@ -590,12 +590,14 @@ class Core:
                 main_head, changed = await asyncio.to_thread(self.pipeline.merge, project["path"], head)
             except Conflict:
                 continue
-            requested = None
-            if changed and self.pipeline.deployable(project["path"]):
-                requested = self.pipeline.request(task["project_id"], "auto", task["id"], task["origin_conversation"],
-                                                  "task " + task["id"][:8])
+            deployment = {'reason': 'already in main'}
+            if changed:
+                deployment = self.pipeline.request(task["project_id"], "auto", task["id"], task["origin_conversation"],
+                                                   "task " + task["id"][:8])
+            requested = bool(deployment.get('id'))
             return {"reason": "", "merge": {"state": "merged" if changed else "already in main", "main": main_head,
-                                            "deploy": bool(requested)}}
+                                            "deploy": requested,
+                                            "deployment": 'deploy requested' if requested else deployment['reason']}}
         raise ValueError("main kept changing while merging; try again")
 
     # -- ending a run ----------------------------------------------------------------------------------------------

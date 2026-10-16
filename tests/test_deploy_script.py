@@ -267,7 +267,7 @@ def test_hold_and_withdrawal_stop_the_deploy_before_any_restart(runtime):
     commit(runtime.repo, 'docs', **{'README.md': ('# Linko Bot Boss', '# Linko Bot Boss held')})
     project_id = 'p' * 32
     runtime.sql("INSERT INTO projects(id,name,path,agent_id,created_at,updated_at) VALUES(?,?,?,?,1,1)",
-                (project_id, 'x', str(runtime.root / 'x'), 'project-x'))
+                (project_id, 'x', str(runtime.repo), 'project-x'))
     pid = (runtime.state / 'pid').read_text()
     runtime.sql("UPDATE projects SET status='paused' WHERE id=?", (project_id,))
     runtime.request(source='auto', project_id=project_id)
@@ -521,9 +521,10 @@ def test_emergency_deploy_bypasses_stale_queue_preserving_backup_and_rollback(tm
 def test_explicit_emergency_intent_bypasses_scheduling_gates_but_preserves_cancellation(tmp_path):
     deploy = deploy_script.Deploy({'repo': str(tmp_path), 'data': str(tmp_path)})
     deploy.id = 'repair'
-    request = {'id': 'repair', 'source': 'auto', 'project_id': 'paused'}
+    request = {'id': 'repair', 'source': 'auto', 'project_id': 'paused', 'requested_at': time.time() - 7200}
     deploy_script.atomic(deploy.root / 'request.json', request)
     deploy_script.atomic(deploy.root / 'emergency.json', {'id': 'repair'})
+    deploy_script.atomic(deploy.root / 'state.json', {'id': 'repair', 'phase': 'waiting_idle'})
     # No database is needed: explicit host intent overrides the paused-project gate.
     deploy.check_request(request)
     (deploy.root / 'request.json').unlink()

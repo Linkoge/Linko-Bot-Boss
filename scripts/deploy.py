@@ -2,9 +2,9 @@
 """The one deploy script. Contract: README.md. Standard library only.
 
 Triggered by systemd when the manager writes DATA/deploy/request.json (or run by hand: `python3 scripts/deploy.py`).
-Steps: run the full backend suite once on main -> wait until nothing is running -> back up the SQLite database ->
-stop the service -> update the live checkout to main -> start -> health check -> on any failure after the stop,
-roll back code and database automatically. The outcome is persisted as one short human-readable result.
+Every saved project setup uses the same wait for idle -> backup -> deploy main -> health check -> automatic rollback
+sequence. Command/service setups supply backup, health and rollback hooks; the installed runtime adapter preserves
+its full backend suite, SQLite snapshots and scheduler/authentication checks. Results are durable and project-scoped.
 """
 import argparse
 import fcntl
@@ -24,6 +24,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from ai_manager import fence  # noqa: E402
+from ai_manager.deploy_setup import validate_setup  # noqa: E402
 
 IDLE = {
     'unfinished_executions': 'SELECT count(*) FROM executions WHERE finished_at IS NULL',
@@ -78,10 +79,64 @@ class Deploy:
         self.commands = {'stop': [*systemctl, 'stop', service], 'start': [*systemctl, 'start', service],
                          **config.get('service_cmds', {})}
         self.id = None
+        self.setup = None  # installed runtime adapter until a project request selects its saved setup
+
+    def select_setup(self, request):
+        setup = request.get('setup')
+        if setup is None:
+            # Pre-upgrade/host CLI requests resolve the same saved setup, including explicit removal.
+            if not request.get('project_id') and not self.db.is_file():
+                return
+            project = self.query('SELECT id,path FROM projects WHERE id=?', (request['project_id'],)) if (
+                request.get('project_id')) else self.query('SELECT id,path FROM projects WHERE path=?', (str(self.repo),))
+            if project:
+                request.update(project_id=project[0], repo=project[1])
+                saved = self.query('SELECT value FROM settings WHERE key=?', ('deploy_setup:' + project[0],))
+                setup = json.loads(saved[0]) if saved else (
+                    {'runtime': self.config} if Path(project[1]).resolve() == self.repo.resolve() else None)
+                if setup is None:
+                    raise ValueError('no deploy setup; merges only')
+                request['setup'] = setup
+            elif request.get('project_id'):
+                raise ValueError('no deploy setup; merges only')
+            else:
+                return  # Initial operator bootstrap before this runtime has a registered project.
+        if 'runtime' in setup:
+            runtime = setup['runtime']
+            if Path(runtime['repo']).resolve() != Path(request['repo']).resolve():
+                raise ValueError('Deploy setup repository mismatch')
+            # Keep host timing overrides; all runtime operations use the saved installation.
+            self.__init__({**runtime, **{k: v for k, v in self.config.items()
+                                      if k in {'health_seconds', 'poll_seconds', 'idle_seconds', 'test_seconds'}}}, self.sleep)
+            self.id = request['id']
+            return
+        self.setup = validate_setup(setup)
+        if request.get('emergency'):
+            raise ValueError('Normal project deploys cannot use host emergency mode')
+        self.repo = Path(request['repo'])
+        self.receipt = self.root / 'projects' / (hashlib.sha256(str(self.repo.resolve()).encode()).hexdigest() + '.json')
+        service = self.setup.get('service')
+        self.commands = {'stop': ['systemctl', '--user', 'stop', service] if service else ['true'],
+                         'start': self.setup.get('deploy_command') or ['systemctl', '--user', 'start', service]}
+
+    @property
+    def last_good(self):
+        return self.receipt if self.setup else self.root / 'last_good.json'
+
+    def hook(self, name, backup=None, commit=None):
+        env = {**os.environ, 'DEPLOY_BACKUP_DIR': str(backup or self.backup_dir),
+               'DEPLOY_REPO': str(self.repo), 'DEPLOY_COMMIT': commit or self.target or '',
+               'DEPLOY_PREVIOUS': self.previous or ''}
+        return run(self.setup[name], cwd=self.repo, timeout=120, env=env)
+
+    def service(self, action):
+        if self.setup and action == 'start' and self.setup.get('deploy_command'):
+            return self.hook('deploy_command')
+        return run(self.commands[action], cwd=self.repo, timeout=120)
 
     @property
     def branch(self):
-        return fence.main_branch(self.repo, self.config.get('branch'))  # same resolution as the merge step
+        return fence.main_branch(self.repo, None if self.setup else self.config.get('branch'))
 
     # ---- bookkeeping --------------------------------------------------------------------------------------------
     def log(self, text):
@@ -107,6 +162,9 @@ class Deploy:
                   'task_id': request.get('task_id'), 'conversation_id': request.get('conversation_id'), **extra}
         atomic(self.root / 'results' / (self.id + '.json'), result)
         atomic(self.root / 'result.json', result)
+        if request.get('project_id'):
+            key = hashlib.sha256(request['project_id'].encode()).hexdigest()
+            atomic(self.root / 'project-results' / (key + '.json'), result)
         stamp = time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(result['finished_at']))
         (self.root / 'last-deploy.txt').write_text(f"{stamp} - {status.replace('_', ' ')}: {result['reason']}\n")
         self.log(f"result {status}: {result['reason']}")
@@ -146,8 +204,11 @@ class Deploy:
         """A withdrawn request or a paused project stops the deploy before anything changes."""
         if not self.request():
             raise Stop('cancelled', 'request withdrawn before the restart')
-        if (request.get('source') == 'auto' and request.get('project_id') and not request.get('emergency')
-                and (read(self.root / 'emergency.json') or {}).get('id') != self.id):
+        emergency = request.get('emergency') or (read(self.root / 'emergency.json') or {}).get('id') == self.id
+        if not emergency and (read(self.root / 'state.json') or {}).get('phase') in {'testing', 'waiting_idle'} and (
+                time.time() - request.get('requested_at', time.time()) >= IDLE_SECONDS):
+            raise Stop('cancelled', 'deploy request expired after 30 minutes; merged work stays on main')
+        if request.get('source') == 'auto' and request.get('project_id') and not emergency:
             status = self.query('SELECT status FROM projects WHERE id=?', (request['project_id'],))
             if not status or status[0] != 'active':
                 raise Stop('cancelled', 'project is paused or removed')
@@ -163,6 +224,8 @@ class Deploy:
             return error.code, error.read()
 
     def running_commit(self):
+        if self.setup:
+            return (read(self.last_good) or {}).get('commit')
         try:
             status, body = self.http('/api/auth-status')
             return json.loads(body).get('release_commit') if status == 200 else None
@@ -171,6 +234,14 @@ class Deploy:
 
     def health(self, commit):
         """App responds with the expected code, scheduler runs, auth boundary holds and a session works."""
+        if self.setup:
+            if self.setup.get('health_command'):
+                self.hook('health_command', commit=commit)
+            else:
+                with urllib.request.urlopen(self.setup['health_url'], timeout=5) as response:
+                    if not 200 <= response.status < 300:
+                        raise RuntimeError('unhealthy HTTP status: ' + str(response.status))
+            return
         status, body = self.http('/api/auth-status')
         info = json.loads(body)
         if status != 200 or not info.get('scheduler_running'):
@@ -203,6 +274,13 @@ class Deploy:
     # ---- database ------------------------------------------------------------------------------------------------
     def backup(self, destination):
         destination.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if self.setup:
+            if destination.name == 'before.sqlite3':
+                self.git('bundle', 'create', str(destination.parent / 'code.bundle'), '--all')
+                atomic(destination.parent / 'release.json', {'previous': self.previous, 'commit': self.target,
+                                                            'repo': str(self.repo), 'setup': self.setup})
+                self.hook('backup_command', backup=destination.parent)
+            return
         with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=30) as src, sqlite3.connect(destination) as dst:
             src.backup(dst)
             if dst.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
@@ -210,6 +288,9 @@ class Deploy:
         os.chmod(destination, 0o600)
 
     def restore(self, source):
+        if self.setup:
+            self.hook('rollback_command', backup=source.parent, commit=self.previous)
+            return
         temp = self.db.with_name(self.db.name + '.restore')
         temp.unlink(missing_ok=True)
         with sqlite3.connect(source) as src, sqlite3.connect(temp) as dst:
@@ -227,6 +308,8 @@ class Deploy:
 
     # ---- code ----------------------------------------------------------------------------------------------------
     def sync(self):
+        if self.setup:
+            return
         if self.config.get('uv'):
             run([self.config['uv'], 'sync', '--locked'], cwd=self.repo, timeout=900)
 
@@ -234,6 +317,8 @@ class Deploy:
         return bool(old and self.git('diff', '--name-only', old, new, '--', 'pyproject.toml', 'uv.lock', check=False))
 
     def rollback(self, previous, target, synced):
+        if self.setup and not previous:
+            return  # First release: rollback_command restores the live release from the mandatory backup.
         if not previous:
             raise RuntimeError('previous version unknown; code could not be restored')
         self.git('tag', '-f', 'linko-failed-' + self.id, target)  # keeps the failed commits reachable
@@ -251,6 +336,7 @@ class Deploy:
         stopped = changed = synced = False
         previous = target = None
         backups = self.root / 'backups' / self.id
+        self.backup_dir, self.previous, self.target = backups, None, None
         fenced = ExitStack()  # holds the checkout fence from the final idle check to the end
         def emergency_stop():
             nonlocal stopped
@@ -260,7 +346,7 @@ class Deploy:
             self.state('emergency_backing_up')
             self.backup(backups / 'before.sqlite3')
             stopped = True
-            run(self.commands['stop'], timeout=120)
+            self.service('stop')
             with sqlite3.connect(f'file:{self.db}?mode=ro', uri=True, timeout=10) as conn:
                 pids = conn.execute('SELECT pid,process_start FROM executions WHERE pid IS NOT NULL').fetchall()
             def process_start(pid):
@@ -278,15 +364,19 @@ class Deploy:
                 with fence.hold(self.data, True, wait=60):  # no merge may change the checkout under us
                     if self.git('status', '--porcelain', '--untracked-files=no'):
                         raise Stop('failed', 'live checkout has uncommitted changes')
-                    previous = self.running_commit() or (read(self.root / 'last_good.json') or {}).get('commit')
+                    previous = self.running_commit() or (read(self.last_good) or {}).get('commit')
                     if self.git('symbolic-ref', '-q', '--short', 'HEAD', check=False) != self.branch:
                         self.git('checkout', '--quiet', self.branch)
                     target = self.git('rev-parse', 'HEAD')
+                    self.previous, self.target = previous, target
             except fence.Busy as error:
                 raise Stop('failed', 'live checkout is busy: ' + str(error)) from error
+            if not self.setup and not previous:
+                raise Stop('failed', 'previous release unknown; cannot guarantee code and database rollback')
             if previous == target and not request.get('emergency'):
+                self.wait_health(target)
                 raise Stop('success', f'{target[:10]} is already live; nothing to deploy')
-            tests = self.config.get('test_cmd')
+            tests = None if self.setup else self.config.get('test_cmd')
             if tests and not request.get('skip_tests'):
                 result = run(tests, cwd=self.repo, timeout=self.config.get('test_seconds', 3600), check=False)
                 if result.returncode:
@@ -294,11 +384,14 @@ class Deploy:
             if request.get('emergency'):
                 emergency_stop()
             self.state('waiting_idle', commit=target)
-            deadline = time.monotonic() + self.config.get('idle_seconds', IDLE_SECONDS)
+            remaining = max(0, request.get('requested_at', time.time()) + IDLE_SECONDS - time.time())
+            deadline = time.monotonic() + min(self.config.get('idle_seconds', IDLE_SECONDS), remaining)
             last_busy, reported_at = None, 0.0
             while True:
                 self.check_request(request)
                 if not request.get('emergency') and (read(self.root / 'emergency.json') or {}).get('id') == self.id:
+                    if self.setup:
+                        raise Stop('failed', 'Normal project deploys cannot use host emergency mode')
                     request['emergency'] = True
                     emergency_stop()
                 busy = {} if request.get('emergency') else self.busy()
@@ -332,7 +425,7 @@ class Deploy:
             self.state('restarting')
             stopped = True
             if not request.get('emergency'):
-                run(self.commands['stop'], timeout=120)
+                self.service('stop')
             self.backup(backups / 'stopped.sqlite3')  # consistent snapshot; nothing writes while stopped
             self.state('updating')
             changed = True
@@ -340,17 +433,17 @@ class Deploy:
             if previous and self.deps_changed(previous, target):
                 self.sync()
                 synced = True
-            run(self.commands['start'], timeout=120)
+            self.service('start')
             self.state('verifying')
             self.wait_health(target)
-            (self.root / 'last_good.json').write_text(json.dumps({'commit': target, 'at': time.time()}))
+            atomic(self.last_good, {'commit': target, 'at': time.time()})
             self.prune()
             return self.finish(request, 'success', f'deployed {target[:10]}; health check passed',
                                commit=target, previous=previous, backup=str(backups))
         except Stop as stop:
             if stopped:
                 try:
-                    run(self.commands['start'], timeout=120)
+                    self.service('start')
                     self.wait_health(previous)
                 except Exception as restart_error:
                     return self.finish(request, 'rollback_failed', str(stop) + '; restart failed: ' + str(restart_error))
@@ -360,15 +453,16 @@ class Deploy:
                 return self.finish(request, 'failed', str(error), commit=target, previous=previous)
             self.state('rolling_back')
             problems = []
-            for step, action in (('stop', lambda: run(self.commands['stop'], timeout=120, check=False)),
-                                 ('code', lambda: changed and self.rollback(previous, target, synced)),
-                                 ('database', lambda: changed and self.restore(backups / 'stopped.sqlite3'))):
+            for step, action in (('stop', lambda: self.service('stop')),
+                                 ('code', lambda: (changed or self.setup) and self.rollback(previous, target, synced)),
+                                 ('data', lambda: (changed or self.setup) and self.restore(backups / 'stopped.sqlite3'))):
                 try:
                     action()
                 except Exception as rollback_error:  # keep going: the service must still be started
                     problems.append(f'{step} rollback failed: {str(rollback_error)[:200]}')
             try:
-                run(self.commands['start'], timeout=120)
+                if not self.setup:  # The saved rollback command restores/restarts the external release itself.
+                    self.service('start')
                 if not problems:
                     self.wait_health(previous)
             except Exception as start_error:
@@ -379,8 +473,8 @@ class Deploy:
             if not changed:
                 return self.finish(request, 'failed', str(error)[:300] + '; service restarted',
                                    commit=target, previous=previous)
-            return self.finish(request, 'rolled_back', f'{str(error)[:300]}; code and database restored to '
-                               f'{previous[:10]}', commit=target, previous=previous, backup=str(backups))
+            return self.finish(request, 'rolled_back', f'{str(error)[:300]}; code and data restored to '
+                               f'{(previous or "backed-up release")[:20]}', commit=target, previous=previous, backup=str(backups))
         finally:
             fenced.close()
 
@@ -404,6 +498,10 @@ class Deploy:
                 request['emergency'] = True
                 atomic(self.root / 'request.json', request)
             self.id = request['id']
+            try:
+                self.select_setup(request)
+            except Exception as error:
+                return self.finish(request, 'failed', 'Invalid deploy setup: ' + str(error))
             result = self.execute(request)
             return result
 

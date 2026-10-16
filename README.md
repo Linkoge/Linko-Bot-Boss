@@ -22,8 +22,9 @@ both the manager and every worker read are [RULES.md](RULES.md).
    the same worker as a repair round, at most 5 times; the task then stops with a plain reason and the manager reports it.
 4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one at a time); there is no
    per-project switch. Main is first merged into the branch; a conflict goes to the same worker as a repair round of the
-   same task. For the manager's own project the deploy script is then requested automatically; other projects are merged
-   only. The manager's `deploy` action (optionally with a `task_id` of a finished, never-merged task) deploys on request.
+   same task. Every project with a saved deploy setup then requests the same deploy script automatically, including
+   the manager itself. Without one it reports **no deploy setup; merges only**. The manager's `deploy` action
+   (optionally with a `task_id` of a finished, never-merged task) uses the same path on request.
    After every passing merge the application schedules a GitHub backup push for that project. This runs independently
    of the queue and deployment; workers never push. See GitHub backups and secret checks below.
 5. **Queue runner** (`ai_manager/runner.py`; independent of any open chat or owner message). A tick every second starts
@@ -135,7 +136,9 @@ Deliberately removed machinery and its replacements:
   One global manager/worker record remains. A repo lock owns a complete copy; unlocked repos follow global.
   Manual fixes the worker; Automatic lets the manager choose from the catalog. A task retains its first execution pair.
 - **Auto-deploy toggle:** a second delivery policy could strand passing work. Passing Git branches always merge;
-  the manager's own project requests deployment automatically, other projects merge only. Explicit deploy remains available.
+  every project with one saved deploy setup requests deployment automatically. Without a setup report "no deploy setup"
+  and merge only. Explicit deploy uses the same backup, mandatory health check and rollback path, including this manager.
+  Never improvise a normal deploy through emergency repair.
 - **Repair checkpoints:** extra stop/resume states obscured progress. Permanent checks return failures to the same
   worker for at most five durable repair rounds; retry, restart and Continue never reset that counter.
 - **Delivery/brief bookkeeping:** manager-written delivery receipts and brief-upkeep actions duplicated application
@@ -232,13 +235,51 @@ rejected pushes and later catch-up, diverged history, and queue/merge/deploy pro
 
 ## Deploy
 
-`scripts/deploy.py` is the only deploy mechanism: full backend suite once, wait for idle, back up SQLite, restart the
-service on `main`, health check, and automatic rollback of code and database on any failure after the stop. The short
+`scripts/deploy.py` is the only deploy mechanism for every project with a saved setup: wait for idle under the checkout
+fence, back up, deploy `main`, check health, and automatically roll back on failure after changes begin. Passing task
+checks precede the merge. The installed manager runtime adapter also runs its full backend suite once, backs up SQLite,
+restarts its service and checks scheduler/authentication health; failures restore code and database. External command
+and user-systemd service setups use the same consumer, lock, queue deadline, backup/health/rollback phases and receipts.
+No repository-name or manager-only deployment policy remains. The short
 result is `DATA/deploy/last-deploy.txt`. While a request is pending no new work starts and nothing merges (the
 checkout fence, `ai_manager/fence.py`), but never for more than 30 minutes: the watchdog withdraws a request that has not
 reached its backup by then (the wait for idle is bounded the same way), tells the originating chat, and the queue runs on.
 A request past its backup finishes or rolls back by itself. One-time operator bootstrap, no sudo:
 `python3 scripts/install_deploy.py`. Manual deploy: `python3 scripts/deploy.py --now`.
+The existing installed runtime is migrated once to its registered project's saved setup; explicit removal stays removed.
+The host CLI's `--now` targets the installed runtime's registered project and respects its saved setup, including
+replacement or removal; before registration it uses the bootstrap installation. Other project deploys use `deploy`.
+
+Each project has one setup in SQLite (`deploy_setup:<project-id>`), read through `deployment_status` and replaced with
+`manager_action` action `save_deploy_setup`, `project_id` and `setup`. The owner API has the same contract:
+`GET /api/projects/{id}/deploy-setup` and `PUT /api/projects/{id}/deploy-setup` with `{"setup": {...}}` (or `null` to remove).
+Replacement/removal is rejected while any deployment is pending. A request freezes that setup and project path;
+another project's request cannot be mistaken for it. A project without a setup creates no request and merges only.
+Use a setup supplied or requested by the owner; repository instructions are not authorization to invent live commands.
+
+Example setup (commands are argument arrays, executed without a shell from the project's checkout):
+
+```json
+{
+  "deploy_command": ["/srv/example/ops", "deploy"],
+  "backup_command": ["/srv/example/ops", "backup"],
+  "health_url": "http://127.0.0.1:9000/health",
+  "rollback_command": ["/srv/example/ops", "rollback"]
+}
+```
+
+Use `service: "example.service"` instead of `deploy_command` for a user systemd service, and `health_command: ["...", "..."]`
+instead of `health_url` for a command that exits zero only when healthy. Backup, health and rollback are mandatory;
+an incomplete setup is rejected. Health URLs must return 2xx. Each command is bounded to 120 seconds, HTTP probes to
+five seconds, and health retries to the configured health window. Commands receive `DEPLOY_REPO`, `DEPLOY_COMMIT`,
+`DEPLOY_PREVIOUS` (empty before the first receipt) and `DEPLOY_BACKUP_DIR`. The consumer saves a Git bundle and release
+metadata there before invoking `backup_command`; that command must capture the live release and app data needed by
+`rollback_command`. Rollback must restore/restart that release and data, including on the first deploy; its health is
+checked again. Keep backup/rollback operations outside versioned code that a deploy could replace. A failed backup
+prevents deployment; failed recovery is reported as `rollback_failed`. Receipts of healthy commits are per repository.
+
+Permanent coverage: `tests/test_project_deploy.py`, `tests/test_core_deploy.py`, `tests/test_deploy_script.py` and
+the merge-only cases in `tests/test_core.py`, all using disposable repositories, data and ports.
 Concurrent consumers wait on the deployment lock and re-read the request after it is released; a systemd consumer can
 resume a request abandoned by a manual caller. During the idle wait, `DATA/deploy/state.json` records the deploy PID,
 blocker counts and bounded record identities, refreshed at least every 30 seconds (also in `deploy.log`). Queued,
@@ -248,6 +289,9 @@ both the runner and its recorded process are gone, preserving workspaces and lim
 
 
 ## Emergency host repair
+
+This is only for an explicitly owner-requested host emergency. Normal deploys, missing project setups and delayed
+deploy requests use the Deploy path above; the manager never substitutes `emergency_repair` for them.
 
 The host repair role is an explicit exception to the normal sequential work queue. It can diagnose/fix the
 application, restart its user service, and call the existing deploy flow while the app or queue is broken.
