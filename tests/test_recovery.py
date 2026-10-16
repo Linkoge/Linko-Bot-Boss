@@ -209,8 +209,57 @@ async def test_five_queued_tasks_run_in_order_through_a_manager_interruption(sys
     assert db.one("SELECT count(*) AS n FROM executions WHERE delivery='delivered'")["n"] == 5
     assert len(db.all("SELECT * FROM messages WHERE role='worker'")) == 5
     assert len(db.all("SELECT * FROM messages WHERE role='assistant' AND status='completed'")) == 6
-    assert all(t["origin_conversation"] == origin for t in Tasks(db).list())
+    # Listings contain compact cards; routing metadata lives on the full task.
+    assert all(Tasks(db).get(t["id"])["origin_conversation"] == origin for t in Tasks(db).list())
     assert len(db.all("SELECT * FROM executions")) == 11  # Healthy turns plus retry in the same execution.
+
+
+@pytest.mark.parametrize("state", ["done", "failed", "queued", "held"])
+@pytest.mark.parametrize("instructions", [
+    {"details": "Handle the new edge case"},
+    {"objective": "Handle the new edge case"},
+    {"objective": "Extend the feature", "details": "Handle the new edge case"},
+    {"objective": "Handle the new edge case", "details": "Handle the new edge case"},
+])
+@pytest.mark.asyncio
+async def test_manager_continue_instructions_reach_worker_input(system, state, instructions):
+    db, registry, chat, settings = system
+    task, project, origin = task_in(system, "Original objective")
+    db.run("UPDATE tasks SET acceptance='Original criteria' WHERE id=?", (task["id"],))
+    faults = Faults(["permanent"] if state == "failed" else [])
+    workers = Core(db, registry, settings, Pipeline(db, registry), faults.factory)
+    if state in {"done", "failed"}:
+        workers.launch(Tasks(db).claim())
+        await settle(workers)
+        assert Tasks(db).get(task["id"])["status"] == state
+    elif state == "held":
+        Tasks(db).control(task["id"], "hold")
+    previous = Tasks(db).get(task["id"])
+    scheduler = Scheduler(db, registry, settings, workers, chat)
+    params = {"tool": "manager_action", "callId": "continue-call",
+              "manager_execution_id": "continue-request", "conversation_id": origin,
+              "arguments": {"action": "continue", "task_id": task["id"],
+                            "acceptance": "New criteria", **instructions}}
+    continued = await scheduler.manager_action(project["id"], params)
+    assert continued["status"] == "queued"
+    assert continued["rounds"] == previous["rounds"]
+    # Replayed manager calls must neither duplicate instructions nor re-queue twice.
+    assert await scheduler.manager_action(project["id"], params) == continued
+    assert len(db.all("SELECT 1 FROM events WHERE task_id=? AND kind='task.continue'", (task["id"],))) == 1
+    claimed = Tasks(db).claim()
+    assert claimed["id"] == task["id"]
+    workers.launch(claimed)
+    await settle(workers)
+    execution = db.one("SELECT input,status FROM executions WHERE id=?", (claimed["lease_owner"],))
+    assert execution["status"] == "completed"
+    prompt = json.loads(execution["input"])
+    assert prompt == faults.calls[-1]
+    assert prompt["objective"].startswith("Original objective")
+    for text in set(instructions.values()):
+        assert prompt["objective"].count(text) == 1
+    assert prompt["acceptance_criteria"] == "Original criteria\n\nNew criteria"
+    if previous["native_thread"]:
+        assert previous["native_thread"] in faults.resumed
 
 
 @pytest.mark.asyncio

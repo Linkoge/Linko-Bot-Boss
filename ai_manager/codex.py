@@ -376,7 +376,8 @@ pause_project / resume_project, deploy, deployment_status, emergency_repair, rep
 list_tasks returns compact summaries: all matching unfinished tasks plus the latest five terminal tasks by default.
 Use next_offset for older terminal pages, query/status to filter in SQL, and read_task/read_result for full objectives,
 criteria, results, checks and references. In All Projects, omit project_id to list across projects.
-To refine a queued task, continue it with only the added instructions. A running task cannot be edited: delegate the
+To refine a queued task, continue it with only the added instructions in objective and/or details; both are preserved
+in the worker's objective. acceptance appends criteria. A running task cannot be edited: delegate the
 new work (it runs next) or cancel and continue.
 The context's worker is the owner's fixed model and effort for new tasks. When it says automatic, you pick: pass model
 and effort (any from its available list) to delegate, or leave them out for the provider default.

@@ -60,7 +60,7 @@ MANAGER_TOOL = {
             "model": {"type": "string"},
             "effort": {"type": "string"},
             "title": {"type": "string"},
-            "details": {"type": "string"},
+            "details": {"type": "string", "description": "To-Do details, or additional instructions for continue; appended alongside objective."},
             "path": {"type": "string"},
             "reason": {"type": "string"},
             "query": {"type": "string"},
@@ -232,6 +232,10 @@ class Scheduler:
             if task["project_id"] != project_id:
                 raise ValueError("Task belongs to another project")
             if action == "continue":
+                # Both fields are accepted by the tool. Preserve distinct details
+                # even when an objective is supplied, without repeating identical text.
+                additions = "\n\n".join(dict.fromkeys(
+                    text.strip() for text in (args.get("objective", ""), args.get("details", "")) if text.strip()))
                 with self.db.transaction() as conn:
                     previous = conn.execute(
                         "SELECT 1 FROM events WHERE kind='manager.continued' AND execution_id=? AND task_id=?",
@@ -247,7 +251,7 @@ class Scheduler:
                             context[key] = list(context.get(key, [])) + [v for v in values if v not in context.get(key, [])]
                         self.db.event(conn, "task.context", context, project_id, task["id"])
                     self.db.event(conn, "manager.continued", {"call_id": params["callId"]}, project_id, task["id"], params["manager_execution_id"])
-                task = await self.core.control(task["id"], "continue", None, args.get("objective", ""), args.get("acceptance", ""))
+                task = await self.core.control(task["id"], "continue", None, additions, args.get("acceptance", ""))
             else:
                 task = await self.core.control(task["id"], action)
             return self.tasks.context(task)

@@ -40,8 +40,12 @@ both the manager and every worker read are [RULES.md](RULES.md).
    stall. Held, paused, retry-waiting and deploy-waiting work is never a stall. Nothing stays blocked without a visible reason.
 
 Owner controls on a task: **Hold / Release** (queued), **Cancel** (queued or running; the branch is kept),
-**Continue** (failed or done task: appends instructions, re-queues at the end, counters stay). A worker may ask the owner a
-question; the task stays running and says so. Finished results return to the originating chat automatically.
+**Continue** appends instructions to queued/held tasks and releases a hold; failed/done tasks re-queue at the end,
+with counters preserved. Manager `continue` accepts added instructions in `objective`, `details`, or both;
+distinct text from both fields is appended to the original objective and reaches the worker's execution input,
+including when resuming the retained thread. `acceptance` appends criteria without replacing earlier requirements.
+A worker may ask the owner a question; the task stays running and says so.
+Finished results return to the originating chat automatically.
 
 ## Architecture design principles
 

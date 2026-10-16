@@ -56,5 +56,51 @@ Commands completed successfully with the repository virtualenv interpreter:
 - Ruff on all changed Python implementation/test files and `git diff --check`:
   passed.
 
+## Deployment recovery regression and continue follow-up
+
+Follow-up assignment: `ffde2650990e4cfb8cf1ea017cf7578e`, based on `85acc4aaa7`.
+The reported deployment failure is deterministic, not a queue/recovery timing
+failure. Running only
+`tests/test_recovery.py::test_five_queued_tasks_run_in_order_through_a_manager_interruption`
+on that base failed in 0.85 seconds with `KeyError: 'origin_conversation'`.
+Before that assertion, all five objectives ran in order, all five results were
+delivered, and the worker/manager message counts passed. Compact `Tasks.list()`
+cards deliberately omit `origin_conversation`; the test still expected a full
+task row. The queue claim path reads full tasks directly and does not use the
+bounded list, its terminal ordering, or the five-terminal manager window.
+The original validation commands recorded above did not include recovery tests.
+
+The test now retrieves each listed task with `Tasks.get()` before asserting its
+original conversation. Every existing assertion remains, including exact queue
+order, task/result/message counts and the eleven executions through interruption.
+The compact-list contract remains covered by `tests/test_card_listing.py`.
+
+The separate continue defect was in `Scheduler.manager_action`: the tool accepted
+`details`, but forwarded only `objective` as added instructions to `Core.control`.
+A details-only continuation therefore re-queued a terminal task with its original
+objective. Queued/held continuations likewise lost those instructions. Continue
+now joins distinct, nonblank `objective` and `details` text before calling the
+existing append/control path. Original requirements, acceptance criteria, task
+limits, queue placement and retained worker threads keep their existing behavior.
+The manager prompt, tool field description and README document both input fields.
+
+The permanent parametrized test
+`test_manager_continue_instructions_reach_worker_input` covers done, failed,
+queued and held tasks with details only, objective only, both distinct fields,
+and identical text in both fields (16 cases). It runs workers, compares the
+persisted execution input with the prompt actually received, and checks original
+requirements, appended acceptance, replay idempotency and resumed native threads.
+Before the fix, eight cases failed because details were absent; afterward all
+16 pass. The focused recovery/context/listing suites pass (54 tests).
+
+Final validation with the repository virtualenv interpreter, on unchanged
+implementation/test files between full runs:
+
+- Three consecutive `timeout 600s python -m pytest -q -p no:cacheprovider`
+  invocations: **416 passed** each, in **232.49 s**, **233.84 s**, and **233.25 s**.
+- `timeout 180s python -m pytest -q -m smoke`: **45 passed**, 371 deselected,
+  in **5.15 s**, within the permanent 20-second smoke budget.
+- Ruff on the changed Python files and `git diff --check`: passed.
+
 The application owns merge and deployment; this assignment only changes and
 commits its assigned workspace/branch.
