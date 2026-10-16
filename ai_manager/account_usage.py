@@ -1,4 +1,5 @@
-"""Account quota metadata only; never submits inference or reads credentials."""
+"""Account quota metadata only; never submits inference. The app server never reads credentials; only the
+Claude host reads its stored login, solely for a read-only usage request."""
 
 import asyncio
 import math

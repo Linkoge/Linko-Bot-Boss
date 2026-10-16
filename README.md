@@ -666,6 +666,15 @@ silently dropped flat events. Separate five-hour/weekly events merge without ref
 window's observation time. Claude readings retain their original event time across disk reads and
 restarts; reading saved metadata does not refresh the observation.
 
+Claude limits are fetched actively. The Claude host's `account/rateLimits/read` makes one read-only GET to
+Anthropic's OAuth usage endpoint (the source behind Claude Code's `/usage`) under an 8-second timeout, using the
+CLI's stored login (`$CLAUDE_CONFIG_DIR` or `~/.claude/.credentials.json`). This is the only place credentials are
+read: the token is never logged, persisted or returned, an expired token is not refreshed, and raw error text is
+discarded. The five-hour and weekly utilization and reset times are normalized into the saved
+`claude-rate-limits.json` snapshot (primary 300 min, secondary 10080 min), so the 60-second refresh picks up new
+values after a reset. Passive `rate_limit_event` updates still merge in. On any failure (no login, network/HTTP error,
+unexpected shape) the last saved reading is returned and shows as stale; with none it shows unavailable.
+
 The metadata-only `account/rateLimits/read` request includes available reset-credit details. The dialog
 shows each provider's available reset count, individual available-credit expiration dates, and reported
 credit balance/unlimited status. Counts are never inferred from the detail list: it may be partial or
@@ -677,7 +686,7 @@ There is no reset/redeem action. Cached limits, empty balances, unavailable meta
 never disable Send or preflight a message. Real provider errors still follow the existing queue behavior.
 
 Permanent regressions: `tests/test_account_usage.py`, `tests/test_usage_display.py`, and
-`tests/test_claude_provider.py`, plus `tests/test_usage_limits_browser.py` for saved manager/repo-lock
+`tests/test_claude_provider.py`, `tests/test_claude_usage_fetch.py` (mocked endpoint and fake login), plus `tests/test_usage_limits_browser.py` for saved manager/repo-lock
 switching, simultaneous provider cards for either manager, independent stale/unavailable states, inline logos,
 credits, keyboard focus and desktop/mobile/narrow layouts; responsive interaction checks remain in `scripts/browser_account_usage.py`.
 Protocol reference: installed Codex 0.162.1 generated `GetAccountRateLimitsResponse`,

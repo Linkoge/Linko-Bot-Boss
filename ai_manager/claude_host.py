@@ -16,6 +16,8 @@ import sys
 import tempfile
 import time
 import uuid
+import urllib.request
+from datetime import datetime
 from pathlib import Path
 
 LEVELS = ('low', 'medium', 'high')
@@ -54,6 +56,46 @@ def failure(result):
     else:
         info = 'other'
     return {'message': text[:2000], 'codexErrorInfo': info, **({'httpStatusCode': status} if status else {})}
+
+
+USAGE_URL = 'https://api.anthropic.com/api/oauth/usage'
+USAGE_TIMEOUT = 8
+
+
+def fetch_usage(token):
+    """Read-only GET of the same usage data Claude Code's /usage shows; the token never leaves this call."""
+    request = urllib.request.Request(USAGE_URL, headers={
+        'Authorization': f'Bearer {token}', 'anthropic-beta': 'oauth-2025-04-20',
+        'Accept': 'application/json', 'User-Agent': 'linko-claude-host'})
+    with urllib.request.urlopen(request, timeout=USAGE_TIMEOUT) as response:
+        return json.loads(response.read(1_000_000))
+
+
+def stored_token():
+    """The CLI's OAuth access token, or None when absent or expired (this host never refreshes it)."""
+    config = os.environ.get('CLAUDE_CONFIG_DIR') or Path.home() / '.claude'
+    oauth = json.loads((Path(config) / '.credentials.json').read_text())['claudeAiOauth']
+    expires = oauth.get('expiresAt')
+    if isinstance(expires, (int, float)) and expires / 1000 <= time.time():
+        return None
+    token = oauth['accessToken']
+    return token if isinstance(token, str) and token else None
+
+
+def usage_windows(payload):
+    """Map the usage response onto {'five_hour'|'seven_day': (percent, resets_at epoch seconds)}."""
+    found = {}
+    for key in ('five_hour', 'seven_day'):
+        window = payload.get(key)
+        percent = window.get('utilization') if isinstance(window, dict) else None
+        if isinstance(percent, bool) or not isinstance(percent, (int, float)) or not math.isfinite(percent) or percent < 0:
+            continue
+        try:
+            resets = datetime.fromisoformat(window['resets_at']).timestamp()
+        except (KeyError, TypeError, ValueError):
+            resets = None
+        found[key] = (round(percent, 1), resets)
+    return found
 
 
 class Host:
@@ -150,7 +192,7 @@ class Host:
     async def rpc_model_list(self, params):
         return {'data': CATALOG, 'nextCursor': None}
 
-    async def rpc_account_rateLimits_read(self, params):
+    def saved_limits(self):
         try:
             payload = json.loads(self.limits_file.read_text())
             if not isinstance(payload, dict):
@@ -159,6 +201,16 @@ class Host:
             return payload
         except (OSError, ValueError):
             return {}
+
+    async def rpc_account_rateLimits_read(self, params):
+        # Any failure (no login, network, HTTP, odd shape) falls back to the last saved reading.
+        # Never log or return the token or raw error text.
+        try:
+            token = stored_token()
+            found = usage_windows(await asyncio.to_thread(fetch_usage, token)) if token else {}
+        except Exception:
+            found = {}
+        return self.record(found) or self.saved_limits()
 
     async def rpc_thread_start(self, params):
         thread = {'id': str(uuid.uuid4()), 'session': False, 'turns': []}
@@ -314,32 +366,39 @@ class Host:
         windows = dict(windows) if isinstance(windows, dict) else {}
         if info.get('rateLimitType') in ('five_hour', 'seven_day') and 'utilization' in info:
             windows.setdefault(info['rateLimitType'], info)
-        previous = await self.rpc_account_rateLimits_read({})
+        found = {}
+        for key in ('five_hour', 'seven_day'):
+            window = windows.get(key)
+            utilization = window.get('utilization') if isinstance(window, dict) else None
+            if (isinstance(utilization, (int, float)) and not isinstance(utilization, bool)
+                    and math.isfinite(utilization) and utilization >= 0):
+                found[key] = (round(utilization * 100, 1), window.get('resetsAt'))
+        payload = self.record(found)
+        if payload:
+            await self.notify('account/rateLimits/updated', payload)
+
+    def record(self, found):
+        """Merge {'five_hour'|'seven_day': (percent, resets_at)} into the saved snapshot; None if empty."""
+        if not found:
+            return None
+        previous = self.saved_limits()
         raw = previous.get('rateLimits')
         snapshot = raw.copy() if isinstance(raw, dict) else {}
         for slot in ('primary', 'secondary'):
             if isinstance(snapshot.get(slot), dict):
                 snapshot[slot].setdefault('observedAt', previous.get('observedAt'))
         snapshot.update(limitId='claude', limitName='Claude')
-        observed, changed = time.time(), False
+        observed = time.time()
         for slot, key, minutes in (('primary', 'five_hour', 300), ('secondary', 'seven_day', 10080)):
-            window = windows.get(key)
-            if not isinstance(window, dict):
-                continue
-            utilization = window.get('utilization')
-            if (isinstance(utilization, (int, float)) and not isinstance(utilization, bool)
-                    and math.isfinite(utilization) and utilization >= 0):
-                snapshot[slot] = {'usedPercent': round(utilization * 100, 1), 'windowDurationMins': minutes,
-                                  'resetsAt': window.get('resetsAt'), 'observedAt': observed}
-                changed = True
-        if not changed:
-            return
+            if key in found:
+                snapshot[slot] = {'usedPercent': found[key][0], 'windowDurationMins': minutes,
+                                  'resetsAt': found[key][1], 'observedAt': observed}
         payload = {'rateLimits': snapshot, 'observedAt': observed}
         # Individual window timestamps survive a later event for only the other window.
         temporary = self.limits_file.with_suffix('.tmp')
         temporary.write_text(json.dumps(payload))
         temporary.replace(self.limits_file)
-        await self.notify('account/rateLimits/updated', payload)
+        return payload
 
     # MCP bridge --------------------------------------------------------------------------
     async def bridge(self, reader, writer):
