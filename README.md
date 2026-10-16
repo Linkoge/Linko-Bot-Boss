@@ -296,7 +296,13 @@ probes, live database changes, service restarts or host installation are part of
   `81711bd`, `208554a` and `db292c6`: `docs/evidence/model-picker/` (`FINDINGS.md`, `side-by-side-*.png`).
 - Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
   To-Do directly to one queued task); read-only project memory brief for the manager with owner-run review;
-  chat clear/trash/archive/search.
+  chat clear/trash/archive/search. **Archive all** saves the entire conversation and opens a fresh chat.
+  **Archive part 10** saves all earlier messages while keeping the latest 10 visible messages
+  (usually 5 owner and 5 AI) in the active chat. Both use a named, searchable archive and require
+  confirmation with no response running. Partial archiving is unavailable with 10 or fewer messages;
+  it resets the AI thread and summary so subsequent responses use the retained history.
+  Message IDs, attachments, execution evidence, other projects and trash are preserved.
+  Permanent coverage: `tests/test_chat_history.py` and `tests/test_archive_browser.py`.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
 - Security: Argon2 owner login, one-time setup token, revocable sessions, CSRF/origin/host checks, CSP, throttling.
   Workers run as the service user with broad access; the rules ask them to confirm before catastrophic destruction.

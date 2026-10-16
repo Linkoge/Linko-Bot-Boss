@@ -120,7 +120,9 @@ class Chat:
                           "message_id": message_id, "evidence_retained": True}, project_id)
         return {"result": "accepted", "message_id": message_id}
 
-    def reset(self, project_id, conversation_id, last_message_id, confirmed, archive=False, title=""):
+    def reset(self, project_id, conversation_id, last_message_id, confirmed, archive=False, title="", keep_last=0):
+        if keep_last not in (0, 10) or (keep_last and not archive):
+            raise ValueError("Partial archiving must keep the latest 10 messages")
         if not confirmed:
             raise ValueError("Confirm before clearing or archiving a chat")
         if project_id:
@@ -136,7 +138,7 @@ class Chat:
             if not conversation or conversation["id"] != conversation_id:
                 raise ValueError("Chat changed. Refresh and confirm the current chat again")
             last = conn.execute(
-                "SELECT id FROM messages WHERE conversation_id=? AND NOT EXISTS(SELECT 1 FROM settings WHERE key='chat_deleted_message:' || messages.id) ORDER BY created_at DESC,rowid DESC LIMIT 1",
+                "SELECT id FROM messages WHERE conversation_id=? AND NOT " + hidden_message() + " ORDER BY rowid DESC LIMIT 1",
                 (conversation_id,),
             ).fetchone()
             if not last:
@@ -153,15 +155,36 @@ class Chat:
             count = conn.execute(
                 "SELECT count(*) FROM messages WHERE conversation_id=?", (conversation_id,)
             ).fetchone()[0]
+            cutoff = None
+            if keep_last:
+                tail = conn.execute(
+                    "SELECT rowid AS position FROM messages WHERE conversation_id=? AND NOT "
+                    + hidden_message() + " ORDER BY rowid DESC LIMIT 11", (conversation_id,),
+                ).fetchall()
+                if len(tail) <= keep_last:
+                    raise ValueError("This chat has no earlier messages to archive; keep the latest 10")
+                cutoff = tail[keep_last - 1]["position"]
             if archive:
                 if not title:
                     project = self.registry.get(project_id) if project_id else None
                     label = (project["display_name"] or project["name"]) if project else "All Projects"
                     title = f"{label} · {datetime.fromtimestamp(now, timezone.utc):%Y-%m-%d %H:%M UTC}"
-                conn.execute(
-                    "UPDATE conversations SET context=? WHERE id=?", ("archive:" + conversation_id, conversation_id)
-                )
-                conn.execute("INSERT INTO chat_archives VALUES(?,?,?)", (conversation_id, title, now))
+                archive_id = new_id() if keep_last else conversation_id
+                if keep_last:
+                    conn.execute(
+                        "INSERT INTO conversations(id,context,project_id,thread_id,summary,created_at) VALUES(?,?,?,?,?,?)",
+                        (archive_id, "archive:" + archive_id, project_id, conversation["thread_id"],
+                         conversation["summary"], conversation["created_at"]),
+                    )
+                    count = conn.execute(
+                        "UPDATE messages SET conversation_id=? WHERE conversation_id=? AND rowid<?",
+                        (archive_id, conversation_id, cutoff),
+                    ).rowcount
+                    conn.execute("UPDATE conversations SET thread_id=NULL,summary='' WHERE id=?", (conversation_id,))
+                    conn.execute("DELETE FROM settings WHERE key=?", ("manager_context:" + conversation_id,))
+                else:
+                    conn.execute("UPDATE conversations SET context=? WHERE id=?", ("archive:" + archive_id, archive_id))
+                conn.execute("INSERT INTO chat_archives VALUES(?,?,?)", (archive_id, title, now))
             else:
                 key = "chat_trash:" + (project_id or "global")
                 previous = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
@@ -172,11 +195,12 @@ class Chat:
                 conn.execute("UPDATE conversations SET context=? WHERE id=?", ("trash:" + conversation_id, conversation_id))
                 conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                              (key, json.dumps({"conversation_id": conversation_id, "cleared_at": now})))
-            fresh_id = new_id()
-            conn.execute(
-                "INSERT INTO conversations(id,context,project_id,created_at) VALUES(?,?,?,?)",
-                (fresh_id, project_id or "global", project_id, now),
-            )
+            fresh_id = conversation_id if keep_last else new_id()
+            if not keep_last:
+                conn.execute(
+                    "INSERT INTO conversations(id,context,project_id,created_at) VALUES(?,?,?,?)",
+                    (fresh_id, project_id or "global", project_id, now),
+                )
             self.db.event(
                 conn,
                 "chat.archived" if archive else "chat.cleared",
@@ -184,13 +208,16 @@ class Chat:
                     "conversation_id": conversation_id,
                     "new_conversation_id": fresh_id,
                     "message_count": count,
+                    "kept_messages": keep_last,
+                    "archive_conversation_id": archive_id if archive else None,
                     "title": title if archive else None,
                 },
                 project_id,
             )
         return {
             "result": "accepted",
-            "message": f"Chat archived as “{title}”. A fresh chat is ready."
+            "message": f"Earlier messages archived as “{title}”. The latest 10 messages remain in this chat."
+            if keep_last else f"Chat archived as “{title}”. A fresh chat is ready."
             if archive
             else "Chat moved to trash. Only the latest cleared chat can be restored.",
             "conversation_id": fresh_id,

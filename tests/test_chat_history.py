@@ -226,3 +226,65 @@ def test_trash_context_isolation_keeps_unrelated_chat_and_task_evidence(chat, tm
     chat.change_trash(None, fresh, None, old, True)
     assert chat.db.all("SELECT * FROM conversations WHERE project_id=?", (project,)) == before
     assert chat.db.one("SELECT id FROM messages WHERE conversation_id=?", (old,))
+
+
+@pytest.mark.smoke
+@pytest.mark.parametrize('count', [11, 24, 425])
+def test_partial_archive_keeps_latest_ten_and_is_searchable_after_restart(chat, count):
+    current, last = seed(chat, count=count)
+    before = chat.db.all('SELECT * FROM messages ORDER BY rowid')
+    chat.db.set_setting('manager_context:' + current, {'thread_id': 'saved-thread'})
+    result = chat.reset(None, current, last, True, archive=True, title='Earlier', keep_last=10)
+    assert result['conversation_id'] == current
+    restarted = Chat(Database(chat.db.path), chat.registry, chat.server)
+    active = restarted.history()
+    assert [m['id'] for m in active['messages']] == [m['id'] for m in before[-10:]]
+    assert active['conversation']['thread_id'] is None
+    assert active['conversation']['summary'] == ''
+    assert restarted.db.setting('manager_context:' + current) is None
+    archive = next(c for c in restarted.search_history()['conversations'] if c['archived_at'])
+    assert archive['message_count'] == count - 10
+    assert archive['title'] == 'Earlier'
+    assert restarted.saved_history(archive['id'])['conversation']['thread_id'] == 'saved-thread'
+    assert restarted.search_history(search='message 0 ')['conversations'][0]['id'] == archive['id']
+    after = restarted.db.all('SELECT * FROM messages ORDER BY rowid')
+    assert [{**m, 'conversation_id': current} for m in after] == before
+    with pytest.raises(ValueError, match='no earlier'):
+        restarted.reset(None, current, last, True, archive=True, keep_last=10)
+
+
+@pytest.mark.parametrize('count', [0, 1, 10])
+def test_partial_archive_short_chat_is_unchanged(chat, count):
+    current, last = seed(chat, count=count)
+    before = chat.db.all('SELECT * FROM conversations')
+    with pytest.raises(ValueError, match='empty|no earlier'):
+        chat.reset(None, current, last, True, archive=True, keep_last=10)
+    assert chat.db.all('SELECT * FROM conversations') == before
+    assert not chat.db.all('SELECT * FROM chat_archives')
+
+
+def test_partial_archive_hidden_messages_and_atomic_guards(chat, monkeypatch):
+    current, last = seed(chat, count=24)
+    chat.delete_message(None, current, last, True)
+    last = current + '-22'
+    original = chat.db.all('SELECT * FROM messages ORDER BY rowid')
+    for identity, tail, confirmed, reason in [
+        (current, last, False, 'Confirm'), ('wrong', last, True, 'Chat changed'),
+        (current, 'stale', True, 'New messages'),
+    ]:
+        with pytest.raises(ValueError, match=reason):
+            chat.reset(None, identity, tail, confirmed, archive=True, keep_last=10)
+    chat.db.run("UPDATE messages SET status='streaming' WHERE id=?", (last,))
+    with pytest.raises(ValueError, match='finish'):
+        chat.reset(None, current, last, True, archive=True, keep_last=10)
+    chat.db.run("UPDATE messages SET status='completed' WHERE id=?", (last,))
+    def fail(*args, **kwargs):
+        raise RuntimeError('fixture persistence failure')
+    with monkeypatch.context() as patch:
+        patch.setattr(chat.db, 'event', fail)
+        with pytest.raises(RuntimeError):
+            chat.reset(None, current, last, True, archive=True, keep_last=10)
+    assert chat.db.all('SELECT * FROM messages ORDER BY rowid') == original
+    assert not chat.db.all('SELECT * FROM chat_archives')
+    chat.reset(None, current, last, True, archive=True, keep_last=10)
+    assert [m['id'] for m in chat.history()['messages']] == [current + f'-{i}' for i in range(13, 23)]

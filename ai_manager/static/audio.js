@@ -24,7 +24,7 @@ function renderAudio(){
   if(typeof attachmentState!=='undefined'&&attachmentState.uploads.has(state.project))$('send').disabled=true;
   if(typeof updateComposer==='function')updateComposer();
   renderProjectAvailability();
-  for(const id of ['archive-chat','clear-chat','restore-trash','empty-trash'])if(session&&session.project===state.project)$(id).disabled=true;
+  for(const id of ['archive-chat','archive-part-chat','clear-chat','restore-trash','empty-trash'])if(session&&session.project===state.project)$(id).disabled=true;
   if(!session&&state.history)updateChatTrashAvailability();
 }
 function audioChanged(auth=false){

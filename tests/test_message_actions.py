@@ -105,3 +105,29 @@ def test_delete_endpoint_requires_owner_csrf_exact_context_and_boolean_confirmat
     assert browser.post('/api/chat/message/delete', json={**payload, 'message_id': owner['id']}).status_code == 409
     assert browser.post('/api/chat/message/delete', json=payload).status_code == 200
     assert [m['id'] for m in browser.get('/api/history').json()['messages']] == [owner['id']]
+
+
+def test_partial_archive_endpoint_authorization_validation_and_project_isolation(client):
+    browser, app, settings = client
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    conversation, last = seed(app.state.chat, project, count=24)
+    other, _ = seed(app.state.chat)
+    other_before = app.state.db.all('SELECT * FROM messages WHERE conversation_id=?', (other,))
+    payload = {'project_id': project, 'conversation_id': conversation, 'last_message_id': last,
+               'confirmed': True, 'keep_last': 10, 'title': 'Project earlier messages'}
+    assert browser.post('/api/chat/archive', json=payload).status_code == 401
+    sign_in(browser, app, settings)
+    csrf = browser.headers.pop('X-CSRF-Token')
+    assert browser.post('/api/chat/archive', json=payload).status_code == 403
+    browser.headers['X-CSRF-Token'] = csrf
+    for keep in (-1, 5, 11, '10', True):
+        assert browser.post('/api/chat/archive', json={**payload, 'keep_last': keep}).status_code in (409, 422)
+    assert browser.post('/api/chat/archive', json={**payload, 'project_id': None}).status_code == 409
+    assert browser.post('/api/chat/archive', json={**payload, 'confirmed': False}).status_code == 409
+    assert browser.post('/api/chat/archive', json=payload).json()['conversation_id'] == conversation
+    assert len(app.state.chat.history(project)['messages']) == 10
+    assert app.state.db.all('SELECT * FROM messages WHERE conversation_id=?', (other,)) == other_before
+    archive = app.state.db.one('SELECT conversation_id FROM chat_archives')['conversation_id']
+    with pytest.raises(ValueError, match='selected context'):
+        app.state.chat.saved_history(archive)
+    assert len(app.state.chat.saved_history(archive, project)['messages']) == 14

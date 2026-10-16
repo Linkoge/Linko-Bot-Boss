@@ -80,6 +80,10 @@ class ChatResetBody(BaseModel):
     title: str = Field(default="", max_length=120)
 
 
+class ChatArchiveBody(ChatResetBody):
+    keep_last: int = Field(default=0, strict=True, ge=0, le=10)
+
+
 class ChatMessageDeleteBody(BaseModel):
     project_id: str | None = None
     conversation_id: str = Field(min_length=1, max_length=100)
@@ -343,9 +347,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return chat.change_trash(**body.model_dump())
 
     @app.post("/api/chat/archive", dependencies=[Depends(require_owner)])
-    def archive_chat(body: ChatResetBody):
+    def archive_chat(body: ChatArchiveBody):
         return chat.reset(
-            body.project_id, body.conversation_id, body.last_message_id, body.confirmed, archive=True, title=body.title
+            body.project_id, body.conversation_id, body.last_message_id, body.confirmed, archive=True, title=body.title, keep_last=body.keep_last
         )
 
     @app.get("/api/executions/{execution_id}/events", dependencies=[Depends(require_owner)])

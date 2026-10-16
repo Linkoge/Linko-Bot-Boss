@@ -427,6 +427,7 @@ function attachStream(execution,messageId,cursor=0){
 function updateChatActions(){
   const disabled=!state.history?.messages.length||state.pending.has(state.project)||!!state.execution||state.history.messages.some(m=>['queued','streaming','waiting'].includes(m.status));
   for(const id of ['archive-chat','clear-chat'])$(id).disabled=disabled;
+  $('archive-part-chat').disabled=disabled||(!state.history?.has_more&&state.history.messages.length<=10);
   updateChatTrashAvailability();
   for(const id of ['copy-all','copy-five'])$(id).disabled=!state.history?.messages.length||!!state.copyingChat;
   renderAttachments();
@@ -465,26 +466,27 @@ async function copyText(text){
   finally{input.remove();focused?.focus({preventScroll:true});selection.removeAllRanges();for(const range of ranges)selection.addRange(range);}
 }
 for(const [id,all] of [['copy-all',true],['copy-five',false]])$(id).onclick=()=>{closeChatMenu(true);return copyChat(all).catch(error=>notice('Rejected or failed: '+error.message));};
-function confirmChatReset(archive){
+function confirmChatReset(archive,keepLast=0){
   closeChatMenu(true);
   if(!state.history?.messages.length)return;
   const project=state.project,selection=state.selection,history=state.history;
-  $('chat-confirm-title').textContent=archive?'Archive this chat?':'Clear this chat?';
-  $('chat-confirm-description').textContent=archive?`Save the entire ${projectName(project)} conversation in a searchable archive and start a fresh chat.`:`Move the current ${projectName(project)} chat to the single trash slot? It replaces the previous trash. Restore swaps with a nonempty current chat. Archives, tasks and recovery evidence are preserved.`;
+  $('chat-confirm-title').textContent=keepLast?'Archive part 10?':archive?'Archive all?':'Clear this chat?';
+  $('chat-confirm-description').textContent=keepLast?`Save earlier messages in a searchable archive and keep the latest 10 messages in the active ${projectName(project)} chat (about 5 owner and 5 AI messages).`:archive?`Save the entire ${projectName(project)} conversation in a searchable archive and start a fresh chat.`:`Move the current ${projectName(project)} chat to the single trash slot? It replaces the previous trash. Restore swaps with a nonempty current chat. Archives, tasks and recovery evidence are preserved.`;
   $('chat-archive-label').hidden=!archive;
   $('chat-archive-name').value=`${projectName(project)} · ${new Date().toLocaleString()}`.slice(0,120);
-  $('chat-confirm-submit').textContent=archive?'Archive chat':'Clear chat';
+  $('chat-confirm-submit').textContent=keepLast?'Archive part 10':archive?'Archive all':'Clear chat';
   $('chat-confirm-submit').className=archive?'primary':'danger';$('chat-confirm-error').textContent='';
   $('chat-confirm-form').onsubmit=async event=>{
     event.preventDefault();const button=$('chat-confirm-submit');if(button.disabled)return;button.disabled=true;
     try{
-      const result=await api(archive?'/api/chat/archive':'/api/chat/clear',{method:'POST',body:JSON.stringify({project_id:project,conversation_id:history.conversation.id,last_message_id:history.messages.at(-1).id,confirmed:true,title:archive?$('chat-archive-name').value:''})});
+      const result=await api(archive?'/api/chat/archive':'/api/chat/clear',{method:'POST',body:JSON.stringify({project_id:project,conversation_id:history.conversation.id,last_message_id:history.messages.at(-1).id,confirmed:true,title:archive?$('chat-archive-name').value:'',...(archive?{keep_last:keepLast}:{})})});
       $('chat-confirm').close();$('chat-notice').textContent=result.message;$('chat-notice').hidden=false;clearTimeout(state.chatNoticeTimer);state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,8000);
       if(selection===state.selection){state.source?.close();state.source=null;state.execution=null;$('stop-chat').hidden=true;$('send').disabled=false;await loadHistory(selection);}
     }catch(error){$('chat-confirm-error').textContent=error.message;}finally{button.disabled=false;}
   };
   $('chat-confirm').showModal();
 }
+$('archive-part-chat').onclick=()=>confirmChatReset(true,10);
 $('archive-chat').onclick=()=>confirmChatReset(true);$('clear-chat').onclick=()=>confirmChatReset(false);
 $('chat-confirm-cancel').onclick=()=>$('chat-confirm').close();
 function confirmTrash(restore){
