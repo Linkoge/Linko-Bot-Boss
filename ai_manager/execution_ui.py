@@ -1,6 +1,7 @@
 """Read-only execution presentation from durable turn and question state."""
 
 from .history import EVENT_WINDOW
+from .listing import bounded_listing
 
 # Capacity reservations and recovery timers are not active work. Both native
 # workers and interactive manager turns share this predicate, across all scopes.
@@ -52,17 +53,15 @@ def execution_page(db, *, task_id=None, project_id=None, offset=0, before=None):
             'before_execution': page[-1]['id'] if len(rows) > EVENT_WINDOW else None}
 
 
-def execution_summary(db, project_id=None):
-    scope = " AND e.project_id=?" if project_id else ""
-    params = (project_id,) if project_id else ()
-    rows = db.all(
-        f"""SELECT {brief_columns()},({ACTIVE}) AS is_working,
-        (SELECT MIN(v.created_at) FROM events v WHERE v.execution_id=e.id
-            AND v.kind IN ('worker.started','chat.started','turn/started')) AS work_started_at
-        FROM executions e WHERE (e.finished_at IS NULL OR e.rowid IN
-            (SELECT rowid FROM executions recent WHERE recent.agent_id=e.agent_id
-                AND recent.project_id IS e.project_id AND recent.finished_at IS NOT NULL ORDER BY rowid DESC LIMIT {EVENT_WINDOW})){scope}
-        ORDER BY is_working DESC,CASE WHEN e.finished_at IS NULL THEN 0 ELSE 1 END,e.started_at DESC,e.id LIMIT 100""", params,
-    )
-    count = db.one(f"SELECT count(*) AS n FROM executions e WHERE {ACTIVE}{scope}", params)["n"]
-    return {"executions": rows, "active_agents": count}
+def execution_summary(db, project_id=None, *, through=None, older=False):
+    columns = f"""{brief_columns('executions')},({ACTIVE.replace('e.', 'executions.')}) AS is_working,
+        (SELECT MIN(v.created_at) FROM events v WHERE v.execution_id=executions.id
+            AND v.kind IN ('worker.started','chat.started','turn/started')) AS work_started_at"""
+    page = bounded_listing(db, table='executions', columns=columns, terminal='finished_at IS NOT NULL',
+                           clock='finished_at', scope=project_id, through=through, older=older,
+                           active_order='is_working DESC,started_at DESC,rowid DESC')
+    scope = ' AND e.project_id=?' if project_id else ''
+    count = db.one(f"SELECT count(*) AS n FROM executions e WHERE {ACTIVE}{scope}",
+                   (project_id,) if project_id else ())["n"]
+    return {"executions": page['rows'], "active_agents": count,
+            "execution_cursor": page['cursor'], "has_older_executions": page['has_more']}

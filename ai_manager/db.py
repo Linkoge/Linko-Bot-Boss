@@ -192,6 +192,9 @@ class Database:
         conn.execute("UPDATE tasks SET lease_owner=NULL WHERE state IN ('done','failed')")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_running ON tasks(state) WHERE state='running'")
         conn.execute("CREATE INDEX IF NOT EXISTS task_queue ON tasks(state,held,queued_at)")
+        for prefix, scope in (('', ''), ('project_', 'project_id,')):
+            conn.execute(f"CREATE INDEX IF NOT EXISTS tasks_{prefix}finished ON tasks({scope}updated_at DESC) WHERE state IN ('done','failed')")
+            conn.execute(f"CREATE INDEX IF NOT EXISTS executions_{prefix}finished ON executions({scope}finished_at DESC) WHERE finished_at IS NOT NULL")
 
     def connect(self):
         conn = sqlite3.connect(self.path, timeout=10)

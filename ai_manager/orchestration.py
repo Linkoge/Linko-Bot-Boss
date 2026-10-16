@@ -64,6 +64,7 @@ MANAGER_TOOL = {
             "path": {"type": "string"},
             "reason": {"type": "string"},
             "query": {"type": "string"},
+            "status": {"type": "string", "enum": ["queued", "held", "running", "done", "failed"]},
             "message_id": {"type": "string"},
             "offset": {"type": "integer", "minimum": 0},
         },
@@ -186,6 +187,15 @@ class Scheduler:
             rows = Todos(self.db).list(project_id)
             rows = [r for r in rows if args.get("query", "").lower() in (r['title']+' '+r['details']).lower()]
             return {"entries": rows[offset:offset+20], "next_offset": offset+20 if len(rows)>offset+20 else None}
+        if action == "list_tasks":
+            project_id = args.get('project_id') or selected_project
+            if selected_project and selected_project != project_id:
+                raise ValueError('Tasks belong to another project')
+            if project_id:
+                self.registry.get(project_id)
+            page = self.tasks.page(project_id, limit=5, offset=offset, query=args.get('query', ''),
+                                   status=args.get('status'))
+            return {'assignments': page['tasks'], 'next_offset': page['next_offset']}
         project_id = args.get("project_id") or selected_project
         if not project_id or (selected_project and selected_project != project_id):
             raise ValueError("Select the intended project; cross-project work requires All Projects context")
@@ -246,20 +256,6 @@ class Scheduler:
                 project_id, project["revision"], {"status": "paused" if action == "pause_project" else "active"}
             )
             return {k: updated[k] for k in ("id", "status")}
-        if action == "list_tasks":
-            tasks = self.tasks.list(project_id)
-            tasks = [t for t in tasks if args.get("query", "").lower() in t["description"].lower()]
-            return {
-                "assignments": [
-                    {
-                        **self.tasks.context(t),
-                        "description": t["description"][:300],
-                        "description_truncated": len(t["description"]) > 300,
-                    }
-                    for t in tasks[offset : offset + 20]
-                ],
-                "next_offset": offset + 20 if len(tasks) > offset + 20 else None,
-            }
         if action == "read_result":
             result = self.db.one("SELECT id,task_id,project_id,status,output,error,input,delivery FROM executions WHERE id=? AND task_id IS NOT NULL", (args["execution_id"],))
             if not result or result["project_id"] != project_id:

@@ -437,12 +437,24 @@ explicit historical search/read actions remain available. Hidden transport rows 
 keep their existing behavior.
 
 Task and worker history opens with the last **20 events** and up to **20 execution references** per page.
-The Agents view retains the latest 20 completed executions per worker/project plus unfinished work,
-within its existing 100-row presentation cap. **Browse older executions**, task **History**, and worker
+The Tasks and Agents menus each show **all unfinished work plus the latest 10 terminal cards** in the
+selected repository, or across every repository and global manager executions in All Projects. Held,
+queued, running and retry-delayed work stays visible regardless of age or count. Terminal tasks are
+ordered by their last update; finished executions by finish time, with insertion order breaking ties.
+**Load older tasks** / **Load older agents** add 10 older terminal cards using database cursors.
+Refresh preserves the explicitly opened range and includes new finishes without duplicates; switching
+scope or reloading resets both lists to the default. This SQL listing limit is independent of message/event
+retention and introduces no archive state or deletion. Task headlines derive from the objective's first line.
+The manager's `list_tasks` uses the same listing path with five terminal summaries by default, SQL
+`query`/`status` filters and `next_offset` for older terminal pages; unfinished matches appear on the first
+page. Compact summaries omit full criteria, gate logs and workspace/merge payloads. `read_task` and
+`read_result` retain full retrieval. **Browse older executions**, task **History**, and worker
 **History and full output** retrieve older records and full output on demand. Routine portfolio refreshes
 include only a short result tail (at most 1,200 characters), execution metadata and task summaries;
 they do not load historical prompts or inflate compressed results. Task records, full final reports,
 deployment receipts, report paths, attachments and delivery/execution references remain permanent.
+The listing root cause and permanent validation are recorded in
+[the bounded listing result](docs/evidence/task-agent-listing.md).
 
 A single maintenance loop starts with the existing scheduler, runs outside the sequential assignment
 queue, and retries once per minute. Each atomic transaction handles at most 250 messages, 250 events

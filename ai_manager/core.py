@@ -23,6 +23,7 @@ from .attachments import native_image
 from .codex import RULES, AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
 from .fence import Busy, main_branch
+from .listing import CARD_WINDOW, bounded_listing
 from .model_settings import RouteBlocked, assignment_route
 from .pipeline import IDENTITY, Conflict, git
 from .recovery import turn_error
@@ -138,20 +139,34 @@ class Tasks:
                 "workspace", "workspace_branch", "merge", "retry_at")
         return {k: task.get(k) for k in keys} | {"worker_route": task.get("worker_route")}
 
+    def page(self, project_id=None, *, limit=CARD_WINDOW, offset=0, query="", status=None, through=None, older=False):
+        if status not in (None, 'queued', 'held', 'running', 'done', 'failed'):
+            raise ValueError('Unknown task status')
+        status_sql = "CASE WHEN held=1 AND state='queued' THEN 'held' ELSE state END"
+        # List only card fields. Full objectives, criteria, gate logs, merge receipts
+        # and workspace references remain available from get()/read_task/history.
+        columns = f"""id,project_id,substr(description,1,300) AS description,
+            length(description)>300 AS description_truncated,state,{status_sql} AS status,
+            blocker,lease_owner,revision,rounds,created_at,updated_at,retry_at,
+            (SELECT history_preview(output) FROM executions e WHERE e.task_id=tasks.id
+                ORDER BY e.rowid DESC LIMIT 1) AS result_summary"""
+        where = "instr(lower(description),lower(?))>0"
+        params = [query]
+        if status:
+            where += f' AND ({status_sql})=?'
+            params.append(status)
+        page = bounded_listing(self.db, table='tasks', columns=columns,
+                               terminal="state IN ('done','failed')", clock='updated_at',
+                               scope=project_id, where=where, params=params, limit=limit, offset=offset,
+                               through=through, older=older,
+                               active_order="CASE state WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END,queued_at,id")
+        for row in page['rows']:
+            row['repair_limit'] = REPAIR_ROUNDS
+            row['title'] = row['description'].strip().split('\n', 1)[0][:100]
+        return {'tasks': page.pop('rows'), **page}
+
     def list(self, project_id=None):
-        rows = self.db.all(
-            """SELECT tasks.*,(SELECT history_preview(output) FROM executions e
-                WHERE e.task_id=tasks.id ORDER BY e.rowid DESC LIMIT 1) AS result_summary FROM tasks"""
-            + (" WHERE project_id=?" if project_id else "")
-            + """ ORDER BY CASE state WHEN 'running' THEN 0 WHEN 'queued' THEN 1 ELSE 2 END,
-            CASE WHEN state='queued' THEN queued_at END,created_at DESC,id""",
-            (project_id,) if project_id else (),
-        )
-        archived = self.db.setting("archived_tasks", {})
-        records = [self.record(row) for row in rows if row["id"] not in archived]
-        for record in records:
-            del record["history"]  # failure output tails stay out of the polled list; get() and the history view have them
-        return records
+        return self.page(project_id)['tasks']
 
     def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None,
             model_route=None, todos=None, reuse_objective=True):

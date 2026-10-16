@@ -508,15 +508,21 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return {"result": "accepted", "task_id": task["id"], "status": task["status"]}
 
     @app.get("/api/portfolio", dependencies=[Depends(require_owner)])
-    def portfolio(project_id: str | None = None):
+    def portfolio(project_id: str | None = None, task_through: str | None = None,
+                  execution_through: str | None = None, older: str | None = None):
         if project_id:
             registry.get(project_id)
+        if older not in (None, 'tasks', 'executions'):
+            raise ValueError('Unknown older listing')
+        task_page = tasks.page(project_id, through=task_through, older=older == 'tasks')
         return {
             "scope_project_id": project_id,
             "projects": registry.list(),
             "global_last_used_at": db.setting("global_last_used_at", 0),
-            "tasks": tasks.list(project_id),
-            **execution_summary(db, project_id),
+            "tasks": task_page['tasks'],
+            "task_cursor": task_page['cursor'],
+            "has_older_tasks": task_page['has_more'],
+            **execution_summary(db, project_id, through=execution_through, older=older == 'executions'),
             "questions": db.all(
                 "SELECT q.*,e.project_id,e.task_id FROM questions q JOIN executions e ON e.id=q.execution_id WHERE q.status='pending'"
                 + (" AND e.project_id=?" if project_id else ""),

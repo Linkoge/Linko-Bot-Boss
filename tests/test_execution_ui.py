@@ -39,7 +39,7 @@ def test_count_scope_question_pause_finish_and_unlimited_count(records):
     for i in range(105):
         execution(db, one, str(i), 'queued', queued=200+i)
     result = execution_summary(db, one)
-    assert len(result['executions']) == 100
+    assert len(result['executions']) == 106  # Every unfinished execution survives the old cap.
     assert result['active_agents'] == 1  # Active record is older than displayed history.
     assert execution_summary(db)['active_agents'] == 3
     with db.transaction() as conn:
@@ -73,11 +73,11 @@ def test_work_start_uses_durable_event_not_queue_time(records):
     assert execution_summary(reopened, one) == execution_summary(db, one)
 
 
-def test_archived_tasks_stay_hidden_but_kept(records):
+def test_legacy_archive_setting_cannot_hide_unfinished_work(records):
     db, tasks, (one, two) = records
     old, new = tasks.add(one, 'Old'), tasks.add(one, 'New')
     db.set_setting('archived_tasks', {old['id']: {'at': 1}})
-    assert [t['id'] for t in tasks.list()] == [new['id']]
+    assert {t['id'] for t in tasks.list()} == {old['id'], new['id']}
     assert len(db.all('SELECT * FROM tasks')) == 2
     with pytest.raises(ValueError, match='archived'):
         tasks.control(old['id'], 'hold', tasks.get(old['id'])['revision'])
@@ -100,6 +100,6 @@ def test_status_group_order_is_stable_and_history_remains(records):
         with db.transaction() as conn:
             conn.execute('UPDATE executions SET finished_at=500 WHERE id=?', (f'history-{i}',))
     rows = execution_summary(db, one)['executions']
-    assert rows[0]['id'] == 'old-active' and len(rows) == 21
-    assert {r['id'] for r in rows[1:]} == {f'history-{i}' for i in range(85,105)}
+    assert rows[0]['id'] == 'old-active' and len(rows) == 11
+    assert {r['id'] for r in rows[1:]} == {f'history-{i}' for i in range(95,105)}
     assert execution_summary(db, one)['executions'] == rows

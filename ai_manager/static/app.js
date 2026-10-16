@@ -38,7 +38,7 @@ for(const type of ['wheel','touchstart','pointerdown','keydown']){
 $('chat-older').addEventListener('pointerdown',cancelInitialChat,{passive:true});
 const draftRecovery=JSON.parse(sessionStorage.getItem('linko-drafts-v1')||'[]');
 const appliedTranscripts=new Set(draftRecovery.transcripts||[]);
-const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
+const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', taskPaging:false, executionPaging:false, setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
 const submissionKey = 'linko-chat-submissions-v1';
 const submissions = new Map(JSON.parse(sessionStorage.getItem(submissionKey)||'[]'));
 // Settings intents and owner chat acceptance share one order, including background favorite recall.
@@ -87,11 +87,22 @@ function actionResult(result){notice(`${result.result||'accepted'}: ${result.mes
 function showAuth(){cancelInitialChat();initialChatPosition=true;$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
-let refreshVersion=0;
-async function refresh(loadChat=true){
-  const version=++refreshVersion,selection=state.selection,project=state.project;
-  const portfolio=await api('/api/portfolio'+(project?'?project_id='+encodeURIComponent(project):''));
+let refreshVersion=0,listingLoad=null;
+async function refresh(loadChat=true,older=null){
+  const selection=state.selection,project=state.project;
+  if(listingLoad?.selection===selection)return false;
+  const version=++refreshVersion,params=new URLSearchParams();
+  if(project)params.set('project_id',project);
+  if((state.taskPaging||older==='tasks')&&state.portfolio?.task_cursor)params.set('task_through',state.portfolio.task_cursor);
+  if((state.executionPaging||older==='executions')&&state.portfolio?.execution_cursor)params.set('execution_through',state.portfolio.execution_cursor);
+  const loading=older?{selection}:null;
+  if(older){params.set('older',older);listingLoad=loading;}
+  let portfolio;
+  try{portfolio=await api('/api/portfolio?'+params);}
+  finally{if(loading&&listingLoad===loading)listingLoad=null;}
   if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return false;
+  if(older==='tasks')state.taskPaging=true;
+  if(older==='executions')state.executionPaging=true;
   preserveChatPosition(()=>{state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();});
   if(state.project&&portfolio.projects.find(p=>p.id===state.project)?.visible===false){await selectProject(null);return false;}
   if(portfolio.queue_error)notice(portfolio.queue_error);
@@ -211,11 +222,12 @@ async function selectProject(id){
   const selection=++state.selection;
   cancelInitialChat();initialChatPosition=true;
   state.todoSelection=new Set();state.todos=[];renderTodos(true);
+  state.taskPaging=false;state.executionPaging=false;
   state.project=id;state.detail=null;state.brief=null;clearTimeout(state.memoryTimer);renderMemory();renderMemoryReview();state.source?.close();state.source=null;
   state.execution=null;state.history=null;$('messages').replaceChildren();updateChatActions();
   $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';state.draftContextReady=true;
   $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderAttachments();renderAudio();
-  state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],active_agents:0};
+  state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],active_agents:0,task_cursor:null,execution_cursor:null,has_older_tasks:false,has_older_executions:false};
   renderProjects();renderTasks();renderAgents();renderQuestions();
   await refresh(false);
   if(selection!==state.selection)return;
@@ -252,15 +264,18 @@ function renderTasks(){
   $('task-count').textContent=count;$('task-count').hidden=count===0;$('task-list').replaceChildren();
   for(const t of tasks){
     const row=element('article',undefined,'panel');row.dataset.taskId=t.id;
-    row.append(element('h3',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
+    row.append(element('h3',t.title),element('small',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
     if(t.rounds)row.append(element('small',`Repair rounds ${t.rounds} of ${t.repair_limit}`));
     const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));appendTaskControls(controls,t);
     if(t.result_summary)row.append(element('p',t.result_summary,'result-summary'));
     const records=element('button','History');records.onclick=action(()=>readHistory('task',t.id));
     controls.append(records);row.append(controls);$('task-list').append(row);
   }
+  $('tasks-older').hidden=!state.portfolio.has_older_tasks;
   updateComposer();
 }
+$('tasks-older').onclick=action(()=>refresh(false,'tasks'));
+$('agents-older').onclick=action(()=>refresh(false,'executions'));
 function renderAgents(){
   const count=state.portfolio.active_agents||0,badge=$('agent-count'),scope=projectName(state.project);badge.textContent=count;badge.hidden=count===0;badge.title=`${count} working · ${scope}`;
   document.querySelector('[data-view=agents]').setAttribute('aria-label',`Agents · ${scope}${count?' · '+count+' working':''}`);
@@ -271,8 +286,8 @@ function renderAgents(){
   const existing=new Map([...list.children].map(row=>[row.dataset.executionId,row]));
   const visible=state.portfolio.executions.filter(e=>!state.project||e.project_id===state.project);
   const ids=new Set(visible.map(e=>e.id));
-  // Retain an expanded result even when it rolls out of the bounded server list.
-  for(const [id,row] of existing)if(!ids.has(id)&&!row.querySelector('details').open)row.remove();
+  for(const [id,row] of existing)if(!ids.has(id))row.remove();
+  $('agents-older').hidden=!state.portfolio.has_older_executions;
   for(const [index,e] of visible.entries()){
     let row=existing.get(e.id);
     if(!row){row=element('article',undefined,'panel');row.dataset.executionId=e.id;row.append(element('div',undefined,'agent-metadata'));const details=element('details');details.append(element('summary','Output and execution references'),element('pre',undefined,'agent-output'));row.append(details,element('div',undefined,'agent-controls'));const next=visible.slice(index+1).map(item=>existing.get(item.id)).find(Boolean);list.insertBefore(row,next||null);}
@@ -564,7 +579,7 @@ $('execution-history').onclick=action(()=>readHistory('executions'));
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
-function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')cancelInitialChat();const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning){initialChatPosition=true;positionInitialChat(state.selection);}}
+function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')cancelInitialChat();const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view==='agents'&&state.portfolio)renderAgents();if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning){initialChatPosition=true;positionInitialChat(state.selection);}}
 function editor(title,fields,onSave,reloadContext=true){
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}

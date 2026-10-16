@@ -373,6 +373,9 @@ hold / release (a queued task), cancel (queued or running; the branch is kept), 
 appended to a queued/held task, or re-queues a done/failed task; repair rounds are never reset), list_tasks / read_task /
 read_result / read_document / read_project / read_memory / list_memory / list_history / read_history (inspect),
 pause_project / resume_project, deploy, deployment_status, emergency_repair, repair_status, save_todo / list_todos.
+list_tasks returns compact summaries: all matching unfinished tasks plus the latest five terminal tasks by default.
+Use next_offset for older terminal pages, query/status to filter in SQL, and read_task/read_result for full objectives,
+criteria, results, checks and references. In All Projects, omit project_id to list across projects.
 To refine a queued task, continue it with only the added instructions. A running task cannot be edited: delegate the
 new work (it runs next) or cancel and continue.
 The context's worker is the owner's fixed model and effort for new tasks. When it says automatic, you pick: pass model
