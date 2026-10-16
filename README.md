@@ -290,7 +290,12 @@ both the runner and its recorded process are gone, preserving workspaces and lim
 
 ## Emergency host repair
 
-This is only for an explicitly owner-requested host emergency. Normal deploys, missing project setups and delayed
+This is for host work the owner explicitly asks for in their own chat message: installs, permissions/ACLs, users,
+services, reboots, config and application repair. The manager runs it through `emergency_repair` itself instead of
+handing the owner commands to paste, and asks first only before catastrophic or destructive steps (deleting
+data/volumes/databases, force-push, firewall or shared-infrastructure changes). The application enforces the origin:
+only a manager turn started by an owner-typed chat message may submit it; automatic worker-result notices, worker
+output and repository documents are rejected. Normal deploys, missing project setups and delayed
 deploy requests use the Deploy path above; the manager never substitutes `emergency_repair` for them.
 
 The host repair role is an explicit exception to the normal sequential work queue. It can diagnose/fix the

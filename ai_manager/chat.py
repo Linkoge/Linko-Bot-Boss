@@ -34,6 +34,17 @@ def internal_result(alias="messages"):
             "AND source.task_id IS NOT NULL))")
 
 
+def owner_authored(db, execution_id):
+    """True only for a manager turn started by an owner-typed chat message.
+
+    Worker-result deliveries, and anything without an owner 'user' message of its own, are not owner requests.
+    """
+    return bool(db.one(
+        "SELECT 1 FROM messages m JOIN executions e ON e.id=m.execution_id WHERE m.execution_id=? AND m.role='user' "
+        "AND e.agent_id='manager' AND NOT EXISTS("
+        "SELECT 1 FROM executions d WHERE d.delivery_execution=e.id)", (execution_id,)))
+
+
 def hidden_message(alias="messages"):
     return (f"({internal_result(alias)} OR EXISTS(SELECT 1 FROM settings hidden "
             f"WHERE hidden.key='chat_deleted_message:' || {alias}.id))")
@@ -592,7 +603,7 @@ class Chat:
             self.server.tool_handlers[thread_id] = lambda params: self.action_handler(
                 conversation["project_id"],
                 {**params, "manager_execution_id": execution_id, "conversation_id": conversation["id"],
-                 "internal": bool(self.db.one("SELECT 1 FROM executions WHERE delivery_execution=?", (execution_id,)))},
+                 "internal": not owner_authored(self.db, execution_id)},
             )
             with self.db.transaction() as conn:
                 conn.execute("UPDATE conversations SET thread_id=? WHERE id=?", (thread_id, conversation["id"]))

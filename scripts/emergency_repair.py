@@ -16,11 +16,12 @@ from pathlib import Path
 
 FINAL = {'succeeded', 'failed'}
 INSTRUCTIONS = """You are the owner's emergency host repair agent, outside the normal task queue.
-Read the current README and implementation before acting. Diagnose and repair the host application.
+Read the current README and implementation before acting. Do the host work the owner requested (installs, permissions/ACLs,
+users, services, reboots, config) and diagnose and repair the host application.
 You may restart its user service and invoke scripts/deploy.py --now --emergency, which preserves
 backup, health checks and rollback. Do not wait on or enqueue normal tasks. Preserve all data,
 workspaces and recovery protections. Ordinary repairs are authorized. Before catastrophic broad
-destruction (repository, volume, production database, force push, shared infrastructure), STOP and
+destruction (repository, volume, production database, force push, firewall or shared infrastructure), STOP and
 return a failed result asking the owner for specific confirmation. No unattended destructive approval.
 You may be resuming an interrupted attempt: inspect retained logs, native history, git, service and
 deploy receipts FIRST; reconcile effects before repeating any operation. Do not blindly replay.
