@@ -3,6 +3,7 @@ import asyncio
 import json
 import subprocess
 import threading
+from pathlib import Path
 
 import pytest
 from test_core import git, run_next
@@ -84,6 +85,45 @@ def test_exact_fixture_allowlist_and_invalid_policy(repository):
         ('real/token.txt', 1), ('fixtures/token.txt', 2)}
     head = commit(root, {ALLOWLIST: '[{"path":"*"}]'})
     assert scan(root, base, head) == [{'file': ALLOWLIST, 'line': 0, 'rule': 'invalid-allowlist'}]
+
+
+def test_reviewed_backup_fixtures_allow_only_exact_historical_coordinates(repository):
+    """Exercise the shipped policy against removed fixtures and unreviewed additions."""
+    policy = (Path(__file__).resolve().parents[1] / ALLOWLIST).read_text()
+    entries = json.loads(policy)
+    assert len(entries) == 20
+    assert all(entry['rule'] == 'credential-assignment' and entry['reason'].startswith('Dummy:')
+               for entry in entries)
+    root, base = repository
+    files = {}
+    for entry in entries:
+        lines = files.setdefault(entry['path'], [])
+        while len(lines) < entry['line']:
+            lines.append('ordinary fixture line\n')
+        lines[entry['line'] - 1] = 'password = "' + 'synthetic-credential' + '"\n'
+    fixture_files = {name: ''.join(lines) for name, lines in files.items()}
+    commit(root, fixture_files)
+    # The head policy must cover reviewed fixtures even after they were deleted.
+    git(root, 'rm', '-r', '.')
+    head = commit(root, {ALLOWLIST: policy})
+    assert scan(root, base, head) == []
+    path = 'tests/test_audio.py'
+    lines = fixture_files[path].splitlines(keepends=True)
+    lines[43] = TOKEN + '\n'  # Same coordinate, different rule remains blocked.
+    lines.append('password = "' + 'unreviewed-credential' + '"\n')
+    head = commit(root, {path: ''.join(lines), 'unreviewed.txt': lines[-1]})
+    assert scan(root, base, head) == [
+        {'file': path, 'line': 44, 'rule': 'github-token'},
+        {'file': path, 'line': 299, 'rule': 'credential-assignment'},
+        {'file': 'unreviewed.txt', 'line': 1, 'rule': 'credential-assignment'},
+    ]
+
+
+def test_runtime_data_is_ignored_and_untracked():
+    root = Path(__file__).resolve().parents[1]
+    assert git(root, 'check-ignore', '--no-index', '.data/secret-check-regression.txt') == (
+        '.data/secret-check-regression.txt')
+    assert git(root, 'ls-files', '--', '.data') == ''
 
 
 def test_merge_inherited_main_lines_excluded_and_resolution_checked(repository):

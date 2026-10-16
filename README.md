@@ -120,6 +120,31 @@ can be added together with its exact entry. Entries require a nonempty reason; m
 Review allowlist edits as code: this mechanism is for fixtures, never live credentials. It applies to both delivery and
 backup, and never to another repository.
 
+The backup fixture audit (2026-10-16) classified all 14 originally reported findings as **dummy**. A full-history
+scan at `caaa0d0` additionally found six audio-test fixtures, for 20 distinct path/line/rule findings; all 20 are
+**dummy**, with no real credential found. The exact entries in this repository's `.linko-secret-allowlist.json`
+cover only those historical findings under `credential-assignment`; scanner rules and matching behavior are unchanged.
+Line numbers below are historical added-line coordinates, so they may differ from the current source. Each value was
+reviewed in its test/harness context, including the deleted files; credential values are omitted from this report.
+
+| Finding path | Historical line(s), each classified dummy | Evidence |
+| --- | --- | --- |
+| `.data/auto-deploy-bootstrap/review.diff` | 1336: dummy | Copy of browser setup fixture in archived review diff. |
+| `scripts/browser_audio.py` | 23: dummy; 34: dummy | Synthetic audio key; temporary localhost harness and fake provider. |
+| `scripts/browser_auto_deploy.py` | 54: dummy | Setup password for temporary localhost deployment fixture. |
+| `scripts/browser_deployment.py` | 49: dummy | Setup password for temporary localhost deployment fixture. |
+| `scripts/browser_fetch_recovery.py` | 44: dummy | Setup password for temporary localhost recovery fixture. |
+| `scripts/browser_tasks.py` | 65: dummy | Setup password for temporary localhost task fixture. |
+| `tests/test_audio.py` | 44: dummy; 194: dummy; 222: dummy; 247: dummy; 274: dummy; 298: dummy | Synthetic audio keys; mocked providers/transports, upload deadlines, forwarding and safe-error assertions. |
+| `tests/test_deployment.py` | 240: dummy | TestClient login in temporary deployment admission test. |
+| `tests/test_hardening.py` | 169: dummy; 173: dummy | TestClient setup/login in temporary secure-cookie test. |
+| `tests/test_web.py` | 30: dummy; 33: dummy; 46: dummy; 55: dummy | TestClient authentication fixture and rejected setup requests in temporary test data. |
+
+`.data/` is ignored by Git and has no tracked files in the delivered tree. Its historical review diff remains in
+history; the single reviewed fixture entry above permits that finding without excluding `.data/` from scanning.
+No history rewrite or push is needed for this remediation. Future findings require individual review; if a real
+credential is found, stop and report it without committing its value or adding an exception for it.
+
 Enable GitHub's server-side protection as well: repository **Settings → Advanced Security** (under Security and quality)
 → enable **Secret Protection**, then enable **Push protection** in that section. Availability depends on repository and
 plan; an organization may manage this setting. Follow the current
