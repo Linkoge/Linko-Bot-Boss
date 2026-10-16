@@ -19,7 +19,7 @@ def seed_history(browser_context):
         conn.execute('DELETE FROM messages WHERE conversation_id=?', (conversation,))
         for i in range(155):
             conn.execute("INSERT INTO messages VALUES(?,?,'assistant',?,'completed',NULL,?)",
-                         (uuid.uuid4().hex, conversation, f'Message {i}\n\n' + ('Long history paragraph.\n' * 18), time.time()))
+                         (uuid.uuid4().hex, conversation, f'Message {i}\n\n' + ('Long history paragraph.\n\n' * 18), time.time()))
 
 
 def bottom(page):
@@ -35,7 +35,7 @@ def test_long_history_reload_reopen_and_recovery_settle_at_bottom(page, browser_
       Object.defineProperty(document.fonts,'ready',{value:fontGate});
     """)
     page.reload()
-    page.wait_for_function('()=>state.history?.messages.length===50')
+    page.wait_for_function('()=>state.history?.messages.length===30')
     # Exercise a layout change after content arrives and before fonts settle.
     page.locator('#message-input').fill('Retained draft changing composer height')
     page.evaluate('releaseFonts()')
@@ -60,7 +60,7 @@ def test_manual_gesture_during_open_and_load_older_preserve_reading(page, browse
       Object.defineProperty(document.fonts,'ready',{value:fontGate});
     """)
     page.reload()
-    page.wait_for_function('()=>state.history?.messages.length===50')
+    page.wait_for_function('()=>state.history?.messages.length===30')
     page.locator('#messages').hover()
     page.mouse.wheel(0, -500)
     page.wait_for_timeout(100)
@@ -73,9 +73,9 @@ def test_manual_gesture_during_open_and_load_older_preserve_reading(page, browse
     anchor = page.locator('#messages [data-message]').first
     y = anchor.bounding_box()['y']
     page.locator('#chat-older').click()
-    page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===100")
+    page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===60")
     # The same message remains at the same viewport coordinate after prepend.
-    assert abs(page.locator('#messages [data-message]').nth(50).bounding_box()['y'] - y) <= 1
+    assert abs(page.locator('#messages [data-message]').nth(30).bounding_box()['y'] - y) <= 1
     before = page.locator('#messages').evaluate('n=>n.scrollTop')
     page.evaluate('()=>refresh()')
     assert page.locator('#messages').evaluate('n=>n.scrollTop') == before

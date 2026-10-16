@@ -40,7 +40,12 @@ def test_picker_styles_are_the_original_ones_and_the_switch_is_drawn_like_the_ol
 
 def test_client_uses_one_settings_write_path_and_one_repo_toggle():
     js = _js()
-    assert digest(js) == '351ea813dfa54863415d79cf5dfd8e809d192b38ecaac0fb911708b7b9bcd3a6'
+    # Snapshot includes scoped limits invalidation after confirmed model/lock saves.
+    assert digest(js) == '14d8ae15cd719bf133a39c4ce175e3c1e46cda823e84f68aa1cdd65c20416ccb'
+    assert "if(typeof clearUsage==='function')clearUsage()" in js
+    assert 'setUsageProvider(provider,forceUsage)' in js
+    assert 'setProviderIcon(modelPanel.provider,true)' in js
+    assert 'setUsageProvider(null,true)' in js
     assert "const changeWorker=changeModels" in js
     assert 'modelWriteScope(project)' in js and 'model-lock' in js
     assert 'worker-model' not in js and 'project_worker' not in js and 'worker-default' not in js

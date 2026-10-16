@@ -138,7 +138,7 @@ def test_authenticated_api_unavailable_and_account_wide(web_client):  # noqa: F8
     assert browser.get('/api/account-usage').status_code == 401
     sign_in(browser, app, settings)
     assert browser.get('/api/account-usage').json()['status'] == 'unavailable'
-    assert browser.get('/api/account-usage?project_id=nonexistent').json()['scope'] == 'account'
+    assert browser.get('/api/account-usage?project_id=nonexistent').status_code == 409
 
 
 def test_authenticated_api_real_shape_and_throttling(web_client):  # noqa: F811
@@ -152,7 +152,8 @@ def test_authenticated_api_real_shape_and_throttling(web_client):  # noqa: F811
 
     app.state.chat.server.request = request
     first = browser.get('/api/account-usage').json()
-    second = browser.get('/api/account-usage?project_id=unknown').json()
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    second = browser.get('/api/account-usage?project_id=' + project).json()
     assert first['buckets'][0]['windows'][0]['remaining_percent'] == 52
     assert first['buckets'] == second['buckets']
     assert calls == ['account/rateLimits/read']
@@ -274,3 +275,95 @@ def test_count_only_refresh_and_expiring_credit_staleness():
     assert usage.view()['metadata_stale'] and usage.view()['status'] == 'stale'
     usage.update({}, replace=True)
     assert usage.view()['reset_credits']['available_count'] is None
+
+
+@pytest.mark.asyncio
+async def test_claude_flat_events_merge_windows_without_refreshing_other_window(tmp_path, monkeypatch):
+    from ai_manager.claude_host import Host
+
+    host = Host.__new__(Host)
+    host.limits_file = tmp_path / 'limits.json'
+    emitted = []
+
+    async def notify(method, data):
+        emitted.append(data)
+
+    host.notify = notify
+    monkeypatch.setattr('ai_manager.claude_host.time.time', lambda: 1000)
+    await host.limits({'status': 'allowed_warning', 'rateLimitType': 'five_hour',
+                       'utilization': .37, 'resetsAt': 3000})
+    monkeypatch.setattr('ai_manager.claude_host.time.time', lambda: 1200)
+    await host.limits({'status': 'allowed_warning', 'rateLimitType': 'seven_day',
+                       'utilization': .12, 'resetsAt': 9000})
+    usage = cache()
+    usage.clock = lambda: 1200
+    usage.update(await host.rpc_account_rateLimits_read({}), replace=True)
+    five, week = usage.view()['buckets'][0]['windows']
+    assert (five['remaining_percent'], five['observed_at'], five['stale']) == (63, 1000, True)
+    assert (week['remaining_percent'], week['observed_at'], week['stale']) == (88, 1200, False)
+    for bad in [None, [], {'unifiedWindows': []}, {'unifiedWindows': {'five_hour': []}},
+                {'rateLimitType': 'five_hour', 'utilization': True},
+                {'rateLimitType': 'five_hour', 'utilization': float('nan')},
+                {'rateLimitType': 'five_hour', 'utilization': -1}]:
+        await host.limits(bad)
+    assert len(emitted) == 2
+    assert (await host.rpc_account_rateLimits_read({}))['observedAt'] == 1200
+
+
+@pytest.mark.smoke
+def test_usage_api_resolves_same_saved_manager_as_dispatch_with_provider_isolation(tmp_path):
+    from fastapi.testclient import TestClient
+    from test_model_settings import SOL, SONNET, CatalogServer
+
+    from ai_manager.config import Settings
+    from ai_manager.model_settings import active, current, manager_route, save, set_lock
+    from ai_manager.providers import ProviderServer
+    from ai_manager.web import create_app
+
+    root = tmp_path / 'projects'
+    root.mkdir()
+    (root / 'locked').mkdir()
+    (root / 'unlocked').mkdir()
+    settings = Settings(data_dir=tmp_path / 'data', project_roots=(root,), secure_cookie=False)
+    calls, failing = [], set()
+
+    class UsageServer(CatalogServer):
+        def __init__(self, provider):
+            super().__init__(settings)
+            self.provider = provider
+
+        async def request(self, method, params, timeout=30):
+            if method != 'account/rateLimits/read':
+                return await super().request(method, params, timeout)
+            calls.append(self.provider)
+            if self.provider in failing:
+                raise RuntimeError('No limits')
+            return {'rateLimits': {'limitId': self.provider, 'primary': snapshot(25 if self.provider == 'claude' else 80,
+                                                                                reset=time.time()+3600)}}
+
+    import time
+    backends = {p: UsageServer(p) for p in ('codex', 'claude')}
+    server = ProviderServer(settings, active=lambda: active(app.state.db), backends=backends)
+    app = create_app(settings, server, CatalogServer)
+    with TestClient(app, base_url="http://localhost") as browser:
+        sign_in(browser, app, settings)
+        db = app.state.db
+        locked = app.state.registry.add(root / 'locked')['id']
+        unlocked = app.state.registry.add(root / 'unlocked')['id']
+        save(db, server, {**current(db, server), 'manager': {'model': SOL, 'effort': 'low'}})
+        set_lock(db, locked, {'revision': current(db, server, locked)['revision'], 'locked': True}, server)
+        save(db, server, {**current(db, server, locked), 'manager': {'model': SONNET, 'effort': 'high'}}, locked)
+        for project, provider, remaining in [(locked, 'claude', 75), (unlocked, 'codex', 20), (None, 'codex', 20)]:
+            data = browser.get('/api/account-usage', params={'project_id': project} if project else {}).json()
+            assert data['manager'] == manager_route(db, project) and data['provider'] == provider
+            assert data['buckets'][0]['id'] == provider
+            assert data['buckets'][0]['windows'][0]['remaining_percent'] == remaining
+        assert calls == ['claude', 'codex']  # One metadata read per provider, never starts/reads the other.
+        # A provider notification stays in its own cache even while global uses the other provider.
+        backends['claude'].usage_invalidate()
+        failing.add('claude')
+        unavailable = browser.get('/api/account-usage', params={'project_id': locked}).json()
+        assert unavailable['provider'] == 'claude' and unavailable['status'] == 'unavailable'
+        assert unavailable['buckets'] == []
+        set_lock(db, locked, {'revision': current(db, server, locked)['revision'], 'locked': False}, server)
+        assert browser.get('/api/account-usage', params={'project_id': locked}).json()['provider'] == 'codex'

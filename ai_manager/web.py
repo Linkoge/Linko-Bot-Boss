@@ -155,7 +155,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     worker_factory = worker_factory or provider_factory
     chat = Chat(db, registry, server or provider_factory(settings))
-    account_usage = AccountUsage(chat.server)
+    usage_backends = getattr(chat.server, 'backends', {'codex': chat.server})
+    account_usage = {name: AccountUsage(backend, provider=name) for name, backend in usage_backends.items()}
+
+    def invalidate_usage():
+        for reader in account_usage.values():
+            reader.invalidate()
     audio = Audio(settings)
     attachments = Attachments(db, settings)
     chat.attachments = attachments
@@ -310,8 +315,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return {"revoked": True}
 
     @app.get("/api/history", dependencies=[Depends(require_owner)])
-    def history(project_id: str | None = None, search: str = "", before: str | None = None):
-        return chat.history(project_id, search, before)
+    def history(project_id: str | None = None, search: str = "", before: str | None = None,
+                since: str | None = None, watch: str = ""):
+        return chat.history(project_id, search, before, since, watch.split(',') if watch else ())
 
     @app.get("/api/chat-history", dependencies=[Depends(require_owner)])
     def search_history(
@@ -381,8 +387,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"X-Accel-Buffering": "no"})
 
     @app.get("/api/account-usage", dependencies=[Depends(require_owner)])
-    async def usage():
-        return await account_usage.read()
+    async def usage(project_id: str | None = None):
+        from .model_settings import manager_route
+        from .providers import provider_of
+        selection = manager_route(db, project_id)
+        provider = provider_of(selection.get('model'))
+        reader = account_usage.get(provider)
+        result = await reader.read() if reader else None
+        # A saved selection can change while metadata is in flight.
+        current = manager_route(db, project_id)
+        if current != selection:
+            provider, result = provider_of(current.get('model')), None
+        return {**(result or {'scope': 'account', 'buckets': [], 'status': 'unavailable'}),
+                'provider': provider, 'manager': current, 'project_id': project_id, 'server_time': time.time()}
 
     @app.get("/api/audio", dependencies=[Depends(require_owner)])
     def audio_status():
@@ -429,7 +446,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         from .model_settings import save
         await chat.server.start()
         result = save(db, chat.server, body, project_id, locked)
-        account_usage.invalidate()
+        invalidate_usage()
         return result
 
     @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
@@ -443,7 +460,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         from .model_settings import recall_favorite
         await chat.server.start()
         recall_favorite(db, chat.server, slot, project_id, locked)
-        account_usage.invalidate()
+        invalidate_usage()
         return await model_settings(project_id)
 
     @app.put("/api/settings/instructions", dependencies=[Depends(require_owner)])

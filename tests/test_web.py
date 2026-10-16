@@ -176,3 +176,21 @@ def test_removed_settings_and_endpoints_are_gone(client):
     assert browser.get("/api/models").status_code == 404
     html = browser.get("/").text
     assert "chat-mode" not in html and "auto-deploy-settings" not in html
+
+
+@pytest.mark.smoke
+def test_history_endpoint_latest_older_and_since_cursor(client):
+    from test_chat_history import seed
+
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    conversation, last = seed(app.state.chat, count=92)
+    latest = browser.get('/api/history').json()
+    assert len(latest['messages']) == 30 and latest['messages'][0]['id'] == f'{conversation}-62'
+    older = browser.get('/api/history', params={'before': latest['messages'][0]['id']}).json()
+    assert len(older['messages']) == 30 and older['messages'][-1]['id'] == f'{conversation}-61'
+    delta = browser.get('/api/history', params={'since': f'{conversation}-89'}).json()
+    assert [m['id'] for m in delta['messages']] == [f'{conversation}-90', last]
+    assert delta['incremental'] and not delta['sync_has_more']
+    empty = browser.get('/api/history', params={'since': last}).json()
+    assert empty['messages'] == [] and empty['cursor'] == last

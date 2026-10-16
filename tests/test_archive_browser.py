@@ -7,7 +7,7 @@ from test_model_picker_browser import browser_context, page, server  # noqa: F40
 def test_archive_part_then_all(page, browser_context):
     seed_history(browser_context)
     page.reload()
-    page.wait_for_function('()=>state.history?.messages.length===50')
+    page.wait_for_function('()=>state.history?.messages.length===30')
     current = page.evaluate('state.history.conversation.id')
     page.get_by_role('button', name='Chat controls', exact=True).click()
     page.get_by_role('menuitem', name='Archive part 10', exact=True).click()

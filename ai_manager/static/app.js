@@ -39,6 +39,37 @@ $('chat-older').addEventListener('pointerdown',cancelInitialChat,{passive:true})
 const draftRecovery=JSON.parse(sessionStorage.getItem('linko-drafts-v1')||'[]');
 const appliedTranscripts=new Set(draftRecovery.transcripts||[]);
 const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', taskPaging:false, executionPaging:false, setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
+// Detached message nodes preserve parsed Markdown, selection controls and attachments.
+// Session storage is a bounded reload preview; every restoration immediately syncs.
+const chatCacheKey='linko-chat-cache-v1',chatCache=new Map();
+let chatCacheWrite=null;
+try{for(const [id,history] of JSON.parse(sessionStorage.getItem(chatCacheKey)||'[]'))if(history?.conversation?.id&&Array.isArray(history.messages))chatCache.set(id,{history});}catch{sessionStorage.removeItem(chatCacheKey);}
+function cacheCurrentChat(){
+  if(!state.history||$('app').hidden)return;
+  chatCache.delete(state.project);
+  chatCache.set(state.project,{history:state.history,nodes:[...$('messages').children],scrollTop:$('messages').scrollTop,
+    olderHasMore:state.olderHasMore,olderLoaded:state.olderLoaded});
+  clearTimeout(chatCacheWrite);chatCacheWrite=setTimeout(persistChatCache,200);
+}
+function persistChatCache(){
+  clearTimeout(chatCacheWrite);if($('app').hidden)return;
+  try{
+    const entries=[...chatCache].slice(-10).map(([id,entry])=>[id,{...entry.history,messages:entry.history.messages.slice(-30),updates:[],incremental:false,reset:false,deleted_message_ids:[],
+      has_more:entry.history.has_more||entry.history.messages.length>30}]);
+    sessionStorage.setItem(chatCacheKey,JSON.stringify(entries));
+  }catch{/* The in-memory cache still works if browser storage is full. */}
+}
+function restoreCachedChat(selection){
+  const cached=chatCache.get(state.project);if(!cached)return false;
+  if(cached.nodes){
+    state.history=cached.history;state.olderHasMore=cached.olderHasMore;state.olderLoaded=cached.olderLoaded;
+    $('messages').replaceChildren(...cached.nodes);$('messages').scrollTop=cached.scrollTop;
+    cancelInitialChat();state.execution=state.history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.finished_at===null)?.execution_id||null;$('chat-older').hidden=!state.olderHasMore;updateChatActions();
+    $('status-label').textContent='Syncing saved chat…';
+  }else renderHistory(cached.history,selection,null,true);
+  return true;
+}
+function clearChatCache(){clearTimeout(chatCacheWrite);chatCache.clear();sessionStorage.removeItem(chatCacheKey);}
 const submissionKey = 'linko-chat-submissions-v1';
 const submissions = new Map(JSON.parse(sessionStorage.getItem(submissionKey)||'[]'));
 // Settings intents and owner chat acceptance share one order, including background favorite recall.
@@ -84,7 +115,7 @@ async function api(path, options={}){
 }
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
-function showAuth(){cancelInitialChat();initialChatPosition=true;$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
+function showAuth(){clearChatCache();state.history=null;$('messages').replaceChildren();cancelInitialChat();initialChatPosition=true;$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[null,...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
 let refreshVersion=0,listingLoad=null;
@@ -219,21 +250,24 @@ async function selectProject(id){
   if(id!==state.project)audioChanged();
   $('agent-list').replaceChildren();
   if(state.draftContextReady){state.drafts.set(state.project,$('message-input').value);saveDrafts();}
+  cacheCurrentChat();
   const selection=++state.selection;
   cancelInitialChat();initialChatPosition=true;
   state.todoSelection=new Set();state.todos=[];renderTodos(true);
-  state.taskPaging=false;state.executionPaging=false;
-  state.project=id;state.detail=null;state.brief=null;clearTimeout(state.memoryTimer);renderMemory();renderMemoryReview();state.source?.close();state.source=null;
-  state.execution=null;state.history=null;$('messages').replaceChildren();updateChatActions();
+  state.taskPaging=false;state.executionPaging=false;state.olderLoading=false;
+  state.project=id;if(typeof setUsageProvider==='function')setUsageProvider(null,true);state.detail=null;state.brief=null;clearTimeout(state.memoryTimer);renderMemory();renderMemoryReview();state.source?.close();state.source=null;
+  state.execution=null;state.history=null;$('messages').replaceChildren();state.olderLoaded=false;state.olderHasMore=false;$('chat-older').hidden=true;updateChatActions();
   $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';state.draftContextReady=true;
   $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderAttachments();renderAudio();
   state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],active_agents:0,task_cursor:null,execution_cursor:null,has_older_tasks:false,has_older_executions:false};
   renderProjects();renderTasks();renderAgents();renderQuestions();
-  await refresh(false);
+  restoreCachedChat(selection);
+  // Chat sync starts immediately; portfolio and secondary tabs cannot delay it.
+  const sync=loadHistory(selection),listing=refresh(false);
+  await Promise.all([sync,listing]);
   if(selection!==state.selection)return;
   if(state.view==='memory')await loadMemory(selection);
   if(state.view==='search')await searchHistory();
-  await loadHistory(selection);
   if(selection===state.selection&&submissions.has(id))await sendSubmission();
 }
 
@@ -316,45 +350,75 @@ document.addEventListener('selectionchange',()=>{for(const output of document.qu
 function renderQuestions(){$('questions').replaceChildren();for(const q of state.portfolio.questions.filter(q=>!state.project||q.project_id===state.project)){const request=JSON.parse(q.request),form=element('form',undefined,'panel');form.append(element('h3','Codex needs your answer · '+projectName(q.project_id)));if(q.kind==='item/tool/requestUserInput'){for(const question of request.questions){const label=element('label',question.question),input=element('input');input.name=question.id;input.required=true;if(question.options)label.append(element('small',question.options.map(x=>x.label).join(' / ')));label.append(input);form.append(label);}form.append(element('button','Send answer','primary'));form.onsubmit=action(async event=>{event.preventDefault();await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:Object.fromEntries(new FormData(form))})});await refresh();});}else{form.append(element('pre',JSON.stringify(request,null,2)));for(const [label,approve] of [['Confirm exact action',true],['Decline',false]]){const b=element('button',label);b.type='button';b.onclick=action(async()=>{await api(`/api/questions/${q.id}/answer`,{method:'POST',body:JSON.stringify({answers:{approve}})});await refresh();});form.append(b);}}$('questions').append(form);}}
 async function loadHistory(selection=state.selection,before=null){
   if(selection!==state.selection)return;
-  if(before)cancelInitialChat();
-  const query=new URLSearchParams();if(state.project)query.set('project_id',state.project);if(before)query.set('before',before);
-  if(!before){state.source?.close();state.source=null;}
-  const request=state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
-  const history=await api(`/api/history?${query}`);if(selection!==state.selection||request!==state.loadHistoryRequest)return;
-  const messages=$('messages'),fresh=state.history?.conversation.id!==history.conversation.id;
+  if(before&&state.olderLoading)return;
+  if(before){cancelInitialChat();state.olderLoading=true;}
+  const project=state.project,query=new URLSearchParams(),watchGroups=[];
+  if(project)query.set('project_id',project);
+  if(before)query.set('before',before);
+  else if(state.history?.cursor){
+    query.set('since',state.history.cursor);
+    const watch=state.history.messages.filter(m=>m.execution_id&&m.finished_at===null).map(m=>m.id);
+    for(let i=0;i<watch.length;i+=100)watchGroups.push(watch.slice(i,i+100));
+  }
+  const request=before?null:state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
+  if(!watchGroups.length)watchGroups.push([]);
+  try{
+    for(const watched of watchGroups){
+      query.delete('watch');if(watched.length)query.set('watch',watched.join(','));
+      do{
+        const history=await api(`/api/history?${query}`);
+        if(selection!==state.selection||project!==state.project||(!before&&request!==state.loadHistoryRequest))return;
+        renderHistory(history,selection,before);
+        cacheCurrentChat();updatesRecovered('history');
+        if(history.reset||!state.history.cursor)return;
+        if(!before)query.set('since',state.history.cursor);
+        if(!history.sync_has_more)break;
+      }while(selection===state.selection);
+    }
+  }catch(error){if(selection===state.selection)updatesUnavailable(error,'history');throw error;}
+  finally{if(before&&selection===state.selection)state.olderLoading=false;}
+}
+function renderHistory(history,selection,before=null,cached=false){
+  const messages=$('messages'),fresh=state.history?.conversation.id!==history.conversation.id||history.reset;
   const previousTop=messages.scrollTop,previousHeight=messages.scrollHeight;
-  history.messages=history.messages.filter(m=>!history.deleted_message_ids?.includes(m.id));
-  if(!before)state.history=history;
-  if(fresh||before||!state.olderLoaded)state.olderHasMore=history.has_more;
+  const previous=state.history,changed=[...new Map([...history.messages,...(history.updates||[])].map(m=>[m.id,m])).values()].sort((a,b)=>a.position-b.position);
+  const loaded=new Map((fresh?[]:previous.messages).map(m=>[m.id,m]));
+  for(const m of changed)loaded.set(m.id,m);
+  for(const [id,m] of loaded)if(history.deleted_message_ids?.includes(id)||
+    (history.first_position!=null&&m.position<history.first_position)||history.first_position===null)loaded.delete(id);
+  state.history={...history,updates:[],messages:[...loaded.values()].sort((a,b)=>a.position-b.position),
+    cursor:before?previous?.cursor:history.cursor,
+    has_more:before?history.has_more:history.incremental?previous?.has_more:history.has_more};
+  history.messages=changed.filter(m=>loaded.has(m.id));
+  if(fresh||before||(!history.incremental&&!state.olderLoaded))state.olderHasMore=history.has_more;
   if(fresh)state.olderLoaded=false;
   if(before)state.olderLoaded=true;
+  if(state.history.messages[0]?.position===history.first_position){state.olderHasMore=false;state.history.has_more=false;}
   $('chat-older').hidden=!state.olderHasMore;updateChatActions();
-  if(fresh||(!before&&!history.messages.length))messages.replaceChildren();
+  if(fresh||!state.history.messages.length)messages.replaceChildren();
   const olderAnchor=before?messages.firstElementChild:null;
   const rows=new Map([...messages.querySelectorAll('[data-message]')].map(row=>[row.dataset.message,row]));
-  const ids=new Set(history.messages.map(m=>m.id));
-  // /api/history is a rolling 50-message tail, not a deletion list. Keep
-  // already loaded older rows until the conversation changes or is cleared.
-  for(const [id,row] of rows)if((fresh&&!ids.has(id))||history.deleted_message_ids?.includes(id))row.remove();
+  // Only explicit deletion/retention metadata removes already loaded rows.
+  for(const [id,row] of rows)if(!loaded.has(id))row.remove();
   for(const m of history.messages){
     let row=rows.get(m.id);
-    if(!row){row=element('article',undefined,`message ${m.role}`);row.setAttribute('aria-label',messageAuthor(m));const body=element('div'),label=element('div',undefined,'message-label');label.append(element('span',undefined,'badge'));body.append(label,element('div',messageText(m),'message-content'));row.append(body);row.dataset.message=m.id;messages.insertBefore(row,olderAnchor);}
+    if(!row){row=element('article',undefined,`message ${m.role}`);row.setAttribute('aria-label',messageAuthor(m));const body=element('div'),label=element('div',undefined,'message-label');label.append(element('span',undefined,'badge'));body.append(label,element('div',messageText(m),'message-content'));row.append(body);row.dataset.message=m.id;const next=state.history.messages.find(other=>other.position>m.position&&rows.has(other.id));messages.insertBefore(row,next?rows.get(next.id):olderAnchor);rows.set(m.id,row);}
     // Reply/stream completion does not establish requested-task acceptance or deployment.
     const badge=row.querySelector('.badge'),label=row.querySelector('.message-label');
     label.hidden=m.status==='completed';
     badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;
     badge.className=`badge ${m.status==='completed'?'':m.status}`;
-    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role);renderMessageAttachments(row,m);renderMessageActions(row,m,history.conversation.id);
+    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role,false);renderMessageAttachments(row,m);renderMessageActions(row,m,history.conversation.id);
 
   }
   if(before){messages.scrollTop=previousTop+messages.scrollHeight-previousHeight;return;}
   if(!fresh)messages.scrollTop=previousTop;
   if(fresh){initialChatPosition=true;positionInitialChat(selection);}
-  const active=history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
+  const active=state.history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.execution_status&&m.finished_at===null);
   state.execution=active?.execution_id||null;
   $('stop-chat').hidden=!active;$('send').disabled=state.pending.has(state.project);
   $('status-label').textContent=active?(active.status==='waiting'?recoveryLabel(active):active.status==='queued'?'Queued':'Thinking / responding'):'Ready to help';
-  if(active)attachStream(active.execution_id,active.id,active.stream_cursor);
+  if(!cached){state.source?.close();state.source=null;if(active)attachStream(active.execution_id,active.id,active.stream_cursor);}
   updateChatActions();
 }
 function renderMessageActions(row,message,conversation){
@@ -398,12 +462,14 @@ function confirmMessageDelete(message,conversation){
 function messageText(m){if(m.attachments?.length&&!m.content)return '';return m.content||(m.status==='failed'?(m.execution_error||'Response failed.'):m.status==='interrupted'?'Stopped.':m.status==='completed'?'No text response.':m.status==='waiting'?recoveryLabel(m):m.status==='queued'?'Queued':'Thinking…');}
 function messageAuthor(message){return message.role==='user'?'You':message.role==='worker'?'Bot result':'Bot Boss';}
 function chatHasSelection(node=$('messages')){const selection=window.getSelection();return !!selection&&!selection.isCollapsed&&selection.containsNode(node,true);}
-function updateMessageContent(node,text,role='assistant'){
+function updateMessageContent(node,text,role='assistant',preserve=true){
   const markdown=role==='assistant'||role==='worker';
   if(node._messageSource===text&&node.classList.contains('markdown')===markdown){delete node._pendingMessage;return;}
   if(chatHasSelection(node)){node._pendingMessage={text,role};return;}
   delete node._pendingMessage;
-  if(markdown)preserveChatPosition(()=>node.replaceChildren(renderChatMarkdown(text)));
+  // History batches restore scroll once. Reading scrollTop for every inserted
+  // Markdown row forces a full layout per message on long conversations.
+  if(markdown){const render=()=>node.replaceChildren(renderChatMarkdown(text));if(preserve)preserveChatPosition(render);else render();}
   else if(node.firstChild?.nodeType===Node.TEXT_NODE&&text.startsWith(node.textContent))node.firstChild.appendData(text.slice(node.textContent.length));
   else node.textContent=text;
   node.classList.toggle('markdown',markdown);node._messageSource=text;
@@ -550,6 +616,7 @@ async function openSavedHistory(id,older=false,search=''){
   $('history-older').hidden=!data.has_more;$('history-detail').hidden=false;
   if(!older)$('history-detail').scrollIntoView({block:'start'});
 }
+$('messages').addEventListener('scroll',()=>{if($('messages').scrollTop<80&&state.olderHasMore&&!state.olderLoading&&!initialChatPosition)loadHistory(state.selection,state.history?.messages[0]?.id).catch(()=>{});},{passive:true});
 $('chat-older').onclick=action(()=>loadHistory(state.selection,$('messages').querySelector('[data-message]')?.dataset.message));
 let readerRequest=0;
 async function readHistory(kind,id){
@@ -631,7 +698,7 @@ $('discover').onclick=action(async()=>{await api('/api/projects/discover',{metho
 $('rename-project').onclick=()=>renameProject();
 $('add-project').onclick=()=>editor('Add project',[{name:'path',label:'Project directory',required:true}],values=>api('/api/projects',{method:'POST',body:JSON.stringify(values)}));
 $('project-settings').onclick=()=>{const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editProject(p);else notice('Select a project first.');};
-$('logout').onclick=action(async()=>{await api('/api/logout',{method:'POST'});state.csrf=null;showAuth();});
+$('logout').onclick=action(async()=>{clearChatCache();await api('/api/logout',{method:'POST'});state.csrf=null;showAuth();});
 $('revoke-sessions').onclick=action(async()=>{await api('/api/sessions/revoke',{method:'POST'});showAuth();});
 $('instructions-form').onsubmit=action(async event=>{event.preventDefault();await api('/api/settings/instructions',{method:'PUT',body:JSON.stringify({content:$('global-instructions').value})});notice('Instructions saved.');});
 
@@ -808,3 +875,5 @@ function deploymentText(result){
 async function deploymentStatus(){const result=await api('/api/deployment');$('deployment-status').textContent=deploymentText(result);$('deployment-cancel').hidden=!result.request;}
 $('deployment-check').onclick=action(deploymentStatus);
 $('deployment-cancel').onclick=action(async()=>{await api('/api/deployment/cancel',{method:'POST',body:'{}'});await deploymentStatus();});
+
+window.addEventListener('pagehide',()=>{cacheCurrentChat();persistChatCache();});

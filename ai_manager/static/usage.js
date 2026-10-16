@@ -1,11 +1,14 @@
 'use strict';
-// Metadata shares the authenticated API client. Project selection never scopes it.
+// The server resolves the saved effective manager selection for this project.
 let usageData=null,usageTimer=null,usageTick=null,usageRequest=null,usageSession=0,usageOffset=0;
-let usageProvider=null;
-function setUsageProvider(provider){
-  if(usageProvider===provider)return;
+let usageProvider=null,usageProject;
+function setUsageProvider(provider,force=false){
+  if(!force&&usageProvider===provider&&usageProject===state.project)return;
+  clearUsage(provider);refreshUsage(true);
+}
+function clearUsage(provider=null){
+  usageProject=state.project;
   usageProvider=provider;usageSession++;usageRequest=null;usageData={provider,buckets:[]};renderUsage();
-  refreshUsage();
 }
 const usageNow=()=>Date.now()/1000+usageOffset;
 function usageBucket(){return usageData?.buckets.find(b=>b.id===(usageData.provider||'codex'));}
@@ -24,12 +27,12 @@ function usageDuration(timestamp){
   return parts.join(' ');
 }
 function renderUsage(){
-  const windows=usageWindows(),labels=[],provider=usageData?.provider==='claude'?'Claude':'Codex';
+  const windows=usageWindows(),labels=[],provider=usageData?.provider==='claude'?'Claude':usageData?.provider==='codex'?'Codex':'Manager';
   for(const [id,minutes,name] of [['usage-five',300,'Five-hour'],['usage-week',10080,'Weekly']]){
     const matches=windows.filter(w=>w.duration_minutes===minutes),w=matches.length===1?matches[0]:null;
-    const stale=w&&usageStale(w),known=w&&w.remaining_percent!==null;
-    $(id).textContent=known?`${Math.round(w.remaining_percent)}%`:'—';
-    $(id).classList.toggle('stale',!!stale);
+    const stale=w&&usageStale(w),known=w&&Number.isFinite(w.remaining_percent)&&!stale&&!usageData?.error;
+    $(id).textContent=known?`${Math.round(w.remaining_percent)}%`:'unavailable';
+    $(id).classList.toggle('stale',!!stale);$(id).classList.toggle('unavailable',!known);
     $(id).title=`${name} remaining: ${known?usagePercent(w.remaining_percent):'unavailable'}${stale?' (stale)':''}`;
     labels.push($(id).title);
   }
@@ -44,12 +47,13 @@ function renderUsage(){
     const matches=windows.filter(w=>w.duration_minutes===minutes),w=matches.length===1?matches[0]:null;
     const section=element('section',undefined,'usage-window');
     section.append(element('h3',label));
-    const remaining=element('p',w?.remaining_percent!=null?usagePercent(w.remaining_percent):'Unavailable','usage-remaining');
+    const remaining=element('p',w&&!usageStale(w)&&!usageData?.error&&Number.isFinite(w.remaining_percent)?usagePercent(w.remaining_percent):'Unavailable','usage-remaining');
     const isStale=!!w&&(usageStale(w)||!!usageData?.error);
     remaining.classList.toggle('stale',isStale);
     if(isStale){remaining.title='Previous reading is stale';remaining.setAttribute('aria-label',remaining.textContent+'. Previous reading is stale.');}
-    const reset=element('p',usageDuration(w?.resets_at),'usage-reset');
-    reset.title=w?.resets_at!=null?'Resets '+localTime(w.resets_at):'Reset time unavailable';
+    const reportedReset=w&&!usageStale(w)&&!usageData?.error?w.resets_at:null;
+    const reset=element('p',usageDuration(reportedReset),'usage-reset');
+    reset.title=reportedReset!=null?'Resets '+localTime(reportedReset):'Reset time unavailable';
     reset.setAttribute('aria-label',reset.title+'. '+reset.textContent);
     section.append(remaining,reset);
     details.append(section);
@@ -60,7 +64,7 @@ function renderUsage(){
     (usageBucket()?.observed_at!=null&&usageBucket().observed_at+180<=usageNow())||
     usageData?.reset_credits?.credits?.some(c=>c.expires_at!=null&&c.expires_at<=usageNow());
   if(staleMetadata)metadata.append(element('p','Previous metadata is stale.'));
-  const resets=usageData?.reset_credits;
+  const resets=staleMetadata?null:usageData?.reset_credits;
   metadata.append(element('p','Available resets: '+(resets?.available_count??'Unavailable')));
   if(resets?.credits?.length){
     if(resets.credits.length<resets.available_count)metadata.append(element('p','Expiration details are partial.'));
@@ -70,17 +74,18 @@ function renderUsage(){
       metadata.append(element('p','Reset credit expiration: '+expiry));
     }
   }else metadata.append(element('p','Reset credit expiration: Unavailable'));
-  const credits=usageBucket()?.credits;
+  const credits=staleMetadata?null:usageBucket()?.credits;
   metadata.append(element('p','Credits: '+(credits?.unlimited===true?'Unlimited':credits?.balance??
     (credits?.has_credits===false?'None reported':credits?.has_credits===true?'Available; balance unavailable':'Unavailable'))));
   metadata.append(element('p','Credit balance expiration: Unavailable'));
   details.append(metadata);
   $('usage-last-refresh').textContent='Last refresh '+(usageData?.last_successful_refresh_at!=null?localTime(usageData.last_successful_refresh_at):'Never');
 }
-async function refreshUsage(){
+async function refreshUsage(force=false){
+  if(!force&&typeof modelPending!=='undefined'&&modelPending>0)return usageRequest;
   if(usageRequest||$('app').hidden||document.hidden)return usageRequest;
-  const session=usageSession;
-  usageRequest=(async()=>{try{const data=await api('/api/account-usage');if(session!==usageSession)return;usageData=data;usageOffset=data.server_time-Date.now()/1000;}catch(error){if(session!==usageSession)return;usageData={...(usageData||{buckets:[],server_time:usageNow()}),error:'Account usage unavailable. Refresh failed; previous readings are stale.',last_attempt_at:usageNow()};for(const b of usageData.buckets)for(const w of b.windows)w.stale=true;}finally{if(session===usageSession){usageRequest=null;renderUsage();}}})();
+  const session=usageSession,project=state.project;
+  usageRequest=(async()=>{try{const data=await api('/api/account-usage'+(project?'?project_id='+encodeURIComponent(project):''));if(session!==usageSession||project!==state.project)return;usageData=data;usageProvider=data.provider;usageProject=project;if(typeof setProviderIcon==='function')setProviderIcon(data.provider);usageOffset=data.server_time-Date.now()/1000;}catch(error){if(session!==usageSession)return;usageData={provider:usageProvider,buckets:[],error:'Account usage unavailable.',last_attempt_at:usageNow()};}finally{if(session===usageSession){usageRequest=null;renderUsage();}}})();
   renderUsage();return usageRequest;
 }
 function startUsage(){stopUsage();usageTimer=setInterval(refreshUsage,60000);usageTick=setInterval(renderUsage,15000);setTimeout(refreshUsage,0);}

@@ -433,12 +433,41 @@ gone; its history is in Git. Schema 16 migrates each explicit legacy `project_wo
 full repo lock, combining its worker/manual with the current global manager. Inherited null overrides remain unlocked.
 The old keys are deleted; migration runs once and never recreates a lock after OFF. Existing full locks take precedence.
 
-History retention uses lossless compression only; there is no 90-day purge. The current chat and
-saved-chat pages load the last **50 messages**, with **Load older messages** / **Load earlier messages**
-retrieving preceding pages in original insertion order. New manager threads receive the last 50 context
+History retention uses lossless compression only; there is no 90-day purge. The current chat loads
+its latest **30 messages**; scrolling to the top or **Load older messages** retrieves preceding 30-message
+pages in insertion order. Saved-chat pages retain their 50-message **Load earlier messages** pages.
+New manager threads receive the last 50 context
 messages (plus the latest owner request if it falls outside that window); native thread continuity and
 explicit historical search/read actions remain available. Hidden transport rows and display tombstones
 keep their existing behavior.
+
+Each loaded project's chat, parsed message nodes, older pages and reading position stay in client memory.
+Switching back shows them synchronously, then immediately syncs in parallel with the portfolio request.
+A bounded session-storage preview (latest 30 messages for up to ten contexts) also renders before the
+first chat request after a page reload. It is cleared on logout/authentication recovery; storage failure
+still permits the in-memory cache. Every preview syncs immediately, and failed syncs show the existing
+retry status and retry through polling. Late responses from another project are ignored.
+
+`GET /api/history?project_id=…` returns a latest page, `before=<message-id>` an older page, and
+`since=<cursor>` only newer rows in ascending insertion order. `cursor` advances through bounded
+catch-up pages while `sync_has_more` is true. Optional `watch=<comma-separated-message-ids>` refreshes
+cached unfinished replies whose content/status can change without new rows (up to 100 IDs per request, automatically batched by the client).
+`updates` carries those rows separately; completed cached bodies are not re-fetched. Deletion tombstones
+and `first_position` reconcile deletion/partial archive, and `reset` plus a new tail reconcile an invalid
+cursor or replaced conversation. Older pages remain in memory through ordinary delta refreshes.
+
+Switch profiling (2026-10-16, disposable server/Chromium, 150 replies with 100 formatted paragraphs each):
+the old return switch took **519 ms** unthrottled, or **3,056 ms at 6× CPU throttling**. In the throttled
+run, SQLite history reads were 14–21 ms, the history round trip 23 ms, and Markdown rendering 2,725 ms.
+Rebuilding parsed nodes dominated; the portfolio/history waterfall and per-message scroll/layout reads
+also contributed. With cached nodes, deferred preview writes, parallel sync and one scroll restoration
+per history batch, the measured return was **64 ms** to restore unthrottled; at 6× it restored in
+**552 ms**, painted in **686 ms**, and completed background sync in **713 ms**, with **0 ms Markdown
+reparsing**. Cold first-switch time at 6× fell from 3,429 ms (50 rows) to 1,600 ms (30 rows). These are
+fixture measurements, not live-host timings. Reproduce with
+`python -m pytest -q -s tests/test_chat_switch_browser.py`; it records query, API, render, restore and paint
+times and verifies node reuse, immediate delta sync, reload previews, deletion/reset, older scrolling and
+late-response isolation.
 
 Task and worker history opens with the last **20 events** and up to **20 execution references** per page.
 The Tasks and Agents menus each show **all unfinished work plus the latest 10 terminal cards** in the
@@ -486,11 +515,22 @@ actual chat, event and full-output controls in Chromium with disposable data and
 
 ## Account usage
 
-The usage button follows the selected provider (Codex or Claude). Details show reported five-hour
-and weekly remaining percentages and reset countdowns; reset timestamps are available to assistive
-technology and on hover. Missing windows remain Unavailable. Cached readings are marked stale after
-three minutes, a passed window reset, or refresh failure. Claude readings retain their original event
-time across disk reads and restarts; reading saved metadata does not refresh the observation.
+The usage button follows the provider of the **saved effective manager selection**, resolved by the
+same `manager_route` rule used for dispatch: the active repository's full lock when enabled, otherwise
+global. `GET /api/account-usage?project_id=…` resolves that saved pair and reads only that provider's
+metadata backend. Provider caches/listeners are isolated, so a locked Claude repo works while global
+uses Codex, and an unavailable provider never falls back to the other's readings. The response includes
+the effective manager pair; changing selection while a read is in flight discards that reading.
+
+The upper bar is the five-hour allowance; the lower bar is weekly. Details show reported remaining
+percentages and reset countdowns; reset timestamps are available to assistive technology and on hover.
+A project switch or saved model/lock change clears the widget immediately and starts a scoped refresh.
+Late context responses are ignored. Missing, expired, failed or stale readings display **unavailable**
+instead of a previous percentage (stale after three minutes or a passed reset). Claude's reader accepts
+both nested `unifiedWindows` and flat `rateLimitType`/`utilization` events; the previous nested-only parser
+silently dropped flat events. Separate five-hour/weekly events merge without refreshing the other
+window's observation time. Claude readings retain their original event time across disk reads and
+restarts; reading saved metadata does not refresh the observation.
 
 The metadata-only `account/rateLimits/read` request includes available reset-credit details. The dialog
 shows the provider's available reset count, individual available-credit expiration dates, and reported
@@ -503,7 +543,8 @@ There is no reset/redeem action. Cached limits, empty balances, unavailable meta
 never disable Send or preflight a message. Real provider errors still follow the existing queue behavior.
 
 Permanent regressions: `tests/test_account_usage.py`, `tests/test_usage_display.py`, and
-`tests/test_claude_provider.py`; responsive interaction checks remain in `scripts/browser_account_usage.py`.
+`tests/test_claude_provider.py`, plus `tests/test_usage_limits_browser.py` for saved manager/repo-lock
+switching, stale/unavailable display and context changes; responsive interaction checks remain in `scripts/browser_account_usage.py`.
 Protocol reference: installed Codex 0.162.1 generated `GetAccountRateLimitsResponse`,
 `RateLimitResetCreditsSummary`, `RateLimitResetCredit`, and `CreditsSnapshot` (also available in the
 [upstream schema](https://github.com/openai/codex/tree/main/codex-rs/app-server-protocol/schema/typescript/v2)).

@@ -306,19 +306,39 @@ class Host:
         await self.notify('turn/completed', {'threadId': thread_id, 'turn': turn})
 
     async def limits(self, info):
-        windows = info.get('unifiedWindows') or {}
-        snapshot = {'limitId': 'claude', 'limitName': 'Claude'}
+        if not isinstance(info, dict):
+            return
+        # CLI versions emit either a full unifiedWindows snapshot or one flat
+        # rateLimitType/utilization window. The old reader silently dropped flat events.
+        windows = info.get('unifiedWindows')
+        windows = dict(windows) if isinstance(windows, dict) else {}
+        if info.get('rateLimitType') in ('five_hour', 'seven_day') and 'utilization' in info:
+            windows.setdefault(info['rateLimitType'], info)
+        previous = await self.rpc_account_rateLimits_read({})
+        raw = previous.get('rateLimits')
+        snapshot = raw.copy() if isinstance(raw, dict) else {}
+        for slot in ('primary', 'secondary'):
+            if isinstance(snapshot.get(slot), dict):
+                snapshot[slot].setdefault('observedAt', previous.get('observedAt'))
+        snapshot.update(limitId='claude', limitName='Claude')
+        observed, changed = time.time(), False
         for slot, key, minutes in (('primary', 'five_hour', 300), ('secondary', 'seven_day', 10080)):
             window = windows.get(key)
-            if isinstance(window, dict) and isinstance(window.get('utilization'), (int, float)) and not isinstance(
-                window['utilization'], bool
-            ) and math.isfinite(window['utilization']) and window['utilization'] >= 0:
-                snapshot[slot] = {'usedPercent': round(window['utilization'] * 100, 1), 'windowDurationMins': minutes,
-                                  'resetsAt': window.get('resetsAt')}
-        if 'primary' not in snapshot and 'secondary' not in snapshot:
+            if not isinstance(window, dict):
+                continue
+            utilization = window.get('utilization')
+            if (isinstance(utilization, (int, float)) and not isinstance(utilization, bool)
+                    and math.isfinite(utilization) and utilization >= 0):
+                snapshot[slot] = {'usedPercent': round(utilization * 100, 1), 'windowDurationMins': minutes,
+                                  'resetsAt': window.get('resetsAt'), 'observedAt': observed}
+                changed = True
+        if not changed:
             return
-        payload = {'rateLimits': snapshot, 'observedAt': time.time()}
-        self.limits_file.write_text(json.dumps(payload))
+        payload = {'rateLimits': snapshot, 'observedAt': observed}
+        # Individual window timestamps survive a later event for only the other window.
+        temporary = self.limits_file.with_suffix('.tmp')
+        temporary.write_text(json.dumps(payload))
+        temporary.replace(self.limits_file)
         await self.notify('account/rateLimits/updated', payload)
 
     # MCP bridge --------------------------------------------------------------------------

@@ -28,10 +28,12 @@ def test_load_older_chat_worker_events_and_complete_output(page, browser_context
         worker(db, project, 'browser-task', eid=f'fixture-worker-{i}')
     maintain(db)
     page.reload()
-    page.wait_for_function('()=>state.ready&&state.history.messages.length===50')
-    assert page.locator('#messages [data-message]').count() == 50
+    page.wait_for_function('()=>state.ready&&state.history.messages.length===30')
+    assert page.locator('#messages [data-message]').count() == 30
     page.locator('#chat-older').click()
-    page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===100")
+    page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===60")
+    page.locator('#chat-older').click()
+    page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===90")
     page.locator('#chat-older').click()
     page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===113")
     assert page.locator('#messages [data-message]').first.get_attribute('data-message') == 'retention-0'

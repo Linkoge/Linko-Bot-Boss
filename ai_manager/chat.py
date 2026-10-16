@@ -24,6 +24,8 @@ from .recovery import (
 )
 from .registry import Registry
 
+CHAT_PAGE_SIZE = 30
+
 
 # Application-created transport rows only; never classify by text or JSON shape.
 def internal_result(alias="messages"):
@@ -59,35 +61,64 @@ class Chat:
             )
             return dict(conn.execute("SELECT * FROM conversations WHERE context=?", (context,)).fetchone())
 
-    def history(self, project_id=None, search="", before=None):
+    def history(self, project_id=None, search="", before=None, since=None, watch=()):
+        """Bounded rowid pages. Since returns new rows plus explicitly watched mutable replies."""
+        if before and since:
+            raise ValueError('Choose older messages or newer messages')
         conversation = self.conversation(project_id)
         boundary = None
-        if before:
+        if before or since:
             boundary = self.db.one('SELECT rowid AS position FROM messages WHERE id=? AND conversation_id=?',
-                                   (before, conversation['id']))
-            if not boundary:
+                                   (before or since, conversation['id']))
+            if before and not boundary:
                 raise ValueError('Message was not found in this chat')
-        rows = self.db.all(
-            """SELECT m.*,CASE WHEN m.role='user' AND e.id IS NOT NULL THEN
+        incremental = bool(since and boundary)
+        position = boundary['position'] if boundary else None
+        conditions, params = ['m.conversation_id=?', 'NOT ' + hidden_message('m')], [conversation['id']]
+        if search:
+            conditions.append('instr(lower(history_text(m.content)),lower(?))>0')
+            params.append(search)
+        if position is not None:
+            conditions.append('m.rowid' + ('>?' if incremental else '<?'))
+            params.append(position)
+        select = """SELECT m.rowid AS position,m.*,CASE WHEN m.role='user' AND e.id IS NOT NULL THEN
             CASE WHEN e.finished_at IS NOT NULL THEN CASE WHEN e.status='completed' THEN 'completed' ELSE e.status END
             WHEN e.status='running' THEN 'processing' WHEN e.status='recovering' THEN 'waiting' ELSE 'queued' END
             WHEN m.role!='assistant' OR e.id IS NULL THEN m.status
             WHEN e.finished_at IS NOT NULL THEN e.status WHEN e.status='recovering' THEN 'waiting'
             WHEN e.status='running' THEN 'streaming' ELSE 'queued' END AS authoritative_status,e.status AS execution_status,
-            e.finished_at,e.retry_at,e.recovery_reason,history_preview(e.error) AS execution_error, (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE m.conversation_id=? AND NOT """ + hidden_message("m") + """ AND (?='' OR instr(lower(history_text(m.content)),lower(?))>0) AND (? IS NULL OR m.rowid<?) ORDER BY m.rowid DESC LIMIT ?""",
-            (conversation["id"], search, search, boundary["position"] if boundary else None,
-             boundary["position"] if boundary else None, CHAT_WINDOW + 1),
-        )
-        has_more = len(rows) > CHAT_WINDOW
-        rows = rows[:CHAT_WINDOW]
-        for row in rows:
-            row["status"] = row.pop("authoritative_status")
+            e.finished_at,e.retry_at,e.recovery_reason,history_preview(e.error) AS execution_error,
+            (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor
+            FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE """
+        rows = self.db.all(select + ' AND '.join(conditions) + ' ORDER BY m.rowid '
+                           + ('ASC' if incremental else 'DESC') + ' LIMIT ?', (*params, CHAT_PAGE_SIZE + 1))
+        more = len(rows) > CHAT_PAGE_SIZE
+        rows = rows[:CHAT_PAGE_SIZE]
+        if not incremental:
+            rows.reverse()
+        updates = []
+        if incremental and watch:
+            # A cached unfinished reply can finish without adding another message.
+            # Completed cached rows never need their bodies transferred again.
+            watched = list(dict.fromkeys(watch))
+            if len(watched) > 100:
+                raise ValueError('Too many watched messages')
+            updates = self.db.all(select + 'm.conversation_id=? AND NOT ' + hidden_message('m')
+                                  + ' AND m.id IN (' + ','.join('?' for _ in watched) + ') ORDER BY m.rowid',
+                                  (conversation['id'], *watched))
+        for row in rows + updates:
+            row['status'] = row.pop('authoritative_status')
             row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
-        return {"conversation": conversation, "messages": list(reversed(rows)), "has_more": has_more,
-                "deleted_message_ids": [r["id"] for r in self.db.all(
+        first = self.db.one('SELECT rowid AS position FROM messages WHERE conversation_id=? AND NOT '
+                            + hidden_message() + ' ORDER BY rowid LIMIT 1', (conversation['id'],))
+        return {'conversation': conversation, 'messages': rows, 'updates': updates,
+                'has_more': more if not incremental else False, 'sync_has_more': more if incremental else False,
+                'incremental': incremental, 'reset': bool(since and not boundary), 'cursor': rows[-1]['id'] if rows else since if incremental else None,
+                'first_position': first['position'] if first else None,
+                'deleted_message_ids': [r['id'] for r in self.db.all(
                     "SELECT id FROM messages WHERE conversation_id=? AND EXISTS(SELECT 1 FROM settings "
-                    "WHERE key='chat_deleted_message:' || messages.id)", (conversation["id"],))],
-                "trash": self.db.setting("chat_trash:" + (project_id or "global"))}
+                    "WHERE key='chat_deleted_message:' || messages.id)", (conversation['id'],))],
+                'trash': self.db.setting('chat_trash:' + (project_id or 'global'))}
 
     def delete_message(self, project_id, conversation_id, message_id, confirmed):
         """Remove a whole display message, preserving native/task/recovery evidence."""

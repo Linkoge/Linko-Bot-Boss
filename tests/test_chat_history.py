@@ -288,3 +288,56 @@ def test_partial_archive_hidden_messages_and_atomic_guards(chat, monkeypatch):
     assert not chat.db.all('SELECT * FROM chat_archives')
     chat.reset(None, current, last, True, archive=True, keep_last=10)
     assert [m['id'] for m in chat.history()['messages']] == [current + f'-{i}' for i in range(13, 23)]
+
+
+def test_active_history_latest_older_since_and_reset(chat):
+    conversation, last = seed(chat, count=75)
+    latest = chat.history()
+    assert [m['id'] for m in latest['messages']] == [f'{conversation}-{i}' for i in range(45, 75)]
+    assert latest['has_more'] and latest['cursor'] == last
+    older = chat.history(before=latest['messages'][0]['id'])
+    assert [m['id'] for m in older['messages']] == [f'{conversation}-{i}' for i in range(15, 45)]
+    with chat.db.transaction() as conn:
+        for i in range(75, 146):
+            conn.execute("INSERT INTO messages VALUES(?,?,'assistant',?,'completed',NULL,?)",
+                         (f'{conversation}-{i}', conversation, str(i), time.time()))
+    ids, cursor = [], last
+    while True:
+        page = chat.history(since=cursor)
+        assert page['incremental'] and len(page['messages']) <= 30
+        ids.extend(m['id'] for m in page['messages'])
+        cursor = page['cursor']
+        if not page['sync_has_more']:
+            break
+    assert ids == [f'{conversation}-{i}' for i in range(75, 146)]
+    assert not chat.history(since=cursor)['messages']
+    assert not chat.history(since=cursor)['updates']
+    chat.delete_message(None, conversation, f'{conversation}-100', True)
+    assert f'{conversation}-100' in chat.history(since=cursor)['deleted_message_ids']
+    chat.reset(None, conversation, cursor, True, archive=True, keep_last=10)
+    partial = chat.history(since=cursor)
+    assert partial['first_position'] == chat.db.one('SELECT rowid AS p FROM messages WHERE id=?',
+                                                   (f'{conversation}-136',))['p']
+    chat.reset(None, conversation, cursor, True, archive=True)
+    fresh = chat.history(since=cursor)
+    assert fresh['conversation']['id'] != conversation and fresh['messages'] == [] and not fresh['incremental']
+    with pytest.raises(ValueError, match='older messages or newer'):
+        chat.history(before=last, since=last)
+
+
+@pytest.mark.asyncio
+async def test_since_refreshes_watched_reply_that_finished_without_new_rows(chat):
+    receipt = await chat.submit(None, 'Mutable reply')
+    await asyncio.wait_for(asyncio.gather(*chat.jobs.values()), 5)
+    initial = chat.history()
+    assistant = next(m for m in initial['messages'] if m['role'] == 'assistant')
+    # A later, unrelated row advances the cursor past this execution.
+    chat.db.run("INSERT INTO messages VALUES('later',?,'assistant','Later','completed',NULL,?)",
+                (initial['conversation']['id'], time.time()))
+    chat.db.run('UPDATE executions SET output=? WHERE id=?', ('Final corrected output', receipt['execution_id']))
+    chat.db.run('UPDATE messages SET content=? WHERE id=?', ('Final corrected output', assistant['id']))
+    page = chat.history(since='later', watch=[assistant['id']])
+    assert page['messages'] == []
+    updated = next(m for m in page['updates'] if m['id'] == assistant['id'])
+    assert updated['content'] == 'Final corrected output' and updated['status'] == 'completed'
+    assert updated['finished_at'] is not None

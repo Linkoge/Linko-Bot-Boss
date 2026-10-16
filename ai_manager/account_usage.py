@@ -44,8 +44,9 @@ class AccountUsage:
     refresh_seconds = 60
     stale_seconds = 180
 
-    def __init__(self, server, clock=time.time, monotonic=time.monotonic):
+    def __init__(self, server, clock=time.time, monotonic=time.monotonic, provider=None):
         self.server, self.clock, self.monotonic = server, clock, monotonic
+        self.provider = provider
         self.lock = asyncio.Lock()
         self.buckets = {}
         self.resets = reset_credits(None)
@@ -139,11 +140,12 @@ class AccountUsage:
                 minutes = minutes if number(minutes) and minutes > 0 else None
                 reset = timestamp(source.get("resetsAt"))
                 expired = reset is not None and reset <= now
+                window_observed = timestamp(source.get("observedAt")) or observed
                 windows.append({
-                    "observed_at": observed, "slot": slot, "label": window_label(minutes, slot), "duration_minutes": minutes,
+                    "observed_at": window_observed, "slot": slot, "label": window_label(minutes, slot), "duration_minutes": minutes,
                     "used_percent": used, "remaining_percent": max(0, 100 - used) if used is not None else None,
                     "resets_at": reset, "reset_in_seconds": max(0, reset - now) if reset is not None else None,
-                    "reset_passed": expired, "stale": bool(self.error) or now - observed >= self.stale_seconds or expired,
+                    "reset_passed": expired, "stale": bool(self.error) or now - window_observed >= self.stale_seconds or expired,
                 })
             buckets.append({
                 "id": key, "name": raw.get("limitName") or key, "plan": raw.get("planType"),
@@ -159,8 +161,8 @@ class AccountUsage:
                           or any(c["expires_at"] is not None and c["expires_at"] <= now
                                  for c in self.resets["credits"] or []))
         return {
-            "scope": "account", "provider": self.server.active() if callable(getattr(self.server, "active", None)) else
-            ("claude" if any(b["id"] == "claude" for b in buckets) else "codex"),
+            "scope": "account", "provider": self.provider or (self.server.active() if callable(getattr(self.server, "active", None)) else
+            ("claude" if any(b["id"] == "claude" for b in buckets) else "codex")),
             "reset_credits": self.resets, "observed_at": self.observed_at,
             "metadata_stale": metadata_stale,
             "buckets": buckets, "last_attempt_at": self.last_attempt,

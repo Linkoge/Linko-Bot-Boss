@@ -54,7 +54,7 @@ def test_chat_windows_order_search_restart_and_no_full_history_default(chat, mon
     with monkeypatch.context() as patch:
         patch.setattr(zlib, 'decompress', lambda value: (calls.append(1), decompress(value))[1])
         page = restored.history()
-        assert len(page['messages']) == 50 and page['has_more']
+        assert len(page['messages']) == 30 and page['has_more']
         assert len(calls) <= 1  # At most the lookahead row; no scan of cold bodies.
     ids = [m['id'] for m in page['messages']]
     while page['has_more']:

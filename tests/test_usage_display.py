@@ -33,7 +33,7 @@ vm.runInContext(app.slice(app.indexOf('async function sendSubmission('),app.inde
       windows:[{duration_minutes:300,remaining_percent:25,resets_at:Date.now()/1000+3600,observed_at:Date.now()/1000}]}],
       reset_credits:{available_count:2,credits:[{expiration_known:true,expires_at:2000000000}]}};
     context.data=data;vm.runInContext('usageData=data;renderUsage()',context);
-    assert.equal($('usage-five').textContent,'25%');assert.equal($('usage-week').textContent,'—');
+    assert.equal($('usage-five').textContent,'25%');assert.equal($('usage-week').textContent,'unavailable');
     assert($('usage-details').text.includes(provider==='claude'?'Claude':'Codex'));
     assert($('usage-details').text.includes('Available resets: 2'));
     assert($('usage-details').text.includes('Reset credit expiration: date:2000000000'));
@@ -52,12 +52,27 @@ vm.runInContext(app.slice(app.indexOf('async function sendSubmission('),app.inde
     assert.deepEqual($('usage-details').children.filter(n=>n.tag==='button'),[]);
   }
   assert.equal(context.sent,8);
+  context.data={provider:'codex',buckets:[{id:'codex',windows:[{duration_minutes:300,remaining_percent:99,stale:true}]}]};
+  vm.runInContext('usageData=data;renderUsage()',context);
+  assert.equal($('usage-five').textContent,'unavailable');
+  // A project change clears a same-provider reading before its scoped request resolves.
+  context.requests=[];context.api=path=>{context.requests.push(path);return new Promise(resolve=>context.resolveUsage=resolve);};
+  vm.runInContext("state.project='repo';setUsageProvider('codex',true)",context);
+  assert.equal($('usage-five').textContent,'unavailable');
+  assert.equal(context.requests.at(-1),'/api/account-usage?project_id=repo');
+  const old=context.resolveUsage;
+  vm.runInContext("state.project='locked';setUsageProvider('claude',true)",context);
+  old({provider:'codex',buckets:[{id:'codex',windows:[{duration_minutes:300,remaining_percent:99}]}]});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal($('usage-five').textContent,'unavailable');
+  context.api=async()=>{throw Error('offline');};
+
   vm.runInContext("setUsageProvider('claude')",context);
   assert($('usage-button')['aria-label'].startsWith('Claude'));
-  assert.equal($('usage-five').textContent,'—');
+  assert.equal($('usage-five').textContent,'unavailable');
   vm.runInContext("setUsageProvider('codex')",context);
   assert($('usage-button')['aria-label'].startsWith('Codex'));
-  assert.equal($('usage-five').textContent,'—');
+  assert.equal($('usage-five').textContent,'unavailable');
   vm.runInContext("usageData=null;refreshUsage()",context);
   await new Promise(resolve=>setImmediate(resolve));
   assert.equal($('send').disabled,false);

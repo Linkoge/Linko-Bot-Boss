@@ -59,7 +59,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page = context.new_page()
                 errors = []
                 page.on('pageerror', lambda err: errors.append(str(err)))
-                page.route('**/api/account-usage', lambda route: route.fulfill(json=response))
+                page.route('**/api/account-usage*', lambda route: route.fulfill(json=response))
                 page.goto(base)
                 page.locator('#username').fill('owner')
                 page.locator('#password').fill('usage-fixture-password')
@@ -148,24 +148,26 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 for bucket in failed['buckets']:
                     for window in bucket['windows']:
                         window['stale'] = True
-                page.unroute('**/api/account-usage')
-                page.route('**/api/account-usage', lambda route: route.fulfill(json=failed))
+                page.unroute('**/api/account-usage*')
+                page.route('**/api/account-usage*', lambda route: route.fulfill(json=failed))
                 page.locator('#usage-refresh').click()
                 page.wait_for_function('() => !usageRequest')
                 assert page.locator('#usage-last-refresh').inner_text() == successful_footer
                 assert page.locator('.usage-remaining.stale').count() == 2
-                # Browser/network failure also retains success and explicitly marks stale.
-                page.unroute('**/api/account-usage')
-                page.route('**/api/account-usage', lambda route: route.abort())
+                assert page.locator('.usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
+                # Browser/network failure clears readings instead of keeping stale numbers.
+                page.unroute('**/api/account-usage*')
+                page.route('**/api/account-usage*', lambda route: route.abort())
                 page.locator('#usage-refresh').click()
                 page.wait_for_function('() => !usageRequest')
-                assert page.locator('#usage-last-refresh').inner_text() == successful_footer
-                assert page.locator('.usage-remaining.stale').count() == 2
+                assert page.locator('#usage-last-refresh').inner_text() == 'Last refresh Never'
+                assert page.locator('.usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
+                assert page.locator('#usage-five').inner_text() == 'unavailable'
                 page.screenshot(path=str(evidence/'failed-refresh.png'))
                 recovered = json.loads(json.dumps(response))
                 recovered['last_successful_refresh_at'] += 600
-                page.unroute('**/api/account-usage')
-                page.route('**/api/account-usage', lambda route: route.fulfill(json=recovered))
+                page.unroute('**/api/account-usage*')
+                page.route('**/api/account-usage*', lambda route: route.fulfill(json=recovered))
                 page.locator('#usage-refresh').click()
                 page.wait_for_function('() => !usageRequest')
                 assert page.locator('#usage-last-refresh').inner_text() != successful_footer
@@ -176,7 +178,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.evaluate("usageData.buckets[0].windows[0].resets_at=usageNow()-1;renderUsage()")
                 assert 'stale' in page.locator('#usage-button').get_attribute('aria-label')
                 assert page.locator('.usage-remaining.stale').count() == 1
-                assert page.locator('.usage-reset').nth(0).inner_text() == '0m'
+                assert page.locator('.usage-reset').nth(0).inner_text() == 'Unavailable'
                 page.evaluate('usageData.buckets[0].windows[0].resets_at=null;renderUsage()')
                 assert page.locator('.usage-reset').nth(0).inner_text() == 'Unavailable'
                 assert page.evaluate('usageDuration(usageNow()+22320)') == '6h 12m'
@@ -192,8 +194,8 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 for invalid in ['null','undefined','NaN','Infinity','-Infinity',"'1000000'"]:
                     assert page.evaluate(f'usageDuration({invalid})') == 'Unavailable'
                 (evidence/'format-boundaries.json').write_text(json.dumps(boundaries,indent=2))
-                page.unroute('**/api/account-usage')
-                page.route('**/api/account-usage', lambda route: route.abort())
+                page.unroute('**/api/account-usage*')
+                page.route('**/api/account-usage*', lambda route: route.abort())
                 page.evaluate("usageData=null;renderUsage()")
                 page.locator('#usage-refresh').click()
                 page.wait_for_function('() => !usageRequest')
@@ -258,7 +260,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     page.locator('[data-view=chat]').tap()
                     receipts.append({'project_menu_viewport':[width,height],**surface,'selection_rename_dismissal':'passed','sticky_document_scroll':'passed'})
                 assert not errors, errors
-                (evidence/'browser.json').write_text(json.dumps({'viewports':receipts,'page_errors':errors,'refresh_checks':{'successful_footer':successful_footer,'backend_failure_preserved':True,'network_failure_preserved':True,'recovery_advanced':True,'never_placeholder':True},'baseline_overlap_reproduced':True},indent=2))
+                (evidence/'browser.json').write_text(json.dumps({'viewports':receipts,'page_errors':errors,'refresh_checks':{'successful_footer':successful_footer,'backend_failure_preserved':True,'network_failure_unavailable':True,'recovery_advanced':True,'never_placeholder':True},'baseline_overlap_reproduced':True},indent=2))
                 browser.close()
             print('Account usage desktop/mobile/narrow, exact values, unavailable/stale/error, scrolling, keyboard/touch passed')
         finally:
