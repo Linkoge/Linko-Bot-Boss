@@ -132,6 +132,10 @@ class Database:
                 migrate_deferred(conn)
                 conn.execute("INSERT INTO schema_version VALUES(11)")
             self.migrate_queue(conn, task_columns)
+            if not conn.execute("SELECT 1 FROM schema_version WHERE version=16").fetchone():
+                from .model_settings import migrate_repo_locks
+                migrate_repo_locks(conn)
+                conn.execute('INSERT INTO schema_version VALUES(16)')
             conn.commit()
         self.path.chmod(0o600)
 

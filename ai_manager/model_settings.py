@@ -1,8 +1,8 @@
 """One manager choice and one worker choice, any provider, model and effort the catalog offers, independent of each other.
 What the panel shows is what is saved and dispatched: manager turns use the saved manager pair; a new task runs on the saved
 worker pair or, when the worker is Automatic (null), on whatever the manager picks for it. `manual` remembers the last fixed
-worker so switching Automatic off restores it. An optional project worker selection replaces only the worker choice;
-an empty override follows the global choice. A task keeps the pair it first ran on."""
+worker so switching Automatic off restores it. A repo lock stores the entire choice; absent locks follow global.
+A task keeps the pair it first ran on."""
 import copy
 import json
 import re
@@ -19,21 +19,46 @@ class RouteBlocked(ValueError):
 DEFAULT = {'manager': {'effort': 'low'}, 'worker': {'effort': 'medium'}}  # no model yet: the provider's default model
 
 
-def active(db):
+def active(db, project_id=None):
     """The manager's provider: account usage and the provider-less default follow it."""
-    return provider_of(saved(db)['manager'].get('model'))
+    return provider_of(saved(db, project_id)['manager'].get('model'))
 
 
-def saved(db):
-    """The saved choice; first run after the one-choice change adopts the most recently edited old per-provider store."""
-    if value := db.setting(KEY):
+def saved(db, project_id=None):
+    """One resolution rule for both roles: the repo record if present, otherwise global."""
+    if project_id:
+        repo_key(db, project_id)
+        if value := db.setting(KEY + ':' + project_id):
+            return value
+    return global_choice(db.setting)
+
+
+def global_choice(setting):
+    """Global defaults, including adoption of settings from before the unified picker."""
+    if value := setting(KEY):
         return value
-    olds = [v for v in (db.setting('model_settings'), db.setting('model_settings:claude')) if v]
+    olds = [v for v in (setting('model_settings'), setting('model_settings:claude')) if v]
     if olds:
         old = max(olds, key=lambda v: v['revision'])
         return {'revision': 0, 'manager': old['manager'], 'worker': old['bot']['manual']}
-    routes = db.setting('model_routes', {})
+    routes = setting('model_routes') or {}
     return {'revision': 0, **{k: routes.get(r, DEFAULT[k]) for k, r in (('manager', 'interactive'), ('worker', 'execution'))}}
+
+
+def migrate_repo_locks(conn):
+    """Schema 16: consume worker-only overrides once, preserving explicit Automatic and Manual."""
+    def setting(key):
+        row = conn.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    global_settings = global_choice(setting)
+    for key, raw in conn.execute("SELECT key,value FROM settings WHERE key GLOB 'project_worker:*'").fetchall():
+        project_id = key.split(':', 1)[1]
+        override = json.loads(raw).get('override')
+        if override is not None and conn.execute('SELECT 1 FROM projects WHERE id=?', (project_id,)).fetchone():
+            choice = {**global_settings, **override, 'revision': 0}
+            conn.execute('INSERT OR IGNORE INTO settings VALUES(?,?)', (KEY + ':' + project_id, json.dumps(choice)))
+        conn.execute('DELETE FROM settings WHERE key=?', (key,))
 
 
 FAMILIES = {'codex': ('Luna', 'Sol', 'Astra'), 'claude': ('Haiku', 'Sonnet', 'Opus')}
@@ -70,21 +95,36 @@ def choices(server, provider, extra=()):
     return result
 
 
-def project_worker(db, project_id):
-    """One project's optional worker selection, never seeded from another project or a UI's last selection."""
+def repo_key(db, project_id):
     if not db.one('SELECT id FROM projects WHERE id=?', (project_id,)):
         raise ValueError('Unknown project')
-    return db.setting('project_worker:' + project_id, {'revision': 0, 'override': None})
+    return KEY + ':' + project_id
+
+
+def locked(db, project_id):
+    return bool(project_id and db.setting(repo_key(db, project_id)) is not None)
+
+
+def set_lock(db, project_id, value, server=None):
+    """Existence is the toggle: ON copies global; OFF deletes every repo choice."""
+    if (not isinstance(value, dict) or set(value) != {'revision', 'locked'}
+            or type(value['locked']) is not bool or type(value['revision']) is not int):
+        raise ValueError('Invalid repo lock')
+    key = repo_key(db, project_id)
+    with db.transaction() as conn:
+        if saved(db, project_id)['revision'] != value['revision']:
+            raise ValueError('Settings changed; reopen the panel before editing')
+        if value['locked'] and not locked(db, project_id):
+            conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(current(db, server))))
+        elif not value['locked']:
+            conn.execute('DELETE FROM settings WHERE key=?', (key,))
+        db.event(conn, 'models.repo_lock', value, project_id)
 
 
 def current(db, server=None, project_id=None):
     """The saved choice; a role saved without a model shows the provider's default model. `manual` is the fixed worker
     Automatic is switched back to."""
-    value = copy.deepcopy(saved(db))
-    if project_id:
-        override = project_worker(db, project_id)['override']
-        if override is not None:
-            value.update(copy.deepcopy(override))
+    value = copy.deepcopy(saved(db, project_id))
     value['manual'] = value.get('manual') or value['worker'] or DEFAULT['worker']
     for role in ('manager', 'worker', 'manual'):
         if server and value[role] and not value[role].get('model'):
@@ -95,42 +135,23 @@ def current(db, server=None, project_id=None):
     return value
 
 
-def save_project_worker(db, server, project_id, value):
-    """Null override inherits; an explicit selection uses the existing Manual/Automatic worker semantics."""
-    if (not isinstance(value, dict) or set(value) != {'revision', 'override'}
-            or type(value['revision']) is not int or value['revision'] < 0):
-        raise ValueError('Invalid project worker settings')
-    override = value['override']
-    if override is not None:
-        if not isinstance(override, dict) or set(override) != {'worker', 'manual'}:
-            raise ValueError('Invalid project worker override')
-        worker = None if override['worker'] is None else validate_pair(server, override['worker'])
-        override = {'worker': worker, 'manual': worker or validate_pair(server, override['manual'])}
-    with db.transaction() as conn:
-        before = project_worker(db, project_id)
-        if before['revision'] != value['revision']:
-            raise ValueError('Settings changed; reopen the panel before editing')
-        new = {'revision': value['revision'] + 1, 'override': override}
-        conn.execute('INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                     ('project_worker:' + project_id, json.dumps(new)))
-        db.event(conn, 'models.project_worker_saved', new, project_id)
-    return new
-
-
 def validate_pair(server, pair):
     if not isinstance(pair, dict) or set(pair) != {'model', 'effort'} or not pair['model'] or not isinstance(pair['model'], str):
         raise ValueError('Choose an exact model and reasoning effort')
     return server.route(**pair)
 
 
-def save(db, server, value):
+def save(db, server, value, project_id=None, expected_locked=None):
     if (not isinstance(value, dict) or set(value) - {'manual'} != {'revision', 'manager', 'worker'}
             or type(value['revision']) is not int or value['revision'] < 0):
         raise ValueError('Invalid model settings')
     new = {'revision': value['revision'] + 1, 'manager': validate_pair(server, value['manager']),
            'worker': None if value['worker'] is None else validate_pair(server, value['worker'])}
     with db.transaction() as conn:
-        before = saved(db)
+        is_locked = locked(db, project_id)
+        if expected_locked is not None and is_locked != expected_locked:
+            raise ValueError('Settings scope changed; reopen the panel before editing')
+        before = saved(db, project_id)
         if before['revision'] != value['revision']:
             raise ValueError('Settings changed; reopen the panel before editing')
         manual = new['worker'] or before.get('manual') or before['worker'] or DEFAULT['worker']
@@ -138,13 +159,15 @@ def save(db, server, value):
             new['manual'] = manual if manual.get('model') else server.route(None, manual['effort'])
         except ValueError:
             new['manual'] = manual
-        conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, json.dumps(new)))
-        db.event(conn, 'models.saved', new)
+        key = repo_key(db, project_id) if is_locked else KEY
+        conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (key, json.dumps(new)))
+        db.event(conn, 'models.saved', new, project_id if is_locked else None)
     return new
 
 
-def manager_route(db):
-    return saved(db)['manager']
+def manager_route(db, project_id=None):
+    return saved(db, project_id)['manager']
 
 
 def delegation(db, server, model=None, effort=None, project_id=None):
@@ -199,10 +222,10 @@ def favorites(db, server):
     return result
 
 
-def insert_favorite(db, server, slot):
+def insert_favorite(db, server, slot, project_id=None):
     if slot not in (0, 1):
         raise ValueError('Choose favorite slot 1 or 2')
-    pair = validate_pair(server, current(db, server)['manager'])
+    pair = validate_pair(server, current(db, server, project_id)['manager'])
     with db.transaction() as conn:
         row = conn.execute("SELECT value FROM settings WHERE key='manager_favorites'").fetchone()
         slots = json.loads(row[0]) if row else [None, None]
@@ -213,10 +236,10 @@ def insert_favorite(db, server, slot):
     return favorites(db, server)
 
 
-def recall_favorite(db, server, slot):
+def recall_favorite(db, server, slot, project_id=None, expected_locked=None):
     if slot not in (0, 1):
         raise ValueError('Choose favorite slot 1 or 2')
     item = favorites(db, server)[slot]
     if not item or not item['available']:
         raise ValueError('Favorite unavailable; insert a supported Manager selection to replace it')
-    return save(db, server, {**current(db, server), 'manager': item['pair']})
+    return save(db, server, {**current(db, server, project_id), 'manager': item['pair']}, project_id, expected_locked)

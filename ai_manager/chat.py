@@ -436,7 +436,9 @@ class Chat:
         )
         if not conversation or (conversation_id and conversation["id"] != conversation_id):
             raise ValueError("Chat changed. Refresh before sending")
-        route = manager_route(self.db)
+        # A task report keeps its repository's settings even when returned to All Projects.
+        source = self.db.one('SELECT project_id FROM executions WHERE id=?', (delivery,)) if delivery else None
+        route = manager_route(self.db, source['project_id'] if source else project_id)
         execution_id, response_id, now = new_id(), new_id(), time.time()
         receipt = {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
         with self.deploy_fence(), self.db.transaction() as conn:
@@ -571,7 +573,9 @@ class Chat:
                     ("manager_tool_schema:" + conversation["id"], json.dumps(schema)),
                 )
             prompt, context = self.prompt(conversation, content, execution_id, thread_id, prior)
-            prompt['worker'] = worker_context(self.db, self.server, conversation['project_id'])
+            source = self.db.one('SELECT project_id FROM executions WHERE delivery_execution=?', (execution_id,))
+            prompt['worker'] = worker_context(self.db, self.server,
+                                              source['project_id'] if source else conversation['project_id'])
             execution = self.db.one("SELECT * FROM executions WHERE id=?", (execution_id,))
             if execution["retry_count"]:
                 prompt["recovery"] = (
@@ -829,7 +833,7 @@ class Chat:
                         row["project_id"],
                         execution_id=row["id"],
                     )
-                route = {"model": row["model"], "effort": row["effort"]} if row["model"] else manager_route(self.db)
+                route = {"model": row["model"], "effort": row["effort"]} if row["model"] else manager_route(self.db, row["project_id"])
                 self.launch(row["id"], response_id, conversation, row["input"], route)
             except Exception as error:
                 failure = classify(error)

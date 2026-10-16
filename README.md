@@ -58,7 +58,7 @@ Deliberately removed machinery and its replacements:
 
 - **Model restrictions / permitted pairs; Pin/Global:** hidden pair policies and overlapping controls could reject or
   misrepresent a saved choice. Manager and worker are independent; any installed catalog model/effort is valid.
-  One global manager and default worker remain, with one optional project worker override that can follow the default.
+  One global manager/worker record remains. A repo lock owns a complete copy; unlocked repos follow global.
   Manual fixes the worker; Automatic lets the manager choose from the catalog. A task retains its first execution pair.
 - **Auto-deploy toggle:** a second delivery policy could strand passing work. Passing Git branches always merge;
   the manager's own project requests deployment automatically, other projects merge only. Explicit deploy remains available.
@@ -270,30 +270,28 @@ probes, live database changes, service restarts or host installation are part of
 
 - Chat has no modes: the manager does what is asked. Composer with recording/transcription,
   Discard/Upload, arbitrary attachments (only verified raster images become native image input), drafts and sequential Send.
-- Model settings: one global manager choice and one default worker choice, independent of each other (a Claude manager can
-  have a Codex worker). Each project can optionally override the worker; an empty override follows the current global
-  `model_choice` worker. In a project, picking a worker saves only that project's override. **Use default worker** clears it;
-  **Following default worker** indicates inheritance. Manager edits and favorites remain global and leave worker overrides
-  alone. The picker is the layout deployed at `208554a` (Manager, Worker, Favorites; per provider a model row and an effort
-  row; three families in fixed order - Codex Luna, Sol, Astra; Claude Haiku, Sonnet, Opus - each as its newest installed model,
-  with Low/Medium/High; a family missing from the catalog shows disabled) plus the **Manual | Automatic** switch in the Worker
-  heading row, drawn exactly as the Bot switch of `81711bd` was. Automatic stores the worker as null in the selected scope;
-  the last fixed worker is kept as `manual` and returns when Manual is chosen. Project settings use one revisioned
-  `project_worker:<project_id>` setting: `override: null` means inheritance; an explicit `{worker, manual}` selection can
-  itself be Automatic (`worker: null`). `GET /api/model-settings?project_id=...` returns the global `settings`, the persisted
-  `project_worker`, and the effective `worker_selection`. `PUT /api/projects/{id}/worker-model` saves `{revision, override}`;
-  `PUT /api/model-settings` continues to save global defaults. There are no Pin/Global controls or permitted-pair policies.
-  While Automatic, a new task runs on the pick the
-  manager passes with `delegate` (`model`/`effort`, any catalog provider/model/effort; the provider default for what it leaves
-  out) and the manager is told the available catalog; a fixed worker always wins. Dispatch accepts any model and effort the
-  provider catalog offers (`PUT /api/model-settings`); what the panel shows is what is saved and dispatched. A saved or
-  favorited model outside the families is added as one extra button (with its own efforts) while selected. A task keeps the
-  pair it first ran on and each run records the model and effort actually used. Two manager favorites. Pinned by
-  `tests/test_model_picker_ui.py` (original markup/styles and reviewed client code) and `tests/test_model_picker_browser.py`
-  (rendered geometry at 1200/393/320, persistence, project isolation/clearing, independence, favorites, Send).
-  `tests/test_project_worker_models.py` verifies reloads, inherited defaults, overrides, direct tasks, delegation and actual
-  thread/turn arguments plus execution/task route evidence for separate projects. Evidence and the comparison with
-  `81711bd`, `208554a` and `db292c6`: `docs/evidence/model-picker/` (`FINDINGS.md`, `side-by-side-*.png`).
+- Model settings: one global manager/worker choice and optional repo locks. The header is
+  **Manager · [current repo name] · ×**. The repo name is a picker-style toggle showing the active repository tab,
+  clearly highlighted when ON. ON creates `model_choice:<project_id>` as a copy of current global `model_choice`;
+  OFF deletes it completely. Re-enabling copies global again, with no prior repo state restored.
+  One resolution rule applies everywhere: use the repo record if it exists, otherwise global. Every manager model/effort,
+  worker Manual/Automatic and worker model/effort pick edits that scope. Unlocked repos share global changes; locked repos
+  keep independent settings for chats, tasks, reports and memory reviews. Task reports use the task repo settings
+  even when delivered to an All Projects conversation. All Projects edits global and has no repo toggle.
+  `GET /api/model-settings?project_id=...` returns effective `settings`, `locked`, `repo_name`, favorites and catalog choices.
+  `PUT /api/model-settings?project_id=...&locked=true|false` saves the same effective record with optimistic `revision`
+  and scope checks. `PUT /api/projects/{id}/model-lock` accepts `{revision, locked}`. The old worker override API and UI
+  are removed. Favorites store manager pairs; Insert reads the current scope and Recall edits the current scope.
+  Manager and worker can use different providers. Per provider the picker shows a model row and effort row: Codex
+  Luna/Sol/Astra and Claude Haiku/Sonnet/Opus, each family's newest installed model with Low/Medium/High. Missing
+  families are disabled. Saved or favorited off-family models stay visible with their supported efforts. Dispatch accepts
+  any catalog model/effort, with no usage-limit fallback or automatic model switching.
+  **Manual | Automatic** remains in the Worker heading. Automatic stores `worker: null`; `manual` remembers the last
+  fixed pair. New tasks then use the manager's explicit delegate model/effort, or provider defaults for omitted values;
+  a fixed worker wins over delegate arguments. Tasks retain their first selected execution pair across later settings
+  changes and record the actual model/effort used. Permanent coverage in `tests/test_model_picker_ui.py`,
+  `tests/test_model_picker_browser.py` and `tests/test_project_worker_models.py` checks layout, toggle/scope, reload,
+  migration, resolution and real thread/turn arguments. Earlier picker visual evidence remains in `docs/evidence/model-picker/`.
 - Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
   To-Do directly to one queued task); read-only project memory brief for the manager with owner-run review;
   chat clear/trash/archive/search. **Archive all** saves the entire conversation and opens a fresh chat.
@@ -427,7 +425,9 @@ dropped the per-project Auto-deploy values unread (older tasks that were left un
 retroactively; `deploy` with their `task_id` merges one on request); the chat mode column and manager brief-upkeep records
 are ignored history. Schema 15 drops the unused columns `tasks.round_limit`, `open_round`, `checkpoints`, `merge_requested`
 and `waits` and the stored `todos.revision`; no data is read from them. The earlier release/helper/tier/reviewer/integration/follow-up machinery is
-gone; its history is in Git.
+gone; its history is in Git. Schema 16 migrates each explicit legacy `project_worker:<project_id>` override into a
+full repo lock, combining its worker/manual with the current global manager. Inherited null overrides remain unlocked.
+The old keys are deleted; migration runs once and never recreates a lock after OFF. Existing full locks take precedence.
 
 History retention uses lossless compression only; there is no 90-day purge. The current chat and
 saved-chat pages load the last **50 messages**, with **Load older messages** / **Load earlier messages**

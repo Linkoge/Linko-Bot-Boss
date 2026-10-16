@@ -509,7 +509,7 @@ class MemoryReviews:
         observed, usage, output = [], TurnUsage(), ""
         try:
             await server.start()
-            route = server.route(**manager_route(self.memory.db))
+            route = server.route(**manager_route(self.memory.db, project_id))
             thread = await server.thread(
                 self.workspace, REVIEW_INSTRUCTIONS, model=route["model"], dynamic_tools=[REVIEW_TOOL]
             )

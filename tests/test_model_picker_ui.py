@@ -1,8 +1,4 @@
-"""The model picker is the layout deployed at 208554a4cd (Manager / Worker / Favorites, a model row and an effort row per
-provider, three families, Low/Medium/High) with one deliberate addition: the Manual | Automatic switch in the Worker heading
-row, drawn exactly like the one the earlier picker (81711bd) had in its Bot heading row. Markup and styles stay pinned to
-those revisions. The client hash includes the requested per-project worker persistence and clear action; browser tests
-pin the original global geometry and exercise the project selections in tests/test_model_picker_browser.py."""
+"""Picker structure and accessible repo lock controls; browser tests verify behavior and layout."""
 import hashlib
 import re
 from pathlib import Path
@@ -11,6 +7,7 @@ import pytest
 
 STATIC = Path(__file__).resolve().parents[1] / 'ai_manager' / 'static'
 digest = lambda text: hashlib.sha256(text.encode()).hexdigest()  # noqa: E731
+LOCK_HEADER = '<span aria-hidden="true">·</span><div id="repo-lock-container" class="model-choice-row"></div><span aria-hidden="true">·</span>'
 SWITCH = '<div id="worker-mode" class="model-choice-row" role="group" aria-label="Worker selection mode"></div>'
 
 
@@ -22,24 +19,31 @@ def _js():
 def test_dialog_markup_is_the_original_manager_worker_favorites_layout_plus_the_worker_switch():
     html = (STATIC / 'index.html').read_text()
     dialog = re.search(r'<dialog id="model-dialog".*?</dialog>', html)[0]
-    assert digest(dialog.replace(SWITCH, '')) == 'dca2607d9762556f0dc0816285b5e6d10ab0bf4b1a40b14a6ede57e1dc38fe14'
+    assert digest(dialog.replace(SWITCH, '').replace(LOCK_HEADER, '')) == 'dca2607d9762556f0dc0816285b5e6d10ab0bf4b1a40b14a6ede57e1dc38fe14'
+    assert '<h2 id="manager-heading">Manager</h2>' + LOCK_HEADER in dialog
+    assert 'id="repo-lock-container" class="model-choice-row"' in dialog
     assert '<h2 id="worker-heading">Worker</h2>' + SWITCH + '</div>' in dialog  # in the heading row, as Bot's was
     assert dialog.index('id="manager-choices"') < dialog.index('id="worker-choices"') < dialog.index('id="manager-favorites"')
 
 
 def test_picker_styles_are_the_original_ones_and_the_switch_is_drawn_like_the_old_bot_switch():
     css = (STATIC / 'style.css').read_text()
-    rules = [line for line in css.splitlines() if re.search(r'model-|favorite|#model|\.bot-settings', line)]
+    rules = [line for line in css.splitlines() if re.search(r'model-|favorite|#model|\.bot-settings', line)
+             and not line.startswith('#model-dialog section:first-child')]
     assert len(rules) == 29
     assert digest('\n'.join(rules)) == '410c53f33ca1983787accd7236aab2fa3116d3459703b16af4ab48da943f59a7'
+    assert '.model-choice-row button[aria-pressed=true]{background:var(--accent-bg)' in css
+    assert '#repo-lock-container button{width:100%;overflow:hidden;text-overflow:ellipsis;' in css
     # The 81711bd rule for the Bot switch, verbatim apart from the id: two equal columns, 240px, no margin.
     assert [line for line in css.splitlines() if 'worker-mode' in line] == ['#worker-mode{grid-template-columns:1fr 1fr;margin:0;flex:0 1 240px}']
 
 
-def test_client_code_is_the_reviewed_picker_with_project_scoped_worker_persistence():
-    # Hash the whole client, including the added scope capture, persisted effective worker and reset action.
-    # The unchanged markup/style hashes above and rendered geometry checks retain the original design contract.
-    assert digest(_js()) == 'ff6a6439032fc742ab7201bbd3722bb5fb2fcc7d6600a0892708cc1418e72bcb'
+def test_client_uses_one_settings_write_path_and_one_repo_toggle():
+    js = _js()
+    assert digest(js) == '351ea813dfa54863415d79cf5dfd8e809d192b38ecaac0fb911708b7b9bcd3a6'
+    assert "const changeWorker=changeModels" in js
+    assert 'modelWriteScope(project)' in js and 'model-lock' in js
+    assert 'worker-model' not in js and 'project_worker' not in js and 'worker-default' not in js
 
 
 def test_automatic_exists_only_as_the_manual_automatic_switch():

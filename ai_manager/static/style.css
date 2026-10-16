@@ -233,3 +233,8 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #reader-controls{display:flex;gap:.5rem;flex-wrap:wrap;margin-block:1rem}
 #chat-older{align-self:center;flex-shrink:0}
 .result-summary{white-space:pre-wrap;overflow-wrap:anywhere}
+
+#repo-lock-container{display:flex;flex:1;min-width:0;margin:0}
+#repo-lock-container button{width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:6px}
+#manager-heading{flex-shrink:0}
+#model-dialog section:first-child .model-section-head{gap:6px}

@@ -404,47 +404,45 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings(project_id: str | None = None):
-        from .model_settings import active, choices, current, favorites, project_worker
+        from .model_settings import active, choices, current, favorites, locked
         try:
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
-        project_choice = project_worker(db, project_id) if project_id else None
-        saved, marked = current(db, chat.server), favorites(db, chat.server)
-        effective = current(db, chat.server, project_id)
-        keep = {pair.get("model") for pair in (saved["manager"], effective['worker'],
+        saved, marked = current(db, chat.server, project_id), favorites(db, chat.server)
+        keep = {pair.get("model") for pair in (saved["manager"], saved['worker'],
                                                *(f["pair"] for f in marked if f)) if pair}
-        return {"provider": active(db), "settings": saved, "favorites": marked,
-                "project_id": project_id, "project_worker": project_choice,
-                "worker_selection": {k: effective[k] for k in ('worker', 'manual')},
+        return {"provider": active(db, project_id), "settings": saved, "favorites": marked,
+                "project_id": project_id, "locked": locked(db, project_id),
+                "repo_name": (db.one("SELECT COALESCE(display_name,name) AS name FROM projects WHERE id=?", (project_id,))["name"]
+                              if project_id else "All Projects"),
                 "providers": {p: {"choices": choices(chat.server, p, keep)} for p in ("codex", "claude")}}
 
-    @app.put("/api/projects/{project_id}/worker-model", dependencies=[Depends(require_owner)])
-    async def save_worker_override(project_id: str, body: dict):
-        from .model_settings import save_project_worker
-        await chat.server.start()
-        save_project_worker(db, chat.server, project_id, body)
+    @app.put("/api/projects/{project_id}/model-lock", dependencies=[Depends(require_owner)])
+    async def save_repo_lock(project_id: str, body: dict):
+        from .model_settings import set_lock
+        set_lock(db, project_id, body, chat.server)
         return await model_settings(project_id)
 
     @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
-    async def save_model_settings(body: dict):
+    async def save_model_settings(body: dict, project_id: str | None = None, locked: bool | None = None):
         from .model_settings import save
         await chat.server.start()
-        result = save(db, chat.server, body)
+        result = save(db, chat.server, body, project_id, locked)
         account_usage.invalidate()
         return result
 
     @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
-    async def insert_manager_favorite(slot: int):
+    async def insert_manager_favorite(slot: int, project_id: str | None = None):
         from .model_settings import insert_favorite
         await chat.server.start()
-        return insert_favorite(db, chat.server, slot)
+        return insert_favorite(db, chat.server, slot, project_id)
 
     @app.post("/api/manager-favorites/{slot}/recall", dependencies=[Depends(require_owner)])
-    async def recall_manager_favorite(slot: int, project_id: str | None = None):
+    async def recall_manager_favorite(slot: int, project_id: str | None = None, locked: bool | None = None):
         from .model_settings import recall_favorite
         await chat.server.start()
-        recall_favorite(db, chat.server, slot)
+        recall_favorite(db, chat.server, slot, project_id, locked)
         account_usage.invalidate()
         return await model_settings(project_id)
 

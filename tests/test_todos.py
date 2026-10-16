@@ -302,15 +302,16 @@ def test_start_endpoint_dispatch_failure_rolls_back_and_retry_succeeds(client, m
 def test_start_uses_source_project_worker_and_distinct_entries_are_distinct_tasks(client):
     from concurrent.futures import ThreadPoolExecutor
 
-    from ai_manager.model_settings import save_project_worker
+    from ai_manager.model_settings import current, save, set_lock
 
     browser, app, settings = client
     sign_in(browser, app, settings)
     browser.portal.call(app.state.scheduler.close)
     project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
     pair = {'model': 'test-model', 'effort': 'high'}
-    save_project_worker(app.state.db, app.state.chat.server, project,
-                        {'revision': 0, 'override': {'worker': pair, 'manual': pair}})
+    db, server = app.state.db, app.state.chat.server
+    set_lock(db, project, {'revision': current(db)['revision'], 'locked': True}, server)
+    save(db, server, {**current(db, server, project), 'worker': pair}, project)
     first, second = [Todos(app.state.db).save(project, 'Identical idea', 'Identical details') for _ in range(2)]
     path = '/api/todos/' + first['id'] + '/start'
     with ThreadPoolExecutor(max_workers=3) as pool:

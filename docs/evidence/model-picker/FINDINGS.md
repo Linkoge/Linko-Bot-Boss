@@ -30,48 +30,31 @@ the Worker heading row has no Manual | Automatic switch, and nothing in the UI c
 - Inference, not confirmed with the owner: which checkpoint the owner regards as known-good. The evidence points to 81711bd's
   switch plus 208554a's sections; if "Bot" as the heading word is wanted, it is one word in `index.html`.
 
-## Optional project worker override (assignment bf46935c)
+## Repo lock (assignment 5f732438)
 
-This assignment preserves the existing dialog markup and CSS, including the Manual | Automatic switch. The global picker
-still passes its original rendered geometry at 1200/393/320. In a project, the same worker buttons edit only that project's
-selection. One additional button beneath the worker rows clears the override (Use default worker) or displays inheritance
-(Following default worker). Manager edits/favorites still edit the global manager. There are no Pin/Global controls or
-permitted-pair filters; catalog validation remains the only model/effort restriction.
+The earlier worker-only override is replaced. The header reads Manager · [active repo name] · ×. The repo button uses
+picker styles and is highlighted while locked. Model/effort rows, Manual | Automatic, favorites and the compact dialog
+geometry remain covered at 1200/393/320. The screenshots above record the earlier layout; they predate the repo header.
 
-One revisioned `project_worker:<id>` setting owns the optional selection. Its null override follows `model_choice`; an
-explicit `{worker, manual}` object preserves the existing Manual/Automatic semantics within the project. `current` resolves
-this selection for the panel, manager context and delegation. Direct queued tasks use the same resolver when first assigned;
-retained task routes keep their original model. Global defaults are never populated from a project override.
+One record owns all settings in a scope: `model_choice:<id>` if present, otherwise `model_choice`. ON copies current
+global settings; OFF deletes the repo record, including remembered Manual. Re-ON copies current global again. Manager
+and worker edits use the same write API and resolver. Favorites read and recall the current scope. Manager chats, repo
+memory reviews, task delegation/direct execution and reports use the repo record; a report delivered to All Projects
+still uses its task repo's settings. A task's first execution pair remains fixed. No usage-limit model fallback is added.
+Schema 16 consumes explicit old worker overrides into full locks with the current global manager; null inheritance
+stays unlocked, and the old keys, worker-only API and reset UI are removed.
 
 Permanent evidence:
 
-- `tests/test_project_worker_models.py`: two distinct simultaneous project overrides; empty overrides and later global
-  changes; clearing/reopening the database and HTTP app; stale revisions, invalid models/efforts, authentication and CSRF;
-  unrestricted off-family model/effort support without displaying another scope's inactive model; Automatic versus
-  inheritance; direct queue resolution; actual manager prompt context with independent manager turn selection.
-- Its smoke regression delegates from a global manager to two projects, clears an override, then changes the default.
-  Three tasks run in global FIFO order. Each asserts the worker's actual `thread` model and `turn/start` model/effort,
-  the execution model/effort, and the persisted `task.model_selected`/task API route after settings have changed.
-- `tests/test_model_picker_browser.py`: project A override, untouched project B, reload, manager editing and favorite recall,
-  project Manual/Automatic restoration, clearing, and following a later default change. A forced HTTP 503 while switching
-  from A to B proves the previous project's cached controls are cleared instead of becoming editable.
-- `tests/test_model_picker_ui.py`: original markup/style hashes retained. The reviewed client hash now includes scoped
-  persistence, effective-worker rendering, the clear action, and clearing stale controls on refresh failure.
+- `tests/test_project_worker_models.py`: manager and worker resolution/dispatch, report routing from repo and global
+  origin chats, task pair retention, full-lock isolation, Automatic/Manual, OFF/re-ON, reload, one-time migration from
+  unified and older global stores, stale writes, validation, authentication/CSRF and off-family catalog choices.
+- `tests/test_model_picker_browser.py`: active repo heading, visible ON highlight, copying global, both roles' edits,
+  Automatic/Manual across reload, scope-aware favorites, unlocked edits updating global, OFF/re-ON discarding prior
+  settings, and failed repo refresh clearing all cached controls. Existing rendered layout and Send checks remain.
+- `tests/test_model_picker_ui.py`: original markup hash after removing the new repo header and worker switch, original
+  model/favorite styles, reviewed client hash, plus checks for the single write path and removed worker controls.
+- `tests/test_todos.py`: Start resolves the source repo's worker using the full repo lock.
 
-Validation uses the repository virtualenv, disposable fixture databases/directories, a dynamically allocated localhost
-browser server, and fake provider protocol turns. No live host settings, services or paid provider calls were used.
-
-Final checks (each pytest command bounded by `timeout 240s`, lint/probes by `timeout 60s`):
-
-- Focused suites: `test_model_settings.py`, `test_project_worker_models.py`, `test_model_picker_ui.py`,
-  `test_model_picker_browser.py`, `test_chat_queue.py`, `test_minimal_flow.py`: **51 passed**.
-- Fixed `python -m pytest -q -m smoke`: **38 passed**, 315 deselected.
-- Ruff on all changed Python files and `git diff --check`: passed.
-- Pytest reports the existing Starlette/httpx deprecation warning; there are no check failures.
-
-Repair round 1 removes the inline synthetic login credential flagged by delivery. The HTTP app reload regression now
-reuses its existing authenticated session cookies and still asserts the persisted cleared override through the protected
-endpoint. No allowlist or scanner changes are needed. Only this assignment's single unmerged commit is amended, so the
-flagged added line is absent from delivered history. The delivery scanner checks the full base..HEAD range after amendment.
-Repair validation: `test_project_worker_models.py` plus `test_github_backup.py`: **20 passed**; fixed smoke: **38 passed**;
-Ruff on the changed test and `git diff --check`: passed.
+Checks use disposable fixture data and allocated localhost ports, fake provider protocol turns, bounded pytest suites
+and the fixed smoke suite. No live host settings, services or paid provider calls are used.
