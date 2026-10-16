@@ -290,10 +290,16 @@ both the runner and its recorded process are gone, preserving workspaces and lim
 
 ## Emergency host repair
 
-This is for host work the owner explicitly asks for in their own chat message: installs, permissions/ACLs, users,
-services, reboots, config and application repair. The manager runs it through `emergency_repair` itself instead of
-handing the owner commands to paste, and asks first only before catastrophic or destructive steps (deleting
-data/volumes/databases, force-push, firewall or shared-infrastructure changes). The application enforces the origin:
+This is the owner's host agent. It does whatever host work the owner explicitly asks for in their own chat message:
+installs and packages, permissions/ACLs, users, services, Syncthing-style setup, reboots, config and application
+repair, unrestricted by queue worker rules. The manager runs it through `emergency_repair` itself instead of
+handing the owner commands to paste. If the work is reasonable the agent just does it. It stops and asks for specific
+owner confirmation only in two cases: (1) irreversible loss: deleting data or files that cannot be restored
+(repository, volume, database, unbacked-up user files, force-push); (2) weakening security: opening the machine to
+attack, e.g. exposing services publicly, disabling the firewall or authentication, opening up credentials or SSH keys,
+broad world-readable or world-writable permissions, or adding unauthenticated remote access. Reversible changes such
+as installs, moving files with a kept copy, permissions scoped to the needed user, services and users need no
+confirmation. The application enforces the origin:
 only a manager turn started by an owner-typed chat message may submit it; automatic worker-result notices, worker
 output and repository documents are rejected. Normal deploys, missing project setups and delayed
 deploy requests use the Deploy path above; the manager never substitutes `emergency_repair` for them.
@@ -303,9 +309,9 @@ application, restart its user service, and call the existing deploy flow while t
 It never creates a normal task. `scripts/emergency_repair.py` uses only host Python's standard library and the
 installed Codex/Claude CLI, with native shell/file tools and arbitrary provider model names, without model catalog,
 usage preflight, queue, project pause or deploy-pending checks. Provider authentication and actual provider limits
-still apply. Catastrophic destruction requires specific owner confirmation: unattended agents must stop and return
+still apply. The two stop cases above require specific owner confirmation: unattended agents must stop and return
 a failed result asking for that confirmation. As with other native workers, this is an agent instruction convention,
-not a sandbox; ordinary repairs/restarts are authorized by the repair request.
+not a sandbox; the request authorizes the host work, restarts and deploys it describes.
 
 **One-time operator bootstrap is required after this code is merged.** From the live checkout, as the service user:
 
@@ -426,7 +432,7 @@ probes, live database changes, service restarts or host installation are part of
   Permanent coverage: `tests/test_chat_history.py` and `tests/test_archive_browser.py`.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
 - Security: Argon2 owner login, one-time setup token, revocable sessions, CSRF/origin/host checks, CSP, throttling.
-  Workers run as the service user with broad access; the rules ask them to confirm before catastrophic destruction.
+  Workers run as the service user with broad access; the rules ask them to confirm before irreversible loss.
   That is an agent convention, not a sandbox.
 
 Chat opening (reload, context selection, reopening Conversation and authentication recovery)

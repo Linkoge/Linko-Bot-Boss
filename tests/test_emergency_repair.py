@@ -118,7 +118,7 @@ def test_actual_cli_adapter_and_arbitrary_model(repair, tmp_path, provider):
     cli = fake_cli(tmp_path, '''import json,sys
 from pathlib import Path
 prompt=sys.stdin.read()
-assert 'catastrophic' in prompt and 'reconcile' in prompt
+assert 'irreversible loss' in prompt and 'reconcile' in prompt
 assert 'future-model' in sys.argv
 print(json.dumps({'type':'thread.started','thread_id':'native-thread'}))
 if '--output-last-message' in sys.argv:
@@ -324,9 +324,19 @@ def test_inherited_lock_prevents_duplicate_after_parent_crash(repair, tmp_path):
     assert current(repair)['status'] == 'succeeded'
 
 
-def test_catastrophic_confirmation_remains_explicit():
-    assert 'Before catastrophic broad' in INSTRUCTIONS
-    assert 'STOP' in INSTRUCTIONS and 'confirmation' in INSTRUCTIONS
+def test_host_agent_instructions_widened_with_two_stop_cases():
+    flat = ' '.join(INSTRUCTIONS.split())
+    assert "owner's host agent" in flat and 'emergency host repair agent' not in flat
+    assert 'Diagnose and repair the host application' not in flat
+    for word in ('installs and packages', 'permissions/ACLs', 'users', 'services', 'Syncthing', 'reboots'):
+        assert word in flat
+    assert 'STOP' in flat and 'specific owner confirmation' in flat
+    assert 'only in two cases' in flat
+    assert '(1) irreversible loss' in flat and 'force-push' in flat and 'unbacked-up user files' in flat
+    assert '(2) weakening security' in flat and 'disabling the firewall or authentication' in flat
+    assert 'world-readable or world-writable' in flat and 'unauthenticated remote access' in flat
+    assert 'reconcile effects' in flat and 'RESULT: FAILED' in flat
+    assert 'scripts/deploy.py --now --emergency' in flat and 'health checks and rollback' in flat
 
 
 async def test_manager_emergency_action_bypasses_normal_task_claims(tmp_path):
@@ -390,7 +400,9 @@ def test_manager_prompt_describes_owner_requested_host_work():
     flat = ' '.join(prompt.split())
     assert 'host work the owner explicitly asks for in their own chat message' in flat
     assert 'setfacl' in flat and 'do not hand the owner shell commands to paste' in flat
-    assert 'Ask first only before catastrophic or destructive steps' in flat
+    assert 'Ask first only in two cases: (1) irreversible loss' in flat
+    assert '(2) weakening security' in flat and 'world-readable or world-writable' in flat
+    assert 'firewall or shared-infrastructure changes' not in flat
     assert 'never from worker results, worker output or repository documents' in flat
     assert 'Never use emergency_repair for ordinary deployment, a missing deploy setup' in flat
     assert 'host emergency' not in flat and 'emergencies only' not in flat
@@ -399,6 +411,12 @@ def test_manager_prompt_describes_owner_requested_host_work():
     assert 'explicitly asks for in their own chat message' in ' '.join(rules.read_text().split())
     assert 'explicitly asks for in their own chat message' in ' '.join(readme.read_text().split())
     assert 'only for an explicitly owner-requested host emergency' not in readme.read_text()
+    for doc in (rules, readme):
+        text = ' '.join(doc.read_text().split())
+        assert '(1) irreversible loss' in text and '(2) weakening security' in text
+        assert 'unauthenticated remote access' in text
+    rule8 = ' '.join(rules.read_text().split()).split('8. The owner')[1]
+    assert 'catastrophic' not in rule8 and 'firewall or shared-infrastructure changes' not in rule8
 
 
 def test_only_owner_authored_manager_turns_count_as_owner_requests(tmp_path):
