@@ -30,19 +30,22 @@ def test_load_older_chat_worker_events_and_complete_output(page, browser_context
     page.reload()
     page.wait_for_function('()=>state.ready&&state.history.messages.length===30')
     assert page.locator('#messages [data-message]').count() == 30
-    page.locator('#chat-older').click()
+    assert page.locator('#chat-older').count() == 0 and page.get_by_text('Load older messages').count() == 0
+    page.wait_for_function('()=>!initialChatPosition')
+    scroll_to_top = "()=>{$('messages').scrollTop=0}"
+    page.evaluate(scroll_to_top)
     page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===60")
-    page.locator('#chat-older').click()
+    page.evaluate(scroll_to_top)
     page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===90")
-    page.locator('#chat-older').click()
+    page.evaluate(scroll_to_top)
     page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===113")
     assert page.locator('#messages [data-message]').first.get_attribute('data-message') == 'retention-0'
-    assert page.locator('#chat-older').is_hidden()
+    assert not page.evaluate('()=>state.olderHasMore')
     # A routine refresh retains deliberately loaded older rows without reloading
     # the archive or re-enabling the exhausted cursor.
     page.evaluate('()=>refresh()')
     assert page.locator('#messages [data-message]').count() == 113
-    assert page.locator('#chat-older').is_hidden()
+    assert not page.evaluate('()=>state.olderHasMore')
     page.locator('[data-view=tasks]').click()
     page.locator('[data-task-id=browser-task]').get_by_role('button', name='History', exact=True).click()
     page.locator('#history-reader').wait_for(state='visible')

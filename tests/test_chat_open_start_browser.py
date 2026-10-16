@@ -70,9 +70,10 @@ def test_manual_gesture_during_open_and_load_older_preserve_reading(page, browse
     assert page.locator('#messages').evaluate('n=>n.scrollTop') == 600
     page.evaluate('()=>refresh()')
     assert page.locator('#messages').evaluate('n=>n.scrollTop') == 600
+    # Scrolling near the top loads the older page automatically; no control is needed.
+    page.locator('#messages').evaluate('n=>n.scrollTop=50')
     anchor = page.locator('#messages [data-message]').first
     y = anchor.bounding_box()['y']
-    page.locator('#chat-older').click()
     page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===60")
     # The same message remains at the same viewport coordinate after prepend.
     assert abs(page.locator('#messages [data-message]').nth(30).bounding_box()['y'] - y) <= 1

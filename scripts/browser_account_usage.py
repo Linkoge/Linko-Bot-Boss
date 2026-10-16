@@ -1,6 +1,7 @@
 """Disposable authenticated navigation/usage interaction and viewport acceptance."""
 import json
 import os
+import re
 import socket
 import subprocess
 import tempfile
@@ -99,12 +100,13 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert page.locator('#usage-dialog').is_visible()
                     assert '87.5%' in page.locator('#usage-details').inner_text()
                     assert '12.5%' not in page.locator('#usage-details').inner_text()
-                    assert page.locator('#usage-details h3').all_text_contents() == ['OpenAI / Codex', 'Claude']
+                    assert page.locator('#usage-details h3').count() == 0 and 'Codex' not in page.locator('#usage-details').inner_text() and page.locator('#usage-details .usage-logo svg').count() == 2
                     assert page.locator('#usage-provider-codex h4').all_text_contents() == ['5 hour', 'Weekly']
                     assert 'allowance' not in page.locator('#usage-dialog').inner_text()
-                    assert page.locator('#usage-last-refresh').inner_text() == page.evaluate("'Last refresh '+localTime(usageData.last_successful_refresh_at)")
+                    assert page.locator('#usage-last-refresh').inner_text() == page.evaluate("'Last refresh '+usageClock(usageData.last_successful_refresh_at)")
+                    assert re.fullmatch(r'Last refresh \d\d:\d\d', page.locator('#usage-last-refresh').inner_text())
                     assert 'Tbilisi' not in page.locator('#usage-details').inner_text()
-                    assert page.locator('#usage-provider-codex .usage-reset').all_text_contents() == ['Resets in 6h 12m', 'Resets in 5d 12h 15m']
+                    assert page.locator('#usage-provider-codex .usage-reset').all_text_contents() == ['6h 12m', '5d 12h 15m']
                     assert page.locator('#usage-provider-codex .usage-reset').first.evaluate('(n)=>getComputedStyle(n).fontSize') == '12px'
                     for duration in page.locator('#usage-provider-codex .usage-reset').all():
                         assert duration.evaluate('(n)=>n.scrollWidth<=n.clientWidth')

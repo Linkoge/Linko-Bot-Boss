@@ -35,7 +35,8 @@ vm.runInContext(app.slice(app.indexOf('async function sendSubmission('),app.inde
       reset_credits:{available_count:2,credits:[{expiration_known:true,expires_at:2000000000}]}};
     context.data=data;vm.runInContext('usageData=data;renderUsage()',context);
     assert.equal($('usage-five').textContent,'25%');assert.equal($('usage-week').textContent,'unavailable');
-    assert($('usage-details').text.includes(provider==='claude'?'Claude':'Codex'));
+    assert(!$('usage-details').text.includes(provider==='claude'?'Claude':'Codex'));
+    assert($('usage-last-refresh').textContent==='Last refresh Never');
     assert($('usage-details').text.includes('Available resets: 2'));
     assert($('usage-details').text.includes('Reset credit expiration: date:2000000000'));
     assert($('usage-details').text.includes('Credits: 12.5'));
@@ -62,10 +63,11 @@ vm.runInContext(app.slice(app.indexOf('async function sendSubmission('),app.inde
     vm.runInContext('usageData=data;renderUsage()',context);
     assert.equal($('usage-five').textContent,provider==='codex'?'20%':'70%');
     assert.equal($('usage-details').children.length,2);
-    assert($('usage-details').children[0].text.includes('OpenAI / Codex'));
+    assert(!$('usage-details').children[0].text.includes('OpenAI / Codex'));
+    assert(!$('usage-details').children[1].text.includes('Claude'));
+    assert(!/resets in/i.test($('usage-details').text));
     assert($('usage-details').children[0].text.includes('20%'));
     assert($('usage-details').children[0].text.includes('21%'));
-    assert($('usage-details').children[1].text.includes('Claude'));
     assert($('usage-details').children[1].text.includes('70%'));
     assert($('usage-details').children[1].text.includes('71%'));
     for(const failed of ['codex','claude']){

@@ -1,5 +1,6 @@
 """The limits widget follows persisted manager scope and rejects late/stale readings."""
 # ruff: noqa: F811
+import re
 import time
 
 import pytest
@@ -135,7 +136,12 @@ def test_expanded_limits_show_both_provider_cards_for_either_manager(page, width
         page.locator('#usage-button').click()
         page.wait_for_function('()=>!usageRequest')
         assert page.locator('.usage-provider').count() == 2
-        assert page.locator('.usage-provider-head h3').all_inner_texts() == ['OpenAI / Codex', 'Claude']
+        assert page.locator('.usage-provider-head h3').count() == 0
+        assert page.locator('.usage-provider-head').all_inner_texts() == ['', '']
+        assert page.locator('.usage-provider .usage-logo').evaluate_all("n=>n.map(x=>x.getAttribute('aria-label'))") == ['OpenAI / Codex', 'Claude']
+        assert not any('resets in' in t.lower() for t in page.locator('.usage-reset').all_inner_texts())
+        assert page.locator('.usage-reset').first.inner_text() != 'Reset time unavailable'
+        assert re.fullmatch(r'Last refresh \d\d:\d\d', page.locator('#usage-last-refresh').inner_text())
         assert page.locator('.usage-logo svg').count() == 2
         assert page.locator('#usage-details img, #usage-details use').count() == 0
         assert page.locator('.usage-remaining').all_inner_texts() == ['20%', '35%', '75%', '90%']

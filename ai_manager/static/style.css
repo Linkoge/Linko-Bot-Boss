@@ -86,7 +86,6 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent-focus);outli
 #usage-details{display:grid;gap:12px}
 .usage-provider{min-width:0;border:1px solid var(--border);border-radius:12px;background:#202734;padding:16px}
 .usage-provider-head{display:flex;align-items:center;gap:10px;margin-bottom:14px}
-.usage-provider-head h3{font-size:14px;font-weight:600;letter-spacing:0;margin:0}
 .usage-logo,.usage-logo svg{display:block;width:24px;height:24px;flex:none}
 #usage-provider-claude .usage-logo{color:#d9a489}
 .usage-window+.usage-window{margin-top:12px}
@@ -253,7 +252,6 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #history-reader{width:min(90vw,70rem);max-height:85vh;overflow:auto}
 #reader-content pre{white-space:pre-wrap;overflow-wrap:anywhere}
 #reader-controls{display:flex;gap:.5rem;flex-wrap:wrap;margin-block:1rem}
-#chat-older{align-self:center;flex-shrink:0}
 .result-summary{white-space:pre-wrap;overflow-wrap:anywhere}
 
 #repo-lock-container{display:flex;flex:1;min-width:0;margin:0}

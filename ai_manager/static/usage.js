@@ -47,7 +47,11 @@ function renderUsage(){
   const expanded=new Set([...details.querySelectorAll('.usage-metadata[open]')].map(n=>n.closest('.usage-provider').id));
   details.replaceChildren();
   for(const provider of ['codex','claude'])details.append(usageProviderCard(provider,usageReading(provider),expanded.has('usage-provider-'+provider)));
-  $('usage-last-refresh').textContent='Last refresh '+(usageData?.last_successful_refresh_at!=null?localTime(usageData.last_successful_refresh_at):'Never');
+  $('usage-last-refresh').textContent='Last refresh '+(usageData?.last_successful_refresh_at!=null?usageClock(usageData.last_successful_refresh_at):'Never');
+}
+// Time of day only: the panel shows no date, month, year or zone label.
+function usageClock(timestamp){
+  return new Intl.DateTimeFormat(undefined,{timeZone:'Asia/Tbilisi',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).format(new Date(timestamp*1000));
 }
 function usageReading(provider){
   return usageData?.providers?.[provider]||(usageData?.provider===provider?usageData:null);
@@ -55,12 +59,12 @@ function usageReading(provider){
 function usageProviderCard(provider,data,expanded=false){
   const name=provider==='codex'?'OpenAI / Codex':'Claude',bucket=usageBucket(data,provider),windows=bucket?.windows||[];
   const card=element('section',undefined,'usage-provider');
-  card.id='usage-provider-'+provider;card.setAttribute('aria-labelledby',card.id+'-title');
+  card.id='usage-provider-'+provider;card.setAttribute('aria-label',name);
   const heading=element('div',undefined,'usage-provider-head'),logo=element('span',undefined,'usage-logo');
   // Trusted, bundled SVG only; provider metadata is always rendered as text.
   logo.innerHTML=provider==='codex'?PROVIDER_LOGOS.codex:
     '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="m12 2 .3 6.7M17 3.4l-3 6M21 7l-6 3.4M22 12l-6.8.2M20.6 17l-6-3M17 21l-3.5-6M12 22l-.2-6.8M7 20.6l3-6M3 17l6-3.5M2 12l6.8-.3M3.4 7l6 3M7 3l3.5 6"/></svg>';
-  const title=element('h3',name);title.id=card.id+'-title';heading.append(logo,title);card.append(heading);
+  logo.setAttribute('role','img');logo.setAttribute('aria-label',name);heading.append(logo);card.append(heading);
   for(const [minutes,label] of [[300,'5 hour'],[10080,'Weekly']]){
     const matches=windows.filter(w=>w.duration_minutes===minutes),w=matches.length===1?matches[0]:null;
     const known=w&&!usageStale(w)&&!data?.error&&Number.isFinite(w.remaining_percent);
@@ -78,7 +82,7 @@ function usageProviderCard(provider,data,expanded=false){
       const fill=element('span');fill.style.width=value+'%';bar.append(fill);
     }else bar.classList.add('unavailable');
     const reportedReset=known?w.resets_at:null;
-    const reset=element('p',reportedReset!=null?'Resets in '+usageDuration(reportedReset):'Reset time unavailable','usage-reset');
+    const reset=element('p',reportedReset!=null?usageDuration(reportedReset):'Reset time unavailable','usage-reset');
     reset.title=reportedReset!=null?'Resets '+localTime(reportedReset):'Reset time unavailable';
     reset.setAttribute('aria-label',reset.title+'. '+reset.textContent);
     section.append(row,bar,reset);card.append(section);

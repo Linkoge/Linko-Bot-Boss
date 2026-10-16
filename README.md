@@ -571,8 +571,8 @@ full repo lock, combining its worker/manual with the current global manager. Inh
 The old keys are deleted; migration runs once and never recreates a lock after OFF. Existing full locks take precedence.
 
 History retention uses lossless compression only; there is no 90-day purge. The current chat loads
-its latest **30 messages**; scrolling to the top or **Load older messages** retrieves preceding 30-message
-pages in insertion order. Saved-chat pages retain their 50-message **Load earlier messages** pages.
+its latest **30 messages**; scrolling (or wheeling up) to the top retrieves preceding 30-message
+pages without any visible control in insertion order. Saved-chat pages retain their 50-message **Load earlier messages** pages.
 New manager threads receive the last 50 context
 messages (plus the latest owner request if it falls outside that window); native thread continuity and
 explicit historical search/read actions remain available. Hidden transport rows and display tombstones
@@ -662,9 +662,10 @@ falls back to the other's readings. The response includes the effective manager 
 while a read is in flight discards that compact reading.
 
 The upper bar is the five-hour allowance; the lower bar is weekly. Details show reported remaining
-percentages and reset countdowns; reset timestamps are available to assistive technology and on hover.
+percentages and bare reset countdowns (e.g. `4h 12m`, no "Resets in" prefix); reset timestamps are available to assistive technology and on hover.
+The footer reads `Last refresh HH:MM` (time of day only; no date or zone label).
 Opening the widget always shows **OpenAI / Codex** and **Claude** together, regardless of the selected
-manager. Each provider has a separate large rounded card with its bundled inline SVG logo, five-hour
+manager. Each provider has a separate large rounded card with its bundled inline SVG logo (no visible provider name; the logo carries the accessible name), five-hour
 and weekly remaining bars, and its own Unavailable states. Cards use the Model Picker's neutral fill,
 muted section typography, compact spacing and buttons. No logo is fetched externally. Credit/reset
 metadata remains available under each card's **Credits & resets** disclosure; a failure or stale reading

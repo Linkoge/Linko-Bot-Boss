@@ -35,7 +35,6 @@ async function positionInitialChat(selection){
 for(const type of ['wheel','touchstart','pointerdown','keydown']){
   $('messages').addEventListener(type,cancelInitialChat,{passive:true});
 }
-$('chat-older').addEventListener('pointerdown',cancelInitialChat,{passive:true});
 const draftRecovery=JSON.parse(sessionStorage.getItem('linko-drafts-v1')||'[]');
 const appliedTranscripts=new Set(draftRecovery.transcripts||[]);
 const state = {csrf:null, project:null, portfolio:null, detail:null, source:null, execution:null, view:'chat', taskPaging:false, executionPaging:false, setup:false, selection:0, drafts:new Map(draftRecovery.drafts||draftRecovery), pending:new Set()};
@@ -64,7 +63,7 @@ function restoreCachedChat(selection){
   if(cached.nodes){
     state.history=cached.history;state.olderHasMore=cached.olderHasMore;state.olderLoaded=cached.olderLoaded;
     $('messages').replaceChildren(...cached.nodes);$('messages').scrollTop=cached.scrollTop;
-    cancelInitialChat();state.execution=state.history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.finished_at===null)?.execution_id||null;$('chat-older').hidden=!state.olderHasMore;updateChatActions();
+    cancelInitialChat();state.execution=state.history.messages.find(m=>m.role==='assistant'&&m.execution_id&&m.finished_at===null)?.execution_id||null;updateChatActions();
     $('status-label').textContent='Syncing saved chat…';
   }else renderHistory(cached.history,selection,null,true);
   return true;
@@ -256,7 +255,7 @@ async function selectProject(id){
   state.todoSelection=new Set();state.todos=[];renderTodos(true);
   state.taskPaging=false;state.executionPaging=false;state.olderLoading=false;
   state.project=id;if(typeof setUsageProvider==='function')setUsageProvider(null,true);state.detail=null;state.brief=null;clearTimeout(state.memoryTimer);renderMemory();renderMemoryReview();state.source?.close();state.source=null;
-  state.execution=null;state.history=null;$('messages').replaceChildren();state.olderLoaded=false;state.olderHasMore=false;$('chat-older').hidden=true;updateChatActions();
+  state.execution=null;state.history=null;$('messages').replaceChildren();state.olderLoaded=false;state.olderHasMore=false;updateChatActions();
   $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';state.draftContextReady=true;
   $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderAttachments();renderAudio();
   state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],active_agents:0,task_cursor:null,execution_cursor:null,has_older_tasks:false,has_older_executions:false};
@@ -394,7 +393,7 @@ function renderHistory(history,selection,before=null,cached=false){
   if(fresh)state.olderLoaded=false;
   if(before)state.olderLoaded=true;
   if(state.history.messages[0]?.position===history.first_position){state.olderHasMore=false;state.history.has_more=false;}
-  $('chat-older').hidden=!state.olderHasMore;updateChatActions();
+  updateChatActions();
   if(fresh||!state.history.messages.length)messages.replaceChildren();
   const olderAnchor=before?messages.firstElementChild:null;
   const rows=new Map([...messages.querySelectorAll('[data-message]')].map(row=>[row.dataset.message,row]));
@@ -617,7 +616,8 @@ async function openSavedHistory(id,older=false,search=''){
   if(!older)$('history-detail').scrollIntoView({block:'start'});
 }
 $('messages').addEventListener('scroll',()=>{if($('messages').scrollTop<80&&state.olderHasMore&&!state.olderLoading&&!initialChatPosition)loadHistory(state.selection,state.history?.messages[0]?.id).catch(()=>{});},{passive:true});
-$('chat-older').onclick=action(()=>loadHistory(state.selection,$('messages').querySelector('[data-message]')?.dataset.message));
+// An upward wheel at the very top has no scroll event to trigger the load above.
+$('messages').addEventListener('wheel',e=>{if(e.deltaY<0&&$('messages').scrollTop<80&&state.olderHasMore&&!state.olderLoading&&!initialChatPosition)loadHistory(state.selection,state.history?.messages[0]?.id).catch(()=>{});},{passive:true});
 let readerRequest=0;
 async function readHistory(kind,id){
   const request=++readerRequest,selection=state.selection,query=historyQuery();
