@@ -392,14 +392,21 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         from .providers import provider_of
         selection = manager_route(db, project_id)
         provider = provider_of(selection.get('model'))
-        reader = account_usage.get(provider)
-        result = await reader.read() if reader else None
+        # Both views come from the existing provider caches/listeners. Concurrent
+        # reads keep an unavailable backend from serially delaying the other.
+        names = ('codex', 'claude')
+        readings = await asyncio.gather(*(account_usage[name].read() for name in names if name in account_usage))
+        providers = dict(zip((name for name in names if name in account_usage), readings))
+        for name in names:
+            providers.setdefault(name, {'scope': 'account', 'provider': name, 'buckets': [], 'status': 'unavailable'})
+        result = providers[provider]
         # A saved selection can change while metadata is in flight.
         current = manager_route(db, project_id)
         if current != selection:
             provider, result = provider_of(current.get('model')), None
         return {**(result or {'scope': 'account', 'buckets': [], 'status': 'unavailable'}),
-                'provider': provider, 'manager': current, 'project_id': project_id, 'server_time': time.time()}
+                'providers': providers, 'provider': provider, 'manager': current,
+                'project_id': project_id, 'server_time': time.time()}
 
     @app.get("/api/audio", dependencies=[Depends(require_owner)])
     def audio_status():

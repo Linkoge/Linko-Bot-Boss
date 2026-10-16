@@ -38,3 +38,12 @@ safe circle of radius 204.8px. No cropping/redesign/generative alteration.
 All three are opaque PNGs. Browser checks decode pixels and ensure the maskable
 safe-circle exterior is entirely the theme background. Private generation recipe
 and validation evidence: deployments/pwa-20261013 under the existing runtime data root.
+
+
+# Usage provider marks
+
+The expanded usage cards embed trusted SVG markup directly from the repository.
+OpenAI reuses the knot mark already bundled as `PROVIDER_LOGOS.codex` in
+`model-settings.js`. Claude uses a small radial burst drawn as an inline path in
+`usage.js`, in muted terracotta. These decorative marks sit next to visible provider
+names, inherit local styling, and contain no scripts, image URLs or external references.

@@ -9,13 +9,14 @@ def test_provider_usage_display_and_send_independence():
 const fs=require('fs'),vm=require('vm'),assert=require('assert');
 class Node {
   constructor(text=''){this.textContent=text;this.children=[];this.open=true;this.hidden=false;this.disabled=false;
-    this.classList={toggle(){}};this.value='hello';}
+    this.classList={toggle(){},add(){}};this.style={};this.value='hello';}
+  querySelectorAll(){return [];}
   append(...nodes){this.children.push(...nodes);} replaceChildren(){this.children=[];}
   setAttribute(k,v){this[k]=v;} addEventListener(){} close(){this.open=false;}
   get text(){return [this.textContent,...this.children.map(n=>n.text)].join('\n');}
 }
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,new Node());return nodes.get(id);};
-const context={$,element:(tag,text)=>Object.assign(new Node(text),{tag}),document:{hidden:false,addEventListener(){}},
+const context={$,PROVIDER_LOGOS:{codex:'<svg></svg>'},element:(tag,text)=>Object.assign(new Node(text),{tag}),document:{hidden:false,addEventListener(){}},
   Date,Number,Math,setInterval,clearInterval,setTimeout,clearTimeout,localTime:t=>'date:'+t,
   api:async()=>{throw Error('offline');},closeChatMenu(){},closeProjectMenu(){},
   state:{project:null,selection:1,pending:new Set(),drafts:new Map()},
@@ -50,6 +51,30 @@ vm.runInContext(app.slice(app.indexOf('async function sendSubmission('),app.inde
     assert($('usage-details').text.includes('Reset credit expiration: Unavailable'));
     assert($('usage-details').text.includes('Credits: Unavailable'));
     assert.deepEqual($('usage-details').children.filter(n=>n.tag==='button'),[]);
+  }
+  // The expanded panel always renders both independent account views.
+  const now=Date.now()/1000;
+  const providers=Object.fromEntries(['codex','claude'].map((provider,index)=>[provider,{provider,buckets:[{id:provider,
+    windows:[300,10080].map((minutes,i)=>({duration_minutes:minutes,remaining_percent:20+index*50+i,
+      observed_at:now,resets_at:now+3600}))}]}]));
+  for(const provider of ['codex','claude']){
+    context.data={...providers[provider],provider,providers};
+    vm.runInContext('usageData=data;renderUsage()',context);
+    assert.equal($('usage-five').textContent,provider==='codex'?'20%':'70%');
+    assert.equal($('usage-details').children.length,2);
+    assert($('usage-details').children[0].text.includes('OpenAI / Codex'));
+    assert($('usage-details').children[0].text.includes('20%'));
+    assert($('usage-details').children[0].text.includes('21%'));
+    assert($('usage-details').children[1].text.includes('Claude'));
+    assert($('usage-details').children[1].text.includes('70%'));
+    assert($('usage-details').children[1].text.includes('71%'));
+    for(const failed of ['codex','claude']){
+      context.data={...providers[provider],provider,providers:{...providers,[failed]:{provider:failed,buckets:[],error:'offline'}}};
+      vm.runInContext('usageData=data;renderUsage()',context);
+      const cards=$('usage-details').children;
+      assert(cards[failed==='codex'?0:1].text.includes('Unavailable'));
+      assert(cards[failed==='codex'?1:0].text.includes(failed==='codex'?'70%':'20%'));
+    }
   }
   assert.equal(context.sent,8);
   context.data={provider:'codex',buckets:[{id:'codex',windows:[{duration_minutes:300,remaining_percent:99,stale:true}]}]};

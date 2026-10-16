@@ -99,15 +99,16 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                     assert page.locator('#usage-dialog').is_visible()
                     assert '87.5%' in page.locator('#usage-details').inner_text()
                     assert '12.5%' not in page.locator('#usage-details').inner_text()
-                    assert page.locator('#usage-details h3').all_text_contents() == ['Codex', '5 hour', 'Weekly']
+                    assert page.locator('#usage-details h3').all_text_contents() == ['OpenAI / Codex', 'Claude']
+                    assert page.locator('#usage-provider-codex h4').all_text_contents() == ['5 hour', 'Weekly']
                     assert 'allowance' not in page.locator('#usage-dialog').inner_text()
                     assert page.locator('#usage-last-refresh').inner_text() == page.evaluate("'Last refresh '+localTime(usageData.last_successful_refresh_at)")
                     assert 'Tbilisi' not in page.locator('#usage-details').inner_text()
-                    assert page.locator('.usage-reset').all_text_contents() == ['6h 12m', '5d 12h 15m']
-                    assert page.locator('.usage-reset').first.evaluate('(n)=>getComputedStyle(n).font') == page.locator('.usage-remaining').first.evaluate('(n)=>getComputedStyle(n).font')
-                    for duration in page.locator('.usage-reset').all():
+                    assert page.locator('#usage-provider-codex .usage-reset').all_text_contents() == ['Resets in 6h 12m', 'Resets in 5d 12h 15m']
+                    assert page.locator('#usage-provider-codex .usage-reset').first.evaluate('(n)=>getComputedStyle(n).fontSize') == '12px'
+                    for duration in page.locator('#usage-provider-codex .usage-reset').all():
                         assert duration.evaluate('(n)=>n.scrollWidth<=n.clientWidth')
-                        assert duration.evaluate('(n)=>getComputedStyle(n).color') == page.locator('.usage-remaining').first.evaluate('(n)=>getComputedStyle(n).color')
+                        assert duration.evaluate('(n)=>getComputedStyle(n).color') == 'rgb(142, 155, 178)'
                     dialog = page.locator('#usage-dialog').bounding_box()
                     assert dialog['x'] >= 0 and dialog['x']+dialog['width'] <= width
                     assert dialog['height'] <= height
@@ -138,7 +139,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.evaluate("usageData.buckets[0].windows.reverse();renderUsage()")
                 assert page.locator('#usage-five').inner_text() == '88%'
                 page.locator('#usage-button').click()
-                assert page.locator('.usage-remaining').all_text_contents() == ['87.5%', '0%']
+                assert page.locator('#usage-provider-codex .usage-remaining').all_text_contents() == ['87.5%', '0%']
                 successful_footer = page.locator('#usage-last-refresh').inner_text()
                 # HTTP success containing a backend refresh failure preserves last success.
                 failed = json.loads(json.dumps(response))
@@ -153,15 +154,15 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.locator('#usage-refresh').click()
                 page.wait_for_function('() => !usageRequest')
                 assert page.locator('#usage-last-refresh').inner_text() == successful_footer
-                assert page.locator('.usage-remaining.stale').count() == 2
-                assert page.locator('.usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
+                assert page.locator('#usage-provider-codex .usage-remaining.stale').count() == 2
+                assert page.locator('#usage-provider-codex .usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
                 # Browser/network failure clears readings instead of keeping stale numbers.
                 page.unroute('**/api/account-usage*')
                 page.route('**/api/account-usage*', lambda route: route.abort())
                 page.locator('#usage-refresh').click()
                 page.wait_for_function('() => !usageRequest')
                 assert page.locator('#usage-last-refresh').inner_text() == 'Last refresh Never'
-                assert page.locator('.usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
+                assert page.locator('#usage-provider-codex .usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
                 assert page.locator('#usage-five').inner_text() == 'unavailable'
                 page.screenshot(path=str(evidence/'failed-refresh.png'))
                 recovered = json.loads(json.dumps(response))
@@ -171,16 +172,16 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.locator('#usage-refresh').click()
                 page.wait_for_function('() => !usageRequest')
                 assert page.locator('#usage-last-refresh').inner_text() != successful_footer
-                assert page.locator('.usage-remaining.stale').count() == 0
+                assert page.locator('#usage-provider-codex .usage-remaining.stale').count() == 0
                 page.evaluate("usageData.buckets[0].windows[1].duration_minutes=15;usageData.buckets[0].windows[1].label='15-minute allowance';renderUsage()")
-                assert page.locator('.usage-remaining').nth(0).inner_text() == '87.5%'
-                assert page.locator('.usage-remaining').nth(1).inner_text() == 'Unavailable'
+                assert page.locator('#usage-provider-codex .usage-remaining').nth(0).inner_text() == '87.5%'
+                assert page.locator('#usage-provider-codex .usage-remaining').nth(1).inner_text() == 'Unavailable'
                 page.evaluate("usageData.buckets[0].windows[0].resets_at=usageNow()-1;renderUsage()")
                 assert 'stale' in page.locator('#usage-button').get_attribute('aria-label')
-                assert page.locator('.usage-remaining.stale').count() == 1
-                assert page.locator('.usage-reset').nth(0).inner_text() == 'Unavailable'
+                assert page.locator('#usage-provider-codex .usage-remaining.stale').count() == 1
+                assert page.locator('#usage-provider-codex .usage-reset').nth(0).inner_text() == 'Reset time unavailable'
                 page.evaluate('usageData.buckets[0].windows[0].resets_at=null;renderUsage()')
-                assert page.locator('.usage-reset').nth(0).inner_text() == 'Unavailable'
+                assert page.locator('#usage-provider-codex .usage-reset').nth(0).inner_text() == 'Reset time unavailable'
                 assert page.evaluate('usageDuration(usageNow()+22320)') == '6h 12m'
                 assert page.evaluate('usageDuration(usageNow()+1)') == '1m'
                 boundaries = page.evaluate('''() => {
@@ -199,7 +200,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.evaluate("usageData=null;renderUsage()")
                 page.locator('#usage-refresh').click()
                 page.wait_for_function('() => !usageRequest')
-                assert page.locator('.usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
+                assert page.locator('#usage-provider-codex .usage-remaining').all_text_contents() == ['Unavailable', 'Unavailable']
                 assert page.locator('#usage-last-refresh').inner_text() == 'Last refresh Never'
                 page.screenshot(path=str(evidence/'never-refreshed.png'))
                 page.keyboard.press('Escape')

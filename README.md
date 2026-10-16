@@ -517,13 +517,21 @@ actual chat, event and full-output controls in Chromium with disposable data and
 
 The usage button follows the provider of the **saved effective manager selection**, resolved by the
 same `manager_route` rule used for dispatch: the active repository's full lock when enabled, otherwise
-global. `GET /api/account-usage?project_id=…` resolves that saved pair and reads only that provider's
-metadata backend. Provider caches/listeners are isolated, so a locked Claude repo works while global
-uses Codex, and an unavailable provider never falls back to the other's readings. The response includes
-the effective manager pair; changing selection while a read is in flight discards that reading.
+global. `GET /api/account-usage?project_id=…` resolves that saved pair and returns both providers through
+its `providers` map; the top-level reading remains scoped to the effective manager for the compact widget.
+Both views reuse the existing `AccountUsage` caches/listeners and metadata readers, with one concurrent,
+throttled read per provider. Provider caches/listeners stay isolated, so an unavailable provider never
+falls back to the other's readings. The response includes the effective manager pair; changing selection
+while a read is in flight discards that compact reading.
 
 The upper bar is the five-hour allowance; the lower bar is weekly. Details show reported remaining
 percentages and reset countdowns; reset timestamps are available to assistive technology and on hover.
+Opening the widget always shows **OpenAI / Codex** and **Claude** together, regardless of the selected
+manager. Each provider has a separate large rounded card with its bundled inline SVG logo, five-hour
+and weekly remaining bars, and its own Unavailable states. Cards use the Model Picker's neutral fill,
+muted section typography, compact spacing and buttons. No logo is fetched externally. Credit/reset
+metadata remains available under each card's **Credits & resets** disclosure; a failure or stale reading
+for one provider does not hide the other provider's values.
 A project switch or saved model/lock change clears the widget immediately and starts a scoped refresh.
 Late context responses are ignored. Missing, expired, failed or stale readings display **unavailable**
 instead of a previous percentage (stale after three minutes or a passed reset). Claude's reader accepts
@@ -533,7 +541,7 @@ window's observation time. Claude readings retain their original event time acro
 restarts; reading saved metadata does not refresh the observation.
 
 The metadata-only `account/rateLimits/read` request includes available reset-credit details. The dialog
-shows the provider's available reset count, individual available-credit expiration dates, and reported
+shows each provider's available reset count, individual available-credit expiration dates, and reported
 credit balance/unlimited status. Counts are never inferred from the detail list: it may be partial or
 unavailable. Explicit null expiration means no expiration; absent/invalid expiration is Unavailable.
 Balance expiration is unavailable in the current protocol. Claude's retained event adapter supplies
@@ -544,7 +552,8 @@ never disable Send or preflight a message. Real provider errors still follow the
 
 Permanent regressions: `tests/test_account_usage.py`, `tests/test_usage_display.py`, and
 `tests/test_claude_provider.py`, plus `tests/test_usage_limits_browser.py` for saved manager/repo-lock
-switching, stale/unavailable display and context changes; responsive interaction checks remain in `scripts/browser_account_usage.py`.
+switching, simultaneous provider cards for either manager, independent stale/unavailable states, inline logos,
+credits, keyboard focus and desktop/mobile/narrow layouts; responsive interaction checks remain in `scripts/browser_account_usage.py`.
 Protocol reference: installed Codex 0.162.1 generated `GetAccountRateLimitsResponse`,
 `RateLimitResetCreditsSummary`, `RateLimitResetCredit`, and `CreditsSnapshot` (also available in the
 [upstream schema](https://github.com/openai/codex/tree/main/codex-rs/app-server-protocol/schema/typescript/v2)).

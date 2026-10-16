@@ -358,12 +358,26 @@ def test_usage_api_resolves_same_saved_manager_as_dispatch_with_provider_isolati
             assert data['manager'] == manager_route(db, project) and data['provider'] == provider
             assert data['buckets'][0]['id'] == provider
             assert data['buckets'][0]['windows'][0]['remaining_percent'] == remaining
-        assert calls == ['claude', 'codex']  # One metadata read per provider, never starts/reads the other.
+            assert set(data['providers']) == {'codex', 'claude'}
+            assert data['providers']['codex']['buckets'][0]['windows'][0]['remaining_percent'] == 20
+            assert data['providers']['claude']['buckets'][0]['windows'][0]['remaining_percent'] == 75
+        assert calls == ['codex', 'claude']  # One read per provider, shared across all contexts and both UI views.
         # A provider notification stays in its own cache even while global uses the other provider.
         backends['claude'].usage_invalidate()
         failing.add('claude')
         unavailable = browser.get('/api/account-usage', params={'project_id': locked}).json()
         assert unavailable['provider'] == 'claude' and unavailable['status'] == 'unavailable'
         assert unavailable['buckets'] == []
+        assert unavailable['providers']['claude']['status'] == 'unavailable'
+        assert unavailable['providers']['codex']['buckets'][0]['windows'][0]['remaining_percent'] == 20
+        # Failure in the current manager's backend cannot hide the other provider either.
+        backends['codex'].usage_invalidate()
+        failing.remove('claude')
+        backends['claude'].usage_invalidate()
+        failing.add('codex')
+        failed_codex = browser.get('/api/account-usage').json()
+        assert failed_codex['status'] == 'unavailable'
+        assert failed_codex['providers']['codex']['buckets'] == []
+        assert failed_codex['providers']['claude']['buckets'][0]['windows'][0]['remaining_percent'] == 75
         set_lock(db, locked, {'revision': current(db, server, locked)['revision'], 'locked': False}, server)
         assert browser.get('/api/account-usage', params={'project_id': locked}).json()['provider'] == 'codex'
