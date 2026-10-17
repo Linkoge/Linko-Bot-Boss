@@ -23,7 +23,7 @@ def make(tmp_path, **options):
 @pytest.fixture
 def tunnel(tmp_path):
     # The TestClient's direct peer is "testclient"; treat it as the local tunnel daemon.
-    settings, app = make(tmp_path, secure_cookie=False, trusted_proxies=("testclient",))
+    settings, app = make(tmp_path, secure_cookie=False, trusted_proxies=("testclient",), public_hosts=(PUBLIC,))
     with TestClient(app, base_url=f"https://{PUBLIC}") as client:
         yield client, app, settings
 
@@ -43,6 +43,7 @@ def attempts(app):
 
 def test_default_hosts_accept_public_hostname_and_keep_existing(tmp_path, monkeypatch):
     monkeypatch.delenv("AI_MANAGER_RESTRICTED", raising=False)
+    monkeypatch.delenv("AI_MANAGER_PUBLIC_HOSTS", raising=False)  # exercise the built-in default
     monkeypatch.setenv("AI_MANAGER_ALLOWED_HOSTS", "localhost,box.tail1234.ts.net")
     settings, app = make(tmp_path)
     assert {PUBLIC, "localhost", "box.tail1234.ts.net"} <= set(settings.allowed_hosts)
