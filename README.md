@@ -292,11 +292,11 @@ both the runner and its recorded process are gone, preserving workspaces and lim
 ## Public access through a tunnel
 
 The service listens on `127.0.0.1` only (uvicorn runs with `proxy_headers=False`); a tunnel such as cloudflared
-forwards `https://kaxa.linko.ge` to it. Single owner, username/password login; there is no Google sign-in.
+forwards its public hostname to it. Single owner, username/password login; there is no Google sign-in.
 
 - **Hosts**: `AI_MANAGER_ALLOWED_HOSTS` (localhost and the Tailscale name) is always extended by
-  `AI_MANAGER_PUBLIC_HOSTS` (default `kaxa.linko.ge`; no default on a restricted instance, which lists its own
-  hostname in `AI_MANAGER_ALLOWED_HOSTS`). Other `Host` headers get 400; a cross-site `Origin` on a write gets 403.
+  `AI_MANAGER_PUBLIC_HOSTS` (comma-separated; no built-in default, so the main app accepts only what is configured;
+  a restricted instance lists its own hostname in `AI_MANAGER_ALLOWED_HOSTS` or `AI_MANAGER_PUBLIC_HOSTS`). Other `Host` headers get 400; a cross-site `Origin` on a write gets 403.
   There is no CORS: the API sends no CORS headers.
 - **Client IP**: `CF-Connecting-IP`, then the right-most untrusted `X-Forwarded-For` hop, are believed only when the
   direct peer is in `AI_MANAGER_TRUSTED_PROXIES` (default `127.0.0.1,::1`; IPs or CIDRs). Otherwise the peer address is

@@ -163,7 +163,7 @@ def test_migration_closes_old_nonfinal_tasks_and_keeps_every_row_and_branch(tmp_
     # Their unfinished runs are closed so deploys and the queue are not blocked; the manager's own run is untouched.
     assert reopened.one("SELECT finished_at FROM executions WHERE id='x-running'")["finished_at"] is not None
     assert reopened.one("SELECT finished_at FROM executions WHERE id='x-manager'")["finished_at"] is None
-    assert reopened.one("SELECT max(version) AS v FROM schema_version")["v"] == 16
+    assert reopened.one("SELECT max(version) AS v FROM schema_version")["v"] == 17
     assert Tasks(reopened).claim() is None and Database(path).all("SELECT state FROM tasks WHERE state='queued'") == []
     assert reopened.one("PRAGMA integrity_check")["integrity_check"] == "ok"
     # Idempotent: a later start must not close new work again.

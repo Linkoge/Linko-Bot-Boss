@@ -1,4 +1,6 @@
-"""Public access through a tunnel (https://kaxa.linko.ge): cookies, forwarded client IP, hosts, setup, headers."""
+"""Public access through a tunnel (example hostname): cookies, forwarded client IP, hosts, setup, headers."""
+
+import os
 
 import pytest
 from fake_codex import FakeServer
@@ -9,7 +11,14 @@ from ai_manager.proxy import client_ip, is_https, parse_trusted
 from ai_manager.web import create_app
 
 OWNER_SECRET = "-".join(["throwaway", "owner", "value", "1"])  # disposable, built at runtime
-PUBLIC = "kaxa.linko.ge"
+PUBLIC = "public.example"
+
+
+@pytest.fixture(autouse=True)
+def clean_env(monkeypatch):
+    """Ambient AI_MANAGER_* settings of the machine running the tests must not change what these tests see."""
+    for name in [n for n in os.environ if n.startswith("AI_MANAGER_")]:
+        monkeypatch.delenv(name)
 
 
 def make(tmp_path, **options):
@@ -41,10 +50,9 @@ def attempts(app):
     return {r["ip"]: r["n"] for r in rows}
 
 
-def test_default_hosts_accept_public_hostname_and_keep_existing(tmp_path, monkeypatch):
-    monkeypatch.delenv("AI_MANAGER_RESTRICTED", raising=False)
-    monkeypatch.delenv("AI_MANAGER_PUBLIC_HOSTS", raising=False)  # exercise the built-in default
+def test_public_host_comes_from_configuration_and_existing_hosts_keep_working(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_MANAGER_ALLOWED_HOSTS", "localhost,box.tail1234.ts.net")
+    monkeypatch.setenv("AI_MANAGER_PUBLIC_HOSTS", PUBLIC)
     settings, app = make(tmp_path)
     assert {PUBLIC, "localhost", "box.tail1234.ts.net"} <= set(settings.allowed_hosts)
     for host in (PUBLIC, "box.tail1234.ts.net", "localhost"):
@@ -56,12 +64,20 @@ def test_default_hosts_accept_public_hostname_and_keep_existing(tmp_path, monkey
         assert client.get("/api/auth-status").status_code == 400
 
 
-def test_public_hosts_are_configurable_and_restricted_has_no_default(tmp_path, monkeypatch):
+def test_there_is_no_built_in_public_host(tmp_path, monkeypatch):
+    monkeypatch.setenv("AI_MANAGER_ALLOWED_HOSTS", "localhost,box.tail1234.ts.net")
+    settings, app = make(tmp_path)
+    assert settings.public_hosts == ("",)
+    assert set(settings.allowed_hosts) == {"localhost", "box.tail1234.ts.net"}
+    with TestClient(app, base_url=f"https://{PUBLIC}") as client:
+        assert client.get("/api/auth-status").status_code == 400
+    with TestClient(app, base_url="https://box.tail1234.ts.net") as client:
+        assert client.get("/api/auth-status").status_code == 200
+
+
+def test_public_hosts_are_configurable(tmp_path, monkeypatch):
     monkeypatch.setenv("AI_MANAGER_PUBLIC_HOSTS", "a.example, b.example")
     assert {"a.example", "b.example"} <= set(Settings(data_dir=tmp_path).allowed_hosts)
-    monkeypatch.delenv("AI_MANAGER_PUBLIC_HOSTS")
-    monkeypatch.setenv("AI_MANAGER_RESTRICTED", "1")
-    assert PUBLIC not in Settings.__dataclass_fields__["public_hosts"].default_factory()
 
 
 def test_origin_from_public_host_is_accepted_and_foreign_origin_rejected(tunnel):

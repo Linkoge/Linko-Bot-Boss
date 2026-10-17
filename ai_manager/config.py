@@ -40,11 +40,9 @@ class Settings:
     )
 
     # Public tunnel hostname(s) always accepted next to AI_MANAGER_ALLOWED_HOSTS (the Tailscale name).
-    # A restricted instance serves its own hostname, so it has no default.
+    # Configuration only: there is no built-in public host.
     public_hosts: tuple[str, ...] = field(
-        default_factory=lambda: tuple(
-            os.getenv("AI_MANAGER_PUBLIC_HOSTS", "" if os.getenv("AI_MANAGER_RESTRICTED") == "1" else "kaxa.linko.ge").split(",")
-        )
+        default_factory=lambda: tuple(os.getenv("AI_MANAGER_PUBLIC_HOSTS", "").split(","))
     )
     # Direct peers whose CF-Connecting-IP / X-Forwarded-For / X-Forwarded-Proto are believed (IPs or CIDRs).
     trusted_proxies: tuple[str, ...] = field(
