@@ -139,22 +139,33 @@ def test_start_failure_duplicate_clicks_and_lost_response_keep_one_task(page, br
     assert json.loads(db.one("SELECT payload FROM events WHERE kind='task.model_selected' AND task_id=?", (task_id,))['payload'])['model']
 
 
-def test_draft_start_keeps_entry_visible_while_manager_expands_it(page, browser_context):
+def test_ideas_render_in_their_own_group_without_start_and_ready_can_start(page, browser_context):
     _, _, root = browser_context
     project_path = root / 'projects' / uuid.uuid4().hex
     project_path.mkdir()
     db = Database(root / 'data/manager.sqlite3')
     project = Registry(db, (root / 'projects',)).add(project_path)['id']
-    todo = page.evaluate("project=>api('/api/todos',{method:'POST',body:JSON.stringify({project_id:project,title:'Draft: Complete briefs',details:'Retain decisions'})})", project)
+    save = "body=>api('/api/todos',{method:'POST',body:JSON.stringify(body)})"
+    idea = page.evaluate(save, {'project_id': project, 'title': 'Rough thought', 'details': 'Needs chat', 'kind': 'idea'})
+    ready = page.evaluate(save, {'project_id': project, 'title': 'Complete brief', 'details': 'Full', 'kind': 'ready'})
     page.evaluate('()=>refresh()')
     page.evaluate('project=>selectProject(project)', project)
     page.locator('[data-view=todo]').click()
-    button = page.locator('[data-todo-start="' + todo['id'] + '"]')
-    button.click()
-    page.wait_for_function("()=>!todoStarts.size&&$('notice-text').textContent.includes('expanding the draft')")
-    assert button.count() == 1
-    assert 'undefined' not in page.locator('#notice-text').inner_text()
-    assert not db.all('SELECT * FROM tasks WHERE project_id=?', (project,))
-    assert db.one('SELECT archived_at FROM todos WHERE id=?', (todo['id'],))['archived_at'] is None
-    execution = db.one("SELECT * FROM executions WHERE project_id=? AND agent_id='manager'", (project,))
-    assert todo['title'] + '\n\n' + todo['details'] in execution['input']
+    page.wait_for_function("()=>document.querySelectorAll('#todo-list article').length===2")
+    ready_group = page.locator('#todo-list [data-todo-kind=ready]')
+    idea_group = page.locator('#todo-list [data-todo-kind=idea]')
+    assert ready_group.locator('[data-todo-start="' + ready['id'] + '"]').count() == 1
+    assert idea_group.inner_text().count('Rough thought') == 1 and 'Idea' in idea_group.inner_text()
+    assert page.locator('[data-todo-start="' + idea['id'] + '"]').count() == 0
+    assert idea_group.locator('button', has_text='Start').count() == 0
+    assert page.locator('#todo-list article button', has_text='Edit').count() == 2
+    # The owner can promote an idea to Ready from the editor; Start then appears.
+    idea_group.locator('button', has_text='Edit').click()
+    page.locator('#editor-fields select[name=kind]').select_option('ready')
+    page.locator('#editor-form .primary').click()
+    page.wait_for_function("id=>document.querySelector('[data-todo-start=\"'+id+'\"]')", arg=idea['id'])
+    assert page.locator('#todo-list [data-todo-kind=idea]').count() == 0
+    page.locator('[data-todo-start="' + ready['id'] + '"]').click()
+    page.wait_for_function("()=>!todoStarts.size&&$('notice-text').textContent.includes('To-Do started')")
+    assert db.one('SELECT archived_at FROM todos WHERE id=?', (ready['id'],))['archived_at'] is not None
+    assert db.one('SELECT kind,archived_at FROM todos WHERE id=?', (idea['id'],)) == {'kind': 'ready', 'archived_at': None}

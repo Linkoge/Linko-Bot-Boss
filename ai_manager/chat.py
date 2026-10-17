@@ -23,6 +23,7 @@ from .recovery import (
     turn_output,
 )
 from .registry import Registry
+from .todos import Todos
 
 CHAT_PAGE_SIZE = 30
 
@@ -502,9 +503,11 @@ class Chat:
                 if len(set(todos)) != len(todos):
                     raise ValueError("Select distinct To-Do entries")
                 for entry in todos:
-                    if not conn.execute("SELECT 1 FROM todos WHERE id=? AND project_id=? AND archived_at IS NULL",
-                                        (entry, project_id)).fetchone():
+                    row = conn.execute("SELECT * FROM todos WHERE id=? AND project_id=? AND archived_at IS NULL",
+                                       (entry, project_id)).fetchone()
+                    if not row:
                         raise ValueError("To-Do changed. Refresh before starting")
+                    Todos.require_ready(row)
                 conn.execute("INSERT INTO settings VALUES(?,?)", ("execution_todo_sources:"+execution_id,json.dumps(todos)))
             if delivery:
                 if conn.execute("SELECT 1 FROM executions WHERE agent_id='manager' AND conversation_id=? AND finished_at IS NULL", (conversation['id'],)).fetchone():

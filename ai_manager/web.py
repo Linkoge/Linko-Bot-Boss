@@ -108,6 +108,7 @@ class TodoBody(BaseModel):
     project_id: str
     title: str = Field(min_length=1, max_length=200)
     details: str = Field(default="", max_length=24000)
+    kind: Literal["idea", "ready"] | None = None
 
 
 class TodoArchive(BaseModel):
@@ -533,12 +534,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.post("/api/todos", dependencies=[Depends(require_owner)])
     def todo_add(body: TodoBody):
         body.project_id = scope(body.project_id)
-        return Todos(db).save(body.project_id, body.title, body.details)
+        return Todos(db).save(body.project_id, body.title, body.details, kind=body.kind)
 
     @app.patch("/api/todos/{entry_id}", dependencies=[Depends(require_owner)])
     def todo_update(entry_id: str, body: TodoBody):
         body.project_id = scope(body.project_id)
-        return Todos(db).save(body.project_id, body.title, body.details, entry_id)
+        return Todos(db).save(body.project_id, body.title, body.details, entry_id, body.kind)
 
     @app.post("/api/todos/archive", dependencies=[Depends(require_owner)])
     def todo_archive(body: TodoArchive):
@@ -547,8 +548,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.post("/api/todos/{entry_id}/start", dependencies=[Depends(require_owner)])
     async def todo_start(entry_id: str):
-        # Complete briefs queue directly; drafts first use the manager to expand
-        # their instructions. Replay the durable handoff even after a lost reply.
+        # Only Ready To-Dos start; an Idea is refined in chat first. Replay the durable handoff even after a lost reply.
         def receipt():
             handoff = db.setting("todo_handoff:" + entry_id)
             return tasks.get(handoff["task_id"]) if handoff else None
@@ -566,26 +566,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 project_id = entry["project_id"]
                 if registry.get(project_id)["status"] == "removed":
                     raise ValueError("Restore this To-Do's project before starting")
-                # Draft expansion uses the existing manager conversation and receipt
-                # machinery. Repeated clicks reuse the pending turn, even if the
-                # manager has already rewritten the title before delegating.
-                prior = db.one("""SELECT r.receipt,e.finished_at FROM chat_requests r
-                    JOIN executions e ON e.id=json_extract(r.receipt,'$.execution_id')
-                    JOIN settings s ON s.key='execution_todo_sources:' || e.id
-                    WHERE EXISTS (SELECT 1 FROM json_each(s.value) WHERE value=?)
-                    ORDER BY e.rowid DESC LIMIT 1""", (entry_id,))
-                if prior and prior["finished_at"] is None:
-                    return json.loads(prior["receipt"])
-                if entry["title"].startswith("Draft:"):
-                    previous = json.loads(prior["receipt"])["execution_id"] if prior else "initial"
-                    return await chat.submit(project_id,
-                        "Start To-Do " + entry_id + ". First expand this draft into a complete, self-contained worker "
-                        "brief using the relevant chat decisions/history. Rewrite the same entry, remove Draft: from "
-                        "its title, then delegate only this part with its full title and details verbatim. "
-                        "Leave any sibling parts for the owner to start individually.\n\n"
-                        + entry["title"] + "\n\n" + entry["details"],
-                        chat.conversation(project_id)["id"],
-                        request_id="todo-draft-" + entry_id + "-" + previous[:12], todos=[entry_id])
+                Todos.require_ready(entry)
                 route = delegation(db, chat.server, project_id=project_id)
                 details = entry["details"]
                 objective = entry["title"] + ("\n\n" + details if details else "")

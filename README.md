@@ -551,10 +551,18 @@ details, acceptance criteria and relevant ordering. Workers do not receive the c
 Each To-Do is one task; larger work uses numbered family parts (`1/3 <family>: <part>`),
 each self-contained with its own criteria and order note, started individually by the
 owner. Later refinements rewrite the existing entry and affected siblings by ID.
-Only quick captures titled `Draft:` may be short. Starting one sends it through the
-existing manager conversation to expand and rewrite that entry before dispatch;
-repeat clicks reuse the pending manager turn. Drafts stay in the same list until the
-task is accepted, with no additional UI sections, states or approval steps.
+Every To-Do has a `kind` (`todos.kind`, schema 17): `idea` or `ready`. An **Idea** is an
+unrefined capture that may be short; it is only discussed in chat, shows no Start button
+and can never be dispatched (`POST /api/todos/{id}/start`, chat `todos` and
+`delegate`/`continue` with `todos:[id]` all reject it with a message asking to refine it
+first). When chat has refined an idea the manager rewrites it into a full brief with
+`save_todo` (`kind: "ready"`), or the owner switches the Kind in the Edit dialog; a Ready
+To-Do shows Start as before. The UI keeps one list with two groups, Ready first, then
+Ideas, each entry carrying a kind badge. `list_todos` accepts an optional `kind` filter,
+`save_todo` and `POST`/`PATCH /api/todos` accept `kind` (new entries default to `ready`,
+updates keep the current kind). The schema 17 migration turned every old `Draft:`-titled
+entry into an Idea and removed the prefix; there is no other "Draft:" convention and no
+manager draft-expansion on Start. No extra approval gates.
 
 ## Whole-session audio recording
 

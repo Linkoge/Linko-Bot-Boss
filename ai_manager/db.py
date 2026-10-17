@@ -51,7 +51,7 @@ CREATE TABLE IF NOT EXISTS chat_requests(
  receipt TEXT NOT NULL, created_at REAL NOT NULL, PRIMARY KEY(owner_id,request_id));
 CREATE TABLE IF NOT EXISTS todos(
  id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL,
- details TEXT NOT NULL DEFAULT '',
+ details TEXT NOT NULL DEFAULT '', kind TEXT NOT NULL DEFAULT 'ready',
  source_task_id TEXT UNIQUE REFERENCES tasks(id), created_at REAL NOT NULL, updated_at REAL NOT NULL,
  archived_at REAL);
 CREATE INDEX IF NOT EXISTS todos_project ON todos(project_id,archived_at);
@@ -136,6 +136,10 @@ class Database:
                 from .model_settings import migrate_repo_locks
                 migrate_repo_locks(conn)
                 conn.execute('INSERT INTO schema_version VALUES(16)')
+            if not conn.execute("SELECT 1 FROM schema_version WHERE version=17").fetchone():
+                from .todos import migrate_kind
+                migrate_kind(conn)
+                conn.execute("INSERT INTO schema_version VALUES(17)")
             conn.commit()
         self.path.chmod(0o600)
 

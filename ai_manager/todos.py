@@ -44,6 +44,21 @@ def migrate_deferred(conn):
         )
 
 
+KINDS = ("idea", "ready")
+
+
+def migrate_kind(conn):
+    """Schema 17: a To-Do is an 'idea' (brainstorm in chat, never startable) or 'ready' (a complete brief).
+
+    The old "Draft:" title prefix becomes kind 'idea' and is removed from the title; everything else is 'ready'.
+    """
+    if "kind" not in {r[1] for r in conn.execute("PRAGMA table_info(todos)")}:
+        conn.execute("ALTER TABLE todos ADD COLUMN kind TEXT NOT NULL DEFAULT 'ready'")
+    for row in conn.execute("SELECT id,title FROM todos WHERE title LIKE 'Draft:%'").fetchall():
+        title = row["title"][len("Draft:"):].strip() or row["title"]
+        conn.execute("UPDATE todos SET kind='idea',title=? WHERE id=?", (title, row["id"]))
+
+
 class Todos:
     def __init__(self, db):
         self.db = db
@@ -64,8 +79,23 @@ class Todos:
             raise ValueError("To-Do details must be at most 24000 characters")
         return title.strip(), details
 
-    def save(self, project_id, title, details="", entry_id=None):
+    @staticmethod
+    def check_kind(kind):
+        if kind is not None and kind not in KINDS:
+            raise ValueError("To-Do kind must be 'idea' or 'ready'")
+        return kind
+
+    @staticmethod
+    def require_ready(row):
+        if row["kind"] == "idea":
+            raise ValueError(
+                "To-Do \"" + row["title"] + "\" is an Idea, not a ready worker brief. Refine it in chat, then "
+                "rewrite it with save_todo as kind 'ready' before starting it")
+
+    def save(self, project_id, title, details="", entry_id=None, kind=None):
+        """Create (kind defaults to 'ready') or update (kind defaults to the current one) a To-Do."""
         title, details = self.validate(title, details)
+        kind = self.check_kind(kind)
         now = time.time()
         with self.db.transaction() as conn:
             if not conn.execute("SELECT 1 FROM projects WHERE id=? AND status!='removed'", (project_id,)).fetchone():
@@ -78,13 +108,15 @@ class Todos:
                 ).fetchone()
                 if not previous:
                     raise ValueError("To-Do not found in this project (it may be archived)")
-                conn.execute("UPDATE todos SET title=?,details=?,updated_at=? WHERE id=?",
-                             (title, details, now, entry_id))
+                kind = kind or previous["kind"]
+                conn.execute("UPDATE todos SET title=?,details=?,kind=?,updated_at=? WHERE id=?",
+                             (title, details, kind, now, entry_id))
             else:
                 entry_id = new_id()
+                kind = kind or "ready"
                 conn.execute(
-                    "INSERT INTO todos(id,project_id,title,details,created_at,updated_at) VALUES(?,?,?,?,?,?)",
-                    (entry_id, project_id, title, details, now, now),
+                    "INSERT INTO todos(id,project_id,title,details,kind,created_at,updated_at) VALUES(?,?,?,?,?,?,?)",
+                    (entry_id, project_id, title, details, kind, now, now),
                 )
             self.db.event(
                 conn,
@@ -93,6 +125,7 @@ class Todos:
                     "todo_id": entry_id,
                     "title": title,
                     "details": details,
+                    "kind": kind,
                     "previous": dict(previous) if previous else None,
                 },
                 project_id,
@@ -131,6 +164,7 @@ class Todos:
             row = conn.execute("SELECT * FROM todos WHERE id=? AND archived_at IS NULL", (entry_id,)).fetchone()
             if not row or row["project_id"] != project_id:
                 raise ValueError("To-Do not found in this project (it may be archived); refresh before starting")
+            self.require_ready(row)
             record = {"task_id": task_id, "source": dict(row), "reason": reason, "at": time.time()}
             conn.execute("INSERT INTO settings VALUES(?,?)", (key, json.dumps(record)))
             conn.execute("UPDATE todos SET archived_at=?,updated_at=? WHERE id=?",

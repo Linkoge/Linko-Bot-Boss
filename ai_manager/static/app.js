@@ -812,17 +812,24 @@ function renderTodos(force=false){
     if(!force&&selection&&!selection.isCollapsed&&selection.containsNode(list,true))return;
     const focused=document.activeElement,listFocused=list.contains(focused),focusId=focused?.dataset.todo,focusKind=focused?.type;
     list.replaceChildren();list.dataset.signature=signature;
-    for(const entry of state.todos){
+    const groups=[['ready','Ready to start',state.todos.filter(t=>t.kind!=='idea')],['idea','Ideas · discuss in chat first',state.todos.filter(t=>t.kind==='idea')]];
+    for(const [kind,heading,entries] of groups){
+    if(!entries.length)continue;
+    const group=element('section',undefined,'todo-group');group.dataset.todoKind=kind;group.append(element('h3',heading));list.append(group);
+    for(const entry of entries){
       const row=element('article',undefined,'panel'),label=element('label'),checkbox=element('input');
       checkbox.type='checkbox';checkbox.dataset.todo=entry.id;checkbox.checked=state.todoSelection.has(entry.id);
       checkbox.setAttribute('aria-label','Select '+entry.title);
       checkbox.onchange=()=>{if(checkbox.checked)state.todoSelection.add(entry.id);else state.todoSelection.delete(entry.id);renderTodos();};
-      label.append(checkbox,element('strong',entry.title));row.append(label,element('small',projectName(entry.project_id)),element('p',entry.details,'todo-details'));
+      label.append(checkbox,element('strong',entry.title),element('span',kind==='idea'?'Idea':'Ready','todo-kind todo-kind-'+kind));row.append(label,element('small',projectName(entry.project_id)),element('p',entry.details,'todo-details'));
       if(entry.source_task_id)row.append(element('small','Linked recording assignment: '+entry.source_task_id));
       const edit=element('button','Edit');edit.dataset.todo=entry.id;edit.type='button';edit.onclick=()=>editTodo(entry);row.append(edit);
-      const start=element('button','Start');start.type='button';start.dataset.todoStart=entry.id;start.onclick=action(()=>startTodo(entry));row.append(start);list.append(row);
+      if(kind==='idea')row.append(element('small','Not startable: refine it with the manager in chat, then it becomes Ready.','todo-idea-note'));
+      else{const start=element('button','Start');start.type='button';start.dataset.todoStart=entry.id;start.onclick=action(()=>startTodo(entry));row.append(start);}
+      group.append(row);
     }
-    if(!state.todos.length)list.append(element('p','No future ideas in this context.','empty'));
+    }
+    if(!state.todos.length)list.append(element('p','No To-Dos in this context.','empty'));
     if(listFocused&&focusId)list.querySelector(`[data-todo="${focusId}"][type="${focusKind}"]`)?.focus({preventScroll:true});
   }
   for(const box of list.querySelectorAll('input[type=checkbox]'))box.checked=state.todoSelection.has(box.dataset.todo);
@@ -836,9 +843,9 @@ async function startTodo(entry){
   const pending=orderModelIntent(async()=>{
     if(modelSelectionError)throw new Error('Choose model settings again before starting: '+modelSelectionError);
     const result=await api('/api/todos/'+encodeURIComponent(entry.id)+'/start',{method:'POST'});
-    notice(result.task_id?'To-Do started · Assignment '+result.task_id+' · '+result.status:'Manager is expanding the draft before dispatch.');
+    notice('To-Do started · Assignment '+result.task_id+' · '+result.status);
     if(selection===state.selection){
-      if(result.task_id){state.todos=state.todos.filter(todo=>todo.id!==entry.id);state.todoSelection.delete(entry.id);renderTodos();}
+      state.todos=state.todos.filter(todo=>todo.id!==entry.id);state.todoSelection.delete(entry.id);renderTodos();
       await refresh().catch(error=>updatesUnavailable(error));
     }
     return result;
@@ -849,10 +856,11 @@ async function startTodo(entry){
 }
 function editTodo(entry=null){
   const project=state.project,selection=state.selection;
-  const fields=[{name:'title',label:'Idea',required:true,value:entry?.title||''},{name:'details',label:'Details',long:true,value:entry?.details||''}];
+  const fields=[{name:'title',label:'Title',required:true,value:entry?.title||''},{name:'details',label:'Details',long:true,value:entry?.details||''},
+    {name:'kind',label:'Kind (Ideas cannot be started; Ready needs a complete worker brief)',options:[['idea','Idea · brainstorm in chat'],['ready','Ready · can be started']],value:entry?.kind||'idea'}];
   if(!entry&&!project)fields.unshift({name:'project_id',label:'Project',required:true,options:state.portfolio.projects.filter(p=>p.status!=='removed').map(p=>[p.id,projectLabel(p)])});
   if(!entry&&!project&&!fields[0].options.length){notice('Add a project before recording an idea.');return;}
-  editor(entry?'Edit To-Do':'Add To-Do',fields,async values=>{
+  editor(entry?'Edit To-Do':'Add idea',fields,async values=>{
     if(selection!==state.selection||project!==state.project)throw new Error('Context changed. Close this editor and select the idea again.');
     await api('/api/todos'+(entry?'/'+entry.id:''),{method:entry?'PATCH':'POST',body:JSON.stringify({...values,project_id:entry?.project_id||project||values.project_id})});
     await loadTodos(selection);

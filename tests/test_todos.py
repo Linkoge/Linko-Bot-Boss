@@ -296,67 +296,107 @@ def test_start_dispatches_maximum_multi_paragraph_brief_verbatim_to_worker(clien
     assert len(objective) == 24202
 
 
-@pytest.mark.asyncio
-async def test_draft_start_expands_in_existing_manager_flow_before_worker_dispatch(client, monkeypatch):
+def test_idea_cannot_start_until_rewritten_ready_and_kind_round_trips(client):
     browser, app, settings = client
     sign_in(browser, app, settings)
     browser.portal.call(app.state.scheduler.close)
-    # Hold the fixture manager turn so we can exercise its actions explicitly.
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    idea = browser.post('/api/todos', json={'project_id': project, 'title': 'Rough thought', 'kind': 'idea'}).json()
+    assert idea['kind'] == 'idea'
+    assert Todos(app.state.db).save(project, 'Default kind', 'x')['kind'] == 'ready'
+    assert browser.post('/api/todos', json={'project_id': project, 'title': 'Bad', 'kind': 'draft'}).status_code == 422
+    path = '/api/todos/' + idea['id'] + '/start'
+    response = browser.post(path)
+    assert response.status_code >= 400 and 'is an Idea' in response.text
+    assert not app.state.db.all('SELECT * FROM tasks')
+    assert not app.state.db.setting('todo_handoff:' + idea['id'])
+    kept = browser.patch('/api/todos/' + idea['id'], json={'project_id': project, 'title': 'Still rough'}).json()
+    assert kept['kind'] == 'idea'  # an update without kind keeps it
+    ready = browser.patch('/api/todos/' + idea['id'],
+                          json={'project_id': project, 'title': 'Full brief', 'details': 'Goal', 'kind': 'ready'}).json()
+    assert ready['kind'] == 'ready'
+    assert browser.post(path).json()['task_id']
+    assert not [t for t in Todos(app.state.db).list(project) if t['id'] == idea['id']]
+
+
+@pytest.mark.asyncio
+async def test_manager_dispatch_rejects_idea_and_save_todo_promotes_it(client, monkeypatch):
+    browser, app, settings = client
+    sign_in(browser, app, settings)
+    browser.portal.call(app.state.scheduler.close)
     monkeypatch.setattr(app.state.chat, 'launch', lambda *args: None)
     project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
     todos = Todos(app.state.db)
-    draft = todos.save(project, 'Draft: Worker briefs', 'Keep chat decisions')
-    sibling = todos.save(project, '2/2 Worker briefs: follow-up', 'Owner starts this separately')
-    path = '/api/todos/' + draft['id'] + '/start'
-    response = browser.post(path)
-    assert response.status_code == 200, response.text
-    receipt = response.json()
-    assert receipt['execution_id'] and 'task_id' not in receipt
-    assert not app.state.db.all('SELECT * FROM tasks')
-    assert todos.list(project) == [draft, sibling]
-    assert browser.post(path).json() == receipt
-    execution = app.state.db.one('SELECT * FROM executions WHERE id=?', (receipt['execution_id'],))
-    assert draft['title'] + '\n\n' + draft['details'] in execution['input']
-    params = {'tool': 'manager_action', 'manager_execution_id': receipt['execution_id'],
-              'conversation_id': execution['conversation_id'],
-              'arguments': {'action': 'delegate', 'objective': 'Thin draft'}}
-    with pytest.raises(ValueError, match='Expand the draft'):
-        await app.state.scheduler.manager_action(project, params)
-    details = ('Goal: make worker briefs complete.\n\nProblem: workers cannot see chat decisions.\n\n'
-               'Decision: preserve the full title and details.\nAcceptance: verify the worker objective.\n'
-               'Order: first of two; the owner starts part two individually.')
-    params['arguments'] = {'action': 'save_todo', 'todo_id': draft['id'],
-                           'title': '1/2 Worker briefs: complete instructions', 'details': details}
-    expanded = await app.state.scheduler.manager_action(project, params)
-    assert browser.post(path).json() == receipt  # rewritten title must not bypass the pending manager
-    params['arguments'] = {'action': 'delegate', 'objective': expanded['title'] + '\n\n' + details}
+    idea = todos.save(project, 'Worker briefs', 'Keep chat decisions', kind='idea')
+    params = {'tool': 'manager_action', 'manager_execution_id': 'manager-exec',
+              'conversation_id': app.state.chat.conversation(project)['id'], 'arguments': {}}
+    for action in ('delegate', 'continue'):
+        params['arguments'] = {'action': action, 'objective': 'Thin idea', 'todos': [idea['id']], 'task_id': 'x'}
+        with pytest.raises(ValueError, match='is an Idea'):
+            await app.state.scheduler.manager_action(project, params)
+    listed = await app.state.scheduler.manager_action(project, {**params, 'arguments': {'action': 'list_todos', 'kind': 'idea'}})
+    assert [e['id'] for e in listed['entries']] == [idea['id']] and listed['entries'][0]['kind'] == 'idea'
+    none = await app.state.scheduler.manager_action(project, {**params, 'arguments': {'action': 'list_todos', 'kind': 'ready'}})
+    assert none['entries'] == []
+    details = 'Goal: briefs.\nAcceptance: verify.\nOrder: independent.'
+    params['arguments'] = {'action': 'save_todo', 'todo_id': idea['id'], 'title': 'Worker briefs', 'details': details,
+                           'kind': 'ready'}
+    assert (await app.state.scheduler.manager_action(project, params))['kind'] == 'ready'
+    params['arguments'] = {'action': 'delegate', 'objective': 'Worker briefs\n\n' + details, 'todos': [idea['id']]}
     task = await app.state.scheduler.manager_action(project, params)
-    assert task['description'] == expanded['title'] + '\n\n' + details
-    assert todos.list(project) == [sibling]
-    assert browser.post(path).json()['task_id'] == task['id']
-    assert len(app.state.db.all('SELECT * FROM tasks')) == 1
-    assert len(app.state.db.all('SELECT * FROM executions')) == 1
+    assert task['description'] == 'Worker briefs\n\n' + details
+    assert todos.list(project) == []
 
 
-def test_draft_start_retries_after_failed_expansion_without_consuming_source(client, monkeypatch):
-    import time
-
+def test_consume_and_chat_selection_reject_idea(client):
     browser, app, settings = client
     sign_in(browser, app, settings)
     browser.portal.call(app.state.scheduler.close)
-    monkeypatch.setattr(app.state.chat, 'launch', lambda *args: None)
     project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
-    draft = Todos(app.state.db).save(project, 'Draft: Retry expansion', 'Preserve this idea')
-    path = '/api/todos/' + draft['id'] + '/start'
-    first = browser.post(path).json()
-    with app.state.db.transaction() as conn:
-        conn.execute("UPDATE executions SET status='failed',finished_at=? WHERE id=?",
-                     (time.time(), first['execution_id']))
-    retry = browser.post(path).json()
-    assert retry['execution_id'] != first['execution_id']
-    assert browser.post(path).json() == retry
-    assert Todos(app.state.db).list(project) == [draft]
-    assert not app.state.db.all('SELECT * FROM tasks')
+    idea = Todos(app.state.db).save(project, 'Only a thought', kind='idea')
+    task = app.state.scheduler.tasks.add(project, 'Some task')
+    with pytest.raises(ValueError, match='is an Idea'), app.state.db.transaction() as conn:
+        Todos(app.state.db).consume(conn, [idea['id']], project, task['id'])
+    response = browser.post('/api/chat', json={'project_id': project, 'content': 'go', 'todos': [idea['id']],
+                                               'request_id': 'req-idea', 'conversation_id': 'x'})
+    assert response.status_code >= 400
+    assert Todos(app.state.db).list(project)[0]['id'] == idea['id']
+
+
+def test_kind_migration_turns_draft_prefix_into_ideas(client):
+    _, app, settings = client
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    db = app.state.db
+    todos = Todos(db)
+    draft = todos.save(project, 'Draft: Quick capture', 'Rough')
+    spaced = todos.save(project, 'Draft:   Spaced', '')
+    plain = todos.save(project, 'Draft notes are fine here', 'Not the prefix')
+    other = todos.save(project, 'Complete brief', 'Goal')
+    with db.transaction() as conn:
+        conn.execute("DELETE FROM schema_version WHERE version=17")
+        conn.execute("UPDATE todos SET kind='ready'")
+    migrated = Database(settings.db_path)
+    rows = {t['id']: t for t in Todos(migrated).list(project)}
+    assert (rows[draft['id']]['kind'], rows[draft['id']]['title']) == ('idea', 'Quick capture')
+    assert (rows[spaced['id']]['kind'], rows[spaced['id']]['title']) == ('idea', 'Spaced')
+    assert rows[plain['id']]['kind'] == 'ready' and rows[plain['id']]['title'] == plain['title']
+    assert rows[other['id']]['kind'] == 'ready'
+    assert rows[draft['id']]['details'] == 'Rough'
+    assert Database(settings.db_path).one('SELECT 1 FROM schema_version WHERE version=17')
+    Database(settings.db_path)  # idempotent
+
+
+def test_kind_migration_adds_column_to_pre_kind_database(client):
+    _, app, settings = client
+    project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
+    db = app.state.db
+    Todos(db).save(project, 'Draft: Old row', 'x')
+    Todos(db).save(project, 'Old ready', 'y')
+    with db.transaction() as conn:
+        conn.execute("ALTER TABLE todos DROP COLUMN kind")
+        conn.execute("DELETE FROM schema_version WHERE version=17")
+    kinds = {t['title']: t['kind'] for t in Todos(Database(settings.db_path)).list(project)}
+    assert kinds == {'Old row': 'idea', 'Old ready': 'ready'}
 
 
 def test_start_endpoint_dispatch_failure_rolls_back_and_retry_succeeds(client, monkeypatch):

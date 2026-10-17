@@ -49,7 +49,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent-focus);outli
 .record-time{display:block;color:var(--muted);font-size:12px}
 .task-controls .record-time{margin-right:auto}
 
-.todo-details{white-space:pre-wrap;overflow-wrap:anywhere}#todo-list label{display:flex;align-items:center;gap:.65rem}#todo-list input[type=checkbox]{width:auto;min-width:24px;min-height:24px}#view-todo .section-head{flex-wrap:wrap;gap:.5rem}
+.todo-group h3{margin:.8rem 0 .4rem;font-size:1rem;color:var(--muted)}.todo-kind{font-size:.75rem;padding:.1rem .5rem;border:1px solid var(--border);border-radius:999px;white-space:nowrap}.todo-kind-idea{color:var(--muted)}.todo-kind-ready{color:var(--accent)}.todo-details{white-space:pre-wrap;overflow-wrap:anywhere}#todo-list label{display:flex;align-items:center;gap:.65rem}#todo-list input[type=checkbox]{width:auto;min-width:24px;min-height:24px}#view-todo .section-head{flex-wrap:wrap;gap:.5rem}
 
 /* Markdown shares the same constrained message column in live and saved chat. */
 .message-content.markdown{white-space:normal;line-height:1.65;min-width:0}

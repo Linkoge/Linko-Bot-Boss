@@ -69,6 +69,7 @@ MANAGER_TOOL = {
             "task_id": {"type": "string"},
             "execution_id": {"type": "string"},
             "todo_id": {"type": "string"},
+            "kind": {"type": "string", "enum": ["idea", "ready"], "description": "save_todo: 'idea' = unrefined, discuss in chat, never startable; 'ready' = a complete worker brief the owner can Start. list_todos: optional filter."},
             "todos": {"type": "array", "minItems": 1, "maxItems": 200, "items": {"type": "string"}},
             "model": {"type": "string"},
             "effort": {"type": "string"},
@@ -135,9 +136,9 @@ class Scheduler:
         if args.get("todos") and action not in {"delegate", "continue"}:
             raise ValueError("To-Do ids go only with delegate or continue, when the owner asks to start them")
         for entry_id in args.get("todos", []):
-            entry = self.db.one("SELECT title FROM todos WHERE id=? AND archived_at IS NULL", (entry_id,))
-            if entry and entry["title"].startswith("Draft:"):
-                raise ValueError("Expand the draft into a complete worker brief with save_todo before dispatch")
+            entry = self.db.one("SELECT title,kind FROM todos WHERE id=? AND archived_at IS NULL", (entry_id,))
+            if entry:
+                Todos.require_ready(entry)
         if action in {'emergency_repair', 'repair_status'}:
             from scripts.emergency_repair import Repair
 
@@ -226,7 +227,8 @@ class Scheduler:
                     raise ValueError("To-Do belongs to another project or does not exist")
                 return {"entry": row, "handoff": self.db.setting("todo_handoff:" + row["id"])}
             rows = Todos(self.db).list(project_id)
-            rows = [r for r in rows if args.get("query", "").lower() in (r['title']+' '+r['details']).lower()]
+            rows = [r for r in rows if args.get("query", "").lower() in (r['title']+' '+r['details']).lower()
+                    and (not args.get("kind") or r["kind"] == args["kind"])]
             return {"entries": rows[offset:offset+20], "next_offset": offset+20 if len(rows)>offset+20 else None}
         if action == "list_tasks":
             project_id = args.get('project_id') or selected_project
@@ -246,7 +248,7 @@ class Scheduler:
                                     args.get('tiles', ''), args.get('selector', ''))
         if action == "save_todo":
             # Recording a To-Do never calls Tasks.add/control.
-            return Todos(self.db).save(project_id, args["title"], args.get("details", ""), args.get("todo_id"))
+            return Todos(self.db).save(project_id, args["title"], args.get("details", ""), args.get("todo_id"), args.get("kind"))
         if action == "list_memory":
             rows = self.db.all("SELECT name,updated_at FROM memory WHERE project_id=? AND instr(lower(name),lower(?))>0 ORDER BY name LIMIT 21 OFFSET ?", (project_id,args.get("query", ""),offset))
             return {"records":rows[:20], "next_offset":offset+20 if len(rows)>20 else None}
