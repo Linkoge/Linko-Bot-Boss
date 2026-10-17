@@ -32,6 +32,10 @@ class Settings:
     audio_provider: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_PROVIDER", "grok"))
     audio_model: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_MODEL", "grok-voice-transcribe-2.0"))
     audio_probe: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_PROBE", "ffprobe"))
+    # GitHub classic token (repo scope only) for creating/renaming repositories: one file outside every repository.
+    github_token_file: Path | None = field(
+        default_factory=lambda: Path(p).expanduser() if (p := os.getenv("AI_MANAGER_GITHUB_TOKEN_FILE")) else None
+    )
     session_seconds: int = 43200
     allowed_hosts: tuple[str, ...] = field(
         default_factory=lambda: tuple(

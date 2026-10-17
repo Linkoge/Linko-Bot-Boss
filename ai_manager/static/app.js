@@ -116,7 +116,7 @@ function action(fn){return async event=>{const button=event?.currentTarget;if(bu
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
 function showAuth(){clearChatCache();state.history=null;$('messages').replaceChildren();cancelInitialChat();initialChatPosition=true;$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;state.restricted=!!auth.restricted;document.body.classList.toggle('restricted',state.restricted);$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
-async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[...(state.restricted?[]:[null]),...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;}
+async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[...(state.restricted?[]:[null]),...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;loadGithubStatus();}
 let refreshVersion=0,listingLoad=null;
 async function refresh(loadChat=true,older=null){
   const selection=state.selection,project=state.project;
@@ -215,7 +215,11 @@ function renderProjectMenu(){
   const stashed=sorted.filter(p=>p.visible===false);
   if(stashed.length){const details=element('details'),summary=element('summary',`Stashed projects (${stashed.length})`);details.open=stashedProjectsOpen;
     details.ontoggle=()=>{stashedProjectsOpen=details.open;};details.append(summary);for(const p of stashed)addRow(p,details,true);menu.append(details);}
-  if(state.project){const rename=element('button','Rename selected project…');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};menu.append(rename);}
+  if(state.project){const rename=element('button','Change display name…');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};menu.append(rename);}
+  if(!state.restricted){
+    const create=element('button','Create project…');create.dataset.project='github-create';create.onclick=()=>{closeProjectMenu();createGithubProject();};menu.append(create);
+    if(state.project){const rename=element('button','Rename project…');rename.dataset.project='github-rename';rename.title='Renames the GitHub repository, the local folder and the git remote';rename.onclick=()=>{closeProjectMenu();renameGithubProject();};menu.append(rename);}
+  }
   renderProjectAvailability();
   if(focusKey!==undefined){const target=menu.querySelector(`[data-visibility="${focusKey}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target)?.focus({preventScroll:true});}
   else if(focused!==undefined)menu.querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
@@ -738,6 +742,12 @@ document.addEventListener('visibilitychange',()=>{if(!document.hidden)pollUpdate
 // Deferred companion scripts must initialize before authentication can render the composer.
 document.addEventListener('DOMContentLoaded',()=>boot().catch(error=>notice(error.message)),{once:true});
 
+// GitHub actions: create and rename only (there is no delete). The token is entered once in Settings and never shown again.
+function createGithubProject(){editor('Create project',[{name:'name',label:'Name (also the GitHub repository and folder name)',required:true},{name:'private',label:'Visibility',options:[['true','Private (default)'],['false','Public']],value:'true'}],async values=>{
+  const result=await api('/api/github/projects',{method:'POST',body:JSON.stringify({name:values.name,private:values.private==='true'})});state.project=result.project.id;return result;});}
+function renameGithubProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'name',label:'New name (renames the GitHub repository, local folder and git remote; blocked while a task is running)',value:p.name,required:true}],values=>api(`/api/github/projects/${p.id}/rename`,{method:'POST',body:JSON.stringify(values)}));}
+async function loadGithubStatus(){if(state.restricted)return;try{const s=await api('/api/github');$('github-status').textContent=s.configured?'A GitHub token is saved.':'No GitHub token saved.';}catch(error){$('github-status').textContent=error.message;}}
+$('github-token-form').onsubmit=action(async event=>{event.preventDefault();const input=$('github-token');try{const r=await api('/api/github/token',{method:'PUT',body:JSON.stringify({token:input.value})});$('github-status').textContent=`A GitHub token is saved${r.login?` for ${r.login}`:''}.`;}catch(error){$('github-status').textContent=error.message;}finally{input.value='';}});
 function renameProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'display_name',label:'Display name',value:p.display_name||''}],values=>api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,revision:p.revision})}));}
 
 // Keyboard APIs are optional; viewport shrink is a best-effort mobile signal.

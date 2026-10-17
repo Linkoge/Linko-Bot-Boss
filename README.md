@@ -179,7 +179,8 @@ one saved selection drives display and dispatch."
 The owner has authorized automatic application pushes, including verified existing backlog. Every Git project uses its
 single `origin` push URL on `github.com` (SSH or HTTPS), with the service user's existing Git credentials. The application
 pushes local `main` (legacy `master` where that is the project's main branch) to the same remote branch. It never forces,
-resets local commits, rewrites history, creates repositories, or changes remote configuration. Non-Git projects keep
+resets local commits or rewrites history, and the backup itself never creates repositories or changes remote
+configuration (only the owner's menu actions below do). Non-Git projects keep
 their in-place workflow. Missing/unsupported origins or authentication failures need attention, without holding work.
 
 `ai_manager/github_backup.py` runs network work in a background thread without the checkout fence. A merge requests an
@@ -256,6 +257,42 @@ needs-attention and retries; no bypass URL or secret value is exposed or acted o
 Permanent synthetic regression coverage is in `tests/test_github_backup.py`: detection and exact allowlists, safe
 diagnostics, optional scanner absence, commit scope and intermediate history, bounded repairs, first-push backlog,
 rejected pushes and later catch-up, diverged history, and queue/merge/deploy progress during backup failure or latency.
+
+### Create and rename a project on GitHub
+
+The project menu (▾ left of the model picker, main instance only) has **Create project…** and **Rename project…**.
+(**Change display name…** still only edits the label.) These are the only two GitHub actions; **there is no delete code
+at all**, no delete route, and the API client refuses every request except `GET /user`, `POST /user/repos` and
+`PATCH /repos/{owner}/{repo}` (`ai_manager/github_projects.py`).
+
+*Credentials.* Pushes never used an application credential: they run `git push` with the service user's own SSH key or
+Git credential helper (above). That cannot call the REST API, so creating/renaming needs one extra credential: a GitHub
+**classic** personal access token with **only the `repo` scope** (leave `delete_repo` unticked so GitHub itself refuses
+deletes; a fine-grained token's Administration permission bundles delete, so do not use one). `repo` is still broad
+(read/write on all your repositories). Paste it once into **Settings → GitHub**; the server validates it against
+`GET /user` and rejects fine-grained tokens and any token with a scope other than `repo`. It is stored in one file
+outside every repository, `~/.config/linko-bot-manager/github-token` (override with `AI_MANAGER_GITHUB_TOKEN_FILE`),
+mode 0600 in a 0700 directory; a file readable by others is refused. It is never put in SQLite, events, logs, API
+responses, tasks or prompts, and error text from GitHub or the network has it redacted. Revoke it on GitHub to remove it.
+New repositories use the existing SSH push style (`git@github.com:owner/name.git`).
+
+*Create project* (name only): (1) create the GitHub repository, private by default (a public choice is explicit);
+(2) create `<first project root>/<name>`, `git init -b main`, `origin` set, one initial `README.md` commit so the
+existing backup can push; (3) register it in the manager. *Rename project*: (1) rename the GitHub repository (GitHub
+redirects old links); (2) rename the local folder; (3) update `origin`, repair retained task worktrees, and update the
+project's name, path and repository in the manager. A display name equal to the old name is cleared; a custom one stays.
+Rename holds the checkout fence (no task starts, merge or deploy meanwhile) and is refused while the project has a
+running task or execution, a saved deploy setup or pending deployment (those embed the folder path), or when it is the
+manager's own live checkout.
+
+If a step fails the action stops, undoes what is safely reversible (renames are renamed back, a just-created empty
+folder is removed) and returns the per-step report (`steps`: `done`, `failed`, `rolled back`, `not run`). A repository
+created on GitHub cannot be undone by the application (no delete): the report says so and it must be deleted or
+reused on GitHub. Restricted instances reject all four routes (`/api/github*`) with `Not available on a restricted
+instance`. The push-time secret check is unchanged.
+
+Tests: `tests/test_github_projects.py` (mocked GitHub API: create, rename, failure midway with rollback, blocked while
+running, no token, token validation and file mode, no delete route/request, token never logged/stored, restricted).
 
 ## Deploy
 
@@ -362,8 +399,8 @@ run in their usual branch/worktree flow on that one project (a Git repository). 
   host-repair spool is written. Do not install `scripts/install_repair.py` for such an instance.
 - The manager is offered a tool without those actions, and manager and workers get a short restricted note
   (`RESTRICTED_NOTE` in `ai_manager/codex.py`). `/api/auth-status` reports `restricted`, and the UI then hides All
-  Projects, the project menu, the model/effort picker button, the Models settings panel, Discover/Add project and the
-  Deployment panel (cosmetic: `body.restricted` CSS only, elements stay in the DOM so no script breaks; the server-side
+  Projects, the project menu, the model/effort picker button, the Models settings panel, the GitHub panel,
+  Discover/Add project and the Deployment panel (cosmetic: `body.restricted` CSS only, elements stay in the DOM so no script breaks; the server-side
   rejections are the real protection). Word editing and browsing tools stay
   allowed. Rejections use `Not available on a restricted instance` (HTTP 403, or a rejected manager action).
 

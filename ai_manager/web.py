@@ -27,6 +27,7 @@ from .config import Settings
 from .core import Core, Tasks
 from .db import Database
 from .execution_ui import event_page, execution_page, execution_summary
+from .github_projects import GitHubError, GitHubProjects
 from .orchestration import Scheduler
 from .pipeline import RESTRICTED, Pipeline
 from .progress import progress
@@ -48,6 +49,19 @@ class SetupBody(LoginBody):
 class ProjectBody(BaseModel):
     path: str = Field(max_length=4096)
     name: str | None = Field(default=None, max_length=200)
+
+
+class GitHubToken(BaseModel):
+    token: str = Field(max_length=300, repr=False)
+
+
+class GitHubCreate(BaseModel):
+    name: str = Field(max_length=200)
+    private: bool = True
+
+
+class GitHubRename(BaseModel):
+    name: str = Field(max_length=200)
 
 
 class ProjectVisibility(BaseModel):
@@ -145,7 +159,7 @@ class AnswerBody(BaseModel):
     answers: dict
 
 
-def create_app(settings: Settings | None = None, server=None, worker_factory=None):
+def create_app(settings: Settings | None = None, server=None, worker_factory=None, github_fetch=None):
     settings = settings or Settings()
     settings.prepare()
     db = Database(settings.db_path)
@@ -174,6 +188,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     scheduler = Scheduler(db, registry, settings, core, chat, pipeline)
     chat.action_handler = scheduler.manager_action
     chat.restricted = restricted
+    github = GitHubProjects(db, registry, settings, pipeline, fetch=github_fetch)
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
     release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
@@ -198,6 +213,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     app = FastAPI(title="Linko Bot Boss", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
     app.state.core, app.state.scheduler = core, scheduler
+    app.state.github_projects = github
     app.state.audio = audio
     app.state.attachments = attachments
     app.state.memory, app.state.memory_reviews = memory, reviews
@@ -254,6 +270,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def invalid(request, error):
         logging.getLogger(__name__).warning("action.rejected path=%s reason=%s", request.url.path, str(error))
         return JSONResponse({"result": "rejected", "detail": str(error), "message": str(error)}, status_code=409)
+
+    @app.exception_handler(GitHubError)
+    async def github_failed(request, error):
+        logging.getLogger(__name__).warning("action.rejected path=%s reason=%s", request.url.path, str(error))
+        return JSONResponse({"result": "rejected", "detail": str(error), "message": str(error), "steps": error.steps},
+                            status_code=409)
 
     @app.exception_handler(CodexError)
     async def unavailable(request, error):
@@ -612,6 +634,23 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.post("/api/projects", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def add_project(body: ProjectBody):
         return registry.add(body.path, body.name)
+
+    # GitHub actions: create and rename only. There is intentionally no delete route or delete code.
+    @app.get("/api/github", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_status():
+        return github.status()
+
+    @app.put("/api/github/token", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_token(body: GitHubToken):
+        return github.save_token(body.token)
+
+    @app.post("/api/github/projects", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_create(body: GitHubCreate):
+        return github.create(body.name, body.private)
+
+    @app.post("/api/github/projects/{project_id}/rename", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_rename(project_id: str, body: GitHubRename):
+        return github.rename(project_id, body.name)
 
     @app.patch("/api/projects/{project_id}", dependencies=[Depends(require_owner)])
     def update_project(project_id: str, body: ProjectUpdate):
