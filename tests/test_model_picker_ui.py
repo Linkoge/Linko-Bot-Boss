@@ -29,10 +29,11 @@ def test_dialog_markup_is_the_original_manager_worker_favorites_layout_plus_the_
 def test_picker_styles_are_the_original_ones_and_the_switch_is_drawn_like_the_old_bot_switch():
     css = (STATIC / 'style.css').read_text()
     rules = [line for line in css.splitlines() if re.search(r'model-|favorite|#model|\.bot-settings', line)
-             and not line.startswith('#model-dialog section:first-child')]
+             and not line.startswith(('#model-dialog section:first-child', '.restricted '))]  # restricted hiding is not picker styling
     assert len(rules) == 29
     assert digest('\n'.join(rules)) == '410c53f33ca1983787accd7236aab2fa3116d3459703b16af4ab48da943f59a7'
     assert '.model-choice-row button[aria-pressed=true]{background:var(--accent-bg)' in css
+    assert '.restricted #model-settings-button,.restricted #models-panel,.restricted #model-dialog{display:none}' in css
     assert '#repo-lock-container button{width:100%;overflow:hidden;text-overflow:ellipsis;' in css
     # The 81711bd rule for the Bot switch, verbatim apart from the id: two equal columns, 240px, no margin.
     assert [line for line in css.splitlines() if 'worker-mode' in line] == ['#worker-mode{grid-template-columns:1fr 1fr;margin:0;flex:0 1 240px}']

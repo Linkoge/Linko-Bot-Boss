@@ -372,7 +372,7 @@ class Chat:
                 ],
                 "instructions": self.db.setting("global_instructions", ""),
             }
-        from .project_memory import ProjectMemory, encode
+        from .project_memory import CONTEXT_MAXIMUM, ProjectMemory, encode
         p = self.registry.get(project_id)
         memory = ProjectMemory(self.db, self.registry).snapshot(project_id)
         context = {
@@ -380,8 +380,11 @@ class Chat:
             "project_brief": memory["brief"],
             "memory_reference": memory["active"],
         }
-        if len(encode(context).encode()) > 2000:
-            raise ValueError("Project context exceeds token ceiling; condense brief with provenance")
+        size = len(encode(context).encode())
+        if size > CONTEXT_MAXIMUM:
+            raise ValueError(
+                f"Project context exceeds token ceiling ({size} bytes > {CONTEXT_MAXIMUM}); condense brief with provenance"
+            )
         return {**context, "instructions": self.db.setting("global_instructions", "")}
 
     def prompt(self, conversation, content, execution_id, thread_id, prior):
@@ -389,9 +392,12 @@ class Chat:
         from .pipeline import Pipeline
         context['deployment'] = Pipeline(self.db, self.registry).summary(conversation['project_id'])
         if conversation['project_id']:
-            from .project_memory import encode
-            if len(encode({k: v for k, v in context.items() if k != 'instructions'}).encode()) > 2000:
-                raise ValueError('Default project context exceeds token ceiling; condense with provenance')
+            from .project_memory import CONTEXT_MAXIMUM, encode
+            size = len(encode({k: v for k, v in context.items() if k != 'instructions'}).encode())
+            if size > CONTEXT_MAXIMUM:
+                raise ValueError(
+                    f'Default project context exceeds token ceiling ({size} bytes > {CONTEXT_MAXIMUM}); condense with provenance'
+                )
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         source = self.db.one("SELECT e.*,t.state AS task_status,t.blocker,t.rounds,t.merge FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery_execution=?", (execution_id,))
         prompt = {"message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}

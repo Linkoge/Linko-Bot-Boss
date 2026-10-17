@@ -15,7 +15,7 @@ from ai_manager.codex import safe_config
 from ai_manager.core import Core, Tasks
 from ai_manager.orchestration import Scheduler
 from ai_manager.pipeline import Pipeline, atomic
-from ai_manager.project_memory import MAXIMUM, MemoryReviews, ProjectMemory, encode
+from ai_manager.project_memory import CONTEXT_MAXIMUM, MAXIMUM, TARGET, MemoryReviews, ProjectMemory, encode
 
 system = system_fixture
 client = client_fixture
@@ -60,7 +60,7 @@ def test_fresh_chat_brief_retains_goals_state_global_preference_without_bulk_not
     assert context["instructions"] == "Routine owner report extremely brief"
     assert "owner_notes" not in context
     assert "historical secret phrase" not in encode(context)
-    assert len(encode({k: v for k, v in context.items() if k != "instructions"}).encode()) <= 2000
+    assert len(encode({k: v for k, v in context.items() if k != "instructions"}).encode()) <= CONTEXT_MAXIMUM
     assert memory.snapshot(project)["active"] == before["active"]
 
 
@@ -304,7 +304,7 @@ def test_oversized_initial_fields_preserved_with_explicit_retrieval_notice(syste
     assert "Retrieve project fields" in snapshot["brief"]["goals"][0]
     record = memory.get(project["id"], snapshot["active"])
     assert record["project_fields"]["objective"] == "authoritative goal " * 2000
-    assert len(encode(chat.context(project["id"])).encode()) <= 2000
+    assert len(encode(chat.context(project["id"])).encode()) <= CONTEXT_MAXIMUM
     assert not system[0].all("SELECT * FROM executions")
 
 
@@ -342,4 +342,46 @@ def test_long_deployment_result_is_summarised_in_the_manager_context(system):
     context = {k: v for k, v in prompt["context"].items() if k != "instructions"}
     assert context["deployment"].startswith("success: historical bulk")
     assert len(context["deployment"]) <= 200  # The long result is summarized, never embedded.
-    assert len(encode(context).encode()) <= 2000
+    assert len(encode(context).encode()) <= CONTEXT_MAXIMUM
+
+
+def test_limits_are_the_doubled_temporary_ones_with_one_context_ceiling():
+    assert (TARGET, MAXIMUM, CONTEXT_MAXIMUM) == (3000, 3200, 4000)
+    from ai_manager.project_memory import REVIEW_INSTRUCTIONS
+    assert f"<={TARGET} UTF-8 bytes; maximum {MAXIMUM} bytes" in REVIEW_INSTRUCTIONS
+
+
+def test_brief_between_the_old_and_new_maximum_chats_reviews_and_activates(system):
+    project, memory, before = ready(system)
+    db, registry, chat, _ = system
+    brief = {**before["brief"], "state": ["x" * 1000, "y" * 1000]}
+    assert 1600 < len(encode(brief).encode()) <= MAXIMUM
+    stored = activate(memory, project, brief)
+    assert stored["brief"] == brief and stored["token_upper_bound"] > 1600
+    assert len(encode(chat.context(project)).encode()) <= CONTEXT_MAXIMUM
+    prompt, _ = chat.prompt(chat.conversation(project), "hello", "execution", "new-thread", None)
+    assert prompt["context"]["project_brief"] == brief
+    review = memory.begin(project)
+    memory.candidate(project, review, {**brief, "state": ["x" * 1000, "z" * 1000]}, [], ["memory:base"])
+    mismatches = memory.get(project, review)["mismatches"]
+    applied = memory.apply(project, review, stored["revision"], [{"action": "accept", "reason": "ok"}] * len(mismatches))
+    assert applied["revision"] > stored["revision"]
+
+
+def test_oversize_errors_state_the_actual_size_and_limit(system):
+    project, memory, before = ready(system)
+    chat = system[2]
+    big = {**before["brief"], "state": ["x" * MAXIMUM]}
+    size = len(encode(big).encode())
+    with pytest.raises(ValueError, match=rf"\({size} bytes > {MAXIMUM}\)"):
+        activate(memory, project, big)
+    # An existing brief inside the brief limit but with an oversized envelope names the context size and ceiling.
+    fat = {**before["brief"], "state": ["x" * (MAXIMUM - 400)]}
+    activate(memory, project, fat)
+    original = chat.registry.get
+    chat.registry.get = lambda pid: {**original(pid), "path": "p" * CONTEXT_MAXIMUM}
+    try:
+        with pytest.raises(ValueError, match=rf"\(\d+ bytes > {CONTEXT_MAXIMUM}\)"):
+            chat.context(project)
+    finally:
+        chat.registry.get = original
