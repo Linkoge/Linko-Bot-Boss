@@ -758,7 +758,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():
         from .model_settings import active
-        return {"global_instructions": db.setting("global_instructions", ""), "max_workers": 1,
+        return {"global_instructions": db.setting("global_instructions", ""),
                 "model_provider": active(db)}
 
     static = Path(__file__).parent / "static"

@@ -7,9 +7,10 @@ FastAPI + SQLite + plain JavaScript; Codex or Claude does the thinking and codin
 
 ## How work runs
 
-One global queue, strictly sequential. States: **queued → running → done | failed**. A **held** task is a queued task with
-the hold flag set; it is skipped until released. Order is the only dependency. The code is `ai_manager/core.py`; the rules
-both the manager and every worker read are [RULES.md](RULES.md).
+One queue per project: at most one running task per project, in strict queue order, while tasks of different
+projects run in parallel (no global cap, no exceptions per project). States: **queued → running → done | failed**. A
+**held** task is a queued task with the hold flag set; it is skipped until released. Order within a project is the only
+dependency. The code is `ai_manager/core.py`; the rules both the manager and every worker read are [RULES.md](RULES.md).
 
 1. **Worker.** The oldest eligible queued task gets an isolated Git worktree and branch
    (`linko/assignment-<id>`, kept on disk, never deleted). The worker implements, adds the permanent tests for its change
@@ -20,18 +21,20 @@ both the manager and every worker read are [RULES.md](RULES.md).
    with disposable data directories.
 3. **Repair rounds** (a counter on the task row, never reset by retry, restart or continue). A failing check goes back to
    the same worker as a repair round, at most 5 times; the task then stops with a plain reason and the manager reports it.
-4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one at a time); there is no
-   per-project switch. Main is first merged into the branch; a conflict goes to the same worker as a repair round of the
+4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one merge at a time across projects, the
+   deploy request is made under the same fence hold); there is no per-project switch. Main is first merged into the branch; a conflict goes to the same worker as a repair round of the
    same task. Every project with a saved deploy setup then requests the same deploy script automatically, including
    the manager itself. Without one it reports **no deploy setup; merges only**. The manager's `deploy` action
    (optionally with a `task_id` of a finished, never-merged task) uses the same path on request.
    After every passing merge the application schedules a GitHub backup push for that project. This runs independently
    of the queue and deployment; workers never push. See GitHub backups and secret checks below.
 5. **Queue runner** (`ai_manager/runner.py`; independent of any open chat or owner message). A tick every second starts
-   the oldest eligible queued task, one at a time. Not eligible: held, project paused, waiting for its retry time, or a
-   deploy request pending (for at most 30 minutes, see Deploy). On service start, whatever was running is resumed without penalty (same branch, same worker
-   thread, repair counters untouched) and retry times are forgotten, so a restart or reboot always retries at
-   once. A provider usage limit or a lost connection never fails a task: it goes back in the queue with a visible retry
+   the oldest eligible queued task of every project that has nothing running, so a project runs one task at a time and
+   different projects run in parallel. Not eligible: held, project paused, waiting for its retry time, or a
+   deploy request pending (for at most 30 minutes, see Deploy). On service start, whatever was running is resumed
+   without penalty (same branch, same worker thread, repair counters untouched) and retry times are forgotten, so a restart or reboot always retries at
+   once; every task that was running (in any project) is resumed this way. A provider usage limit or a lost connection
+   never fails a task: it goes back in the queue with a visible retry
    time and is tried again every 5 minutes, indefinitely (no backoff, no wait counter, the provider's reset time is not
    consulted, so a limit that resets early is picked up by the next try). Only real errors fail a task. The watchdog (every
    minute) requeues a dead or hung worker (30 min without activity) once, then fails it; fails queued tasks of a removed
@@ -114,7 +117,7 @@ judgment. Select middle and end tiles as needed, rather than judging only the fi
 Every call has a **60-second hard wall-clock timeout**, including browser startup, navigation, preparation and
 capture. Timeout/cancellation kills the owned browser process group and discards temporary files. The manager
 receives a clear failure; a page that keeps growing or exceeds the finite 100-screen preparation walk fails explicitly.
-Failures do not enqueue work or block the sequential worker queue. Images are returned to the model and temporary
+Failures do not enqueue work or block the project queues. Images are returned to the model and temporary
 capture files are removed; they are not saved as project files or login sessions.
 
 Install the runtime dependencies with `uv sync --locked` and Chromium with `uv run playwright install chromium`.
@@ -143,7 +146,7 @@ and adds no model or routing restrictions. Proceed with the owner's requested wo
 
 Prefer deletion and one clear path. Add no new gate without a concrete incident it prevents; speculative safeguards
 create their own failure modes. Keep one source per setting and **shown = saved = dispatched** across reload and execution.
-No feature should stall the global sequential queue; keep waits visible, bounded and recoverable.
+No feature should stall a project queue; keep waits visible, bounded and recoverable.
 
 Deliberately removed machinery and its replacements:
 
@@ -161,7 +164,7 @@ Deliberately removed machinery and its replacements:
   state. The application records results and returns them to the originating chat. The project brief remains read-only
   navigation for the manager, with owner-run review; it is not assignment authority or a delivery prerequisite.
 - **Chat modes; tiered/review machinery:** mode switches, helper/reviewer tiers and integration/follow-up paths
-  multiplied handoffs and waiting states. The manager answers, inspects or delegates as asked to one worker queue;
+  multiplied handoffs and waiting states. The manager answers, inspects or delegates as asked to the project's worker queue;
   permanent checks and the existing secret check remain, with no separate architecture approval stage.
 - **Deploy blocking the queue:** checkout safety still pauses new tasks and merges while a deploy is pending.
   Before backup, a 30-minute deadline withdraws a stuck request and releases the queue; after backup, deployment finishes
@@ -262,8 +265,8 @@ checks precede the merge. The installed manager runtime adapter also runs its fu
 restarts its service and checks scheduler/authentication health; failures restore code and database. External command
 and user-systemd service setups use the same consumer, lock, queue deadline, backup/health/rollback phases and receipts.
 No repository-name or manager-only deployment policy remains. The short
-result is `DATA/deploy/last-deploy.txt`. While a request is pending no new work starts and nothing merges (the
-checkout fence, `ai_manager/fence.py`), but never for more than 30 minutes: the watchdog withdraws a request that has not
+result is `DATA/deploy/last-deploy.txt`. While a request is pending no new work starts and nothing merges, in any project (the
+checkout fence, `ai_manager/fence.py`; running tasks of other projects finish or wait to merge, and the deploy waits for idle across all of them), but never for more than 30 minutes: the watchdog withdraws a request that has not
 reached its backup by then (the wait for idle is bounded the same way), tells the originating chat, and the queue runs on.
 A request past its backup finishes or rolls back by itself. One-time operator bootstrap, no sudo:
 `python3 scripts/install_deploy.py`. Manual deploy: `python3 scripts/deploy.py --now`.
@@ -413,7 +416,7 @@ only a manager turn started by an owner-typed chat message may submit it; automa
 output and repository documents are rejected. Normal deploys, missing project setups and delayed
 deploy requests use the Deploy path above; the manager never substitutes `emergency_repair` for them.
 
-The host repair role is an explicit exception to the normal sequential work queue. It can diagnose/fix the
+The host repair role is an explicit exception to the normal task queues. It can diagnose/fix the
 application, restart its user service, and call the existing deploy flow while the app or queue is broken.
 It never creates a normal task. `scripts/emergency_repair.py` uses only host Python's standard library and the
 installed Codex/Claude CLI, with native shell/file tools and arbitrary provider model names, without model catalog,
@@ -754,8 +757,8 @@ deployment receipts, report paths, attachments and delivery/execution references
 The listing root cause and permanent validation are recorded in
 [the bounded listing result](docs/evidence/task-agent-listing.md).
 
-A single maintenance loop starts with the existing scheduler, runs outside the sequential assignment
-queue, and retries once per minute. Each atomic transaction handles at most 250 messages, 250 events
+A single maintenance loop starts with the existing scheduler, runs outside the task
+queues, and retries once per minute. Each atomic transaction handles at most 250 messages, 250 events
 and 250 executions. Inactive content outside the hot windows or older than seven days moves to the
 `history_archive` table in the existing SQLite database as deduplicated zlib-compressed UTF-8 payloads.
 Original rows keep their IDs, order, timestamps, scope and references. Unfinished executions and pending

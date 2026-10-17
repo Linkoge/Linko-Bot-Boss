@@ -1,7 +1,7 @@
 """Merge into main and the deploy request/result protocol. Contract: README.md.
 
-The worker (core.py) merges a passed branch into main one at a time, then asks the single deploy script
-(scripts/deploy.py) to deploy main when the project has a saved setup. The script itself waits for idle, backs up,
+The worker (core.py) merges a passed branch into main (one merge at a time across projects), then asks the single
+deploy script (scripts/deploy.py) to deploy main when the project has a saved setup. The script itself waits for idle, backs up,
 restarts, health-checks and rolls back; this module only writes its request file and reports its short result. A pending
 request holds new work and merges for at most DEPLOY_WAIT seconds. No AI call decides anything here.
 """
@@ -18,6 +18,7 @@ from .fence import Busy, main_branch
 from .github_backup import GitHubBackup
 
 RESTRICTED = 'Not available on a restricted instance'
+MERGE_WAIT = 30  # seconds a merge waits for another project's merge to leave the checkout fence
 DEPLOY_WAIT = 1800  # a pending deploy request holds the queue at most this long, then it is withdrawn
 IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
 
@@ -198,16 +199,22 @@ class Pipeline:
             conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(payload)))
 
     # ---- merge to main ----------------------------------------------------------------------------------------
-    def merge(self, project_path, commit):
-        """The only path into main: exclusive checkout fence, re-checked pending deploy, then the merge."""
-        with fence.hold(self.db.path.parent, exclusive=True):
+    def merge(self, project_path, commit, deploy=None):
+        """The only path into main: exclusive checkout fence, re-checked pending deploy, then the merge.
+
+        Tasks of different projects run in parallel and share this one fence, so a merge waits briefly for another's.
+        When the merge changed main and `deploy` (the arguments of request()) is given, the deploy is requested under
+        the same fence hold: no other project can take the single deploy request between merge and request.
+        Returns (head, changed, deployment); deployment is None unless a request was made or answered.
+        """
+        with fence.hold(self.db.path.parent, exclusive=True, wait=MERGE_WAIT):
             if self.pending():
                 raise Busy('a deploy is pending')
-            result = merge_into_main(project_path, commit)
+            head, changed = merge_into_main(project_path, commit)
             project = self.db.one('SELECT id FROM projects WHERE path=?', (str(project_path),))
             if project:
                 self.backups.request(project['id'])
-            return result
+            return head, changed, self._request(*deploy) if changed and deploy else None
 
     def expire(self, max_age=DEPLOY_WAIT):
         """A deploy request that has not finished in time (script not installed, stuck unit, endless idle wait) must not

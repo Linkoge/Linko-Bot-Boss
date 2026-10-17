@@ -5,7 +5,8 @@ It needs no chat and no owner message. A tick (once a second, from the scheduler
      and retry times are forgotten, so a restart or reboot always retries at once;
   2. every minute: the watchdog fails or requeues a dead or hung worker, expires a stale deploy request, fails queued
      work of a removed project, and reports an idle queue that has eligible work but does not start it;
-  3. starts the oldest eligible queued task (not held, not waiting for its retry time, project active), one at a time.
+  3. starts, for every project with nothing running, its oldest eligible queued task (not held, not waiting for its
+     retry time, project active): one task at a time per project, different projects in parallel.
 A provider usage limit or a lost connection never fails a task: it goes back in the queue and is tried again every
 5 minutes, indefinitely (a limit that resets early is picked up by the next try). Repair-round counters live on the task
 row and are never touched here.
@@ -66,12 +67,14 @@ class Runner:
         self.reported &= self.idle_since is not None
 
     def starved(self):
-        """Eligible queued work and nothing running or holding the queue (a held or paused task or a deploy is a reason)."""
+        """Eligible queued work in a project that has nothing running, and no deploy pending (a held or paused task, a
+        running task of the same project or a deploy is a reason)."""
         core = self.core
-        if core.jobs or core.pipeline.pending() or core.db.one("SELECT 1 FROM tasks WHERE state='running'"):
+        if core.pipeline.pending():
             return None
         return core.db.one("""SELECT t.* FROM tasks t JOIN projects p ON p.id=t.project_id
             WHERE t.state='queued' AND t.held=0 AND p.status='active' AND COALESCE(t.retry_at,0)<=?
+            AND NOT EXISTS(SELECT 1 FROM tasks r WHERE r.state='running' AND r.project_id=t.project_id)
             ORDER BY t.queued_at,t.rowid LIMIT 1""", (time.time(),))
 
     def startup(self):

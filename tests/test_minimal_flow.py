@@ -78,7 +78,7 @@ async def settled(workers):
 
 
 @pytest.mark.smoke
-def test_idempotency_strict_order_one_worker_and_future_projects(system):
+def test_idempotency_strict_order_one_worker_per_project_and_future_projects(system):
     db, registry, chat, settings = system
     tasks = Tasks(db)
     p, q = registry.list()
@@ -88,10 +88,13 @@ def test_idempotency_strict_order_one_worker_and_future_projects(system):
     c = tasks.add(q["id"], "other project")
     claimed = tasks.claim()
     assert claimed["id"] == a["id"]
-    assert tasks.claim() is None  # One global worker, even across projects.
+    other = tasks.claim()
+    assert other["id"] == c["id"]  # Another project starts at once; each project runs one task at a time.
+    assert tasks.claim() is None
     with db.transaction() as conn:
-        conn.execute("UPDATE tasks SET state='done',lease_owner=NULL WHERE id=?", (a["id"],))
-        conn.execute("UPDATE executions SET status='completed',finished_at=1 WHERE id=?", (claimed["lease_owner"],))
+        for done in (claimed, other):
+            conn.execute("UPDATE tasks SET state='done',lease_owner=NULL WHERE id=?", (done["id"],))
+            conn.execute("UPDATE executions SET status='completed',finished_at=1 WHERE id=?", (done["lease_owner"],))
     directory = settings.project_roots[0] / "future"
     directory.mkdir()
     future = registry.add(directory)
@@ -102,7 +105,7 @@ def test_idempotency_strict_order_one_worker_and_future_projects(system):
         with db.transaction() as conn:
             conn.execute("UPDATE tasks SET state='done',lease_owner=NULL WHERE id=?", (task["id"],))
             conn.execute("UPDATE executions SET status='completed',finished_at=1 WHERE id=?", (task["lease_owner"],))
-    assert order == [b["id"], c["id"], d["id"]]
+    assert order == [b["id"], d["id"]]
 
 
 @pytest.mark.smoke
@@ -487,7 +490,7 @@ def test_fresh_schema_contains_only_current_storage(system):
 
 
 @pytest.mark.asyncio
-async def test_background_queue_runs_one_task_at_a_time_in_order(system):
+async def test_background_queues_run_one_task_per_project_in_parallel(system):
     db, registry, chat, settings = system
     for project in registry.list():
         Tasks(db).add(project["id"], "Independent work", chat.conversation(project["id"])["id"])
@@ -497,14 +500,14 @@ async def test_background_queue_runs_one_task_at_a_time_in_order(system):
     try:
         await scheduler.tick()
         await asyncio.sleep(0.03)
-        assert len(workers.jobs) == 1
-        assert len([t for t in Tasks(db).list() if t["state"] == "running"]) == 1
+        assert len(workers.jobs) == 2  # one running task in each of the two projects
+        assert len([t for t in Tasks(db).list() if t["state"] == "running"]) == 2
         directory = settings.project_roots[0] / "new-project"
         directory.mkdir()
         future = registry.add(directory)
         Tasks(db).add(future["id"], "New project work")
         await scheduler.tick()
-        assert len(workers.jobs) == 1
+        assert len(workers.jobs) == 3  # a new project starts at once; the busy ones are not started twice
         NativeFixture.release.set()
         for _ in range(3):
             await settled(workers)

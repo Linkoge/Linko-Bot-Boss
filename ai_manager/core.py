@@ -1,9 +1,10 @@
-"""Task-execution core: one global sequential queue, one worker, durable repair rounds, a watchdog. See README.md.
+"""Task-execution core: one queue per project (one running task each, projects in parallel), durable repair rounds, a
+watchdog. See README.md.
 
-States: queued -> running -> done | failed. `held` is a flag on a queued task (skipped until released); order is the
-only dependency. A worker implements on an isolated branch, the application runs the permanent checks (the fixed smoke
-suite plus the test files the branch added or changed), repairs happen in durable rounds (at most 5, then the task stops
-and reports). A passing branch always merges into main; a saved project setup requests the shared deploy script.
+States: queued -> running -> done | failed. `held` is a flag on a queued task (skipped until released); order within
+a project is the only dependency. A worker implements on an isolated branch, the application runs the permanent checks
+(the fixed smoke suite plus the test files the branch added or changed), repairs happen in durable rounds (at most 5,
+then the task stops and reports). A passing branch always merges into main; a saved project setup requests the shared deploy script.
 """
 
 import asyncio
@@ -266,7 +267,7 @@ class Tasks:
         with self.db.transaction() as conn:
             for task in conn.execute("""SELECT t.*,p.path,p.status AS project_status FROM tasks t
                     JOIN projects p ON p.id=t.project_id WHERE t.state='queued' AND t.held=0
-                    AND NOT EXISTS(SELECT 1 FROM tasks r WHERE r.state='running')
+                    AND NOT EXISTS(SELECT 1 FROM tasks r WHERE r.state='running' AND r.project_id=t.project_id)
                     ORDER BY t.queued_at,t.rowid""").fetchall():
                 if task["project_status"] == "removed":
                     self.fail_queued(conn, task, "Project was removed")
@@ -588,13 +589,12 @@ class Core:
                 hits = await asyncio.to_thread(scan_secrets, root, branch, head)
                 if hits:
                     return {"outcome": outcome([{"check": "secrets", "failures": secret_failures(hits), "output": ""}])}
-                main_head, changed = await asyncio.to_thread(self.pipeline.merge, project["path"], head)
+                main_head, changed, deployment = await asyncio.to_thread(
+                    self.pipeline.merge, project["path"], head,
+                    (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]))
             except Conflict:
                 continue
-            deployment = {'reason': 'already in main'}
-            if changed:
-                deployment = self.pipeline.request(task["project_id"], "auto", task["id"], task["origin_conversation"],
-                                                   "task " + task["id"][:8])
+            deployment = deployment or {'reason': 'already in main'}
             requested = bool(deployment.get('id'))
             return {"reason": "", "merge": {"state": "merged" if changed else "already in main", "main": main_head,
                                             "deploy": requested,

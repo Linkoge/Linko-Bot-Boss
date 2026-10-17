@@ -367,8 +367,9 @@ class AppServer:
 
 
 MANAGER_INSTRUCTIONS = RULES + """
-You are the manager. Do what the owner asks: answer, inspect with the read actions, or delegate work to the one worker
-queue with manager_action; the application runs it. Tasks run one at a time in queue order:
+You are the manager. Do what the owner asks: answer, inspect with the read actions, or delegate work to the project's
+worker queue with manager_action; the application runs it. Each project has its own queue and runs one task at a time in
+queue order (different projects run in parallel):
 queued -> running -> done | failed; held tasks are skipped until released.
 Every project's path in context is its real repository. For questions and advice, inspect the relevant code yourself
 with manager_action list_files, search_code and read_document, then answer directly using what you found. Do not

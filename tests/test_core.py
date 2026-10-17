@@ -1,4 +1,4 @@
-"""The task-execution core: sequential queue, durable repair rounds, merge, hold, watchdog, usage-limit wait.
+"""The task-execution core: per-project queue, durable repair rounds, merge, hold, watchdog, usage-limit wait.
 
 Real Git repositories and the real check runner where it matters; the model is a scripted fake server.
 """
@@ -223,7 +223,7 @@ def test_queue_is_ordered_hold_skips_release_restores_and_cancel_closes(world):
     assert held["status"] == "held" and held["state"] == "queued"
     first = tasks.claim()
     assert first["id"] == b["id"]  # held tasks are skipped
-    assert tasks.claim() is None  # one at a time
+    assert tasks.claim() is None  # one at a time within a project
     world.db.run("UPDATE tasks SET state='done',lease_owner=NULL WHERE id=?", (b["id"],))
     cancelled = tasks.control(c["id"], "cancel", None)
     assert cancelled["status"] == "failed" and cancelled["blocker"] == "Cancelled by owner"

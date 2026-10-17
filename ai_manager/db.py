@@ -145,7 +145,7 @@ class Database:
 
     @staticmethod
     def migrate_queue(conn, task_columns):
-        """Schema 13: the sequential task queue; 14: the Auto-deploy setting is retired; 15: unused columns are dropped.
+        """Schema 13: the per-project task queues; 14: the Auto-deploy setting is retired; 15: unused columns are dropped.
         Old columns (lifecycle, legacy, ...) stay as ignored history.
 
         Old non-final tasks are closed once (failed, reason says cancelled); branches, workspaces and rows are kept.
@@ -194,7 +194,8 @@ class Database:
                         conn.execute(f"ALTER TABLE {table} DROP COLUMN {name}")
             conn.execute("INSERT INTO schema_version VALUES(15)")
         conn.execute("UPDATE tasks SET lease_owner=NULL WHERE state IN ('done','failed')")
-        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_running ON tasks(state) WHERE state='running'")
+        conn.execute("DROP INDEX IF EXISTS one_running")  # was one running task in total; now one per project
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_running_per_project ON tasks(project_id) WHERE state='running'")
         conn.execute("CREATE INDEX IF NOT EXISTS task_queue ON tasks(state,held,queued_at)")
         for prefix, scope in (('', ''), ('project_', 'project_id,')):
             conn.execute(f"CREATE INDEX IF NOT EXISTS tasks_{prefix}finished ON tasks({scope}updated_at DESC) WHERE state IN ('done','failed')")
