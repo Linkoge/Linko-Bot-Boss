@@ -29,6 +29,7 @@ from .db import Database
 from .execution_ui import event_page, execution_page, execution_summary
 from .orchestration import Scheduler
 from .pipeline import RESTRICTED, Pipeline
+from .progress import progress
 from .project_memory import MemoryReviews, ProjectMemory
 from .proxy import client_ip, is_https, parse_trusted
 from .registry import Registry, git
@@ -593,6 +594,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "task_cursor": task_page['cursor'],
             "has_older_tasks": task_page['has_more'],
             **execution_summary(db, project_id, through=execution_through, older=older == 'executions'),
+            "progress": progress(db, scheduler.pipeline, project_id),
             "questions": db.all(
                 "SELECT q.*,e.project_id,e.task_id FROM questions q JOIN executions e ON e.id=q.execution_id WHERE q.status='pending'"
                 + (" AND e.project_id=?" if project_id else ""),

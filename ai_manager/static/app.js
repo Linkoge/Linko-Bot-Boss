@@ -133,7 +133,7 @@ async function refresh(loadChat=true,older=null){
   if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return false;
   if(older==='tasks')state.taskPaging=true;
   if(older==='executions')state.executionPaging=true;
-  preserveChatPosition(()=>{state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();});
+  preserveChatPosition(()=>{state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();renderProgress();});
   if(state.project&&portfolio.projects.find(p=>p.id===state.project)?.visible===false){await selectProject(null);return false;}
   if(portfolio.queue_error)notice(portfolio.queue_error);
   if(state.view==='todo')await loadTodos(selection);
@@ -258,8 +258,8 @@ async function selectProject(id){
   state.execution=null;state.history=null;$('messages').replaceChildren();state.olderLoaded=false;state.olderHasMore=false;updateChatActions();
   $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';state.draftContextReady=true;
   $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderAttachments();renderAudio();
-  state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],active_agents:0,task_cursor:null,execution_cursor:null,has_older_tasks:false,has_older_executions:false};
-  renderProjects();renderTasks();renderAgents();renderQuestions();
+  state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],progress:null,active_agents:0,task_cursor:null,execution_cursor:null,has_older_tasks:false,has_older_executions:false};
+  renderProjects();renderTasks();renderAgents();renderQuestions();renderProgress();
   restoreCachedChat(selection);
   // Chat sync starts immediately; portfolio and secondary tabs cannot delay it.
   const sync=loadHistory(selection),listing=refresh(false);
@@ -273,6 +273,16 @@ async function selectProject(id){
 function projectName(id){const p=state.portfolio?.projects.find(p=>p.id===id);return p?displayName(p):'All Projects';}
 async function loadMemory(selection=state.selection){if(!state.project){renderMemory();renderMemoryReview();return;}const project=state.project;const [detail,brief]=await Promise.all([api(`/api/projects/${project}`),api(`/api/projects/${project}/brief`)]);if(selection!==state.selection||project!==state.project)return;state.detail=detail;state.brief=brief;renderMemory();renderMemoryReview();}
 function renderMemory(){$('memory-list').replaceChildren();if(!state.detail){$('memory-list').append(element('p','Select a project to read historical owner notes.'));return;}for(const m of state.detail.memory){const d=element('details');d.append(element('summary',m.name),element('pre',m.content));$('memory-list').append(d);}if(!state.detail.memory.length)$('memory-list').append(element('p','Project context comes from its repository and instructions.'));}
+// One chip over the composer (no layout space), driven by the backend phase after the agent's turn: checks, repair, merge, deploy.
+// The manager's own streaming reply keeps its message badge and Stop button; a polling outage clears the chip after PROGRESS_STALE_MS.
+const PROGRESS_STALE_MS=90000;
+function renderProgress(stale=false){
+  const chip=$('progress-chip'),progress=stale?null:state.portfolio?.progress,show=!!progress?.active&&!state.execution;
+  clearTimeout(state.progressTimer);
+  if(!show&&!chip.hidden&&!state.execution)$('status-label').textContent='Ready to help';
+  chip.hidden=!show;chip.textContent=show?progress.label:'';chip.dataset.phase=show?progress.phase:'';
+  if(show){$('status-label').textContent=progress.label;state.progressTimer=setTimeout(()=>renderProgress(true),PROGRESS_STALE_MS);}
+}
 function recoveryLabel(record){const reasons={connection:'Waiting for connection',interrupted:'Recovering interrupted execution'};return (reasons[record.recovery_reason]||'Waiting')+(record.retry_at?' · Next attempt '+new Date(record.retry_at*1000).toLocaleString():'');}
 function taskControlButton(task,label,command){
   const selection=state.selection,button=element('button',label);
@@ -419,6 +429,7 @@ function renderHistory(history,selection,before=null,cached=false){
   $('status-label').textContent=active?(active.status==='waiting'?recoveryLabel(active):active.status==='queued'?'Queued':'Thinking / responding'):'Ready to help';
   if(!cached){state.source?.close();state.source=null;if(active)attachStream(active.execution_id,active.id,active.stream_cursor);}
   updateChatActions();
+  renderProgress();
 }
 function renderMessageActions(row,message,conversation){
   if(!['user','assistant'].includes(message.role))return;

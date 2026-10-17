@@ -48,6 +48,22 @@ including when resuming the retained thread. `acceptance` appends criteria witho
 A worker may ask the owner a question; the task stays running and says so.
 Finished results return to the originating chat automatically.
 
+**Progress indicator.** The owner can always see that something is still in progress. `ai_manager/progress.py` derives
+one phase from existing state (task and execution rows, `task.check_started`/`task.check` events, the deploy
+`request.json`/`state.json`; no new state, gate or wait) and `/api/portfolio` returns it as `progress`
+(`active`, `phase`, `label`, `project_id`, `task_id`, `since`), scoped to the selected project or all projects. Phases, most advanced
+first: a running task (`agent` "Working"/"Starting", `checks` "Running checks", `repair` "Repair round N of 5",
+`merge` "Merging", `question` "Waiting for your answer"), a pending deploy (`deploy`: "Deploying: running tests / waiting
+for idle / backing up / restarting / updating", "Health check", "Rolling back"), an interactive manager turn
+("Responding"), a queued task ("Queued", "Queued to merge", "Waiting to retry"; held and paused work is not progress), and
+the hand-off of a finished result to the chat ("Reporting result", at most 5 minutes). Done, failed, cancelled, deployed,
+rolled back and withdrawn all clear it, and the final result message appears as before. Bounds: lease reconciliation and
+the 30-minute deploy withdrawal end their phases; a deploy request older than 3.5 hours, or whose script process is gone and
+silent for 2 minutes, is not shown. The chat shows one pill (`#progress-chip`) over the composer, in the position of the Stop
+button, so it takes no layout space; it is replaced by the message badge and Stop button while the manager streams a reply,
+rides the existing portfolio polling (so it survives reload: shown = saved) and hides itself after 90 seconds
+without a successful poll. Permanent coverage: `tests/test_progress.py`, `tests/test_progress_browser.py`.
+
 Project manager chats receive the registered repository's real `project.path` and use that directory as their
 working directory, including projects other than Linko Bot Boss. All Projects includes each repository path and
 requires `project_id` for code inspection. Questions and advice are answered directly after reading the relevant code;
