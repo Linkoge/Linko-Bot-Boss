@@ -296,6 +296,47 @@ def test_github_destinations_only():
     assert not github_remote('/tmp/repo.git')
 
 
+@pytest.mark.parametrize('branch', ['main', 'master'])
+def test_empty_repository_syncs_without_creating_history(tmp_path, monkeypatch, branch):
+    root, remote = tmp_path / 'empty', tmp_path / 'empty.git'
+    root.mkdir()
+    remote.mkdir()
+    git(root, 'init', '-q', '-b', branch)
+    git(remote, 'init', '-q', '--bare')
+    git(root, 'remote', 'add', 'origin', str(remote))
+    monkeypatch.setattr(backup_module, 'github_remote', lambda url: url == str(remote))
+    assert GitHubBackup.push(root) == {'state': 'synced', 'commit': None, 'reason': 'empty-repository'}
+    assert git(root, 'for-each-ref') == git(remote, 'for-each-ref') == ''
+    assert git(root, 'symbolic-ref', '--short', 'HEAD') == branch
+    # A subsequent first commit still takes the normal scan-and-push path.
+    head = commit(root, {'readme': 'first real work\n'})
+    assert GitHubBackup.push(root) == {'state': 'synced', 'commit': head, 'reason': 'backlog-verified'}
+    assert git(remote, 'rev-parse', branch) == head
+
+
+def test_missing_main_does_not_hide_local_work_or_remote_history(tmp_path, monkeypatch):
+    root, remote = tmp_path / 'empty', tmp_path / 'remote.git'
+    root.mkdir()
+    remote.mkdir()
+    git(root, 'init', '-q', '-b', 'main')
+    git(remote, 'init', '-q', '--bare')
+    git(root, 'remote', 'add', 'origin', str(remote))
+    monkeypatch.setattr(backup_module, 'github_remote', lambda url: url == str(remote))
+    (root / 'readme').write_text('uncommitted work\n')
+    assert GitHubBackup.push(root)['reason'] == 'uncommitted-files'
+    head = commit(root, {'readme': 'retained work\n'})
+    git(root, 'branch', '-m', 'task')
+    assert GitHubBackup.push(root)['reason'] == 'missing-main-branch'
+    git(root, 'push', '-q', 'origin', 'task:main')
+    # A fresh checkout must not claim that existing published history is backed up locally.
+    fresh = tmp_path / 'fresh'
+    fresh.mkdir()
+    git(fresh, 'init', '-q', '-b', 'main')
+    git(fresh, 'remote', 'add', 'origin', str(remote))
+    assert GitHubBackup.push(fresh)['reason'] == 'local-history-missing'
+    assert git(remote, 'rev-parse', 'main') == head
+
+
 @pytest.mark.asyncio
 async def test_timed_retry_survives_restart_and_covers_multiple_projects(world, remote, monkeypatch):
     backup = world.pipeline.backups

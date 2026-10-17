@@ -85,7 +85,19 @@ class GitHubBackup:
             branch = 'main'
             if git_bytes(root, 'show-ref', '--verify', '--quiet', 'refs/heads/main', check=False).returncode:
                 branch = 'master'
-            head = git('rev-parse', 'refs/heads/' + branch)
+            local_head = git_bytes(root, 'rev-parse', '--verify', 'refs/heads/' + branch, check=False)
+            if local_head.returncode:
+                # An untouched, unborn repository has nothing to publish. Never manufacture a commit,
+                # or call it synced if another local ref, uncommitted work or remote history exists.
+                unborn = git('symbolic-ref', '--short', 'HEAD')
+                if git('for-each-ref', '--format=%(refname)') or unborn not in {'main', 'master'}:
+                    return {'state': 'needs-attention', 'reason': 'missing-main-branch'}
+                if git('ls-remote', '--refs', remote):
+                    return {'state': 'needs-attention', 'reason': 'local-history-missing'}
+                if git('status', '--porcelain'):
+                    return {'state': 'needs-attention', 'reason': 'uncommitted-files'}
+                return {'state': 'synced', 'commit': None, 'reason': 'empty-repository'}
+            head = local_head.stdout.decode().strip()
             # Query the actual push URL, not an occasionally stale origin tracking ref or fetch URL.
             remote_head = git('ls-remote', '--refs', remote, 'refs/heads/' + branch)
             base = remote_head.split()[0] if remote_head else None

@@ -190,6 +190,9 @@ across restarts. Project tabs show **GitHub needs attention** on failure; projec
 retry timestamp and safe findings. Backup failures do not fail tasks, consume repair rounds, or prevent merge/deploy.
 A later successful push includes all retained commits. Each Git command has a 60-second timeout and no interactive
 credential prompt. Raw Git/SSH/hook output is discarded, since it can contain credentials.
+An untouched repository with an unborn `main` or `master` and an empty GitHub remote is synced with reason
+`empty-repository`; no artificial commit is created. Existing remote history, other local refs or uncommitted files
+still require attention when the local main branch is missing.
 
 Before the first push, and every subsequent attempt, the application queries the actual remote branch and scans every
 unpushed commit, including intermediate secrets deleted later. An empty remote requires scanning all local history;
