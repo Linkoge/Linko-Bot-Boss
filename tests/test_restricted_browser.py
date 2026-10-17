@@ -56,7 +56,8 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             assert page.locator('#projects button').all_inner_texts() == ['work']
             assert page.locator('#projects button.selected').count() == 1
             page.locator('[data-view=settings]').click()
-            for hidden in ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel'):
+            for hidden in ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel',
+                           '#model-settings-button', '#models-panel', '#model-dialog'):
                 assert not page.locator(hidden).is_visible(), hidden
             assert page.locator('#rename-project').is_visible()
             assert page.evaluate("async()=>(await fetch('/api/deployment')).status") == 403

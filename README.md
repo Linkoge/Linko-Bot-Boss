@@ -314,7 +314,9 @@ run in their usual branch/worktree flow on that one project (a Git repository). 
   host-repair spool is written. Do not install `scripts/install_repair.py` for such an instance.
 - The manager is offered a tool without those actions, and manager and workers get a short restricted note
   (`RESTRICTED_NOTE` in `ai_manager/codex.py`). `/api/auth-status` reports `restricted`, and the UI then hides All
-  Projects, the project menu, Discover/Add project and the Deployment panel. Word editing and browsing tools stay
+  Projects, the project menu, the model/effort picker button, the Models settings panel, Discover/Add project and the
+  Deployment panel (cosmetic: `body.restricted` CSS only, elements stay in the DOM so no script breaks; the server-side
+  rejections are the real protection). Word editing and browsing tools stay
   allowed. Rejections use `Not available on a restricted instance` (HTTP 403, or a rejected manager action).
 
 The per-project GitHub backup keeps working through the existing path and its secret check stays on. The synced folder is

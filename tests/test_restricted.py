@@ -223,5 +223,12 @@ def test_the_ui_hides_the_controls_a_restricted_instance_rejects():
     html, script, style = ((static / name).read_text() for name in ('index.html', 'app.js', 'style.css'))
     assert 'id="deployment-panel"' in html and 'state.restricted=!!auth.restricted' in script
     rule = next(line for line in style.splitlines() if line.startswith('.restricted '))
-    for control in ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel'):
+    controls = ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel',
+                '#model-settings-button', '#models-panel', '#model-dialog')
+    for control in controls:
         assert '.restricted ' + control in rule and f'id="{control[1:]}"' in html
+    # hiding is CSS-only and scoped to body.restricted: every selector in the rule is prefixed, the class is only set
+    # from the server flag, and the elements stay in the DOM so scripts that look them up never hit null
+    assert all(part.startswith('.restricted ') for part in rule.split('{')[0].split(','))
+    assert "document.body.classList.toggle('restricted',state.restricted)" in script
+    assert script.count("classList.add('restricted')") == 0
