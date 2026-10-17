@@ -30,6 +30,7 @@ from .execution_ui import event_page, execution_page, execution_summary
 from .orchestration import Scheduler
 from .pipeline import RESTRICTED, Pipeline
 from .project_memory import MemoryReviews, ProjectMemory
+from .proxy import client_ip, is_https, parse_trusted
 from .registry import Registry, git
 from .todos import Todos
 
@@ -199,6 +200,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     app.state.attachments = attachments
     app.state.memory, app.state.memory_reviews = memory, reviews
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
+    trusted_proxies = parse_trusted(settings.trusted_proxies)
 
     @app.middleware("http")
     async def browser_security(request: Request, call_next):
@@ -217,6 +219,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
         response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Cross-Origin-Opener-Policy"] = "same-origin"
+        response.headers["Cross-Origin-Resource-Policy"] = "same-origin"
+        response.headers["Permissions-Policy"] = "microphone=(self), camera=(), geolocation=(), payment=(), usb=()"
+        if is_https(request, trusted_proxies):
+            response.headers["Strict-Transport-Security"] = "max-age=31536000"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers.setdefault("Cache-Control", "no-store")
         return response
@@ -296,14 +304,14 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.post("/api/setup")
     async def setup(body: SetupBody, request: Request):
-        # Bootstrap token checks are also throttled, with no remote password reset path.
-
-        ip = request.client.host if request.client else "unknown"
-        with db.transaction() as conn:
-            conn.execute("DELETE FROM login_attempts WHERE at < ?", (time.time() - 900,))
-            if conn.execute("SELECT count(*) FROM login_attempts").fetchone()[0] >= 10:
-                raise HTTPException(429, "Too many setup attempts")
-            conn.execute("INSERT INTO login_attempts VALUES(?,?)", (ip, time.time()))
+        # Closed for good once the owner exists: no remote signup or password reset, and no throttle slot used.
+        if db.one("SELECT id FROM owner"):
+            raise HTTPException(409, "Owner account already exists")
+        # Bootstrap token checks are throttled per real client IP.
+        try:
+            auth.throttle(client_ip(request, trusted_proxies))
+        except ValueError as error:
+            raise HTTPException(429, "Too many setup attempts") from error
         await asyncio.to_thread(auth.setup, body.username, body.password, body.token)
         return {"created": True}
 
@@ -311,7 +319,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def login(body: LoginBody, request: Request):
         try:
             token, csrf = await asyncio.to_thread(
-                auth.login, body.username, body.password, request.client.host if request.client else "unknown"
+                auth.login, body.username, body.password, client_ip(request, trusted_proxies)
             )
         except ValueError as error:
             raise HTTPException(429 if "Too many" in str(error) else 401, str(error)) from error
@@ -320,7 +328,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "ai_manager_session",
             token,
             httponly=True,
-            secure=settings.secure_cookie,
+            secure=settings.secure_cookie or is_https(request, trusted_proxies),
             samesite="strict",
             max_age=settings.session_seconds,
             path="/",
@@ -331,7 +339,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def logout(request: Request):
         auth.logout(request.cookies.get("ai_manager_session"))
         response = JSONResponse({"logged_out": True})
-        response.delete_cookie("ai_manager_session", path="/")
+        response.delete_cookie(
+            "ai_manager_session", path="/", httponly=True, samesite="strict",
+            secure=settings.secure_cookie or is_https(request, trusted_proxies),
+        )
         return response
 
     @app.post("/api/sessions/revoke", dependencies=[Depends(require_owner)])

@@ -50,7 +50,8 @@ class Auth:
             self.db.event(conn, "owner.created", {})
         (self.settings.data_dir / "setup-token").unlink(missing_ok=True)
 
-    def login(self, username, password, ip):
+    def throttle(self, ip):
+        """Count one login or setup attempt from ip; ValueError when it or everyone together is over the limit."""
         now = time.time()
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM login_attempts WHERE at < ?", (now - 900,))
@@ -61,6 +62,10 @@ class Auth:
             ):
                 raise ValueError("Too many attempts; try again in 15 minutes")
             conn.execute("INSERT INTO login_attempts VALUES(?,?)", (ip, now))
+
+    def login(self, username, password, ip):
+        now = time.time()
+        self.throttle(ip)
         owner = self.db.one("SELECT * FROM owner")
         try:
             self.hasher.verify(owner["password_hash"] if owner else self.dummy_hash, password)

@@ -289,6 +289,30 @@ tasks, streaming messages and running deliveries do. Stale leases are reconciled
 both the runner and its recorded process are gone, preserving workspaces and limiting recovery retries.
 
 
+## Public access through a tunnel
+
+The service listens on `127.0.0.1` only (uvicorn runs with `proxy_headers=False`); a tunnel such as cloudflared
+forwards `https://kaxa.linko.ge` to it. Single owner, username/password login; there is no Google sign-in.
+
+- **Hosts**: `AI_MANAGER_ALLOWED_HOSTS` (localhost and the Tailscale name) is always extended by
+  `AI_MANAGER_PUBLIC_HOSTS` (default `kaxa.linko.ge`; no default on a restricted instance, which lists its own
+  hostname in `AI_MANAGER_ALLOWED_HOSTS`). Other `Host` headers get 400; a cross-site `Origin` on a write gets 403.
+  There is no CORS: the API sends no CORS headers.
+- **Client IP**: `CF-Connecting-IP`, then the right-most untrusted `X-Forwarded-For` hop, are believed only when the
+  direct peer is in `AI_MANAGER_TRUSTED_PROXIES` (default `127.0.0.1,::1`; IPs or CIDRs). Otherwise the peer address is
+  used. Login and setup-token attempts are throttled on that real address (10 per IP and 100 in total per 15 minutes),
+  so one visitor cannot lock out the owner behind the shared tunnel address.
+- **Cookie**: `ai_manager_session` is `HttpOnly`, `SameSite=Strict`, `Path=/`, and `Secure` when
+  `AI_MANAGER_SECURE_COOKIE=1` (default) or the request is https (including `X-Forwarded-Proto: https` from a trusted
+  proxy). Logout expires it with the same attributes.
+- **Setup**: `POST /api/setup` answers 409 as soon as an owner exists, without using a throttle slot.
+- **Headers** on every response: CSP (`frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options`,
+  `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy`/`Cross-Origin-Resource-Policy: same-origin`,
+  `Permissions-Policy` (microphone for this origin only, for audio recording), `Cache-Control: no-store`, and
+  `Strict-Transport-Security` over https.
+
+Permanent coverage: `tests/test_public_access.py` (disposable data; the test password is a throwaway constant).
+
 ## Multiple instances and the restricted work instance
 
 One shared copy of the code can serve several instances. Each instance is only settings: its own data directory (database,
@@ -498,6 +522,7 @@ probes, live database changes, service restarts or host installation are part of
   Permanent coverage: `tests/test_chat_history.py` and `tests/test_archive_browser.py`.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
 - Security: Argon2 owner login, one-time setup token, revocable sessions, CSRF/origin/host checks, CSP, throttling.
+  See Public access through a tunnel below.
   Workers run as the service user with broad access; the rules ask them to confirm before irreversible loss.
   That is an agent convention, not a sandbox.
 
@@ -625,7 +650,7 @@ PYTHONPATH=. uv run python scripts/browser_smoke.py   # also browser_tasks.py an
 ```
 
 Configuration: `AI_MANAGER_DATA` (default `~/.local/share/linko-bot-manager`), `AI_MANAGER_PORT` (8787),
-`AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_RESTRICTED` and `AI_MANAGER_PROJECT` (restricted work instance, see Multiple instances), `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_SECURE_COOKIE`, `AI_MANAGER_CODEX`,
+`AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_RESTRICTED` and `AI_MANAGER_PROJECT` (restricted work instance, see Multiple instances), `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_PUBLIC_HOSTS`, `AI_MANAGER_TRUSTED_PROXIES`, `AI_MANAGER_SECURE_COOKIE`, `AI_MANAGER_CODEX`,
 `AI_MANAGER_CLAUDE`, `AI_MANAGER_CLAUDE_MODELS` (comma-separated Claude model ids offered in the picker, default
 `claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5`; any id the installed `claude` accepts), `AI_MANAGER_REPO` (live checkout, tests only). Daily database backup: `scripts/backup_daily.py`
 (restore only to a fresh path with the service stopped; native thread storage and project files are backed up separately).
