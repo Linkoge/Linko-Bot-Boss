@@ -91,7 +91,7 @@ def test_session_cookie_flags_over_https_and_logout_expiry(tunnel):
 
 
 def test_cookie_is_secure_by_default_and_by_forwarded_https_only_from_trusted_peer(tmp_path):
-    settings, app = make(tmp_path)  # secure_cookie defaults to on
+    settings, app = make(tmp_path, secure_cookie=True)  # the env default may be off in a test run
     with TestClient(app, base_url="http://localhost") as client:
         create_owner(client, settings)
         assert "secure" in session_cookie(client.post("/api/login", json={"username": "owner", "password": OWNER_SECRET})).lower()
