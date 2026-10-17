@@ -40,3 +40,9 @@ One short file, read by the manager and by every worker.
 9. A restricted work instance (`AI_MANAGER_RESTRICTED=1`) has exactly one fixed project and no deploy, deploy setup,
    host agent or self-edit: the application rejects those with "Not available on a restricted instance". Report that
    plainly instead of looking for a way around it. Documents, forms, email drafts and browsing are normal work there.
+
+10. Never write credential-looking values into tracked files, including fake, dummy or test passwords, tokens and keys.
+    Real credentials come from environment variables or ignored files outside Git. Tests and fixtures must use values
+    the secret check (`ai_manager/secret_check.py`) does not match: generate them at runtime, keep them under 12
+    characters, or avoid names containing password, secret, api_key, access_token or passwd. Never approve dummy values
+    in `.linko-secret-allowlist.json`; fix the value instead.

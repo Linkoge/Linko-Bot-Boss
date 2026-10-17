@@ -189,7 +189,12 @@ remove the credential from every affected unmerged task commit, including interm
 approval gate. This is a small obvious-secret check, not comprehensive credential discovery. Gitleaks may be used by an
 operator separately; the application needs no optional scanner, installation, download or external service to check.
 
-Reviewed synthetic fixtures can use a committed `.linko-secret-allowlist.json` in each repository. Its JSON array has
+Never commit credential-looking values, even fake ones (RULES.md rule 10): real credentials come from environment
+variables or ignored files outside Git, and tests/fixtures generate values at runtime, keep them under 12 characters, or
+avoid password/secret/api_key/access_token/passwd names. Fix a flagged dummy value; do not allowlist it.
+
+Only fixtures that cannot be changed (e.g. file-format samples) can use a committed `.linko-secret-allowlist.json` in
+each repository. Its JSON array has
 exact entries like `{"path":"tests/fixtures/token.txt","line":1,"rule":"github-token","reason":"synthetic fixture"}`.
 Use line 0 with rule `sensitive-filename` for fixture names. Paths are repository-relative; no globs, regex exclusions,
 wildcards or whole-file content bypasses. The delivered tree's policy applies to its history, so an approved fixture

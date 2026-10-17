@@ -350,3 +350,13 @@ def test_ui_exposes_safe_backup_status(world):
     assert "p?.github_backup?.state==='needs-attention'" in source
     assert 'GitHub needs attention' in source
     assert 'Local commits retained; retrying automatically.' in source
+
+
+def test_rules_forbid_dummy_credentials_and_dummy_allowlisting():
+    rules = ' '.join((Path(__file__).parent.parent / 'RULES.md').read_text().split())
+    assert 'Never write credential-looking values into tracked files' in rules
+    assert 'fake, dummy or test passwords' in rules and 'environment variables' in rules
+    assert 'Never approve dummy values in `.linko-secret-allowlist.json`' in rules
+    readme = ' '.join((Path(__file__).parent.parent / 'README.md').read_text().split())
+    assert 'Never commit credential-looking values, even fake ones' in readme
+    assert 'Fix a flagged dummy value; do not allowlist it' in readme
