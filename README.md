@@ -531,6 +531,17 @@ still apply. The two stop cases above require specific owner confirmation: unatt
 a failed result asking for that confirmation. As with other native workers, this is an agent instruction convention,
 not a sandbox; the request authorizes the host work, restarts and deploys it describes.
 
+**Provider fallback.** A request starts on its provider (`--provider`, config `provider`, default Codex). When a turn
+fails with a usage, rate-limit or quota error and the other CLI (Codex <-> Claude, config `<provider>_bin` or `PATH`) is
+available, the next attempt switches to it and retries promptly instead of waiting out the exponential backoff. The
+old provider's session id is cleared (a Codex thread cannot resume in Claude), the model is cleared unless
+`codex_model`/`claude_model` is set in the installed config, and the attempt carries the usual `RECOVERY` reconcile
+note. The receipt notices record it (`Codex usage limit; switching to Claude`). The `max_attempts` budget and the
+states are unchanged, so switching back and forth stays inside it. Connection and timeout failures keep the current
+provider with the normal backoff, as does a limit failure when the other CLI is not installed.
+`scripts/install_repair.py` copies `scripts/emergency_repair.py` to the host launcher, so this takes effect only after
+re-running `install` (see below); requests already running keep the old launcher until then.
+
 **One-time operator bootstrap is required after this code is merged.** From the live checkout, as the service user:
 
 ```bash

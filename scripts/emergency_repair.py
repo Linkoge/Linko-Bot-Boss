@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import os
+import shutil
 import signal
 import sqlite3
 import subprocess
@@ -76,6 +77,9 @@ def identity(pid):
         return fields[19] if fields[0] != 'Z' else None
     except (OSError, IndexError):
         return None
+
+
+LIMIT_WORDS = ('usage limit', 'rate limit', 'usage_limit', 'rate_limit', 'usagelimit', 'ratelimit', 'quota', '429')
 
 
 class Repair:
@@ -198,6 +202,11 @@ class Repair:
             args += ['--resume', row['session']]
         return args
 
+    def alternative(self, row):
+        """The other provider when its CLI is configured or on PATH, else None."""
+        other = {'codex': 'claude', 'claude': 'codex'}.get(row['provider'])
+        return other if other and shutil.which(self.config.get(other + '_bin', other)) else None
+
     def provider(self, row, lock):
         """One bounded CLI turn. Child inherits exclusivity even if this launcher dies."""
         directory = self.root / 'runs' / row['id']
@@ -208,6 +217,9 @@ class Repair:
             self.root / 'requests' / (row['id'] + '.json')) + '\nRetained logs: ' + str(directory)
         if row['attempts'] > 1:
             prompt += '\nRECOVERY: prior attempt interrupted/failed; reconcile its effects before proceeding.'
+        if row.get('switched_from'):
+            prompt += (f"\nThe earlier attempt(s) ran on {row['switched_from'].title()}; "
+                       'its session cannot be resumed here, so read the retained logs.')
         with log.open('w') as stream, tempfile.TemporaryFile() as stdin:
             stdin.write(prompt.encode())
             stdin.seek(0)
@@ -256,10 +268,11 @@ class Repair:
         if output.exists():
             text = output.read_text()
         diagnostics = (error or log.read_text(errors='replace')[-4000:]).lower()
-        retryable = any(word in diagnostics for word in ('usage limit', 'rate limit', 'usage_limit', 'rate_limit', 'usagelimit', 'ratelimit',
-                            'quota', '429', 'connection', 'network', 'overloaded', '503', '502', 'timed out'))
+        limit = any(word in diagnostics for word in LIMIT_WORDS)
+        retryable = limit or any(word in diagnostics for word in (
+            'connection', 'network', 'overloaded', '503', '502', 'timed out'))
         if returncode or error:
-            raise ProviderFailure(error or diagnostics, retryable)
+            raise ProviderFailure(error or diagnostics, retryable, limit)
         if not completed or not text.strip():
             raise ProviderFailure('Provider returned no final result', False)
         if 'RESULT: FAILED' in text:
@@ -277,7 +290,8 @@ class Repair:
                     # Reconcile a CLI that finished before its parent could save the result.
                     directory = self.root / 'runs' / row['id']
                     previous_log = directory / f"{row['attempts']}.jsonl"
-                    if previous_log.exists():
+                    # A log from before a provider switch was already handled; replaying it would restore its session.
+                    if previous_log.exists() and row.get('switched_after') != row['attempts']:
                         try:
                             result = self.outcome(row, previous_log, directory / f"{row['attempts']}.txt", 0)
                         except ProviderFailure:
@@ -306,9 +320,20 @@ class Repair:
                         retryable = isinstance(error, (TimeoutError, ConnectionError)) or (
                             isinstance(error, ProviderFailure) and error.retryable)
                         if retryable and row['attempts'] < self.config.get('max_attempts', 5):
+                            other = self.alternative(row) if getattr(error, 'limit', False) else None
                             row['status'] = 'waiting'
-                            row['retry_at'] = time.time() + min(3600, 60 * 2 ** (row['attempts'] - 1))
-                            self.notice(row, 'Emergency repair waiting for bounded retry: ' + row['error'])
+                            if other:
+                                # A usage limit will not clear soon: retry now on the other provider.
+                                old = row['provider']
+                                row['provider'], row['switched_from'], row['switched_after'] = other, old, row['attempts']
+                                row.pop('session', None)
+                                row['model'] = self.config.get(other + '_model')
+                                row['retry_at'] = 0
+                                self.notice(row, f'Emergency repair: {old.title()} usage limit; switching to '
+                                                 f'{other.title()}. ' + row['error'])
+                            else:
+                                row['retry_at'] = time.time() + min(3600, 60 * 2 ** (row['attempts'] - 1))
+                                self.notice(row, 'Emergency repair waiting for bounded retry: ' + row['error'])
                         else:
                             row['status'] = 'failed'
                             row['result'] = row['error']
@@ -327,9 +352,10 @@ class Repair:
 
 
 class ProviderFailure(RuntimeError):
-    def __init__(self, message, retryable):
+    def __init__(self, message, retryable, limit=False):
         super().__init__(message)
         self.retryable = retryable
+        self.limit = limit  # usage/rate/quota exhaustion, which another provider may not share
 
 
 def main(argv=None):

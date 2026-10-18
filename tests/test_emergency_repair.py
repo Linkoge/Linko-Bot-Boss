@@ -437,3 +437,128 @@ def test_only_owner_authored_manager_turns_count_as_owner_requests(tmp_path):
     assert owner_authored(db, 'bare') is False        # no owner message at all
     assert owner_authored(db, 'claimed') is False     # target of a worker-result delivery
     assert owner_authored(db, 'missing') is False
+
+
+def failing_cli(tmp_path, name, diagnostic, session):
+    """Fake CLI that records argv/stdin, reports a session, then fails with `diagnostic`."""
+    path = tmp_path / name
+    path.write_text('#!' + sys.executable + '\n' + f'''import json,sys
+from pathlib import Path
+Path({str(tmp_path / (name + '.calls'))!r}).open('a').write(json.dumps([sys.argv[1:], sys.stdin.read()]) + '\\n')
+print(json.dumps({{'type':'thread.started','thread_id':{session!r},'session_id':{session!r}}}))
+print(json.dumps({{'type':'turn.failed','error':{diagnostic!r}}}))
+sys.exit(1)
+''')
+    path.chmod(0o700)
+    return str(path)
+
+
+def working_cli(tmp_path, name):
+    path = tmp_path / name
+    path.write_text('#!' + sys.executable + '\n' + f'''import json,sys
+from pathlib import Path
+Path({str(tmp_path / (name + '.calls'))!r}).open('a').write(json.dumps([sys.argv[1:], sys.stdin.read()]) + '\\n')
+if '--output-last-message' in sys.argv:
+    Path(sys.argv[sys.argv.index('--output-last-message')+1]).write_text('Fixed by ' + {name!r})
+print(json.dumps({{'type':'result','session_id':'new-session','result':'Fixed by ' + {name!r}}}))
+''')
+    path.chmod(0o700)
+    return str(path)
+
+
+def calls(tmp_path, name):
+    path = tmp_path / (name + '.calls')
+    return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+
+@pytest.mark.parametrize('first,second', [('codex', 'claude'), ('claude', 'codex')])
+def test_usage_limit_switches_provider_without_resuming_session(repair, tmp_path, first, second):
+    repair.config[first + '_bin'] = failing_cli(tmp_path, first, 'usage limit reached', 'first-session')
+    repair.config[second + '_bin'] = working_cli(tmp_path, second)
+    request(repair, provider=first, model='first-model')
+    repair.run()
+    row = current(repair)
+    assert row['status'] == 'waiting' and row['attempts'] == 1
+    assert row['provider'] == second and 'session' not in row and row['model'] is None
+    assert row['retry_at'] <= time.time()  # prompt retry, not exponential backoff
+    assert any(f'{first.title()} usage limit; switching to {second.title()}' in n for n in row['notices'])
+    repair.run()
+    row = current(repair)
+    assert row['status'] == 'succeeded' and row['attempts'] == 2 and row['result'] == 'Fixed by ' + second
+    argv, stdin = calls(tmp_path, second)[0]
+    assert 'first-session' not in argv and 'resume' not in argv and '--resume' not in argv
+    assert 'first-model' not in argv and '--model' not in argv
+    assert 'RECOVERY' in stdin
+    assert len(calls(tmp_path, first)) == 1
+
+
+def test_switch_uses_configured_model_for_other_provider(repair, tmp_path):
+    repair.config.update(codex_bin=failing_cli(tmp_path, 'codex', 'rate_limit', 's'),
+                         claude_bin=working_cli(tmp_path, 'claude'), claude_model='claude-pinned')
+    request(repair, provider='codex', model='codex-model')
+    repair.run()
+    repair.run()
+    argv, _ = calls(tmp_path, 'claude')[0]
+    assert argv[argv.index('--model') + 1] == 'claude-pinned'
+
+
+@pytest.mark.parametrize('diagnostic', ['network unavailable', 'request timed out'])
+def test_connection_failure_keeps_provider_and_session(repair, tmp_path, diagnostic):
+    repair.config['codex_bin'] = failing_cli(tmp_path, 'codex', diagnostic, 'kept-session')
+    repair.config['claude_bin'] = working_cli(tmp_path, 'claude')
+    request(repair, provider='codex')
+    repair.run()
+    row = current(repair)
+    assert row['provider'] == 'codex' and row['session'] == 'kept-session' and row['status'] == 'waiting'
+    assert row['retry_at'] > time.time()
+    assert not any('switching' in n for n in row['notices'])
+    assert not calls(tmp_path, 'claude')
+
+
+def test_timeout_exception_keeps_provider(repair, tmp_path):
+    repair.config['claude_bin'] = working_cli(tmp_path, 'claude')
+    request(repair, provider='codex')
+
+    def hang(row, lock):
+        raise TimeoutError('Repair turn timed out')
+    repair.run(hang)
+    assert current(repair)['provider'] == 'codex' and current(repair)['retry_at'] > time.time()
+
+
+def test_no_switch_when_other_cli_unavailable(repair, tmp_path):
+    repair.config['codex_bin'] = failing_cli(tmp_path, 'codex', 'usage limit reached', 'kept-session')
+    repair.config['claude_bin'] = str(tmp_path / 'missing-claude')
+    request(repair, provider='codex')
+    repair.run()
+    row = current(repair)
+    assert row['provider'] == 'codex' and row['session'] == 'kept-session' and row['status'] == 'waiting'
+    assert row['retry_at'] > time.time()
+    assert not any('switching' in n for n in row['notices'])
+
+
+def test_switch_keeps_attempt_budget_and_stops_when_both_limited(repair, tmp_path):
+    repair.config['codex_bin'] = failing_cli(tmp_path, 'codex', 'usage limit reached', 'a')
+    repair.config['claude_bin'] = failing_cli(tmp_path, 'claude', 'rate limit reached', 'b')
+    request(repair, provider='codex')
+    for attempt in range(1, 4):
+        repair.run()
+        row = current(repair)
+        assert row['attempts'] == attempt
+        assert row['status'] == ('waiting' if attempt < 3 else 'failed')
+        if row['status'] == 'waiting':
+            row['retry_at'] = 0
+            repair.save(row)
+    assert [len(calls(tmp_path, n)) for n in ('codex', 'claude')] == [2, 1]
+    repair.run(lambda *a: pytest.fail('Budget exhausted: no further attempt'))
+    assert current(repair)['attempts'] == 3
+
+
+def test_restart_after_switch_does_not_restore_old_session(repair, tmp_path):
+    repair.config['codex_bin'] = failing_cli(tmp_path, 'codex', 'usage limit reached', 'old-codex')
+    repair.config['claude_bin'] = working_cli(tmp_path, 'claude')
+    request(repair, provider='codex')
+    repair.run()
+    fresh = Repair(repair.data, repair.config)
+    fresh.healthy = lambda: False
+    fresh.run(lambda row, lock: 'saw session ' + str(row.get('session')))
+    assert current(repair)['result'] == 'saw session None'
