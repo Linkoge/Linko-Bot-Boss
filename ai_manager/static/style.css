@@ -285,3 +285,5 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #github-panel{scroll-margin-top:110px}
 .github-token-actions{display:flex;gap:8px;flex-wrap:wrap}
 #github-panel form[data-github-tier]{border-top:1px solid var(--border);padding-top:12px;margin-top:16px}
+
+.project-idea summary{cursor:pointer;font-weight:600;overflow-wrap:anywhere;min-height:44px;padding:8px 0}.project-idea .task-controls{margin-top:8px}.restricted #view-ideas{display:none}

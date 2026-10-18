@@ -32,6 +32,7 @@ from .github_projects import GitHubError, GitHubProjects
 from .orchestration import Scheduler
 from .pipeline import RESTRICTED, Pipeline
 from .progress import progress
+from .project_ideas import ProjectIdeas
 from .project_memory import MemoryReviews, ProjectMemory
 from .proxy import client_ip, is_https, parse_trusted
 from .registry import Registry, git
@@ -123,6 +124,12 @@ class ChatTrashBody(BaseModel):
 
 class InstructionsBody(BaseModel):
     content: str = Field(max_length=10000)
+
+
+class ProjectIdeaBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    title: str = Field(default="", max_length=200)
+    details: str = Field(min_length=1, max_length=24000)
 
 
 class TodoBody(BaseModel):
@@ -570,6 +577,22 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.get("/")
     def index():
         return HTMLResponse(index_html)
+
+    @app.get("/api/project-ideas", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def project_idea_list():
+        return {"entries": ProjectIdeas(db).list()}
+
+    @app.post("/api/project-ideas", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def project_idea_add(body: ProjectIdeaBody):
+        return ProjectIdeas(db).save(body.title, body.details)
+
+    @app.patch("/api/project-ideas/{entry_id}", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def project_idea_update(entry_id: str, body: ProjectIdeaBody):
+        return ProjectIdeas(db).save(body.title, body.details, entry_id)
+
+    @app.delete("/api/project-ideas/{entry_id}", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def project_idea_delete(entry_id: str):
+        return ProjectIdeas(db).delete(entry_id)
 
     @app.get("/api/todos", dependencies=[Depends(require_owner)])
     def todo_list(project_id: str | None = None):

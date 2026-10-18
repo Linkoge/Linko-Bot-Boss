@@ -55,6 +55,9 @@ CREATE TABLE IF NOT EXISTS todos(
  source_task_id TEXT UNIQUE REFERENCES tasks(id), created_at REAL NOT NULL, updated_at REAL NOT NULL,
  archived_at REAL);
 CREATE INDEX IF NOT EXISTS todos_project ON todos(project_id,archived_at);
+CREATE TABLE IF NOT EXISTS project_ideas(
+ id TEXT PRIMARY KEY, title TEXT NOT NULL, details TEXT NOT NULL,
+ created_at REAL NOT NULL, updated_at REAL NOT NULL);
 CREATE TABLE IF NOT EXISTS chat_archives(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
  title TEXT NOT NULL, archived_at REAL NOT NULL);

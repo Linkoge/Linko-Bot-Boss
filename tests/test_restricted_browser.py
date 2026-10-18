@@ -65,6 +65,9 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             page.evaluate('()=>renderProjectMenu()')
             assert page.locator('[data-project="github-settings"], [data-project="github-create"], [data-project="github-rename"]').count() == 0
             assert page.locator('#project-menu [data-project=""]').count() == 0
+            assert page.locator('#project-menu [data-project="ideas"]').count() == 0
+            page.evaluate("()=>showView('ideas')")
+            assert not page.locator('#view-ideas').is_visible()
             assert page.locator('#project-menu').is_hidden()
             assert page.locator('#rename-project').is_visible()
             assert page.evaluate("async()=>(await fetch('/api/deployment')).status") == 403

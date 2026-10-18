@@ -203,6 +203,7 @@ function renderProjectMenu(){
   const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;
   const content=$('project-menu-content');content.replaceChildren();
   const group=label=>{const section=element('div',undefined,'project-menu-group');section.setAttribute('role','group');section.setAttribute('aria-label',label);content.append(section);return section;};
+  if(!state.restricted){const ideas=element('button','Project ideas');ideas.dataset.project='ideas';ideas.onclick=()=>{closeProjectMenu(true);showView('ideas');};group('Future projects').append(ideas);}
   const projects=group('Projects and stashed projects');
   const global=element('button','◈ All Projects · global context',!state.project?'selected':'');
   global.dataset.project='';global.setAttribute('aria-pressed',String(!state.project));
@@ -674,7 +675,7 @@ $('execution-history').onclick=action(()=>readHistory('executions'));
 $('history-more').onclick=action(()=>searchHistory(true));
 $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id,true));
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
-function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')cancelInitialChat();const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view==='agents'&&state.portfolio)renderAgents();if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning){initialChatPosition=true;positionInitialChat(state.selection);}}
+function showView(view){if(view==='ideas'&&state.restricted)return;if(view==='ideas')loadProjectIdeas().catch(error=>notice(error.message));if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')cancelInitialChat();const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view==='agents'&&state.portfolio)renderAgents();if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning){initialChatPosition=true;positionInitialChat(state.selection);}}
 function editor(title,fields,onSave,reloadContext=true){
   const dialog=$('editor'),form=$('editor-form'),cancel=$('editor-cancel'),save=form.querySelector('.primary');
   if(dialog.open)return;
@@ -871,6 +872,41 @@ updateViewport();
 
 // Refresh keeps text selection, focus and unsaved edits intact; context switches clear selection.
 state.todoSelection=new Set();state.todos=[];
+async function loadProjectIdeas(){
+  if(state.restricted)return;
+  const request=state.ideaRequest=(state.ideaRequest||0)+1;
+  const data=await api('/api/project-ideas');
+  if(request!==state.ideaRequest)return;
+  const list=$('project-idea-list'),signature=JSON.stringify(data.entries);
+  if(list.dataset.signature===signature)return;
+  const expanded=new Set([...list.querySelectorAll('details[open]')].map(node=>node.dataset.idea));
+  list.replaceChildren();list.dataset.signature=signature;
+  for(const entry of data.entries){
+    const row=element('article',undefined,'panel project-idea');row.dataset.idea=entry.id;
+    const details=element('details'),summary=element('summary',entry.title);details.dataset.idea=entry.id;details.open=expanded.has(entry.id);
+    details.append(summary,element('p',entry.details,'todo-details'));row.append(details);
+    const controls=element('div',undefined,'task-controls');
+    const copy=element('button','Copy');copy.type='button';copy.onclick=action(async()=>{await copyText(entry.title+'\n\n'+entry.details);notice('Project idea copied.');});
+    const edit=element('button','Edit');edit.type='button';edit.onclick=()=>editProjectIdea(entry);
+    const remove=element('button','Delete','danger');remove.type='button';remove.onclick=action(async()=>{
+      if(!confirm(`Delete project idea “${entry.title}”?`))return;
+      await api('/api/project-ideas/'+entry.id,{method:'DELETE'});await loadProjectIdeas();
+    });
+    controls.append(copy,edit,remove);row.append(controls);list.append(row);
+  }
+  if(!data.entries.length)list.append(element('p','No project ideas yet.','empty'));
+}
+function editProjectIdea(entry=null){
+  editor(entry?'Edit project idea':'Add project idea',[
+    {name:'title',label:'Title (optional · blank uses the first line)',value:entry?.title||''},
+    {name:'details',label:'Idea or instructions',long:true,rows:12,required:true,value:entry?.details||''}
+  ],async values=>{
+    await api('/api/project-ideas'+(entry?'/'+entry.id:''),{method:entry?'PATCH':'POST',body:JSON.stringify(values)});
+    try{await loadProjectIdeas();}catch(error){notice('Saved, but list refresh failed: '+error.message);}
+  },false);
+}
+$('project-idea-add').onclick=()=>editProjectIdea();
+$('project-idea-back').onclick=()=>showView('chat');
 async function loadTodos(selection=state.selection){
   const request=state.todoRequest=(state.todoRequest||0)+1,project=state.project;
   const data=await api('/api/todos'+(project?'?project_id='+encodeURIComponent(project):''));

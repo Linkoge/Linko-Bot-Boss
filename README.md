@@ -663,6 +663,26 @@ polling and sends preserve the reader’s scroll position; loading older message
 the previously visible message in place. Permanent Chromium coverage lives in
 `tests/test_chat_open_start_browser.py`, including 155-message histories and delayed layout.
 
+**Project ideas** opens from the first group in the project menu, above the project
+list. It is a global notebook for projects that do not exist yet, separate from
+per-project To-Dos. Add free-form idea/instruction text (up to 24000 characters) and
+an optional title (up to 200 characters). A blank title uses the first nonblank text
+line, with whitespace collapsed and trimmed to 80 characters; no model is called.
+Descriptions are collapsed by default. Each entry has Copy, Edit and Delete;
+Delete asks for confirmation. Copy puts the title, a blank line and the complete
+original description on the clipboard, ready to paste into chat. To use an idea,
+create the repository through **Create project**, then paste the copied prompt.
+Nothing in this notebook creates projects, repositories, tasks or dispatches work.
+
+Ideas persist server-side in the global `project_ideas` database table. The
+owner-authenticated `/api/project-ideas` API supports GET/POST and PATCH/DELETE
+`/api/project-ideas/{id}`; mutations use the standard CSRF and origin checks.
+Restricted instances hide the notebook and reject all its endpoints with
+"Not available on a restricted instance", preserving their single-project scope.
+Permanent coverage: `tests/test_project_ideas.py` and
+`tests/test_project_ideas_browser.py` (including clipboard, collapse, reload and
+confirmation behavior).
+
 To-Do **Start** uses authenticated, CSRF-protected `POST /api/todos/{id}/start` to queue
 one task directly with its full title and details verbatim in the worker objective,
 including multi-paragraph text and whitespace at the maximum saved length. The backend resolves the
