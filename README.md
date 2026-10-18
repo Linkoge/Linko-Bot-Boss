@@ -63,8 +63,9 @@ for idle / backing up / restarting / updating", "Health check", "Rolling back"),
 the hand-off of a finished result to the chat ("Reporting result", at most 5 minutes). Done, failed, cancelled, deployed,
 rolled back and withdrawn all clear it, and the final result message appears as before. Bounds: lease reconciliation and
 the 30-minute deploy withdrawal end their phases; a deploy request older than 3.5 hours, or whose script process is gone and
-silent for 2 minutes, is not shown. The chat shows one pill (`#progress-chip`) over the composer, in the position of the Stop
-button, so it takes no layout space; it is replaced by the message badge and Stop button while the manager streams a reply,
+silent for 2 minutes, is not shown. The chat shows one small, muted text label (`#progress-chip`) at the composer's
+bottom-left, matching the recording timer with no border, dot or background and taking no layout space;
+it is replaced by the message badge and Stop button while the manager streams a reply,
 rides the existing portfolio polling (so it survives reload: shown = saved) and hides itself after 90 seconds
 without a successful poll. Permanent coverage: `tests/test_progress.py`, `tests/test_progress_browser.py`.
 
@@ -752,8 +753,9 @@ Record, Attach file and Send retain their right-hand stack, size and visibility 
 capture on desktop and mobile. The existing Record button toggles capture off; there
 is no second Stop button. `tests/test_audio_continuity.py` checks unchanged button
 bounds and the bottom recording row in real Chromium at desktop and mobile widths.
-The destination remains available in the controls’ tooltip; after interruption,
-Download/Retry and the recovery explanation appear in the same bottom row. Other
+The destination remains available in the controls’ tooltip. Startup and failure status text are hidden;
+after failure, the separate Retry button still transcribes the retained audio, while the normal
+microphone icon starts a new recording from zero. Download and Discard remain in the same bottom row. Other
 views hide the composer while the same capture continues. Toggling Record off transcribes the whole
 recording once into the original draft; explicit composer Send retains the existing
 whole-recording send flow. Navigation suppresses automatic Send. Before insertion,

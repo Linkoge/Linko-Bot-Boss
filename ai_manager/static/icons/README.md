@@ -12,8 +12,9 @@ that listing is asserted. Source contains one path, no scripts or external refer
 microphone.svg preserves the exact viewBox and path, adapts fill to currentColor,
 removes fixed 800px dimensions and adds decorative accessibility attributes.
 Its trusted markup is embedded in index.html and cloned by audio.js; CSS gives
-it a centered 24px square within the shared 44px control. Recording square/Retry
-and accessible button names remain state-specific.
+it a centered 24px square within the shared 44px control. Active capture uses a
+recording square and a Stop label; failures restore the idle microphone icon and
+Record label, with Retry kept in its separate button.
 
 Original realistic icon was the platform-rendered U+1F399 emoji, not a bitmap/SVG
 asset. Its exact reusable markup is retained in microphone-realistic.html.

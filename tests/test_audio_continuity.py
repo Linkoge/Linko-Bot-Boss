@@ -98,6 +98,17 @@ def start(page):
     page.wait_for_function("()=>audioState.session?.phase==='recording' && audioState.session.bytes>0")
 
 
+def assert_progress_fits_beside_audio(page):
+    page.evaluate('''()=>{
+      state.portfolio.progress={active:true,phase:'deploy',label:'Deploying: running tests'};
+      renderProgress();
+    }''')
+    progress = page.locator('#progress-chip').bounding_box()
+    actions = page.locator('.audio-actions').bounding_box()
+    assert progress and actions
+    assert progress['x'] + progress['width'] <= actions['x']
+
+
 def test_navigation_background_single_whole_upload(audio_page, audio_server):
     page = audio_page
     uploads = []
@@ -200,7 +211,8 @@ def test_interruption_retains_whole_audio_truthful_ui(audio_page, interruption):
     assert page.evaluate('audioState.session.blob.size===audioState.session.bytes')
     assert page.locator('#audio-stop').count() == 0
     assert page.locator('#audio-download').is_visible()
-    assert 'Captured audio kept' in page.locator('#audio-status').inner_text()
+    assert page.locator('#audio-status').inner_text() == ''
+    assert page.locator('#audio-retry').is_visible()
     assert page.evaluate("stream.getTracks().every(t=>t.readyState==='ended') && !audioState.session.wakeLock")
     page.locator('#audio-retry').click()
     page.wait_for_function('()=>!audioState.session')
@@ -220,6 +232,98 @@ def test_late_wake_lock_is_released_and_start_is_single(audio_page):
     page.evaluate('grantWake()')
     page.wait_for_function('()=>wakeReleases===1')
     assert page.evaluate('!audioState.session')
+
+
+@pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640)])
+def test_starting_microphone_shows_no_status_text(audio_page, width, height):
+    page = audio_page
+    page.set_viewport_size({'width': width, 'height': height})
+    page.evaluate('''()=>{
+      const capture=navigator.mediaDevices.getUserMedia;
+      navigator.mediaDevices.getUserMedia=(...args)=>new Promise(resolve=>{
+        window.allowCapture=()=>capture(...args).then(resolve);
+      });
+    }''')
+    page.locator('#microphone').click()
+    assert page.evaluate("audioState.session.phase") == 'starting'
+    assert page.locator('#audio-status').text_content() == ''
+    assert page.locator('#microphone').is_disabled()
+    page.evaluate('allowCapture()')
+    page.wait_for_function("()=>audioState.session?.phase==='recording'")
+    assert page.locator('#audio-status').inner_text() == '00:00'
+    page.locator('#audio-cancel').click()
+
+
+@pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640)])
+@pytest.mark.parametrize('failure', ['no-audio', 'no-speech', 'provider-error'])
+def test_failure_hides_text_keeps_retry_and_microphone_starts_fresh(audio_page, width, height, failure):
+    page = audio_page
+    page.set_viewport_size({'width': width, 'height': height})
+    microphone = page.locator('#microphone')
+    idle_icon = microphone.inner_html()
+    idle_color = microphone.evaluate('n=>getComputedStyle(n).color')
+    uploads = []
+
+    def fail(route):
+        uploads.append(route.request.post_data_buffer)
+        route.fulfill(status=502 if failure == 'provider-error' else 200,
+                      json={'detail': 'Transcription unavailable'} if failure == 'provider-error' else {'text': ''})
+
+    page.route('**/api/audio/transcribe', fail)
+    start(page)
+    previous_id = page.evaluate('audioState.session.id')
+    if failure == 'no-audio':
+        page.evaluate('''()=>{
+          const session=audioState.session;
+          session.chunks=[];session.bytes=0;session.recorder.ondataavailable=()=>{};
+        }''')
+    microphone.click()
+    page.wait_for_function("()=>audioState.session?.phase==='error'")
+    assert page.locator('#audio-status').text_content() == ''
+    retry = page.locator('#audio-retry')
+    assert retry.is_visible() and retry.is_enabled() and retry.inner_text() == 'Retry'
+    assert microphone.inner_html() == idle_icon
+    assert microphone.inner_text() == ''
+    assert microphone.get_attribute('aria-label') == 'Record microphone'
+    assert microphone.get_attribute('title') == 'Record microphone'
+    assert microphone.evaluate('n=>getComputedStyle(n).color') == idle_color
+    assert microphone.is_enabled()
+    assert_progress_fits_beside_audio(page)
+    upload_count = len(uploads)
+    microphone.click()
+    page.wait_for_function("()=>audioState.session?.phase==='recording'")
+    assert page.evaluate('audioState.session.id') != previous_id
+    assert page.evaluate('captureRequests') == 2
+    assert page.locator('#audio-status').inner_text() == '00:00'
+    assert page.locator('#audio-retry').is_hidden()
+    assert len(uploads) == upload_count  # the microphone never retranscribes retained audio
+    assert_progress_fits_beside_audio(page)
+    page.locator('#audio-cancel').click()
+
+
+@pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640)])
+def test_separate_retry_still_transcribes_the_retained_recording(audio_page, width, height):
+    page = audio_page
+    page.set_viewport_size({'width': width, 'height': height})
+    uploads = []
+
+    def transcribe(route):
+        uploads.append(route.request.post_data_buffer)
+        if len(uploads) == 1:
+            route.fulfill(status=502, json={'detail': 'Transcription unavailable'})
+        else:
+            route.fulfill(json={'text': 'Recovered transcript'})
+
+    page.route('**/api/audio/transcribe', transcribe)
+    start(page)
+    page.locator('#microphone').click()
+    page.wait_for_function("()=>audioState.session?.phase==='error'")
+    assert page.locator('#audio-status').text_content() == ''
+    page.locator('#audio-retry').click()
+    page.wait_for_function('()=>!audioState.session')
+    assert len(uploads) == 2 and uploads[0] == uploads[1]
+    assert page.evaluate('captureRequests') == 1
+    assert page.locator('#message-input').input_value() == 'Recovered transcript'
 
 
 @pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640), (320, 420)])

@@ -1,4 +1,4 @@
-"""Real Chromium: the in-progress chip over the composer in every phase, taking no layout space, clearing at the end."""
+"""Real Chromium: muted progress at the composer bottom-left, without taking layout space, clearing at the end."""
 # ruff: noqa: F811 -- imported pytest fixtures are injected by name
 import json
 import time
@@ -54,6 +54,18 @@ def test_every_phase_shows_its_label_without_taking_layout_space_then_clears(pag
         box, form = chip.bounding_box(), page.locator('#chat-form').bounding_box()
         assert form['x'] <= box['x'] and box['x'] + box['width'] <= form['x'] + form['width'] + 1
         assert form['y'] <= box['y'] and box['y'] + box['height'] <= form['y'] + form['height'] + 1
+        assert abs(box['x'] - form['x'] - 9) <= 1
+        assert abs(form['y'] + form['height'] - box['y'] - box['height'] - 7) <= 1
+        style = chip.evaluate('''n=>{
+          const s=getComputedStyle(n),timer=getComputedStyle($('audio-status'));
+          return {color:s.color,timerColor:timer.color,size:s.fontSize,timerSize:timer.fontSize,
+            border:s.borderWidth,radius:s.borderRadius,background:s.backgroundColor,
+            dot:getComputedStyle(n,'::before').content};
+        }''')
+        assert style['color'] == style['timerColor'] == 'rgb(142, 155, 178)'
+        assert style['size'] == style['timerSize'] == '11px'
+        assert style['border'] == '0px' and style['radius'] == '0px'
+        assert style['background'] == 'rgba(0, 0, 0, 0)' and style['dot'] == 'none'
     holder['progress'] = IDLE  # done, failed, rolled back or stopped: nothing in progress
     page.evaluate('()=>refresh()')
     page.locator('#progress-chip').wait_for(state='hidden')

@@ -8,14 +8,14 @@ function renderAudio(){
   const session=audioState.session,phase=session?.phase;
   const recording=phase==='recording',busy=['starting','stopping','transcribing','sending'].includes(phase);
   $('audio-panel').hidden=!session;
-  $('audio-status').textContent=recording?(session.message||'00:00'):session?`${session.label} · ${session.message||({starting:'Starting microphone…',recording:'Recording',stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
+  $('audio-status').textContent=recording?(session.message||'00:00'):session&&!['starting','error'].includes(phase)?`${session.label} · ${session.message||({stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
   $('audio-panel').title=session?`Recording for ${session.label}${session.interruptionReason?' · '+session.interruptionReason:''}`:'';
   $('audio-retry').hidden=phase!=='error'||!session?.blob;
   $('audio-cancel').disabled=phase==='sending';
   $('audio-download').hidden=!session?.blob;
-  if(recording||phase==='error')$('microphone').textContent=recording?'■':'Retry';
+  if(recording)$('microphone').textContent='■';
   else $('microphone').replaceChildren(microphoneIcon.cloneNode(true));
-  $('microphone').setAttribute('aria-label',recording?'Stop recording and transcribe':phase==='error'?'Retry recording transcription':'Record microphone');
+  $('microphone').setAttribute('aria-label',recording?'Stop recording and transcribe':'Record microphone');
   $('microphone').title=audioSupported()?'Record microphone':!window.isSecureContext?'Microphone requires HTTPS on mobile':'Microphone recording is unavailable in this browser';
   $('microphone').disabled=visibilityPending.size>0||audioState.loading||busy||(!session&&(state.pending.has(state.project)||submissions.has(state.project)||!state.history));
   $('audio-upload').hidden=!recording;$('audio-upload').disabled=!recording||!session.config;
@@ -172,7 +172,6 @@ async function transcribeAudio(session){
 $('microphone').onclick=()=>{
   const session=audioState.session;
   if(session?.phase==='recording')finishAudio(false);
-  else if(session?.phase==='error'&&session.blob)transcribeAudio(session);
   else if(!session||session.phase==='error'){discardAudio();startAudio();}
 };
 $('send').addEventListener('click',()=>{if(audioState.session?.phase==='recording')finishAudio(true);});
