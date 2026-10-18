@@ -118,10 +118,16 @@ def test_create_needs_a_token_and_then_creates_private_repo_folder_and_project(h
     assert browser.post('/api/github/projects', json={'name': 'fresh'}).status_code == 409  # folder now exists
 
 
-def test_create_visibility_and_name_validation(hub):
+@pytest.mark.parametrize('private', [True, False])
+def test_create_visibility_and_name_validation(hub, private):
     browser, app, settings, github = hub
     with_token(browser, github)
-    assert browser.post('/api/github/projects', json={'name': 'open', 'private': False}).json()['private'] is False
+    created = browser.post('/api/github/projects', json={'name': 'fresh', 'private': private})
+    assert created.status_code == 200, created.text
+    assert created.json()['private'] is private and github.repos['fresh']['private'] is private
+    assert github.calls[0][:3] == ('POST', '/user/repos', {'name': 'fresh', 'private': private})
+    assert (settings.project_roots[0] / 'fresh').is_dir()
+    assert app.state.registry.get(created.json()['project']['id'])['name'] == 'fresh'
     for bad in ('', '../x', 'a/b', '.hidden', 'x.git', 'a b', 'a' * 101):
         assert browser.post('/api/github/projects', json={'name': bad}).status_code == 409
     assert github.methods() == [('POST', '/user/repos')]
@@ -169,17 +175,19 @@ def test_create_failure_at_registration_rolls_back_folder(hub, monkeypatch):
     assert not (settings.project_roots[0] / 'unreg').exists()
 
 
-def test_rename_renames_github_folder_remote_and_manager_record(hub):
+@pytest.mark.parametrize('private', [True, False])
+def test_rename_renames_github_folder_remote_and_manager_record(hub, private):
     browser, app, settings, github = hub
     with_token(browser, github)
     project = existing_project(app, settings)
-    github.repos['alpha'] = {'name': 'alpha'}
+    github.repos['alpha'] = {'name': 'alpha', 'private': private}
     # A retained task workspace (git worktree) must keep working after the folder moves.
     worktree = settings.data_dir / 'assignment-workspaces' / 'w1'
     run('git', '-C', project['path'], 'worktree', 'add', '-q', '-b', 'linko/w1', str(worktree))
-    response = browser.post(f"/api/github/projects/{project['id']}/rename", json={'name': 'beta'})
+    response = browser.post(f"/api/github/projects/{project['id']}/rename", json={'name': 'beta', 'private': not private})
     assert response.status_code == 200, response.text
     assert github.methods() == [('PATCH', '/repos/octo/alpha')] and github.calls[0][2] == {'name': 'beta'}
+    assert github.repos['beta']['private'] is private
     new = settings.project_roots[0] / 'beta'
     assert new.is_dir() and not (settings.project_roots[0] / 'alpha').exists()
     assert remote_of(new) == 'git@github.com:octo/beta.git'

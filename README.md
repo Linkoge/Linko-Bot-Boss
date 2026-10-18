@@ -263,7 +263,8 @@ rejected pushes and later catch-up, diverged history, and queue/merge/deploy pro
 
 ### Create and rename a project on GitHub
 
-The project menu (▾ left of the model picker, main instance only) has **Create project…** and **Rename project…**.
+The project menu (▾ left of the model picker, main instance only) has **Create project…**, **Rename project…** and
+**GitHub settings…**, which opens the existing **Settings → GitHub** panel and focuses its token field.
 (**Change display name…** still only edits the label.) These are the only two GitHub actions; **there is no delete code
 at all**, no delete route, and the API client refuses every request except `GET /user`, `POST /user/repos` and
 `PATCH /repos/{owner}/{repo}` (`ai_manager/github_projects.py`).
@@ -283,10 +284,17 @@ New repositories use the existing SSH push style (`git@github.com:owner/name.git
 (2) create `<first project root>/<name>`, `git init -b main`, `origin` set, one initial `README.md` commit so the
 existing backup can push; (3) register it in the manager. *Rename project*: (1) rename the GitHub repository (GitHub
 redirects old links); (2) rename the local folder; (3) update `origin`, repair retained task worktrees, and update the
-project's name, path and repository in the manager. A display name equal to the old name is cleared; a custom one stays.
+project's name, path and repository in the manager. Rename sends only the new name to GitHub and never changes an
+existing repository's visibility. A display name equal to the old name is cleared; a custom one stays.
 Rename holds the checkout fence (no task starts, merge or deploy meanwhile) and is refused while the project has a
 running task or execution, a saved deploy setup or pending deployment (those embed the folder path), or when it is the
 manager's own live checkout.
+
+**Cancel** (or Escape) closes an unsaved create, rename or other shared editor without validating fields, sending a
+request or refreshing the project. Once **Save** dispatches an operation, both buttons and Escape dismissal are
+disabled until it finishes; closing a dialog cannot undo an operation already sent. A failed save keeps the editor
+open with the error so the owner can inspect the result, retry or cancel.
+A successful save closes even if the following project refresh fails; that read failure is reported separately.
 
 If a step fails the action stops, undoes what is safely reversible (renames are renamed back, a just-created empty
 folder is removed) and returns the per-step report (`steps`: `done`, `failed`, `rolled back`, `not run`). A repository
@@ -294,8 +302,11 @@ created on GitHub cannot be undone by the application (no delete): the report sa
 reused on GitHub. Restricted instances reject all four routes (`/api/github*`) with `Not available on a restricted
 instance`. The push-time secret check is unchanged.
 
-Tests: `tests/test_github_projects.py` (mocked GitHub API: create, rename, failure midway with rollback, blocked while
-running, no token, token validation and file mode, no delete route/request, token never logged/stored, restricted).
+Tests: `tests/test_github_projects.py` (mocked GitHub API: private/public create, rename preserving visibility, failure
+midway with rollback, blocked while running, no token, token validation and file mode, no delete route/request, token
+never logged/stored, restricted), `tests/test_github_projects_browser.py` (disposable app and Chromium: shared editor
+cancellation and saves, in-flight protection, visibility choices and the existing GitHub settings shortcut), and
+`tests/test_restricted_browser.py` (GitHub controls stay unavailable on restricted instances).
 
 ## Deploy
 

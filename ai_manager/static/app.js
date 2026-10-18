@@ -219,6 +219,7 @@ function renderProjectMenu(){
   if(!state.restricted){
     const create=element('button','Create project…');create.dataset.project='github-create';create.onclick=()=>{closeProjectMenu();createGithubProject();};menu.append(create);
     if(state.project){const rename=element('button','Rename project…');rename.dataset.project='github-rename';rename.title='Renames the GitHub repository, the local folder and the git remote';rename.onclick=()=>{closeProjectMenu();renameGithubProject();};menu.append(rename);}
+    const githubSettings=element('button','GitHub settings…');githubSettings.dataset.project='github-settings';githubSettings.onclick=()=>{closeProjectMenu();showView('settings');$('github-panel').scrollIntoView({block:'start'});$('github-token').focus({preventScroll:true});};menu.append(githubSettings);
   }
   renderProjectAvailability();
   if(focusKey!==undefined){const target=menu.querySelector(`[data-visibility="${focusKey}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target)?.focus({preventScroll:true});}
@@ -663,10 +664,26 @@ $('history-older').onclick=action(()=>openSavedHistory(state.savedHistory.conver
 $('history-full').onclick=action(()=>openSavedHistory(state.savedHistory.conversation.id));
 function showView(view){if(state.view==='agents'&&view!=='agents')$('agent-list').replaceChildren();if(state.view==='chat'&&view!=='chat')cancelInitialChat();const returning=state.view!=='chat'&&view==='chat';closeChatMenu();if(view!=='chat')audioChanged();state.view=view;if(view==='agents'&&state.portfolio)renderAgents();if(view!=='memory')clearTimeout(state.memoryTimer);$('app').classList.toggle('chat-layout',view==='chat');if(view==='todo')loadTodos().catch(error=>notice(error.message));if(view==='memory')loadMemory().catch(error=>notice(error.message));if(view==='search')searchHistory().catch(error=>notice(error.message));document.querySelectorAll('.view').forEach(node=>node.hidden=node.id!==`view-${view}`);document.querySelectorAll('.tabs button').forEach(b=>(b.classList.toggle('active',b.dataset.view===view),b.setAttribute('aria-current',b.dataset.view===view?'page':'false')));if(returning){initialChatPosition=true;positionInitialChat(state.selection);}}
 function editor(title,fields,onSave,reloadContext=true){
+  const dialog=$('editor'),form=$('editor-form'),cancel=$('editor-cancel'),save=form.querySelector('.primary');
+  if(dialog.open)return;
   $('editor-title').textContent=title;$('editor-fields').replaceChildren();$('editor-error').textContent='';
   for(const f of fields){const label=element('label',f.label);let control;if(f.options){control=element('select');for(const [value,text] of f.options){const option=element('option',text);option.value=value;control.append(option);}}else{control=element(f.long?'textarea':'input');if(f.long)control.rows=f.rows||4;else control.type=f.type||'text';}control.name=f.name;control.value=f.value??'';control.required=!!f.required;control.readOnly=!!f.readonly;if(f.min!==undefined)control.min=f.min;if(f.max!==undefined)control.max=f.max;label.append(control);$('editor-fields').append(label);}
   let saving=false;
-  $('editor-form').onsubmit=async event=>{event.preventDefault();if(saving)return;saving=true;const button=event.target.querySelector('.primary');button.disabled=true;const values=Object.fromEntries(new FormData(event.target));try{const result=await onSave(values);if(result)actionResult(result);$('editor').close();if(reloadContext){await refresh();await selectProject(state.project);}}catch(error){$('editor-error').textContent=error.message;}finally{saving=false;button.disabled=false;}};$('editor').showModal();
+  // Closing a draft never submits or validates it. A dispatched save must finish before it can be dismissed.
+  cancel.onclick=dialog.oncancel=event=>{event.preventDefault();if(!saving)dialog.close();};
+  cancel.disabled=save.disabled=false;save.textContent='Save';
+  form.onsubmit=async event=>{
+    event.preventDefault();if(saving)return;
+    saving=true;cancel.disabled=save.disabled=true;save.textContent='Saving…';
+    const values=Object.fromEntries(new FormData(form));
+    try{
+      const result=await onSave(values);if(result)actionResult(result);
+      // A failed read after a successful write must not invite another submission of that write.
+      if(reloadContext){try{await refresh();await selectProject(state.project);}catch(error){notice('Saved, but project refresh failed: '+error.message);}}
+      dialog.close();
+    }catch(error){$('editor-error').textContent=error.message;}
+    finally{saving=false;cancel.disabled=save.disabled=false;save.textContent='Save';}
+  };dialog.showModal();
 }
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:(state.restricted?['active','paused']:['active','paused','archived','removed']).map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
@@ -745,7 +762,7 @@ document.addEventListener('DOMContentLoaded',()=>boot().catch(error=>notice(erro
 // GitHub actions: create and rename only (there is no delete). The token is entered once in Settings and never shown again.
 function createGithubProject(){editor('Create project',[{name:'name',label:'Name (also the GitHub repository and folder name)',required:true},{name:'private',label:'Visibility',options:[['true','Private (default)'],['false','Public']],value:'true'}],async values=>{
   const result=await api('/api/github/projects',{method:'POST',body:JSON.stringify({name:values.name,private:values.private==='true'})});state.project=result.project.id;return result;});}
-function renameGithubProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'name',label:'New name (renames the GitHub repository, local folder and git remote; blocked while a task is running)',value:p.name,required:true}],values=>api(`/api/github/projects/${p.id}/rename`,{method:'POST',body:JSON.stringify(values)}));}
+function renameGithubProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'name',label:'New name (renames the GitHub repository, local folder and registry name; updates the git remote; visibility unchanged; blocked while a task is running)',value:p.name,required:true}],values=>api(`/api/github/projects/${p.id}/rename`,{method:'POST',body:JSON.stringify({name:values.name})}));}
 async function loadGithubStatus(){if(state.restricted)return;try{const s=await api('/api/github');$('github-status').textContent=s.configured?'A GitHub token is saved.':'No GitHub token saved.';}catch(error){$('github-status').textContent=error.message;}}
 $('github-token-form').onsubmit=action(async event=>{event.preventDefault();const input=$('github-token');try{const r=await api('/api/github/token',{method:'PUT',body:JSON.stringify({token:input.value})});$('github-status').textContent=`A GitHub token is saved${r.login?` for ${r.login}`:''}.`;}catch(error){$('github-status').textContent=error.message;}finally{input.value='';}});
 function renameProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'display_name',label:'Display name',value:p.display_name||''}],values=>api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,revision:p.revision})}));}
