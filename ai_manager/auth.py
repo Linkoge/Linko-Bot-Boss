@@ -89,6 +89,30 @@ class Auth:
             (digest(token or ""), time.time()),
         )
 
+    def renew_session(self, token):
+        """Renew at most hourly; the caller must also refresh the browser cookie.
+
+        Expiry minus lifetime is the last renewal time, including for sessions
+        created before sliding expiry. Short configured lifetimes renew halfway.
+        """
+        if not token:
+            return False
+        now = time.time()
+        lifetime = self.settings.session_seconds
+        due = now + lifetime - min(3600, lifetime / 2)
+        params = (digest(token), now, due)
+        # Keep ordinary requests read-only. Recheck under the write lock so
+        # concurrent requests renew once and logout/revocation cannot resurrect a session.
+        if not self.db.one(
+            "SELECT 1 FROM sessions WHERE token_hash=? AND expires_at>? AND expires_at<=?", params
+        ):
+            return False
+        with self.db.transaction() as conn:
+            return conn.execute(
+                "UPDATE sessions SET expires_at=? WHERE token_hash=? AND expires_at>? AND expires_at<=?",
+                (now + lifetime, *params),
+            ).rowcount == 1
+
     def logout(self, token):
         with self.db.transaction() as conn:
             conn.execute("DELETE FROM sessions WHERE token_hash=?", (digest(token or ""),))

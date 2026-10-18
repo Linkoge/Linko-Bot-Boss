@@ -36,7 +36,7 @@ class Settings:
     github_token_file: Path | None = field(
         default_factory=lambda: Path(p).expanduser() if (p := os.getenv("AI_MANAGER_GITHUB_TOKEN_FILE")) else None
     )
-    session_seconds: int = 43200
+    session_seconds: int = field(default_factory=lambda: int(os.getenv("AI_MANAGER_SESSION_SECONDS", "2592000")))
     allowed_hosts: tuple[str, ...] = field(
         default_factory=lambda: tuple(
             os.getenv("AI_MANAGER_ALLOWED_HOSTS", "localhost,127.0.0.1,testserver").split(",")

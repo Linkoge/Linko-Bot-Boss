@@ -220,6 +220,17 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=list(settings.allowed_hosts))
     trusted_proxies = parse_trusted(settings.trusted_proxies)
 
+    def set_session_cookie(response, token, request):
+        response.set_cookie(
+            "ai_manager_session",
+            token,
+            httponly=True,
+            secure=settings.secure_cookie or is_https(request, trusted_proxies),
+            samesite="strict",
+            max_age=settings.session_seconds,
+            path="/",
+        )
+
     @app.middleware("http")
     async def browser_security(request: Request, call_next):
         if request.method not in {"GET", "HEAD", "OPTIONS"}:
@@ -233,6 +244,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 if not hmac.compare_digest(session["csrf"], request.headers.get("x-csrf-token", "")):
                     return JSONResponse({"detail": "CSRF token required"}, status_code=403)
         response = await call_next(request)
+        # Login/logout already issue their own cookie. Session checks (including
+        # inside event streams) stay read-only: DB and browser renew together here.
+        if request.url.path not in {"/api/login", "/api/logout"} and response.status_code < 400:
+            token = request.cookies.get("ai_manager_session")
+            if auth.renew_session(token):
+                set_session_cookie(response, token, request)
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
@@ -348,15 +365,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         except ValueError as error:
             raise HTTPException(429 if "Too many" in str(error) else 401, str(error)) from error
         response = JSONResponse({"csrf": csrf})
-        response.set_cookie(
-            "ai_manager_session",
-            token,
-            httponly=True,
-            secure=settings.secure_cookie or is_https(request, trusted_proxies),
-            samesite="strict",
-            max_age=settings.session_seconds,
-            path="/",
-        )
+        set_session_cookie(response, token, request)
         return response
 
     @app.post("/api/logout", dependencies=[Depends(require_owner)])

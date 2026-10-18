@@ -368,14 +368,18 @@ forwards its public hostname to it. Single owner, username/password login; there
   so one visitor cannot lock out the owner behind the shared tunnel address.
 - **Cookie**: `ai_manager_session` is `HttpOnly`, `SameSite=Strict`, `Path=/`, and `Secure` when
   `AI_MANAGER_SECURE_COOKIE=1` (default) or the request is https (including `X-Forwarded-Proto: https` from a trusted
-  proxy). Logout expires it with the same attributes.
+  proxy). Sessions last 30 days by default (`session_seconds`, overridden by `AI_MANAGER_SESSION_SECONDS` in seconds).
+  Active sessions refresh their database expiry and cookie together at most once per hour (half the lifetime for
+  lifetimes under two hours). This applies to the main and per-user/restricted instances; idle sessions past expiry
+  are rejected. Logout immediately deletes the session and expires the cookie with the same attributes.
 - **Setup**: `POST /api/setup` answers 409 as soon as an owner exists, without using a throttle slot.
 - **Headers** on every response: CSP (`frame-ancestors 'none'`), `X-Frame-Options: DENY`, `X-Content-Type-Options`,
   `Referrer-Policy: no-referrer`, `Cross-Origin-Opener-Policy`/`Cross-Origin-Resource-Policy: same-origin`,
   `Permissions-Policy` (microphone for this origin only, for audio recording), `Cache-Control: no-store`, and
   `Strict-Transport-Security` over https.
 
-Permanent coverage: `tests/test_public_access.py` (disposable data; the test password is a throwaway constant).
+Permanent coverage: `tests/test_public_access.py` and `tests/test_sessions.py` (disposable data; cookie security,
+sliding renewal, expiration and revocation in both instance modes).
 
 ## Multiple instances and the restricted work instance
 
