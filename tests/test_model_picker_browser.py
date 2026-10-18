@@ -14,6 +14,8 @@ import httpx
 import pytest
 from playwright.sync_api import sync_playwright
 
+from ai_manager.db import Database
+
 PROGRAM = '''
 import sys
 sys.path.insert(0, 'tests')
@@ -124,7 +126,7 @@ def test_menu_has_the_known_good_layout_at_desktop_and_narrow_widths(page, width
     box = page.locator('#model-dialog').bounding_box()
     assert box['width'] == dialog_width and 566 <= box['height'] <= 574, box  # one screen, no scrolling at any width
     assert page.evaluate("()=>modelDialog.scrollHeight<=modelDialog.clientHeight")
-    heads = page.locator('.model-section-head h2, .model-favorites h2').all_inner_texts()
+    heads = page.locator('.model-section-head h2:visible, .model-favorites h2:visible').all_inner_texts()
     assert heads == ['Manager', 'Worker', 'Favorites']
     for section in ('#manager-choices', '#worker-choices'):  # a model row and an effort row per provider, Low/Medium/High
         assert page.locator(f'{section} button').all_inner_texts() == FAMILIES
@@ -299,3 +301,61 @@ def test_repo_toggle_scopes_every_pick_and_discards_local_state(page, browser_co
     now = saved(page)
     page.evaluate("choice=>api('/api/model-settings',{method:'PUT',body:JSON.stringify(choice)})", {**original, 'revision': now['revision']})
     page.evaluate('()=>selectProject(null)')
+
+
+def test_users_reuse_controls_persist_and_show_access_errors(page, browser_context, tmp_path):
+    _, _, root = browser_context
+    data = tmp_path / 'writer'
+    user_db = Database(data / 'manager.sqlite3')
+    manifest = root / 'data' / 'deploy' / 'installed.json'
+    manifest.parent.mkdir(exist_ok=True)
+    import json
+    entries = [{'name': 'Writer <one>', 'data': str(data), 'url': 'http://127.0.0.1:1', 'service': 'offline.service'},
+               {'name': 'Missing', 'data': str(tmp_path / 'missing'), 'url': 'http://127.0.0.1:2', 'service': 'missing.service'}]
+    manifest.write_text(json.dumps({'instances': entries}))
+    original = saved(page)
+    try:
+        open_panel(page)
+        users = page.locator('#instance-models')
+        assert users.is_visible()
+        assert users.locator('h3').all_inner_texts() == ['Writer <one>', 'Missing']
+        writer = users.locator('[data-instance="Writer <one>"]')
+        assert writer.locator('.model-family').count() == 12
+        assert 'cannot access' in users.locator('[data-instance="Missing"] [role=alert]').inner_text()
+        choose(page, 'user-0-manager-Luna')
+        choose(page, 'user-0-manager-codex-high')
+        choose(page, 'user-0-worker-Sonnet')
+        choose(page, 'user-0-worker-claude-high')
+        expected = user_db.setting('model_choice')
+        assert expected['manager'] == {'model': LUNA, 'effort': 'high'}
+        assert expected['worker'] == {'model': SONNET, 'effort': 'high'}
+        assert saved(page) == original
+        choose(page, 'user-0-worker-automatic')
+        assert user_db.setting('model_choice')['worker'] is None
+        page.locator('#model-close').click()
+        page.reload()
+        page.wait_for_function('()=>state.ready&&!!state.history')
+        open_panel(page)
+        assert writer.locator('button[aria-pressed=true]').all_inner_texts() == ['Luna', 'High', 'Automatic']
+        choose(page, 'user-0-worker-manual')
+        assert user_db.setting('model_choice')['worker'] == expected['worker']
+        page.screenshot(path=str(tmp_path / 'users-overview.png'))
+        users.screenshot(path=str(tmp_path / 'users-controls.png'))
+        # A real filesystem denial after opening the panel produces an inline error and retains the saved pair.
+        before = user_db.setting('model_choice')
+        data.joinpath('manager.sqlite3').chmod(0o400)
+        page.locator('[data-choice="user-0-manager-Sol"]').click()
+        page.wait_for_function('()=>!modelSaving')
+        assert 'read/write access' in writer.locator('[role=alert]').inner_text()
+        assert user_db.setting('model_choice') == before
+        assert page.locator('#model-error').inner_text() == ''  # the main selection remains usable
+        page.locator('#model-close').click()
+        # A restricted page never renders user choices, even if a payload unexpectedly includes them.
+        page.evaluate('()=>{state.restricted=true;renderModels();}')
+        assert users.is_hidden() and users.locator('button').count() == 0
+        page.evaluate('()=>{state.restricted=false;renderModels();}')
+    finally:
+        data.joinpath('manager.sqlite3').chmod(0o600)
+        for path in data.glob('manager.sqlite3-*'):
+            path.chmod(0o600)
+        manifest.unlink()

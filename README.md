@@ -520,8 +520,34 @@ cancellation and receipts are unchanged. An instance under another Linux user ca
 give its entry `"service_cmds": {"stop": [...], "start": [...]}` (for example `sudo -n systemctl ...` with a matching
 sudoers rule) in `installed.json`. Deploys of other projects never touch instances.
 
+**Owner-selected user models.** The main instance's model picker has a **Users** section listing the `instances` entries
+from its own `DATA/deploy/installed.json`. Each name has the same Manager/Worker model and effort controls and worker
+Manual/Automatic switch. Restricted instances never show this section or accept its API; their existing picker stays
+hidden. An unrestricted instance without the main deploy registry has no Users section either.
+
+The main service opens each registered `data/manager.sqlite3` directly with SQLite `mode=rw` (no database creation or
+schema migration), and saves through the existing model validation, optimistic revision check and transaction. It writes
+that instance's existing global `settings.model_choice` record and `models.saved` audit event; there is no extra setting
+file, cached choice or second dispatch source. Next chat turns and new tasks read this same record without a restart.
+Existing repository locks and already selected task routes keep their normal semantics. Merely listing an instance never
+saves defaults: instances with no explicit choice, legacy choices and Automatic workers retain their current behavior.
+The catalog is the main instance's installed model/effort catalog, shared by the picker controls.
+
+This local-data mechanism works even when the user's service or URL is offline. The main service's Linux user needs
+traversal permission on all parent directories, read/write access to that instance's database and existing `-wal`/`-shm`
+files, and read/write/traversal access to its data directory so SQLite can create journal files. For another Linux user,
+the host administrator can grant named-user ACLs scoped to those paths and a default ACL on the data directory for newly
+created SQLite files. Keep them scoped to the main service account. `Settings.prepare()` sets the data directory to mode
+0700 at each instance startup, so a host-managed post-start step must restore the directory access ACL/mask after that;
+default ACLs alone do not restore directory access. The app neither changes permissions nor uses sudo. Missing databases,
+inaccessible paths, read-only files, busy databases (one-second SQLite lock timeout), invalid registries and failed saves
+produce visible errors in Users. Other instances and the main picker's controls remain usable. Reopen the picker after
+fixing access to retry. Authenticated, CSRF-protected `GET/PUT /api/instance-model-settings?name=...` resolves names only
+through the main registry; writes use the same settings payload and revision as `/api/model-settings`.
+
 Permanent coverage: `tests/test_restricted.py` (settings, server-side rejections, default behavior) and
-`tests/test_deploy_instances.py` (multi-instance deploy, rollback, installers, unit template).
+`tests/test_deploy_instances.py` (multi-instance deploy, rollback, installers, unit template). `tests/test_instance_models.py`
+and `tests/test_model_picker_browser.py` cover owner model selection, persistence, dispatch, hidden controls and access errors.
 
 ## Emergency host repair
 

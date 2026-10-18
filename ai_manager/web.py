@@ -534,7 +534,14 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         saved, marked = current(db, chat.server, project_id), favorites(db, chat.server)
         keep = {pair.get("model") for pair in (saved["manager"], saved['worker'],
                                                *(f["pair"] for f in marked if f)) if pair}
-        return {"provider": active(db, project_id), "settings": saved, "favorites": marked,
+        users = {}
+        if not restricted and (settings.data_dir / 'deploy' / 'installed.json').exists():
+            from .instance_models import listing
+            try:
+                users['users'] = await asyncio.to_thread(listing, settings.data_dir, chat.server)
+            except (OSError, ValueError) as error:
+                users['users_error'] = f'Cannot load Users: {error}'
+        return {**users, "provider": active(db, project_id), "settings": saved, "favorites": marked,
                 "project_id": project_id, "locked": locked(db, project_id),
                 "repo_name": (db.one("SELECT COALESCE(display_name,name) AS name FROM projects WHERE id=?", (project_id,))["name"]
                               if project_id else "All Projects"),
@@ -554,6 +561,18 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         result = save(db, chat.server, body, project_id, locked)
         invalidate_usage()
         return result
+
+    @app.get('/api/instance-model-settings', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def read_instance_models(name: str):
+        from .instance_models import read
+        await chat.server.start()
+        return await asyncio.to_thread(read, settings.data_dir, chat.server, name)
+
+    @app.put('/api/instance-model-settings', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def save_instance_models(name: str, body: dict):
+        from .instance_models import save
+        await chat.server.start()
+        return await asyncio.to_thread(save, settings.data_dir, chat.server, name, body)
 
     @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
     async def insert_manager_favorite(slot: int, project_id: str | None = None):

@@ -9,6 +9,7 @@ STATIC = Path(__file__).resolve().parents[1] / 'ai_manager' / 'static'
 digest = lambda text: hashlib.sha256(text.encode()).hexdigest()  # noqa: E731
 LOCK_HEADER = '<span aria-hidden="true">·</span><div id="repo-lock-container" class="model-choice-row"></div><span aria-hidden="true">·</span>'
 SWITCH = '<div id="worker-mode" class="model-choice-row" role="group" aria-label="Worker selection mode"></div>'
+USERS = '<section id="instance-models" class="model-favorites" aria-labelledby="users-heading" hidden><h2 id="users-heading">Users</h2><div id="user-model-choices"></div></section>'
 
 
 def _js():
@@ -19,7 +20,8 @@ def _js():
 def test_dialog_markup_is_the_original_manager_worker_favorites_layout_plus_the_worker_switch():
     html = (STATIC / 'index.html').read_text()
     dialog = re.search(r'<dialog id="model-dialog".*?</dialog>', html)[0]
-    assert digest(dialog.replace(SWITCH, '').replace(LOCK_HEADER, '')) == 'dca2607d9762556f0dc0816285b5e6d10ab0bf4b1a40b14a6ede57e1dc38fe14'
+    assert digest(dialog.replace(SWITCH, '').replace(LOCK_HEADER, '').replace(USERS, '')) == 'dca2607d9762556f0dc0816285b5e6d10ab0bf4b1a40b14a6ede57e1dc38fe14'
+    assert USERS in dialog and dialog.index('id="manager-favorites"') < dialog.index('id="users-heading"')
     assert '<h2 id="manager-heading">Manager</h2>' + LOCK_HEADER in dialog
     assert 'id="repo-lock-container" class="model-choice-row"' in dialog
     assert '<h2 id="worker-heading">Worker</h2>' + SWITCH + '</div>' in dialog  # in the heading row, as Bot's was
@@ -41,8 +43,11 @@ def test_picker_styles_are_the_original_ones_and_the_switch_is_drawn_like_the_ol
 
 def test_client_uses_one_settings_write_path_and_one_repo_toggle():
     js = _js()
-    # Snapshot includes scoped limits invalidation after confirmed model/lock saves.
-    assert digest(js) == '14d8ae15cd719bf133a39c4ce175e3c1e46cda823e84f68aa1cdd65c20416ccb'
+    # Snapshot includes the Users section reusing the existing model and effort controls.
+    assert digest(js) == 'b5e3ba8fd62219ca12407bfb23ccf9022181a8b5d73a02d356da2d683eb2e945'
+    assert "renderPair(pair,role,`${user.name} ${titleLevel(role)}`,user,change" in js
+    assert "section.hidden=!!state.restricted" in js
+    assert "'/api/instance-model-settings?name='+encodeURIComponent(user.name)" in js
     assert "if(typeof clearUsage==='function')clearUsage()" in js
     assert 'setUsageProvider(provider,forceUsage)' in js
     assert 'setProviderIcon(modelPanel.provider,true)' in js
@@ -57,7 +62,8 @@ def test_automatic_exists_only_as_the_manual_automatic_switch():
         text = path.read_text()
         assert 'worker-auto' not in text and 'Automatic' not in text, path.name  # no stray "Automatic" row or button
     js = _js()
-    assert js.count("['manual','automatic']") == 1 and "`Worker ${titleLevel(value)}`" in js
+    assert js.count("['manual','automatic']") == 1 and "`${label} ${titleLevel(value)}`" in js
+    assert "label='Worker',prefix='worker'" in js
 
 
 def test_no_overlapping_pin_global_or_permitted_pairs_controls():

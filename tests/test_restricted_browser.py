@@ -59,7 +59,7 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             assert page.locator('#projects button.selected').count() == 1
             page.locator('[data-view=settings]').click()
             for hidden in ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel',
-                           '#model-settings-button', '#models-panel', '#model-dialog', '#github-panel',
+                           '#model-settings-button', '#models-panel', '#model-dialog', '#instance-models', '#github-panel',
                            '#github-token', '#github-company-token'):
                 assert not page.locator(hidden).is_visible(), hidden
             page.evaluate('()=>renderProjectMenu()')
@@ -71,6 +71,8 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             assert page.locator('#project-menu').is_hidden()
             assert page.locator('#rename-project').is_visible()
             assert page.evaluate("async()=>(await fetch('/api/deployment')).status") == 403
+            assert page.evaluate("async()=>('users' in await api('/api/model-settings'))") is False
+            assert page.evaluate("async()=>(await fetch('/api/instance-model-settings?name=work')).status") == 403
             assert errors == []
             browser.close()
     finally:
