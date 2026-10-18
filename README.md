@@ -266,8 +266,9 @@ rejected pushes and later catch-up, diverged history, and queue/merge/deploy pro
 The project menu (▾ left of the model picker, main instance only) has **Create project…**, **Rename project…** and
 **GitHub settings…**, which opens the existing **Settings → GitHub** panel and focuses its token field.
 (**Change display name…** still only edits the label.) These are the only two GitHub actions; **there is no delete code
-at all**, no delete route, and the API client refuses every request except `GET /user`, `POST /user/repos` and
-`PATCH /repos/{owner}/{repo}` (`ai_manager/github_projects.py`).
+at all**, no delete route, and the API client refuses every request except `GET /user`, `POST /user/repos`,
+`POST /orgs/{configured-org}/repos` (exactly the saved organization only), and `PATCH /repos/{owner}/{repo}`
+(`ai_manager/github_projects.py`).
 
 *Credentials.* Pushes never used an application credential: they run `git push` with the service user's own SSH key or
 Git credential helper (above). That cannot call the REST API, so creating/renaming needs one extra credential: a GitHub
@@ -278,12 +279,30 @@ deletes; a fine-grained token's Administration permission bundles delete, so do 
 outside every repository, `~/.config/linko-bot-manager/github-token` (override with `AI_MANAGER_GITHUB_TOKEN_FILE`),
 mode 0600 in a 0700 directory; a file readable by others is refused. It is never put in SQLite, events, logs, API
 responses, tasks or prompts, and error text from GitHub or the network has it redacted. Revoke it on GitHub to remove it.
+The same Settings token is used for Personal and Company. For Company, its account must have permission to create
+repositories in the configured organization, including public repositories under that organization's policy; no new
+token or additional token scope is stored. Organization permission failures explain this requirement. See the
+[GitHub organization repository API](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository).
 New repositories use the existing SSH push style (`git@github.com:owner/name.git`).
 
-*Create project* (name only): (1) create the GitHub repository, private by default (a public choice is explicit);
-(2) create `<first project root>/<name>`, `git init -b main`, `origin` set, one initial `README.md` commit so the
-existing backup can push; (3) register it in the manager. *Rename project*: (1) rename the GitHub repository (GitHub
-redirects old links); (2) rename the local folder; (3) update `origin`, repair retained task worktrees, and update the
+*Destinations.* Save the single **Company organization** in **Settings → GitHub**, next to the existing token entry.
+Use its GitHub name (1–39 letters/digits with single hyphens between them), not a URL. The saved value is the value
+shown in Settings and used for creation. Leave it blank to make Company unavailable; the create dialog points back
+to Settings. The main project list has no organization field or tier labels.
+
+*Create project*: choose a name and **Personal** or **Company**. Personal always creates a **private** repository in
+the token owner's account via `POST /user/repos`. Company always creates a **public** repository directly in the
+configured organization via `POST /orgs/{configured-org}/repos`. The dialog requires an explicit “will be public”
+confirmation. For Company, the manager prepares `<first project root>/<name>` with `git init -b main` and one initial
+`README.md` commit, then runs the existing secret check over its full history **before** creating the public GitHub
+repository. Findings or a failed check block creation and remove the prepared folder. On success it sets `origin` and
+registers the project so the existing backup can push. Personal creates on GitHub before initializing and registering
+the local project. The backup secret check still runs before pushes for both tiers. No transfer, copy, mirror,
+publication or destination-change action exists. A small Personal/Company label accompanies the selected project's
+repository information in the project menu and Settings; the saved tier survives rename and organization changes.
+Labels apply to repositories created through this flow.
+
+*Rename project*: (1) rename the GitHub repository under its actual owner (GitHub redirects old links); (2) rename the local folder; (3) update `origin`, repair retained task worktrees, and update the
 project's name, path and repository in the manager. Rename sends only the new name to GitHub and never changes an
 existing repository's visibility. A display name equal to the old name is cleared; a custom one stays.
 Rename holds the checkout fence (no task starts, merge or deploy meanwhile) and is refused while the project has a
@@ -299,13 +318,15 @@ A successful save closes even if the following project refresh fails; that read 
 If a step fails the action stops, undoes what is safely reversible (renames are renamed back, a just-created empty
 folder is removed) and returns the per-step report (`steps`: `done`, `failed`, `rolled back`, `not run`). A repository
 created on GitHub cannot be undone by the application (no delete): the report says so and it must be deleted or
-reused on GitHub. Restricted instances reject all four routes (`/api/github*`) with `Not available on a restricted
+reused on GitHub. Restricted instances reject all GitHub routes (`/api/github*`) with `Not available on a restricted
 instance`. The push-time secret check is unchanged.
 
-Tests: `tests/test_github_projects.py` (mocked GitHub API: private/public create, rename preserving visibility, failure
-midway with rollback, blocked while running, no token, token validation and file mode, no delete route/request, token
+Tests: `tests/test_github_projects.py` (mocked GitHub API: fixed Personal/Company create, saved org validation, exact
+org allow-list, public confirmation, secret-check refusal, org permission messages, rename preserving tier and
+visibility, failure midway with rollback, blocked while running, no token, token validation and file mode, no delete route/request, token
 never logged/stored, restricted), `tests/test_github_projects_browser.py` (disposable app and Chromium: shared editor
-cancellation and saves, in-flight protection, visibility choices and the existing GitHub settings shortcut), and
+cancellation and saves, in-flight protection, destination choices and public confirmation, disabled Company without
+an org, Settings organization persistence, tier labels and the existing GitHub settings shortcut), and
 `tests/test_restricted_browser.py` (GitHub controls stay unavailable on restricted instances).
 
 ## Deploy

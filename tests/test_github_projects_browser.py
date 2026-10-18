@@ -25,6 +25,7 @@ s = Settings()
 github = FakeGitHub()
 app = create_app(s, FakeServer(s), github_fetch=github)
 app.state.github_projects.store.write(PAT)
+app.state.github_projects.save_company_org('acme')
 existing_project(app, s)
 github.repos['alpha'] = {'name': 'alpha', 'private': True}
 uvicorn.run(app, host='127.0.0.1', port=s.port, log_level='error')
@@ -130,7 +131,7 @@ def test_github_cancel_and_escape_close_empty_or_populated_required_fields(page,
     assert field.get_attribute('required') is not None
     field.fill(value)
     if operation == 'github-create':
-        page.locator('#editor-fields select[name=private]').select_option('false')
+        page.locator('#editor-fields select[name=tier]').select_option('company')
     if dismiss == 'cancel':
         page.locator('#editor-cancel').click()
     else:
@@ -141,7 +142,7 @@ def test_github_cancel_and_escape_close_empty_or_populated_required_fields(page,
     menu_action(page, operation)
     expect(field).to_have_value('' if operation == 'github-create' else 'alpha')
     if operation == 'github-create':
-        expect(page.locator('select[name=private]')).to_have_value('true')
+        expect(page.locator('select[name=tier]')).to_have_value('personal')
     page.locator('#editor-cancel').click()
     assert_draft_closed(page, requests)
 
@@ -163,22 +164,38 @@ def test_other_shared_editors_cancel_without_writes_validation_or_refresh(page, 
     assert_draft_closed(page, requests)
 
 
-@pytest.mark.parametrize('private', [True, False])
-def test_create_keeps_private_default_and_public_choice_and_submits_selected_visibility(page, browser_app, private):
+@pytest.mark.parametrize('tier', ['personal', 'company'])
+def test_create_fixed_destinations_and_public_confirmation(page, browser_app, tier):
     requests = writes(page)
     name = 'created-' + uuid.uuid4().hex[:8]
     menu_action(page, 'github-create')
-    visibility = page.locator('#editor-fields select[name=private]')
-    expect(visibility).to_have_value('true')
-    assert visibility.locator('option').all_inner_texts() == ['Private (default)', 'Public']
+    destination = page.locator('#editor-fields select[name=tier]')
+    expect(destination).to_have_value('personal')
+    assert destination.locator('option').all_inner_texts() == ['Personal · private', 'Company · acme · public']
+    confirmation = page.locator('input[name=public_confirmed]')
+    expect(confirmation).not_to_be_visible()
     page.locator('#editor-fields input[name=name]').fill(name)
-    if not private:
-        visibility.select_option('false')
+    if tier == 'company':
+        destination.select_option('company')
+        expect(confirmation).to_be_visible()
+        expect(confirmation.locator('..')).to_contain_text('will be public')
+        page.locator('#editor .primary').click()
+        expect(page.locator('#editor')).to_be_visible()
+        assert requests == []  # Native required validation refuses unchecked public creation.
+        confirmation.check()
     page.locator('#editor .primary').click()
     expect(page.locator('#editor')).not_to_be_visible()
-    assert [(r.method, r.post_data_json) for r in requests] == [('POST', {'name': name, 'private': private})]
+    assert [(r.method, r.post_data_json) for r in requests] == [
+        ('POST', {'name': name, 'tier': tier, 'public_confirmed': tier == 'company'})]
     assert page.evaluate('()=>state.portfolio.projects.find(p=>p.id===state.project).name') == name
     assert (browser_app[2] / 'projects' / name / '.git').is_dir()
+    page.locator('#project-menu-button').click()
+    expect(page.locator('#project-menu .github-tier')).to_have_text(tier.title())
+    expect(page.locator('#project-menu')).to_contain_text(('octo' if tier == 'personal' else 'acme') + '/' + name)
+    assert page.locator('#projects .github-tier').count() == 0
+    page.locator('#project-menu-button').click()
+    page.locator('[data-view=settings]').click()
+    expect(page.locator('#github-project-repository .github-tier')).to_have_text(tier.title())
 
 
 def test_shared_editor_display_name_save_and_todo_save_still_work(page):
@@ -213,7 +230,7 @@ def test_successful_write_closes_even_if_the_following_refresh_fails(page, brows
     page.locator('#editor .primary').click()
     expect(page.locator('#editor')).not_to_be_visible()
     expect(page.locator('#notice')).to_contain_text('Saved, but project refresh failed: Refresh unavailable')
-    assert len(requests) == 1 and requests[0].post_data_json == {'name': name, 'private': True}
+    assert len(requests) == 1 and requests[0].post_data_json == {'name': name, 'tier': 'personal', 'public_confirmed': False}
     assert (browser_app[2] / 'projects' / name / '.git').is_dir()
 
 
@@ -279,3 +296,30 @@ def test_github_settings_menu_shortcut_focuses_the_existing_token_form(page, pro
     page.locator('[data-view=settings]').click()
     expect(page.locator('#github-token-form')).to_be_visible()
     assert requests == []
+
+
+def test_org_setting_is_saved_shown_after_reload_and_used_for_company(page):
+    menu_action(page, 'github-settings')
+    field = page.locator('#github-company-org')
+    expect(field).to_have_value('acme')
+    field.fill('Example-Co')
+    page.locator('#github-org-form button').click()
+    expect(page.locator('#github-org-status')).to_have_text('Company organization saved.')
+    page.reload()
+    page.wait_for_function('()=>state.ready')
+    page.locator('[data-view=settings]').click()
+    expect(field).to_have_value('Example-Co')
+    menu_action(page, 'github-create')
+    expect(page.locator('select[name=tier] option[value=company]')).to_have_text('Company · Example-Co · public')
+    page.locator('#editor-cancel').click()
+    page.evaluate("()=>api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:'acme'})})")
+
+
+def test_company_disabled_without_saved_org_and_hint_points_to_settings(page):
+    page.evaluate("()=>api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:''})})")
+    menu_action(page, 'github-create')
+    expect(page.locator('select[name=tier] option[value=company]')).to_have_attribute('disabled', '')
+    expect(page.locator('#editor-fields')).to_contain_text('Settings → GitHub')
+    expect(page.locator('select[name=tier]')).to_have_value('personal')
+    page.locator('#editor-cancel').click()
+    page.evaluate("()=>api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:'acme'})})")

@@ -16,15 +16,18 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import fence
+from . import fence, secret_check
 from .config import CODE_ROOT
 from .pipeline import RESTRICTED
 from .registry import git, safe_remote
 
 API = 'https://api.github.com'
 NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$')
+ORG = re.compile(r'[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*')
+COMPANY_ORG = 'github_company_org'
 REMOTE = re.compile(r'^(?P<prefix>.*?github\.com[:/])(?P<owner>[^/:]+)/(?P<repo>[^/]+?)(?P<suffix>\.git)?/?$')
-# The only GitHub requests this application can make. Anything else (in particular DELETE) is refused locally.
+# Fixed allow-list; organization creation below also requires an exact match to the saved, validated org.
+# Anything else (in particular DELETE) is refused locally.
 ALLOWED = (('GET', re.compile(r'^/user$')), ('POST', re.compile(r'^/user/repos$')),
            ('PATCH', re.compile(r'^/repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')))
 log = logging.getLogger(__name__)
@@ -88,12 +91,19 @@ def urllib_fetch(method, url, headers, body, timeout):
     return status, {k.lower(): v for k, v in received.items()}, data
 
 
+def valid_org(name):
+    return isinstance(name, str) and 1 <= len(name) <= 39 and ORG.fullmatch(name) is not None
+
+
 class GitHubApi:
-    def __init__(self, store, fetch=None):
+    def __init__(self, store, fetch=None, company_org=None):
         self.store, self.fetch = store, fetch or urllib_fetch
+        self.company_org = company_org or (lambda: '')
 
     def request(self, method, path, payload=None, token=None):
-        if not any(m == method and rule.match(path) for m, rule in ALLOWED):
+        org = self.company_org()
+        org_creation = method == 'POST' and valid_org(org) and path == f'/orgs/{org}/repos'
+        if not org_creation and not any(m == method and rule.fullmatch(path) for m, rule in ALLOWED):
             raise GitHubError('This GitHub action is not available')
         token = token or self.store.read()
         headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json',
@@ -106,6 +116,9 @@ class GitHubApi:
             # Transport errors can echo request details. Never keep their text.
             raise GitHubError('GitHub could not be reached') from None
         if status >= 400:
+            if org_creation and status in (401, 403, 404):
+                raise GitHubError(f"GitHub refused organization creation ({status}). The token's account needs "
+                                  f'permission to create repositories in the organization {org}')
             raise GitHubError(self.explain(status, data, token))
         return received, data or {}
 
@@ -131,7 +144,19 @@ class GitHubProjects:
     def __init__(self, db, registry, settings, pipeline, store=None, fetch=None):
         self.db, self.registry, self.settings, self.pipeline = db, registry, settings, pipeline
         self.store = store or TokenStore(settings.github_token_file or default_token_file())
-        self.api = GitHubApi(self.store, fetch)
+        self.api = GitHubApi(self.store, fetch, self.company_org)
+
+    def company_org(self):
+        return self.db.setting(COMPANY_ORG, '')
+
+    def save_company_org(self, org):
+        self.guard()
+        org = org.strip()
+        if org and not valid_org(org):
+            raise GitHubError('Use a GitHub organization name: 1-39 letters or digits with single hyphens '
+                              'between them (no spaces, underscores or URL)')
+        self.db.set_setting(COMPANY_ORG, org)
+        return self.status()
 
     def guard(self):
         if self.settings.restricted:
@@ -145,7 +170,7 @@ class GitHubProjects:
 
     def status(self):
         self.guard()
-        return {'configured': self.store.configured()}
+        return {'configured': self.store.configured(), 'company_org': self.company_org()}
 
     def save_token(self, token):
         """Accept only a classic token with `repo` and without `delete_repo`, then store it."""
@@ -166,35 +191,66 @@ class GitHubProjects:
 
     # ---- create -----------------------------------------------------------------------------------------------
 
-    def create(self, name, private=True):
+    def create(self, name, tier='personal', public_confirmed=False):
         self.guard()
         self.check_name(name)
+        if tier not in {'personal', 'company'}:
+            raise GitHubError('Choose Personal or Company')
+        company = tier == 'company'
+        org = self.company_org()
+        if company and not valid_org(org):
+            raise GitHubError('Company is unavailable. Configure the company organization in Settings → GitHub')
+        if company and public_confirmed is not True:
+            raise GitHubError('Confirm that the Company repository will be public before creating it')
+        private = not company
         root = self.settings.project_roots[0]
         folder = root / name
         if folder.exists() or folder.is_symlink() or self.db.one('SELECT 1 FROM projects WHERE path=?', (str(folder),)):
             raise GitHubError(f'The folder {name} already exists; nothing was created')
         steps = []
         self.store.read()
+        if company:
+            # Prepare the actual initial project and scan all its history before creating anything public.
+            # No registration means the backup worker cannot push before this check and confirmation.
+            folder.mkdir(parents=True)
+            try:
+                self.initialize(folder, name, None)
+                step(steps, 'create local folder and git init', 'done', str(folder))
+                if secret_check.scan(folder, None, 'HEAD'):
+                    raise GitHubError('Secret check failed. Company creation was blocked; '
+                                      'remove credentials before creating a public repository')
+                step(steps, 'secret check', 'done')
+            except Exception as error:
+                message = str(error) if isinstance(error, GitHubError) else 'Could not prepare and secret-check the project'
+                step(steps, 'prepare and secret-check project', 'failed', message)
+                self.remove_new_folder(folder, steps)
+                raise GitHubError(message + '. No GitHub repository was created', steps) from None
         try:
-            _, repo = self.api.request('POST', '/user/repos', {'name': name, 'private': bool(private)})
+            _, repo = self.api.request('POST', f'/orgs/{org}/repos' if company else '/user/repos',
+                                       {'name': name, 'private': private})
         except GitHubError as error:
             step(steps, 'create GitHub repository', 'failed', str(error))
+            if company:
+                self.remove_new_folder(folder, steps)
             raise GitHubError(f'{error}. Nothing was created', steps) from None
         remote = repo.get('ssh_url') or ''
         step(steps, 'create GitHub repository', 'done', repo.get('full_name', name))
         try:
             if not REMOTE.match(remote):
                 raise ValueError('GitHub returned no usable repository address')
-            folder.mkdir(parents=True)
-            self.initialize(folder, name, remote)
-            step(steps, 'create local folder and git init', 'done', str(folder))
+            if company:
+                self.set_remote(folder, remote)
+            else:
+                folder.mkdir(parents=True)
+                self.initialize(folder, name, remote)
+                step(steps, 'create local folder and git init', 'done', str(folder))
         except Exception as error:
             step(steps, 'create local folder and git init', 'failed', self.safe_text(error))
             self.remove_new_folder(folder, steps)
             step(steps, 'register in manager', 'not run')
             raise GitHubError(self.leftover(repo, steps), steps) from None
         try:
-            project = self.registry.add(folder)
+            project = self.registry.add(folder, github_tier=tier)
             step(steps, 'register in manager', 'done')
         except Exception as error:
             step(steps, 'register in manager', 'failed', self.safe_text(error))
@@ -203,7 +259,7 @@ class GitHubProjects:
         self.db.run('DELETE FROM settings WHERE key=?', ('github_backup:' + project['id'],))  # fresh backup receipt
         return {'result': 'done', 'message': f'Created {repo.get("full_name", name)} and registered the project',
                 'project': self.registry.get(project['id']), 'repository': repo.get('full_name', name),
-                'private': bool(repo.get('private', private)), 'steps': steps}
+                'private': bool(repo.get('private', private)), 'tier': tier, 'steps': steps}
 
     @staticmethod
     def initialize(folder, name, remote):
@@ -211,7 +267,7 @@ class GitHubProjects:
         identity = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=linko-bot-boss@localhost',
                     '-c', 'core.hooksPath=' + os.devnull, '-c', 'commit.gpgsign=false']
         (folder / 'README.md').write_text(f'# {name}\n')
-        for args in (['init', '-q', '-b', 'main'], ['remote', 'add', 'origin', remote], ['add', 'README.md'],
+        for args in (['init', '-q', '-b', 'main'], *([['remote', 'add', 'origin', remote]] if remote else []), ['add', 'README.md'],
                      [*identity, 'commit', '-q', '-m', 'Initial commit']):
             subprocess.run(['git', '-C', str(folder), *args], check=True, capture_output=True, timeout=60, env=env)
 
@@ -313,7 +369,10 @@ class GitHubProjects:
         def run(*args, check=True):
             return subprocess.run(['git', '-C', str(path), *args], check=check, capture_output=True, timeout=30, env=env)
 
-        run('remote', 'set-url', 'origin', url)
+        if run('remote', 'get-url', 'origin', check=False).returncode:
+            run('remote', 'add', 'origin', url)
+        else:
+            run('remote', 'set-url', 'origin', url)
         if run('config', '--get', 'remote.origin.pushurl', check=False).returncode == 0:
             run('remote', 'set-url', '--push', 'origin', url)
 

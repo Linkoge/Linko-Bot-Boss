@@ -57,7 +57,12 @@ class GitHubToken(BaseModel):
 
 class GitHubCreate(BaseModel):
     name: str = Field(max_length=200)
-    private: bool = True
+    tier: str = 'personal'
+    public_confirmed: bool = Field(default=False, strict=True)
+
+
+class GitHubOrganization(BaseModel):
+    company_org: str = Field(max_length=200)
 
 
 class GitHubRename(BaseModel):
@@ -653,9 +658,13 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def github_token(body: GitHubToken):
         return github.save_token(body.token)
 
+    @app.put("/api/github/organization", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_organization(body: GitHubOrganization):
+        return github.save_company_org(body.company_org)
+
     @app.post("/api/github/projects", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def github_create(body: GitHubCreate):
-        return github.create(body.name, body.private)
+        return github.create(body.name, body.tier, body.public_confirmed)
 
     @app.post("/api/github/projects/{project_id}/rename", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def github_rename(project_id: str, body: GitHubRename):

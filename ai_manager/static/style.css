@@ -270,3 +270,7 @@ input,textarea,select{accent-color:var(--accent-solid)}
 
 .restricted #all-projects,.restricted #project-menu-button,.restricted #discover,.restricted #add-project,.restricted #deployment-panel,.restricted #model-settings-button,.restricted #models-panel,.restricted #model-dialog{display:none}
 .restricted #github-panel{display:none}
+
+.github-tier{display:inline-block;margin-left:.5rem;padding:.1rem .4rem;border:1px solid currentColor;border-radius:.4rem;font-size:.75rem}
+#project-menu p.muted{padding:.4rem .7rem;overflow-wrap:anywhere}
+#editor input[type=checkbox]{width:auto;margin-right:.5rem}

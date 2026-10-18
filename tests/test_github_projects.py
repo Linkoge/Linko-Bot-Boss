@@ -35,14 +35,15 @@ class FakeGitHub:
         if (method, path) == ('GET', '/user'):
             received = {} if self.scopes is None else {'x-oauth-scopes': self.scopes}
             return 200, received, {'login': self.login}
-        if (method, path) == ('POST', '/user/repos'):
+        if method == 'POST' and (path == '/user/repos' or path.startswith('/orgs/')):
+            owner = 'octo' if path == '/user/repos' else path.split('/')[2]
             name = payload['name']
             if name in self.repos:
                 return 422, {}, {'message': 'Repository creation failed.', 'errors': [{'message': 'name already exists'}]}
-            self.repos[name] = {'name': name, 'full_name': f'octo/{name}', 'private': payload['private'],
-                                'ssh_url': f'git@github.com:octo/{name}.git'}
+            self.repos[name] = {'name': name, 'full_name': f'{owner}/{name}', 'private': payload['private'],
+                                'ssh_url': f'git@github.com:{owner}/{name}.git'}
             return 201, {}, self.repos[name]
-        if method == 'PATCH' and path.startswith('/repos/octo/'):
+        if method == 'PATCH' and path.startswith('/repos/'):
             old = path.rsplit('/', 1)[1]
             if old not in self.repos:
                 return 404, {}, {'message': 'Not Found'}
@@ -79,11 +80,11 @@ def with_token(browser, github):
     github.calls.clear()
 
 
-def existing_project(app, settings, name='alpha', repo='alpha'):
+def existing_project(app, settings, name='alpha', repo='alpha', owner='octo'):
     folder = settings.project_roots[0] / name
     folder.mkdir()
     run('git', 'init', '-q', '-b', 'main', str(folder))
-    run('git', '-C', str(folder), 'remote', 'add', 'origin', f'git@github.com:octo/{repo}.git')
+    run('git', '-C', str(folder), 'remote', 'add', 'origin', f'git@github.com:{owner}/{repo}.git')
     (folder / 'f.txt').write_text('x')
     run('git', '-C', str(folder), 'add', '.')
     run('git', '-C', str(folder), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'first')
@@ -92,7 +93,7 @@ def existing_project(app, settings, name='alpha', repo='alpha'):
 
 def remote_of(folder):
     return subprocess.run(['git', '-C', str(folder), 'remote', 'get-url', 'origin'], capture_output=True, text=True,
-                          check=True).stdout.strip()
+                          check=True, timeout=60).stdout.strip()
 
 
 @pytest.mark.smoke
@@ -110,7 +111,7 @@ def test_create_needs_a_token_and_then_creates_private_repo_folder_and_project(h
     folder = settings.project_roots[0] / 'fresh'
     assert remote_of(folder) == 'git@github.com:octo/fresh.git'
     assert subprocess.run(['git', '-C', str(folder), 'rev-list', '--count', 'main'], capture_output=True,
-                          text=True).stdout.strip() == '1'
+                          text=True, timeout=60).stdout.strip() == '1'
     project = app.state.registry.get(body['project']['id'])
     assert project['path'] == str(folder) and project['name'] == 'fresh'
     assert project['repository'] == 'git@github.com:octo/fresh.git'
@@ -118,19 +119,23 @@ def test_create_needs_a_token_and_then_creates_private_repo_folder_and_project(h
     assert browser.post('/api/github/projects', json={'name': 'fresh'}).status_code == 409  # folder now exists
 
 
-@pytest.mark.parametrize('private', [True, False])
-def test_create_visibility_and_name_validation(hub, private):
+@pytest.mark.parametrize('tier', ['personal', 'company'])
+def test_create_tiers_and_name_validation(hub, tier):
     browser, app, settings, github = hub
     with_token(browser, github)
-    created = browser.post('/api/github/projects', json={'name': 'fresh', 'private': private})
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+    private = tier == 'personal'
+    path = '/user/repos' if private else '/orgs/acme/repos'
+    created = browser.post('/api/github/projects', json={'name': 'fresh', 'tier': tier, 'public_confirmed': not private})
     assert created.status_code == 200, created.text
     assert created.json()['private'] is private and github.repos['fresh']['private'] is private
-    assert github.calls[0][:3] == ('POST', '/user/repos', {'name': 'fresh', 'private': private})
+    assert github.calls[0][:3] == ('POST', path, {'name': 'fresh', 'private': private})
+    assert created.json()['project']['github_tier'] == tier
     assert (settings.project_roots[0] / 'fresh').is_dir()
     assert app.state.registry.get(created.json()['project']['id'])['name'] == 'fresh'
     for bad in ('', '../x', 'a/b', '.hidden', 'x.git', 'a b', 'a' * 101):
         assert browser.post('/api/github/projects', json={'name': bad}).status_code == 409
-    assert github.methods() == [('POST', '/user/repos')]
+    assert github.methods() == [('POST', path)]
 
 
 def test_create_failure_at_github_does_nothing_locally(hub):
@@ -193,7 +198,7 @@ def test_rename_renames_github_folder_remote_and_manager_record(hub, private):
     assert remote_of(new) == 'git@github.com:octo/beta.git'
     saved = app.state.registry.get(project['id'])
     assert (saved['name'], saved['path'], saved['repository']) == ('beta', str(new), 'git@github.com:octo/beta.git')
-    assert subprocess.run(['git', '-C', str(worktree), 'status', '--short'], capture_output=True).returncode == 0
+    assert subprocess.run(['git', '-C', str(worktree), 'status', '--short'], capture_output=True, timeout=60).returncode == 0
     assert [s['status'] for s in response.json()['steps']] == ['done'] * 4
 
 
@@ -307,7 +312,7 @@ def test_rollback_that_cannot_complete_is_reported_exactly(hub, monkeypatch):
 
 def test_token_validation_storage_and_permissions(hub):
     browser, app, settings, github = hub
-    assert browser.get('/api/github').json() == {'configured': False}
+    assert browser.get('/api/github').json() == {'configured': False, 'company_org': ''}
     github.scopes = 'repo, delete_repo'
     refused = browser.put('/api/github/token', json={'token': PAT})
     assert refused.status_code == 409 and 'only the repo scope' in refused.json()['detail']
@@ -319,7 +324,7 @@ def test_token_validation_storage_and_permissions(hub):
     assert not settings.github_token_file.exists()
     github.scopes = 'repo'
     assert browser.put('/api/github/token', json={'token': PAT}).json() == {'configured': True, 'login': 'octo'}
-    assert browser.get('/api/github').json() == {'configured': True}
+    assert browser.get('/api/github').json() == {'configured': True, 'company_org': ''}
     assert settings.github_token_file.read_text().strip() == PAT
     assert settings.github_token_file.stat().st_mode & 0o777 == 0o600
     assert settings.github_token_file.parent.stat().st_mode & 0o777 == 0o700
@@ -370,6 +375,7 @@ def test_there_is_no_delete_action_anywhere(hub):
 def test_all_github_routes_need_the_owner_and_csrf(hub):
     browser, app, settings, github = hub
     routes = (('get', '/api/github', None), ('put', '/api/github/token', {'token': PAT}),
+              ('put', '/api/github/organization', {'company_org': 'acme'}),
               ('post', '/api/github/projects', {'name': 'n'}), ('post', '/api/github/projects/p/rename', {'name': 'n'}))
     for method, path, body in routes:
         anonymous = TestClient(app, base_url='http://localhost')  # no lifespan: the running app is shared
@@ -392,6 +398,7 @@ def test_restricted_instance_rejects_every_github_action(tmp_path):
         browser.headers['X-CSRF-Token'] = browser.post('/api/login', json=owner).json()['csrf']
         project_id = app.state.registry.add(project)['id']
         for method, path, body in (('get', '/api/github', None), ('put', '/api/github/token', {'token': PAT}),
+                                   ('put', '/api/github/organization', {'company_org': 'acme'}),
                                    ('post', '/api/github/projects', {'name': 'n'}),
                                    ('post', f'/api/github/projects/{project_id}/rename', {'name': 'n'})):
             response = getattr(browser, method)(path, **({'json': body} if body else {}))
@@ -408,3 +415,130 @@ def test_menu_offers_create_and_rename_only_on_the_main_instance():
     menu = source[source.index('function renderProjectMenu'):source.index("$('project-menu-button').onclick")]
     assert "if(!state.restricted){" in menu and 'Create project…' in menu and 'Rename project…' in menu
     assert 'delete' not in source[source.index('function createGithubProject'):source.index('function renameProject()')].lower()
+
+
+def test_company_org_is_one_persisted_setting_and_validated(hub):
+    browser, app, settings, github = hub
+    response = browser.put('/api/github/organization', json={'company_org': ' Example-Co '})
+    assert response.status_code == 200
+    assert response.json()['company_org'] == 'Example-Co'
+    assert app.state.db.setting('github_company_org') == 'Example-Co'
+    # A newly constructed service reads the same saved source, without a cached configuration value.
+    service = GitHubProjects(app.state.db, app.state.registry, settings, app.state.github_projects.pipeline, fetch=github)
+    assert service.status()['company_org'] == browser.get('/api/github').json()['company_org'] == 'Example-Co'
+    for org in ('../other', 'two/orgs', 'bad_name', '-edge', 'edge-', 'two--hyphens', 'a' * 40, 'a\nb'):
+        response = browser.put('/api/github/organization', json={'company_org': org})
+        assert response.status_code == 409, org
+        assert service.company_org() == 'Example-Co'
+    for org in ('a', 'A-1', 'a' * 39, ''):
+        assert browser.put('/api/github/organization', json={'company_org': org}).status_code == 200
+    assert service.company_org() == '' and github.calls == []
+
+
+def test_allow_list_accepts_only_the_saved_org_and_exact_creation_path(hub):
+    browser, app, settings, github = hub
+    with_token(browser, github)
+    api = app.state.github_projects.api
+    for configured in ('', 'bad/name', 'acme'):
+        app.state.db.set_setting('github_company_org', configured)
+        for path in ('/orgs/other/repos', '/orgs/acme/repos/', '/orgs/acme/repos?x=1',
+                     '/orgs/acme/repos/transfer', '/orgs/acme/../other/repos', '/orgs/acme%2Fother/repos',
+                     '/orgs/acme/repos\n', '/user/repos\n'):
+            with pytest.raises(github_projects.GitHubError, match='not available'):
+                api.request('POST', path, {'name': 'x'})
+        if configured != 'acme':
+            with pytest.raises(github_projects.GitHubError, match='not available'):
+                api.request('POST', '/orgs/acme/repos', {'name': 'x'})
+    assert github.calls == []
+    browser.put('/api/github/organization', json={'company_org': 'other'})
+    with pytest.raises(github_projects.GitHubError, match='not available'):
+        api.request('POST', '/orgs/acme/repos', {'name': 'x'})
+    api.request('POST', '/orgs/other/repos', {'name': 'x', 'private': False})
+    assert github.methods() == [('POST', '/orgs/other/repos')]
+
+
+def test_company_requires_org_and_explicit_public_confirmation(hub):
+    browser, app, settings, github = hub
+    with_token(browser, github)
+    body = {'name': 'company', 'tier': 'company', 'public_confirmed': True}
+    response = browser.post('/api/github/projects', json=body)
+    assert response.status_code == 409 and 'Settings' in response.json()['detail']
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+    for confirmation in (False, None):
+        body.pop('public_confirmed', None)
+        if confirmation is False:
+            body['public_confirmed'] = False
+        response = browser.post('/api/github/projects', json=body)
+        assert response.status_code == 409 and 'public' in response.json()['detail']
+    assert github.calls == [] and list(settings.project_roots[0].iterdir()) == []
+    assert browser.post('/api/github/projects', json={'name': 'x', 'tier': 'other'}).status_code == 409
+    # Legacy or forged visibility/owner inputs cannot change the fixed Personal destination.
+    response = browser.post('/api/github/projects', json={'name': 'personal', 'private': False, 'owner': 'other'})
+    assert response.status_code == 200
+    assert github.calls[0][:3] == ('POST', '/user/repos', {'name': 'personal', 'private': True})
+
+
+def test_secret_check_runs_before_company_api_creation_and_blocks_findings(hub, monkeypatch):
+    browser, app, settings, github = hub
+    with_token(browser, github)
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+    initialize = GitHubProjects.initialize
+
+    def contaminated(folder, name, remote):
+        initialize(folder, name, remote)
+        (folder / 'config.txt').write_text(PAT)
+        run('git', '-C', str(folder), 'add', 'config.txt')
+        run('git', '-C', str(folder), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'config')
+
+    monkeypatch.setattr(GitHubProjects, 'initialize', staticmethod(contaminated))
+    response = browser.post('/api/github/projects', json={'name': 'unsafe', 'tier': 'company', 'public_confirmed': True})
+    assert response.status_code == 409 and 'Secret check failed' in response.json()['detail']
+    assert PAT not in response.text
+    assert github.calls == [] and app.state.registry.list() == []
+    assert not (settings.project_roots[0] / 'unsafe').exists()
+
+
+@pytest.mark.parametrize('status', [401, 403, 404])
+def test_org_permission_error_is_clear_and_removes_prepared_folder(hub, status):
+    browser, app, settings, github = hub
+    with_token(browser, github)
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+    github.fail['POST', '/orgs/acme/repos'] = status
+    response = browser.post('/api/github/projects', json={'name': 'denied', 'tier': 'company', 'public_confirmed': True})
+    assert response.status_code == 409
+    assert "token's account needs permission to create repositories in the organization acme" in response.json()['detail']
+    assert PAT not in response.text and app.state.registry.list() == []
+    assert not (settings.project_roots[0] / 'denied').exists()
+
+
+@pytest.mark.parametrize('tier,owner', [('personal', 'octo'), ('company', 'acme')])
+def test_created_tier_survives_rename_and_org_settings_change(hub, tier, owner):
+    browser, app, settings, github = hub
+    with_token(browser, github)
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+    created = browser.post('/api/github/projects', json={'name': 'first', 'tier': tier, 'public_confirmed': True})
+    assert created.status_code == 200, created.text
+    project = created.json()['project']
+    assert project['github_tier'] == tier
+    browser.put('/api/github/organization', json={'company_org': 'other'})
+    github.calls.clear()
+    renamed = browser.post(f"/api/github/projects/{project['id']}/rename", json={'name': 'second'})
+    assert renamed.status_code == 200, renamed.text
+    assert github.calls[0][:3] == ('PATCH', f'/repos/{owner}/first', {'name': 'second'})
+    assert renamed.json()['project']['github_tier'] == tier
+    assert app.state.registry.list()[0]['github_tier'] == tier
+    assert remote_of(settings.project_roots[0] / 'second') == f'git@github.com:{owner}/second.git'
+    assert github.repos['second']['private'] == (tier == 'personal')
+
+
+def test_tier_save_failure_rolls_back_registration(hub):
+    browser, app, settings, github = hub
+    with_token(browser, github)
+    app.state.db.run("""CREATE TRIGGER refuse_tier BEFORE INSERT ON settings
+                       WHEN NEW.key LIKE 'github_tier:%'
+                       BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END""")
+    response = browser.post('/api/github/projects', json={'name': 'unregistered'})
+    assert response.status_code == 409
+    assert 'WAS created and was not deleted' in response.json()['detail']
+    assert app.state.registry.list() == []
+    assert not (settings.project_roots[0] / 'unregistered').exists()

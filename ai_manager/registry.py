@@ -57,7 +57,9 @@ class Registry:
             raise ValueError("Project directory does not exist")
         return resolved
 
-    def add(self, path: str | Path, name: str | None = None) -> dict:
+    def add(self, path: str | Path, name: str | None = None, *, github_tier: str | None = None) -> dict:
+        if github_tier not in {None, 'personal', 'company'}:
+            raise ValueError('Invalid GitHub tier')
         name = validate_display_name(name)
         path = self.allowed_path(path)
         if self.fixed and path != self.fixed:
@@ -79,6 +81,9 @@ class Registry:
                     now,
                 ),
             )
+            if github_tier:
+                conn.execute('INSERT INTO settings(key,value) VALUES(?,?)',
+                             ('github_tier:' + project_id, json.dumps(github_tier)))
             self.db.event(conn, "project.registered", {"path": str(path)}, project_id)
         if name:
             self.update(project_id, 0, {"display_name": name})
@@ -117,6 +122,7 @@ class Registry:
         for project in projects:
             project["visible"] = json.loads(project.pop("visibility"))
             project["github_backup"] = self.db.setting("github_backup:" + project["id"], {})
+            project["github_tier"] = self.db.setting("github_tier:" + project["id"])
         return projects
 
     def get(self, project_id):
@@ -125,6 +131,7 @@ class Registry:
             raise ValueError("Unknown project")
         project["visible"] = self.db.setting("project_visible:" + project_id, True)
         project["github_backup"] = self.db.setting("github_backup:" + project_id, {})
+        project["github_tier"] = self.db.setting("github_tier:" + project_id)
         return project
 
     def set_visibility(self, project_id: str, visible: bool):
