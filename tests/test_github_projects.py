@@ -428,7 +428,7 @@ def test_restricted_instance_rejects_every_github_action(tmp_path):
 def test_menu_offers_create_and_rename_only_on_the_main_instance():
     source = open(os.path.join(os.path.dirname(github_projects.__file__), 'static', 'app.js')).read()
     menu = source[source.index('function renderProjectMenu'):source.index("$('project-menu-button').onclick")]
-    assert "if(!state.restricted){" in menu and 'Create project…' in menu and 'Rename project…' in menu
+    assert "if(!state.restricted){" in menu and 'Create project' in menu and 'Rename project' in menu
     assert 'delete' not in source[source.index('function createGithubProject'):source.index('function renameProject()')].lower()
 
 

@@ -263,10 +263,19 @@ rejected pushes and later catch-up, diverged history, and queue/merge/deploy pro
 
 ### Create and rename a project on GitHub
 
-The project menu (▾ left of the model picker, main instance only) has **Create project…**, **Rename project…** and
-**GitHub settings**. The GitHub settings entry stays at the top of the scrollable menu, including on mobile, and
-opens the existing **GitHub Settings** section with the Personal token field focused. The token forms are absent
-from the main project navigation. **Change display name…** still only edits the label.
+The project menu (▾ left of the model picker, main instance only) groups projects/stashed projects, project actions,
+and **Settings** with dividers. **All Projects** is always available at the end of both the project tab strip and the
+menu's project list; it has no visibility checkbox. Project tabs otherwise keep their recent-use order, while menu
+projects are alphabetical. On mobile the menu fills the visible viewport with a sticky **Projects** header and close
+button; its content scrolls independently. Compact checkboxes keep larger tap targets. Close or Escape returns focus
+to the menu button, and keyboard navigation stays inside the open menu.
+
+**Change display name** only edits the label; the repository address stays directly underneath it.
+**Rename project** appears only when the selected project's token tier is configured. **Create project** is followed
+by a single **Settings** entry, which opens the settings view at **GitHub Settings** with the Personal token field
+focused, alongside the Company token and organization fields. The menu has no duplicate GitHub settings shortcut or
+disabled rename hint. The token forms are absent from the main project navigation. Restricted instances continue to
+hide the project menu, All Projects, and GitHub settings.
 The repository actions remain create and rename; **there is no repository delete code or route**. The API client
 refuses every request except `GET /user`, `GET /user/memberships/orgs/{configured-org}`, `GET /orgs/{configured-org}`,
 `POST /user/repos`, `POST /orgs/{configured-org}/repos` (exactly the saved organization only), and
@@ -298,7 +307,8 @@ checks and their scope limitations. See the
 [GitHub organization repository API](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository).
 
 Each tier uses its own token for **create, rename and application backup push**. A missing token disables its create
-option and blocks its rename/push, with a hint to open GitHub settings; there is no fallback to the other token or SSH.
+option, hides its menu rename action, and blocks rename/push at the API. The create dialog points to GitHub Settings;
+there is no fallback to the other token or SSH.
 Stored remotes retain the existing SSH URL style. For tiered projects, the backup worker uses the equivalent HTTPS URL
 and an ephemeral askpass helper; the credential is passed only in the network subprocess environment, never in command
 arguments or a remote URL. The helper contains no credential and is removed after the operation. Existing projects
@@ -344,7 +354,9 @@ Tests: `tests/test_github_projects.py` covers mocked GitHub creation, rename, fi
 confirmation and secret checks, rollback, token lifecycles and permissions, legacy migration, each tier's push
 credentials, token-free responses/logs and restricted routes. `tests/test_github_projects_browser.py` covers shared
 editor cancellation and saves, public confirmation, unavailable destinations, Settings persistence, both token
-lifecycles, and visible fields after opening GitHub settings at desktop/mobile widths with a long project menu.
+lifecycles, menu labels/grouping and repository details, All Projects ordering, stash/restore, keyboard focus,
+viewport fit and sticky close controls, and visible fields after opening Settings at desktop/mobile widths with a long
+project menu.
 `tests/test_restricted_browser.py` checks that both fields remain hidden on restricted instances at both widths.
 
 ## Deploy

@@ -157,7 +157,9 @@ function renderProjects(){
   const repoInfo=$('github-project-repository'),selected=state.portfolio.projects.find(p=>p.id===state.project);repoInfo.replaceChildren();if(selected?.repository){repoInfo.append(document.createTextNode(selected.repository));if(selected.github_tier)repoInfo.append(element('small',selected.github_tier==='company'?'Company':'Personal','github-tier'));}
   const scroll=$('project-tabs').scrollLeft,focused=document.activeElement.closest('#projects button')?.dataset.project,globalButton=$('all-projects');
   $('projects').replaceChildren();
-  for(const p of [...(state.restricted?[]:[null]),...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))){
+  const contexts=state.portfolio.projects.filter(p=>p.visible!==false).sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b));
+  if(!state.restricted)contexts.push(null);
+  for(const p of contexts){
     const id=p?.id||null,b=p?element('button',projectLabel(p),'project-button'):globalButton;
     b.classList.toggle('selected',state.project===id);b.title=p?p.path:'Global manager conversation and portfolio';
     if(p?.github_backup?.state==='needs-attention'){
@@ -173,7 +175,7 @@ function renderProjects(){
   if(!$('project-menu').hidden)renderProjectMenu();
   renderProjectAvailability();
 }
-function closeProjectMenu(focus=false){$('project-menu').closest('.navigation').classList.remove('project-menu-open');$('project-menu').hidden=true;$('project-menu-button').setAttribute('aria-expanded','false');if(focus)$('project-menu-button').focus();}
+function closeProjectMenu(focus=false){$('project-menu').closest('.navigation').classList.remove('project-menu-open');$('project-menu').hidden=true;$('project-menu-button').setAttribute('aria-expanded','false');if(focus)$('project-menu-button').focus({preventScroll:true});}
 let stashedProjectsOpen=false,renderingProjectMenu=false;
 const visibilityPending=new Set();
 function renderProjectAvailability(){
@@ -198,30 +200,36 @@ async function setProjectVisibility(p,visible){
 }
 function renderProjectMenu(){
   const menu=$('project-menu'),active=menu.contains(document.activeElement)?document.activeElement:null;
-  const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;menu.replaceChildren();
-  if(!state.restricted){const settings=element('button','GitHub settings');settings.dataset.project='github-settings';settings.onclick=openGithubSettings;menu.append(settings);}
+  const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;
+  const content=$('project-menu-content');content.replaceChildren();
+  const group=label=>{const section=element('div',undefined,'project-menu-group');section.setAttribute('role','group');section.setAttribute('aria-label',label);content.append(section);return section;};
+  const projects=group('Projects and stashed projects');
   const global=element('button','◈ All Projects · global context',!state.project?'selected':'');
   global.dataset.project='';global.setAttribute('aria-pressed',String(!state.project));
   global.onclick=action(async()=>{closeProjectMenu(true);await selectProject(null);});
   const addRow=(p,parent,stashed)=>{
     const row=element('div',undefined,'project-menu-row'),checkbox=element('input');checkbox.type='checkbox';checkbox.checked=!stashed;
     checkbox.dataset.visibility=p.id;checkbox.setAttribute('aria-label',`Show ${projectLabel(p)} in navigation`);
-    checkbox.onchange=action(()=>setProjectVisibility(p,checkbox.checked));row.append(checkbox);
+    checkbox.onchange=action(()=>setProjectVisibility(p,checkbox.checked));const toggle=element('label',undefined,'project-visibility-toggle');toggle.append(checkbox);row.append(toggle);
     if(stashed)row.append(element('span',projectLabel(p)));
     else{const button=element('button',projectLabel(p),state.project===p.id?'selected':'');button.dataset.project=p.id;button.setAttribute('aria-pressed',String(state.project===p.id));
       button.onclick=action(async()=>{closeProjectMenu(true);await selectProject(p.id);});row.append(button);}
     parent.append(row);
   };
   const sorted=[...state.portfolio.projects].sort(compareContexts);
-  for(const p of [null,...sorted.filter(p=>p.visible!==false)].sort(compareContexts)){if(p)addRow(p,menu,false);else menu.append(global);}
+  for(const p of sorted.filter(p=>p.visible!==false))addRow(p,projects,false);
   const stashed=sorted.filter(p=>p.visible===false);
   if(stashed.length){const details=element('details'),summary=element('summary',`Stashed projects (${stashed.length})`);details.open=stashedProjectsOpen;
-    details.ontoggle=()=>{stashedProjectsOpen=details.open;};details.append(summary);for(const p of stashed)addRow(p,details,true);menu.append(details);}
-  if(state.project){const rename=element('button','Change display name…');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};menu.append(rename);}
+    details.ontoggle=()=>{stashedProjectsOpen=details.open;};details.append(summary);for(const p of stashed)addRow(p,details,true);projects.append(details);}
+  if(!state.restricted)projects.append(global);
+  const actions=group('Project actions');
+  if(state.project){const rename=element('button','Change display name');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};actions.append(rename);}
   if(!state.restricted){
-    const selected=state.portfolio.projects.find(p=>p.id===state.project);if(selected?.repository){const info=element('p',selected.repository,'muted');if(selected.github_tier)info.append(element('small',selected.github_tier==='company'?'Company':'Personal','github-tier'));menu.append(info);}
-    const create=element('button','Create project…');create.dataset.project='github-create';create.onclick=action(async()=>{closeProjectMenu();await createGithubProject();});menu.append(create);
-    if(state.project){const tier=selected?.github_tier||'personal',available=!!state.githubStatus?.[tier]?.configured,rename=element('button',available?'Rename project…':'Rename project… · open GitHub settings');rename.dataset.project='github-rename';rename.disabled=!available;rename.title=available?'Renames the GitHub repository, the local folder and the git remote':`Save a ${tier} token in GitHub settings first`;rename.onclick=()=>{closeProjectMenu();renameGithubProject();};menu.append(rename);}
+    const selected=state.portfolio.projects.find(p=>p.id===state.project);if(selected?.repository){const info=element('p',selected.repository,'muted');if(selected.github_tier)info.append(element('small',selected.github_tier==='company'?'Company':'Personal','github-tier'));actions.append(info);}
+    const tier=selected?.github_tier||'personal';
+    if(state.project&&state.githubStatus?.[tier]?.configured){const rename=element('button','Rename project');rename.dataset.project='github-rename';rename.title='Renames the GitHub repository, the local folder and the git remote';rename.onclick=()=>{closeProjectMenu();renameGithubProject();};actions.append(rename);}
+    const create=element('button','Create project');create.dataset.project='github-create';create.onclick=action(async()=>{closeProjectMenu();await createGithubProject();});actions.append(create);
+    const settings=element('button','Settings');settings.dataset.project='github-settings';settings.onclick=openGithubSettings;group('Settings').append(settings);
   }
   renderProjectAvailability();
   if(focusKey!==undefined){const target=menu.querySelector(`[data-visibility="${focusKey}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target)?.focus({preventScroll:true});}
@@ -229,10 +237,12 @@ function renderProjectMenu(){
   else if(summaryFocused)menu.querySelector('summary')?.focus({preventScroll:true});
   menu.scrollTop=scroll;renderingProjectMenu=false;
 }
+$('project-menu-close').onclick=()=>closeProjectMenu(true);
 $('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu').closest('.navigation').classList.add('project-menu-open');$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-pressed="true"]')?.focus({preventScroll:true});$('project-menu').scrollTop=0;};
 $('project-menu').onkeydown=event=>{
   const controls=[...$('project-menu').querySelectorAll('button:not(:disabled),input:not(:disabled),summary')].filter(e=>e.getClientRects().length),index=controls.indexOf(document.activeElement);
   if(event.key==='Escape'){event.preventDefault();closeProjectMenu(true);}
+  if(event.key==='Tab'&&controls.length){if(event.shiftKey&&index===0){event.preventDefault();controls.at(-1).focus();}else if(!event.shiftKey&&index===controls.length-1){event.preventDefault();controls[0].focus();}}
   if(['ArrowDown','ArrowUp','Home','End'].includes(event.key)){event.preventDefault();controls[event.key==='Home'?0:event.key==='End'?controls.length-1:(index+(event.key==='ArrowDown'?1:-1)+controls.length)%controls.length]?.focus();}
 };
 $('project-menu').addEventListener('focusout',event=>{if(!renderingProjectMenu&&event.relatedTarget&&!$('project-menu').contains(event.relatedTarget)&&event.relatedTarget!==$('project-menu-button'))closeProjectMenu();});

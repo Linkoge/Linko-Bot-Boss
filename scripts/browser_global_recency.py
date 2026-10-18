@@ -30,6 +30,8 @@ from fake_codex import FakeServer
 from ai_manager.config import Settings
 from ai_manager.web import create_app
 s=Settings();app=create_app(s,FakeServer(s))
+# Keep unrelated backup status stable during the navigation/restart assertions.
+app.state.github_projects.pipeline.backups.tick = lambda: None
 if not app.state.registry.list():
     for path in sorted(s.project_roots[0].iterdir()):app.state.registry.add(path)
     app.state.db.set_setting('global_last_used_at',100)
@@ -71,7 +73,8 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 ids = page.evaluate("Object.fromEntries(state.portfolio.projects.map(p=>[p.name,p.id]))")
                 def order():
                     return page.locator('#projects button').evaluate_all('(buttons)=>buttons.map(b=>b.dataset.project)')
-                assert order()[:3] == [ids['Alpha'], '', ids['Aardvark']]
+                assert order()[:2] == [ids['Alpha'], ids['Aardvark']]
+                assert order()[-1] == ''
                 snapshot = page.evaluate('JSON.stringify([state.portfolio.global_last_used_at,state.portfolio.projects])')
                 # Opening, polling, and draft switches leave recency alone.
                 page.locator('#message-input').fill('Global draft')
@@ -83,15 +86,18 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 assert snapshot == page.evaluate('JSON.stringify([state.portfolio.global_last_used_at,state.portfolio.projects])')
                 page.locator('#project-menu-button').click()
                 menu_ids = page.locator('#project-menu button[aria-pressed]').evaluate_all('(buttons)=>buttons.map(b=>b.dataset.project)')
-                assert menu_ids[:4] == [ids['Aardvark'], '', ids['Alpha'], ids['Beta']]
+                assert menu_ids[:3] == [ids['Aardvark'], ids['Alpha'], ids['Beta']]
+                assert menu_ids[-1] == ''
                 page.keyboard.press('Home')
+                assert page.evaluate('document.activeElement.id') == 'project-menu-close'
+                page.keyboard.press('ArrowDown')
                 assert page.evaluate('document.activeElement.dataset.visibility') == ids['Aardvark']
                 page.keyboard.press('ArrowDown')
                 assert page.evaluate('document.activeElement.dataset.project') == ids['Aardvark']
                 page.keyboard.press('ArrowDown')
-                assert page.evaluate('document.activeElement.dataset.project') == ''
+                assert page.evaluate('document.activeElement.dataset.visibility') == ids['Alpha']
                 page.evaluate('refresh()')
-                assert page.evaluate('document.activeElement.dataset.project') == ''
+                assert page.evaluate('document.activeElement.dataset.visibility') == ids['Alpha']
                 page.keyboard.press('Escape')
                 assert page.locator('#project-menu').is_hidden()
                 page.locator('#all-projects').focus()
@@ -102,7 +108,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.locator('#send').click()
                 page.wait_for_function("() => state.history?.messages.some(m=>m.content==='Saved streamed answer') && !state.execution")
                 page.evaluate('refresh()')
-                assert order()[0] == ''
+                assert order()[-1] == ''
                 assert page.evaluate('state.history.conversation.project_id') is None
                 global_id = page.evaluate('state.history.conversation.id')
                 global_recency = page.evaluate('state.portfolio.global_last_used_at')
@@ -115,7 +121,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.locator('#send').click()
                 page.wait_for_function("() => state.history?.messages.some(m=>m.content==='Saved streamed answer') && !state.execution")
                 page.evaluate('refresh()')
-                assert order()[:2] == [ids['Alpha'], '']
+                assert order()[0] == ids['Alpha'] and order()[-1] == ''
                 assert page.evaluate('state.portfolio.global_last_used_at') == global_recency
                 # Existing response guard must ignore delayed history from a prior selection.
                 page.evaluate("""window.originalApi=api;window.releaseHistory=null;
@@ -150,7 +156,7 @@ uvicorn.run(app,host='127.0.0.1',port={port},log_level='error')
                 page.reload()
                 page.locator('#app').wait_for(state='visible')
                 page.wait_for_function('() => state.history')
-                assert order()[:2] == [ids['Alpha'], '']
+                assert order()[0] == ids['Alpha'] and order()[-1] == ''
                 assert before == page.evaluate('JSON.stringify([state.portfolio.global_last_used_at,state.portfolio.projects])')
                 assert page.evaluate('state.project') == ids['Alpha']
                 page.evaluate('selectProject(null)')

@@ -1,4 +1,4 @@
-"""Chromium shared-editor regressions against a disposable app with a mocked GitHub transport."""
+"""Chromium project-menu and shared-editor regressions against a disposable app with a mocked GitHub transport."""
 import os
 import secrets
 import socket
@@ -284,7 +284,7 @@ def test_dispatched_save_cannot_be_cancelled_and_failure_restores_cancel(page, o
 
 @pytest.mark.parametrize('width', [1200, 390])
 @pytest.mark.parametrize('project_selected', [True, False])
-def test_github_settings_menu_shortcut_focuses_the_existing_token_form(page, browser_app, project_selected, width):
+def test_settings_menu_entry_opens_the_existing_github_token_forms(page, browser_app, project_selected, width):
     page.set_viewport_size({'width': width, 'height': 900})
     if not project_selected:
         page.evaluate('()=>selectProject(null)')
@@ -296,6 +296,7 @@ def test_github_settings_menu_shortcut_focuses_the_existing_token_form(page, bro
     expect(page.locator('#github-token')).to_be_focused()
     assert page.locator('#github-token-form').count() == 1
     expect(page.locator('#github-company-token')).to_be_visible()
+    expect(page.locator('#github-company-org')).to_have_value('acme')
     expect(page.locator('#github-panel h2')).to_have_text('GitHub Settings')
     for selector in ['#github-panel', '#github-token', '#github-company-token']:
         assert page.locator(selector).evaluate('e=>getComputedStyle(e).display') != 'none'
@@ -335,19 +336,36 @@ def test_company_disabled_without_saved_org_and_hint_points_to_settings(page):
     page.evaluate("()=>api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:'acme'})})")
 
 
-@pytest.mark.parametrize('width', [1200, 390])
-def test_github_settings_stays_in_view_with_a_long_project_menu(page, browser_app, width):
-    page.set_viewport_size({'width': width, 'height': 800})
+@pytest.mark.parametrize('width,height', [(1200, 800), (390, 800), (320, 420), (590, 320)])
+def test_project_menu_scrolls_with_a_sticky_close_header_and_settings_at_the_end(page, browser_app, width, height):
+    page.set_viewport_size({'width': width, 'height': height})
     expect(page.locator('#github-panel')).not_to_be_visible()
     page.evaluate("""()=>{state.portfolio.projects.push(...Array.from({length:30},(_,i)=>({
       ...state.portfolio.projects[0],id:'menu-'+i,name:'000-'+i,display_name:null,visible:true
     })));}""")
     page.locator('#project-menu-button').click()
     entry = page.locator('[data-project=github-settings]')
-    expect(entry).to_have_text('GitHub settings')
+    expect(entry).to_have_text('Settings')
+    menu = page.locator('#project-menu')
+    assert menu.evaluate('e=>e.scrollHeight>e.clientHeight')
+    bounds = menu.bounding_box()
+    assert bounds['x'] >= 0 and bounds['y'] >= 0
+    assert bounds['x'] + bounds['width'] <= width
+    assert bounds['y'] + bounds['height'] <= height
+    if width <= 600:
+        assert bounds == {'x': 0, 'y': 0, 'width': width, 'height': height}
+    page.screenshot(path=str(browser_app[2] / f'github-menu-{width}-top.png'))
+    entry.scroll_into_view_if_needed()
     expect(entry).to_be_in_viewport()
-    assert page.locator('#project-menu').evaluate('e=>e.scrollHeight>e.clientHeight')
-    page.screenshot(path=str(browser_app[2] / f'github-menu-{width}.png'))
+    expect(page.locator('[data-project=github-create]')).to_be_in_viewport()
+    close = page.get_by_role('button', name='Close project menu')
+    expect(close).to_be_in_viewport()
+    page.screenshot(path=str(browser_app[2] / f'github-menu-{width}-bottom.png'))
+    close.click()
+    expect(menu).not_to_be_visible()
+    expect(page.locator('#project-menu-button')).to_be_focused()
+    page.locator('#project-menu-button').click()
+    assert menu.evaluate('e=>e.scrollTop') == 0
     entry.click()
     for selector in ['#github-panel', '#github-token', '#github-company-token']:
         expect(page.locator(selector)).to_be_visible()
@@ -406,8 +424,8 @@ def test_create_options_require_their_own_tokens_and_link_to_settings(page, miss
     page.evaluate('()=>loadGithubStatus()')
     if 'personal' in tiers:
         page.locator('#project-menu-button').click()
-        expect(page.locator('[data-project=github-rename]')).to_be_disabled()
-        expect(page.locator('[data-project=github-rename]')).to_contain_text('GitHub settings')
+        assert page.locator('[data-project=github-rename]').count() == 0
+        expect(page.locator('#project-menu')).not_to_contain_text('open GitHub settings')
         page.locator('#project-menu-button').click()
     menu_action(page, 'github-create')
     for tier in tiers:
@@ -419,3 +437,76 @@ def test_create_options_require_their_own_tokens_and_link_to_settings(page, miss
     expect(page.locator('#github-panel')).to_be_visible()
     for tier in tiers:
         page.evaluate("args=>api(`/api/github/tokens/${args.tier}`,{method:'PUT',body:JSON.stringify({token:args.value})})", {'tier': tier, 'value': secrets.token_hex(20)})
+
+
+@pytest.mark.parametrize('width', [1200, 390])
+def test_project_menu_labels_groups_repository_and_global_order(page, browser_app, width):
+    page.set_viewport_size({'width': width, 'height': 800})
+    page.evaluate("""()=>{
+      state.portfolio.global_last_used_at=Number.MAX_SAFE_INTEGER;
+      for(const project of state.portfolio.projects)project.last_used_at=0;
+      state.portfolio.projects.push(...[
+        {id:'menu-z',name:'Zulu',visible:true,last_used_at:100},
+        {id:'menu-a',name:'Aardvark',visible:true,last_used_at:200},
+        {id:'menu-stashed',name:'Stashed',visible:false,last_used_at:300}
+      ]);
+      renderProjects();
+    }""")
+    tabs = page.locator('#projects button').evaluate_all('(buttons)=>buttons.map(b=>b.dataset.project)')
+    assert tabs[-1] == '' and tabs[:2] == ['menu-a', 'menu-z']
+    assert 'menu-stashed' not in tabs
+    page.screenshot(path=str(browser_app[2] / f'project-overview-{width}.png'))
+    page.locator('#project-menu-button').click()
+    menu = page.locator('#project-menu')
+    assert all('…' not in label and '...' not in label for label in menu.locator('button, summary').all_inner_texts())
+    actions = menu.get_by_role('group', name='Project actions', exact=True)
+    assert actions.locator('button').all_inner_texts() == ['Change display name', 'Rename project', 'Create project']
+    assert actions.locator('[data-project=rename] + p').inner_text() == page.evaluate(
+        '()=>state.portfolio.projects.find(p=>p.id===state.project).repository')
+    assert menu.get_by_role('button', name='GitHub settings', exact=True).count() == 0
+    settings = menu.get_by_role('group', name='Settings', exact=True)
+    assert settings.locator('button').all_inner_texts() == ['Settings']
+    assert actions.evaluate('e=>e.nextElementSibling.getAttribute("aria-label")') == 'Settings'
+    projects = menu.get_by_role('group', name='Projects and stashed projects')
+    ids = projects.locator('button').evaluate_all('(buttons)=>buttons.map(b=>b.dataset.project)')
+    assert ids[0] == 'menu-a' and ids[-2:] == ['menu-z', '']
+    assert projects.locator(':scope > :last-child').get_attribute('data-project') == ''
+    assert projects.locator('[data-project=""] input').count() == 0
+    assert projects.locator('input').count() == len(tabs)  # includes stashed; excludes global
+    expect(menu.locator('[data-project=github-rename]')).to_be_enabled()
+    menu.locator('summary').click()
+    expect(menu.locator('[data-visibility=menu-stashed]')).not_to_be_checked()
+    assert menu.locator('input').first.evaluate('e=>e.getBoundingClientRect().width') == 16
+    page.screenshot(path=str(browser_app[2] / f'project-menu-{width}.png'))
+    # Keyboard navigation and focus survive a background render, including the fixed header.
+    menu.locator('[data-project=github-settings]').focus()
+    page.keyboard.press('Tab')
+    expect(page.locator('#project-menu-close')).to_be_focused()
+    page.evaluate('()=>renderProjectMenu()')
+    expect(page.locator('#project-menu-close')).to_be_focused()
+    page.keyboard.press('Shift+Tab')
+    expect(menu.locator('[data-project=github-settings]')).to_be_focused()
+    page.keyboard.press('Escape')
+    expect(menu).not_to_be_visible()
+    expect(page.locator('#project-menu-button')).to_be_focused()
+
+
+@pytest.mark.parametrize('width', [1200, 390])
+def test_menu_stash_restore_keeps_global_available_and_last(page, width):
+    page.set_viewport_size({'width': width, 'height': 800})
+    project = page.evaluate('()=>state.project')
+    page.locator('#message-input').fill('Retained draft')
+    page.locator('#project-menu-button').click()
+    page.locator(f'[data-visibility="{project}"]').uncheck()
+    page.wait_for_function('()=>state.project===null&&state.history?.conversation.project_id===null')
+    expect(page.locator('#projects button').last).to_have_attribute('id', 'all-projects')
+    expect(page.locator('#project-menu')).to_be_visible()
+    summary = page.locator('#project-menu summary')
+    if not summary.evaluate('e=>e.parentElement.open'):
+        summary.click()
+    page.locator(f'[data-visibility="{project}"]').check()
+    page.wait_for_function('(id)=>state.portfolio.projects.find(p=>p.id===id).visible', arg=project)
+    assert page.evaluate('()=>state.project') is None
+    page.locator(f'#project-menu [data-project="{project}"]').click()
+    expect(page.locator('#message-input')).to_have_value('Retained draft')
+    expect(page.locator('#projects button').last).to_have_attribute('id', 'all-projects')
