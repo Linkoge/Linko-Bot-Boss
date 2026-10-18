@@ -274,3 +274,7 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .github-tier{display:inline-block;margin-left:.5rem;padding:.1rem .4rem;border:1px solid currentColor;border-radius:.4rem;font-size:.75rem}
 #project-menu p.muted{padding:.4rem .7rem;overflow-wrap:anywhere}
 #editor input[type=checkbox]{width:auto;margin-right:.5rem}
+
+#github-panel{scroll-margin-top:110px}
+.github-token-actions{display:flex;gap:8px;flex-wrap:wrap}
+#github-panel form[data-github-tier]{border-top:1px solid var(--border);padding-top:12px;margin-top:16px}

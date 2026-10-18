@@ -8,6 +8,7 @@ import time
 from pathlib import Path
 
 import httpx
+import pytest
 from playwright.sync_api import sync_playwright
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -23,7 +24,8 @@ uvicorn.run(create_app(s, FakeServer(s)), host='127.0.0.1', port=s.port, log_lev
 '''
 
 
-def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_path):
+@pytest.mark.parametrize('width', [1200, 390])
+def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_path, width):
     (tmp_path / 'work').mkdir()
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -42,7 +44,7 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
                 time.sleep(0.1)
         with sync_playwright() as playwright:
             browser = playwright.chromium.launch()
-            page = browser.new_page(viewport={'width': 1200, 'height': 800})
+            page = browser.new_page(viewport={'width': width, 'height': 800})
             page.set_default_timeout(10000)
             errors = []
             page.on('pageerror', lambda error: errors.append(str(error)))
@@ -57,7 +59,8 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             assert page.locator('#projects button.selected').count() == 1
             page.locator('[data-view=settings]').click()
             for hidden in ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel',
-                           '#model-settings-button', '#models-panel', '#model-dialog', '#github-panel'):
+                           '#model-settings-button', '#models-panel', '#model-dialog', '#github-panel',
+                           '#github-token', '#github-company-token'):
                 assert not page.locator(hidden).is_visible(), hidden
             page.evaluate('()=>renderProjectMenu()')
             assert page.locator('[data-project="github-settings"], [data-project="github-create"], [data-project="github-rename"]').count() == 0

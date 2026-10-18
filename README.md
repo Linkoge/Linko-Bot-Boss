@@ -177,8 +177,8 @@ one saved selection drives display and dispatch."
 ## GitHub backups and secret checks
 
 The owner has authorized automatic application pushes, including verified existing backlog. Every Git project uses its
-single `origin` push URL on `github.com` (SSH or HTTPS), with the service user's existing Git credentials. The application
-pushes local `main` (legacy `master` where that is the project's main branch) to the same remote branch. It never forces,
+single `origin` push URL on `github.com` (SSH or HTTPS). Projects created as Personal or Company use that tier's saved
+token over HTTPS; existing projects without a tier use the service user's Git credentials. The application pushes local `main` (legacy `master` where that is the project's main branch) to the same remote branch. It never forces,
 resets local commits or rewrites history, and the backup itself never creates repositories or changes remote
 configuration (only the owner's menu actions below do). Non-Git projects keep
 their in-place workflow. Missing/unsupported origins or authentication failures need attention, without holding work.
@@ -264,31 +264,50 @@ rejected pushes and later catch-up, diverged history, and queue/merge/deploy pro
 ### Create and rename a project on GitHub
 
 The project menu (▾ left of the model picker, main instance only) has **Create project…**, **Rename project…** and
-**GitHub settings…**, which opens the existing **Settings → GitHub** panel and focuses its token field.
-(**Change display name…** still only edits the label.) These are the only two GitHub actions; **there is no delete code
-at all**, no delete route, and the API client refuses every request except `GET /user`, `POST /user/repos`,
-`POST /orgs/{configured-org}/repos` (exactly the saved organization only), and `PATCH /repos/{owner}/{repo}`
-(`ai_manager/github_projects.py`).
+**GitHub settings**. The GitHub settings entry stays at the top of the scrollable menu, including on mobile, and
+opens the existing **GitHub Settings** section with the Personal token field focused. The token forms are absent
+from the main project navigation. **Change display name…** still only edits the label.
+The repository actions remain create and rename; **there is no repository delete code or route**. The API client
+refuses every request except `GET /user`, `GET /user/memberships/orgs/{configured-org}`, `GET /orgs/{configured-org}`,
+`POST /user/repos`, `POST /orgs/{configured-org}/repos` (exactly the saved organization only), and
+`PATCH /repos/{owner}/{repo}` (`ai_manager/github_projects.py`).
 
-*Credentials.* Pushes never used an application credential: they run `git push` with the service user's own SSH key or
-Git credential helper (above). That cannot call the REST API, so creating/renaming needs one extra credential: a GitHub
-**classic** personal access token with **only the `repo` scope** (leave `delete_repo` unticked so GitHub itself refuses
-deletes; a fine-grained token's Administration permission bundles delete, so do not use one). `repo` is still broad
-(read/write on all your repositories). Paste it once into **Settings → GitHub**; the server validates it against
-`GET /user` and rejects fine-grained tokens and any token with a scope other than `repo`. It is stored in one file
-outside every repository, `~/.config/linko-bot-manager/github-token` (override with `AI_MANAGER_GITHUB_TOKEN_FILE`),
-mode 0600 in a 0700 directory; a file readable by others is refused. It is never put in SQLite, events, logs, API
-responses, tasks or prompts, and error text from GitHub or the network has it redacted. Revoke it on GitHub to remove it.
-The same Settings token is used for Personal and Company. For Company, its account must have permission to create
-repositories in the configured organization, including public repositories under that organization's policy; no new
-token or additional token scope is stored. Organization permission failures explain this requirement. See the
+*Credentials.* **GitHub Settings** has separate **Personal token** and **Company token** password fields, each with
+**Save**, **Validate**, **Replace** and **Remove**. Save validates a new token; Replace validates and replaces the saved
+token only on success. Validate checks the saved token again without returning it to the browser. Remove deletes only
+that tier's local credential file; it does not revoke the token on GitHub or delete a repository. Each form shows the
+connected username and validation status, including after reload. Pasted values are cleared after an operation and
+never stored in browser local/session storage.
+
+Both tokens must be GitHub **classic** personal access tokens with **only the `repo` scope**, leaving `delete_repo`
+unticked. The server checks `GET /user`, rejects fine-grained tokens and rejects every scope other than `repo`.
+`repo` is broad (read/write access to repositories). Personal uses `~/.config/linko-bot-manager/github-token`
+(override `AI_MANAGER_GITHUB_TOKEN_FILE`); Company uses the sibling `github-company-token`
+(override `AI_MANAGER_GITHUB_COMPANY_TOKEN_FILE`). Files have mode 0600 in a private 0700 directory, outside Git.
+The existing single file is migrated **in place as Personal**, preserving its path and contents; it is never copied
+into Company. Validate once to populate the legacy token's username/status. No token is put in SQLite, events, logs,
+API responses, tasks, prompts or Git configuration. Token request validation errors also omit submitted inputs.
+
+Company validation checks membership and public repository creation policy for the configured organization when
+GitHub exposes them with `repo` scope. Known inactive membership or a policy denial blocks validation. If GitHub does
+not expose membership/policy, the UI says permission could not be fully checked; actual creation remains authoritative.
+No extra token scope is requested. Revalidate after changing the organization.
+The [organization membership API](https://docs.github.com/en/rest/orgs/members#get-an-organization-membership-for-the-authenticated-user)
+and [organization details API](https://docs.github.com/en/rest/orgs/orgs#get-an-organization) document these permission
+checks and their scope limitations. See the
 [GitHub organization repository API](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository).
-New repositories use the existing SSH push style (`git@github.com:owner/name.git`).
 
-*Destinations.* Save the single **Company organization** in **Settings → GitHub**, next to the existing token entry.
+Each tier uses its own token for **create, rename and application backup push**. A missing token disables its create
+option and blocks its rename/push, with a hint to open GitHub settings; there is no fallback to the other token or SSH.
+Stored remotes retain the existing SSH URL style. For tiered projects, the backup worker uses the equivalent HTTPS URL
+and an ephemeral askpass helper; the credential is passed only in the network subprocess environment, never in command
+arguments or a remote URL. The helper contains no credential and is removed after the operation. Existing projects
+without a saved tier retain their service-user Git credentials. Secret checks and non-forcing backup behavior remain.
+
+*Destinations.* Save the single **Company organization** in **Settings → GitHub**, alongside the two token entries.
 Use its GitHub name (1–39 letters/digits with single hyphens between them), not a URL. The saved value is the value
-shown in Settings and used for creation. Leave it blank to make Company unavailable; the create dialog points back
-to Settings. The main project list has no organization field or tier labels.
+shown in Settings and used for creation. Company needs both the Company token and the organization. Leave it blank
+to make Company unavailable; the create dialog points back to Settings. The main project list has no organization field or tier labels.
 
 *Create project*: choose a name and **Personal** or **Company**. Personal always creates a **private** repository in
 the token owner's account via `POST /user/repos`. Company always creates a **public** repository directly in the
@@ -321,13 +340,12 @@ created on GitHub cannot be undone by the application (no delete): the report sa
 reused on GitHub. Restricted instances reject all GitHub routes (`/api/github*`) with `Not available on a restricted
 instance`. The push-time secret check is unchanged.
 
-Tests: `tests/test_github_projects.py` (mocked GitHub API: fixed Personal/Company create, saved org validation, exact
-org allow-list, public confirmation, secret-check refusal, org permission messages, rename preserving tier and
-visibility, failure midway with rollback, blocked while running, no token, token validation and file mode, no delete route/request, token
-never logged/stored, restricted), `tests/test_github_projects_browser.py` (disposable app and Chromium: shared editor
-cancellation and saves, in-flight protection, destination choices and public confirmation, disabled Company without
-an org, Settings organization persistence, tier labels and the existing GitHub settings shortcut), and
-`tests/test_restricted_browser.py` (GitHub controls stay unavailable on restricted instances).
+Tests: `tests/test_github_projects.py` covers mocked GitHub creation, rename, fixed tiers, saved organization,
+confirmation and secret checks, rollback, token lifecycles and permissions, legacy migration, each tier's push
+credentials, token-free responses/logs and restricted routes. `tests/test_github_projects_browser.py` covers shared
+editor cancellation and saves, public confirmation, unavailable destinations, Settings persistence, both token
+lifecycles, and visible fields after opening GitHub settings at desktop/mobile widths with a long project menu.
+`tests/test_restricted_browser.py` checks that both fields remain hidden on restricted instances at both widths.
 
 ## Deploy
 

@@ -1,8 +1,7 @@
 """Create and rename a GitHub repository together with its local project. There is deliberately no delete action.
 
-The token is a GitHub classic personal access token with only the `repo` scope. It lives in one file outside every
-repository (mode 0600, directory 0700), is read only at the moment of an API call, and is never stored in SQLite,
-events, logs, API responses, tasks or prompts. Pushes keep using the service user's own Git credentials (SSH).
+Each tier uses its own classic token with only `repo` scope, in a private file outside repositories.
+Tokens are never stored in SQLite, events, logs, API responses, tasks, prompts or Git configuration.
 """
 import json
 import logging
@@ -52,7 +51,12 @@ class TokenStore:
     def configured(self):
         return self.path.is_file()
 
+    def check_location(self):
+        if any((parent / '.git').exists() for parent in self.path.resolve().parents):
+            raise GitHubError('GitHub token files must be outside repositories')
+
     def read(self):
+        self.check_location()
         try:
             if self.path.stat().st_mode & 0o077:
                 raise GitHubError('The GitHub token file must be readable only by the service user (chmod 600)')
@@ -64,6 +68,7 @@ class TokenStore:
         return token
 
     def write(self, token):
+        self.check_location()
         self.path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         descriptor, temporary = tempfile.mkstemp(dir=self.path.parent, prefix='.token-')
         try:
@@ -74,6 +79,9 @@ class TokenStore:
         finally:
             if os.path.exists(temporary):
                 os.unlink(temporary)
+
+    def remove(self):
+        self.path.unlink(missing_ok=True)
 
 
 def urllib_fetch(method, url, headers, body, timeout):
@@ -103,7 +111,8 @@ class GitHubApi:
     def request(self, method, path, payload=None, token=None):
         org = self.company_org()
         org_creation = method == 'POST' and valid_org(org) and path == f'/orgs/{org}/repos'
-        if not org_creation and not any(m == method and rule.fullmatch(path) for m, rule in ALLOWED):
+        org_check = method == 'GET' and valid_org(org) and path in {f'/user/memberships/orgs/{org}', f'/orgs/{org}'}
+        if not (org_creation or org_check) and not any(m == method and rule.fullmatch(path) for m, rule in ALLOWED):
             raise GitHubError('This GitHub action is not available')
         token = token or self.store.read()
         headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json',
@@ -144,7 +153,29 @@ class GitHubProjects:
     def __init__(self, db, registry, settings, pipeline, store=None, fetch=None):
         self.db, self.registry, self.settings, self.pipeline = db, registry, settings, pipeline
         self.store = store or TokenStore(settings.github_token_file or default_token_file())
+        # In-place migration: the existing github-token file is Personal, never copied to Company.
+        company_path = settings.github_company_token_file or self.store.path.with_name('github-company-token')
+        if Path(company_path).expanduser().resolve() == self.store.path.resolve():
+            raise ValueError('Personal and Company token files must be separate')
+        self.stores = {'personal': self.store, 'company': TokenStore(company_path)}
         self.api = GitHubApi(self.store, fetch, self.company_org)
+        self.apis = {'personal': self.api, 'company': GitHubApi(self.stores['company'], fetch, self.company_org)}
+
+    def tier(self, tier):
+        self.guard()
+        if tier not in self.stores:
+            raise GitHubError('Choose Personal or Company')
+        return tier
+
+    def require_token(self, tier):
+        self.tier(tier)
+        if not self.stores[tier].configured():
+            raise GitHubError(f'No GitHub token is saved for {tier.title()}. Open GitHub settings first')
+        return self.stores[tier].read()
+
+    def push_credentials(self, project):
+        tier = project.get('github_tier')
+        return self.require_token(tier)
 
     def company_org(self):
         return self.db.setting(COMPANY_ORG, '')
@@ -155,6 +186,9 @@ class GitHubProjects:
         if org and not valid_org(org):
             raise GitHubError('Use a GitHub organization name: 1-39 letters or digits with single hyphens '
                               'between them (no spaces, underscores or URL)')
+        if org != self.company_org():
+            previous = self.token_status('company')
+            self.db.set_setting('github_validation:company', {'login': previous['login'], 'validation': 'unvalidated'})
         self.db.set_setting(COMPANY_ORG, org)
         return self.status()
 
@@ -170,15 +204,29 @@ class GitHubProjects:
 
     def status(self):
         self.guard()
-        return {'configured': self.store.configured(), 'company_org': self.company_org()}
+        return {'configured': self.store.configured(), 'company_org': self.company_org(),
+                **{tier: self.token_status(tier) for tier in self.stores}}
 
-    def save_token(self, token):
+    def token_status(self, tier):
+        self.tier(tier)
+        configured = self.stores[tier].configured()
+        return {'configured': configured, 'login': '', 'validation': 'unvalidated' if configured else 'missing',
+                **(self.db.setting('github_validation:' + tier, {}) if configured else {})}
+
+    def save_token(self, token, tier='personal'):
         """Accept only a classic token with `repo` and without `delete_repo`, then store it."""
-        self.guard()
+        self.tier(tier)
         token = (token or '').strip()
         if not 20 <= len(token) <= 255 or re.search(r'\s', token):
             raise GitHubError('That does not look like a GitHub personal access token')
-        received, data = self.api.request('GET', '/user', token=token)
+        result = self.check_token(token, tier)
+        self.stores[tier].write(token)
+        self.db.set_setting('github_validation:' + tier, result)
+        return self.token_status(tier)
+
+    def check_token(self, token, tier):
+        api = self.apis[tier]
+        received, data = api.request('GET', '/user', token=token)
         scopes = {s.strip() for s in received.get('x-oauth-scopes', '').split(',') if s.strip()}
         if 'x-oauth-scopes' not in received:
             raise GitHubError('Use a classic personal access token, not a fine-grained one')
@@ -186,8 +234,52 @@ class GitHubProjects:
             raise GitHubError('The token needs the repo scope')
         if scopes - {'repo'}:
             raise GitHubError('The token must have only the repo scope; remove every other scope, delete_repo especially')
-        self.store.write(token)
-        return {'configured': True, 'login': str(data.get('login', ''))}
+        login = data.get('login', '')
+        if not valid_org(login) or token in login:
+            raise GitHubError('GitHub returned an invalid account name')
+        result = {'login': login, 'validation': 'valid'}
+        if tier == 'company':
+            result['org_permission'] = self.check_company_permission(api, token)
+        return result
+
+    def check_company_permission(self, api, token):
+        org = self.company_org()
+        if not valid_org(org):
+            return 'Configure the company organization, then Validate again.'
+        try:
+            _, membership = api.request('GET', f'/user/memberships/orgs/{org}', token=token)
+            _, organization = api.request('GET', f'/orgs/{org}', token=token)
+        except GitHubError:
+            # repo-only tokens may not expose membership/policy. Never ask for read:org scope.
+            return 'GitHub did not expose organization permissions with repo-only scope; creation will verify access.'
+        if membership.get('state') != 'active':
+            raise GitHubError('The Company account is not an active member of the configured organization')
+        if membership.get('role') == 'admin':
+            return f'Organization owner: can create public repositories in {org}.'
+        allowed = organization.get('members_can_create_public_repositories')
+        if allowed is None:
+            allowed = organization.get('members_can_create_repositories')
+        if allowed is False:
+            raise GitHubError('The organization does not allow this Company account to create public repositories')
+        return (f'Organization policy allows public repository creation in {org}.' if allowed is True else
+                'Active organization member; GitHub did not expose creation policy. Creation will verify access.')
+
+    def validate_token(self, tier='personal'):
+        self.tier(tier)
+        try:
+            result = self.check_token(self.require_token(tier), tier)
+        except GitHubError:
+            previous = self.token_status(tier)
+            self.db.set_setting('github_validation:' + tier, {'login': previous['login'], 'validation': 'invalid'})
+            raise
+        self.db.set_setting('github_validation:' + tier, result)
+        return self.token_status(tier)
+
+    def remove_token(self, tier='personal'):
+        self.tier(tier)
+        self.stores[tier].remove()
+        self.db.set_setting('github_validation:' + tier, {})
+        return self.token_status(tier)
 
     # ---- create -----------------------------------------------------------------------------------------------
 
@@ -208,7 +300,7 @@ class GitHubProjects:
         if folder.exists() or folder.is_symlink() or self.db.one('SELECT 1 FROM projects WHERE path=?', (str(folder),)):
             raise GitHubError(f'The folder {name} already exists; nothing was created')
         steps = []
-        self.store.read()
+        self.require_token(tier)
         if company:
             # Prepare the actual initial project and scan all its history before creating anything public.
             # No registration means the backup worker cannot push before this check and confirmation.
@@ -226,7 +318,7 @@ class GitHubProjects:
                 self.remove_new_folder(folder, steps)
                 raise GitHubError(message + '. No GitHub repository was created', steps) from None
         try:
-            _, repo = self.api.request('POST', f'/orgs/{org}/repos' if company else '/user/repos',
+            _, repo = self.apis[tier].request('POST', f'/orgs/{org}/repos' if company else '/user/repos',
                                        {'name': name, 'private': private})
         except GitHubError as error:
             step(steps, 'create GitHub repository', 'failed', str(error))
@@ -306,7 +398,7 @@ class GitHubProjects:
         match = REMOTE.match(remote)
         if not match:
             raise GitHubError('The project has no github.com origin; nothing was changed')
-        self.store.read()
+        self.require_token(project.get('github_tier') or 'personal')
         try:
             with fence.hold(self.db.path.parent, exclusive=True, wait=5):
                 # Held for the whole rename: no task can start, nothing merges and nothing deploys meanwhile.
@@ -325,13 +417,14 @@ class GitHubProjects:
 
     def rename_locked(self, project, old_path, new_path, new_name, match):
         steps, owner, old_repo = [], match['owner'], match['repo']
+        api = self.apis[project.get('github_tier') or 'personal']
         try:
-            self.api.request('PATCH', f'/repos/{owner}/{old_repo}', {'name': new_name})
+            api.request('PATCH', f'/repos/{owner}/{old_repo}', {'name': new_name})
             step(steps, 'rename GitHub repository', 'done', f'{owner}/{old_repo} -> {owner}/{new_name}')
         except GitHubError as error:
             step(steps, 'rename GitHub repository', 'failed', str(error))
             raise GitHubError(f'{error}. Nothing was changed', steps) from None
-        undo = [('rename GitHub repository back', lambda: self.api.request(
+        undo = [('rename GitHub repository back', lambda: api.request(
             'PATCH', f'/repos/{owner}/{new_name}', {'name': old_repo}))]
         new_remote = f'{match["prefix"]}{owner}/{new_name}{match["suffix"] or ""}'
         stage = 'rename local folder'

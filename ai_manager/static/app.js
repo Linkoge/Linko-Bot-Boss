@@ -199,6 +199,7 @@ async function setProjectVisibility(p,visible){
 function renderProjectMenu(){
   const menu=$('project-menu'),active=menu.contains(document.activeElement)?document.activeElement:null;
   const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;menu.replaceChildren();
+  if(!state.restricted){const settings=element('button','GitHub settings');settings.dataset.project='github-settings';settings.onclick=openGithubSettings;menu.append(settings);}
   const global=element('button','◈ All Projects · global context',!state.project?'selected':'');
   global.dataset.project='';global.setAttribute('aria-pressed',String(!state.project));
   global.onclick=action(async()=>{closeProjectMenu(true);await selectProject(null);});
@@ -220,8 +221,7 @@ function renderProjectMenu(){
   if(!state.restricted){
     const selected=state.portfolio.projects.find(p=>p.id===state.project);if(selected?.repository){const info=element('p',selected.repository,'muted');if(selected.github_tier)info.append(element('small',selected.github_tier==='company'?'Company':'Personal','github-tier'));menu.append(info);}
     const create=element('button','Create project…');create.dataset.project='github-create';create.onclick=action(async()=>{closeProjectMenu();await createGithubProject();});menu.append(create);
-    if(state.project){const rename=element('button','Rename project…');rename.dataset.project='github-rename';rename.title='Renames the GitHub repository, the local folder and the git remote';rename.onclick=()=>{closeProjectMenu();renameGithubProject();};menu.append(rename);}
-    const githubSettings=element('button','GitHub settings…');githubSettings.dataset.project='github-settings';githubSettings.onclick=()=>{closeProjectMenu();showView('settings');$('github-panel').scrollIntoView({block:'start'});$('github-token').focus({preventScroll:true});};menu.append(githubSettings);
+    if(state.project){const tier=selected?.github_tier||'personal',available=!!state.githubStatus?.[tier]?.configured,rename=element('button',available?'Rename project…':'Rename project… · open GitHub settings');rename.dataset.project='github-rename';rename.disabled=!available;rename.title=available?'Renames the GitHub repository, the local folder and the git remote':`Save a ${tier} token in GitHub settings first`;rename.onclick=()=>{closeProjectMenu();renameGithubProject();};menu.append(rename);}
   }
   renderProjectAvailability();
   if(focusKey!==undefined){const target=menu.querySelector(`[data-visibility="${focusKey}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target)?.focus({preventScroll:true});}
@@ -229,7 +229,7 @@ function renderProjectMenu(){
   else if(summaryFocused)menu.querySelector('summary')?.focus({preventScroll:true});
   menu.scrollTop=scroll;renderingProjectMenu=false;
 }
-$('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu').closest('.navigation').classList.add('project-menu-open');$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-pressed="true"]')?.focus();};
+$('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu').closest('.navigation').classList.add('project-menu-open');$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-pressed="true"]')?.focus({preventScroll:true});$('project-menu').scrollTop=0;};
 $('project-menu').onkeydown=event=>{
   const controls=[...$('project-menu').querySelectorAll('button:not(:disabled),input:not(:disabled),summary')].filter(e=>e.getClientRects().length),index=controls.indexOf(document.activeElement);
   if(event.key==='Escape'){event.preventDefault();closeProjectMenu(true);}
@@ -765,17 +765,34 @@ document.addEventListener('DOMContentLoaded',()=>boot().catch(error=>notice(erro
 async function createGithubProject(){
   if($('editor').open)return;
   const status=await api('/api/github');if($('editor').open)return;
-  editor('Create project',[{name:'name',label:'Name (also the GitHub repository and folder name)',required:true},{name:'tier',label:'Destination',options:[['personal','Personal · private'],['company',status.company_org?`Company · ${status.company_org} · public`:'Company · configure in Settings → GitHub']],value:'personal'},{name:'public_confirmed',type:'checkbox',value:'true',label:'I confirm this Company repository will be public.'}],async values=>{
+  editor('Create project',[{name:'name',label:'Name (also the GitHub repository and folder name)',required:true},{name:'tier',label:'Destination',options:[['personal',status.personal.configured?'Personal · private':'Personal · configure in Settings → GitHub'],['company',status.company_org&&status.company.configured?`Company · ${status.company_org} · public`:'Company · configure in Settings → GitHub']],value:status.personal.configured?'personal':status.company.configured&&status.company_org?'company':'personal'},{name:'public_confirmed',type:'checkbox',value:'true',label:'I confirm this Company repository will be public.'}],async values=>{
     const result=await api('/api/github/projects',{method:'POST',body:JSON.stringify({name:values.name,tier:values.tier,public_confirmed:values.public_confirmed==='true'})});state.project=result.project.id;return result;});
   const destination=$('editor-fields').querySelector('[name=tier]'),confirmation=$('editor-fields').querySelector('[name=public_confirmed]');
-  destination.querySelector('[value=company]').disabled=!status.company_org;
-  if(!status.company_org)$('editor-fields').append(element('small','Company is unavailable. Configure the company organization in Settings → GitHub.','muted'));
+  destination.querySelector('[value=personal]').disabled=!status.personal.configured;
+  destination.querySelector('[value=company]').disabled=!status.company_org||!status.company.configured;
+  if(!status.personal.configured||!status.company.configured||!status.company_org){
+    $('editor-fields').append(element('small','Unavailable destinations need their own token; Company also needs an organization. Open GitHub settings.','muted'));
+    const settings=element('button','Open GitHub settings');settings.type='button';settings.onclick=()=>{if($('editor-cancel').disabled)return;$('editor').close();openGithubSettings();};$('editor-fields').append(settings);
+  }
+  $('editor-form').querySelector('[type=submit]').disabled=!status.personal.configured&&(!status.company.configured||!status.company_org);
   destination.onchange=()=>{const company=destination.value==='company';confirmation.closest('label').hidden=!company;confirmation.disabled=!company;confirmation.required=company;confirmation.checked=false;};destination.onchange();
 }
 function renameGithubProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'name',label:'New name (renames the GitHub repository, local folder and registry name; updates the git remote; visibility unchanged; blocked while a task is running)',value:p.name,required:true}],values=>api(`/api/github/projects/${p.id}/rename`,{method:'POST',body:JSON.stringify({name:values.name})}));}
-async function loadGithubStatus(){if(state.restricted)return;try{const s=await api('/api/github');$('github-status').textContent=s.configured?'A GitHub token is saved.':'No GitHub token saved.';$('github-company-org').value=s.company_org;}catch(error){$('github-status').textContent=error.message;}}
-$('github-org-form').onsubmit=action(async event=>{event.preventDefault();const s=await api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:$('github-company-org').value})});$('github-company-org').value=s.company_org;$('github-org-status').textContent=s.company_org?'Company organization saved.':'Company disabled. Configure an organization here to enable it.';});
-$('github-token-form').onsubmit=action(async event=>{event.preventDefault();const input=$('github-token');try{const r=await api('/api/github/token',{method:'PUT',body:JSON.stringify({token:input.value})});$('github-status').textContent=`A GitHub token is saved${r.login?` for ${r.login}`:''}.`;}catch(error){$('github-status').textContent=error.message;}finally{input.value='';}});
+function openGithubSettings(){closeProjectMenu();showView('settings');$('github-panel').scrollIntoView({block:'start'});$('github-token').focus({preventScroll:true});loadGithubStatus();}
+const githubTokenForms={personal:{form:'github-token-form',input:'github-token',status:'github-status'},company:{form:'github-company-token-form',input:'github-company-token',status:'github-company-status'}};
+function renderGithubToken(tier,s){const ids=githubTokenForms[tier],form=$(ids.form);$(ids.status).textContent=`${s.login?`Connected as ${s.login}. `:''}Validation: ${s.validation}. ${s.org_permission||''}${s.configured?'':' Paste a token and Save.'}`;for(const button of form.querySelectorAll('button'))button.disabled=button.dataset.tokenAction==='save'?s.configured:!s.configured;}
+async function loadGithubStatus(){if(state.restricted)return;try{const s=await api('/api/github');state.githubStatus=s;for(const tier of Object.keys(githubTokenForms))renderGithubToken(tier,s[tier]);$('github-company-org').value=s.company_org;}catch(error){$('github-status').textContent=error.message;}}
+$('github-org-form').onsubmit=action(async event=>{event.preventDefault();const s=await api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:$('github-company-org').value})});$('github-company-org').value=s.company_org;renderGithubToken('company',s.company);$('github-org-status').textContent=s.company_org?'Company organization saved.':'Company disabled. Configure an organization here to enable it.';});
+for(const [tier,ids] of Object.entries(githubTokenForms)){
+  const form=$(ids.form),input=$(ids.input);
+  const perform=async operation=>{
+    const options=operation==='save'||operation==='replace'?{method:'PUT',body:JSON.stringify({token:input.value})}:{method:'POST'};
+    input.value='';for(const button of form.querySelectorAll('button'))button.disabled=true;
+    let failure='';try{const s=await api(`/api/github/tokens/${tier}${options.method==='POST'?`/${operation}`:''}`,options);renderGithubToken(tier,s);}catch(error){failure=error.message;}finally{await loadGithubStatus();if(failure)$(ids.status).textContent+=` ${failure}`;}
+  };
+  form.onsubmit=action(async event=>{event.preventDefault();await perform(event.submitter?.dataset.tokenAction||'save');});
+  for(const operation of ['validate','remove'])form.querySelector(`[data-token-action=${operation}]`).onclick=()=>perform(operation);
+}
 function renameProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'display_name',label:'Display name',value:p.display_name||''}],values=>api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,revision:p.revision})}));}
 
 // Keyboard APIs are optional; viewport shrink is a best-effort mobile signal.

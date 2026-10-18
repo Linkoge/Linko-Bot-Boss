@@ -18,13 +18,15 @@ import sys
 sys.path.insert(0, 'tests')
 import uvicorn
 from fake_codex import FakeServer
-from test_github_projects import FakeGitHub, PAT, existing_project
+from test_github_projects import FakeGitHub, PAT, COMPANY_PAT, existing_project
 from ai_manager.config import Settings
 from ai_manager.web import create_app
 s = Settings()
 github = FakeGitHub()
 app = create_app(s, FakeServer(s), github_fetch=github)
+app.state.github_projects.pipeline.backups.tick = lambda: None
 app.state.github_projects.store.write(PAT)
+app.state.github_projects.stores['company'].write(COMPANY_PAT)
 app.state.github_projects.save_company_org('acme')
 existing_project(app, s)
 github.repos['alpha'] = {'name': 'alpha', 'private': True}
@@ -280,8 +282,10 @@ def test_dispatched_save_cannot_be_cancelled_and_failure_restores_cancel(page, o
     assert len(requests) == 1
 
 
+@pytest.mark.parametrize('width', [1200, 390])
 @pytest.mark.parametrize('project_selected', [True, False])
-def test_github_settings_menu_shortcut_focuses_the_existing_token_form(page, project_selected):
+def test_github_settings_menu_shortcut_focuses_the_existing_token_form(page, browser_app, project_selected, width):
+    page.set_viewport_size({'width': width, 'height': 900})
     if not project_selected:
         page.evaluate('()=>selectProject(null)')
     requests = writes(page)
@@ -291,7 +295,13 @@ def test_github_settings_menu_shortcut_focuses_the_existing_token_form(page, pro
     expect(page.locator('#github-panel')).to_be_visible()
     expect(page.locator('#github-token')).to_be_focused()
     assert page.locator('#github-token-form').count() == 1
-    assert page.locator('input[type=password]').filter(visible=True).count() == 1
+    expect(page.locator('#github-company-token')).to_be_visible()
+    expect(page.locator('#github-panel h2')).to_have_text('GitHub Settings')
+    for selector in ['#github-panel', '#github-token', '#github-company-token']:
+        assert page.locator(selector).evaluate('e=>getComputedStyle(e).display') != 'none'
+    assert page.locator('input[type=password]').filter(visible=True).count() == 2
+    assert page.locator('#projects [data-project=github-settings], #projects input[type=password]').count() == 0
+    page.screenshot(path=str(browser_app[2] / f'github-settings-{width}.png'), full_page=True)
     page.locator('[data-view=chat]').click()
     page.locator('[data-view=settings]').click()
     expect(page.locator('#github-token-form')).to_be_visible()
@@ -319,7 +329,93 @@ def test_company_disabled_without_saved_org_and_hint_points_to_settings(page):
     page.evaluate("()=>api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:''})})")
     menu_action(page, 'github-create')
     expect(page.locator('select[name=tier] option[value=company]')).to_have_attribute('disabled', '')
-    expect(page.locator('#editor-fields')).to_contain_text('Settings → GitHub')
+    expect(page.locator('#editor-fields')).to_contain_text('GitHub settings')
     expect(page.locator('select[name=tier]')).to_have_value('personal')
     page.locator('#editor-cancel').click()
     page.evaluate("()=>api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:'acme'})})")
+
+
+@pytest.mark.parametrize('width', [1200, 390])
+def test_github_settings_stays_in_view_with_a_long_project_menu(page, browser_app, width):
+    page.set_viewport_size({'width': width, 'height': 800})
+    expect(page.locator('#github-panel')).not_to_be_visible()
+    page.evaluate("""()=>{state.portfolio.projects.push(...Array.from({length:30},(_,i)=>({
+      ...state.portfolio.projects[0],id:'menu-'+i,name:'000-'+i,display_name:null,visible:true
+    })));}""")
+    page.locator('#project-menu-button').click()
+    entry = page.locator('[data-project=github-settings]')
+    expect(entry).to_have_text('GitHub settings')
+    expect(entry).to_be_in_viewport()
+    assert page.locator('#project-menu').evaluate('e=>e.scrollHeight>e.clientHeight')
+    page.screenshot(path=str(browser_app[2] / f'github-menu-{width}.png'))
+    entry.click()
+    for selector in ['#github-panel', '#github-token', '#github-company-token']:
+        expect(page.locator(selector)).to_be_visible()
+        assert page.locator(selector).evaluate('e=>getComputedStyle(e).display') != 'none'
+    assert not page.evaluate("()=>document.body.classList.contains('restricted')")
+
+
+@pytest.mark.parametrize('tier,form_id,input_id,status_id', [
+    ('personal', 'github-token-form', 'github-token', 'github-status'),
+    ('company', 'github-company-token-form', 'github-company-token', 'github-company-status'),
+])
+def test_each_token_form_saves_validates_replaces_and_removes_without_echo(page, tier, form_id, input_id, status_id):
+    menu_action(page, 'github-settings')
+    form, field, status = page.locator('#' + form_id), page.locator('#' + input_id), page.locator('#' + status_id)
+    assert field.get_attribute('type') == 'password'
+    assert field.get_attribute('autocomplete') == 'off'
+    response_texts = []
+    page.on('response', lambda response: response_texts.append(response.text()) if '/api/github' in response.url else None)
+    form.locator('[data-token-action=remove]').click()
+    expect(status).to_contain_text('Validation: missing')
+    expect(form.locator('[data-token-action=save]')).to_be_enabled()
+    for operation in ['validate', 'replace', 'remove']:
+        expect(form.locator(f'[data-token-action={operation}]')).to_be_disabled()
+    first, second = secrets.token_hex(20), secrets.token_hex(20)
+    for operation, value in [('save', first), ('replace', second)]:
+        field.fill(value)
+        form.locator(f'[data-token-action={operation}]').click()
+        expect(status).to_contain_text('Connected as octo. Validation: valid')
+        expect(field).to_have_value('')
+        expect(form.locator('[data-token-action=save]')).to_be_disabled()
+        expect(form.locator('[data-token-action=replace]')).to_be_enabled()
+    form.locator('[data-token-action=validate]').click()
+    expect(status).to_contain_text('Validation: valid')
+    expect(form.locator('[data-token-action=validate]')).to_be_enabled()
+    page.reload()
+    page.wait_for_function('()=>state.ready')
+    menu_action(page, 'github-settings')
+    expect(status).to_contain_text('Connected as octo. Validation: valid')
+    expect(field).to_have_value('')
+    stored = page.evaluate('()=>JSON.stringify([Object.entries(localStorage),Object.entries(sessionStorage)])')
+    assert first not in stored and second not in stored
+    assert all(first not in text and second not in text for text in response_texts)
+    form.locator('[data-token-action=remove]').click()
+    expect(status).to_contain_text('Validation: missing')
+    # Restore a disposable fixture credential for other workflow tests.
+    field.fill(secrets.token_hex(20))
+    form.locator('[data-token-action=save]').click()
+    expect(status).to_contain_text('Validation: valid')
+
+
+@pytest.mark.parametrize('missing', ['company', 'personal', 'both'])
+def test_create_options_require_their_own_tokens_and_link_to_settings(page, missing):
+    tiers = ['personal', 'company'] if missing == 'both' else [missing]
+    for tier in tiers:
+        page.evaluate("tier=>api(`/api/github/tokens/${tier}/remove`,{method:'POST'})", tier)
+    page.evaluate('()=>loadGithubStatus()')
+    if 'personal' in tiers:
+        page.locator('#project-menu-button').click()
+        expect(page.locator('[data-project=github-rename]')).to_be_disabled()
+        expect(page.locator('[data-project=github-rename]')).to_contain_text('GitHub settings')
+        page.locator('#project-menu-button').click()
+    menu_action(page, 'github-create')
+    for tier in tiers:
+        expect(page.locator(f'select[name=tier] option[value={tier}]')).to_have_attribute('disabled', '')
+    if missing == 'both':
+        expect(page.locator('#editor .primary')).to_be_disabled()
+    page.get_by_role('button', name='Open GitHub settings', exact=True).click()
+    expect(page.locator('#editor')).not_to_be_visible()
+    expect(page.locator('#github-panel')).to_be_visible()
+    for tier in tiers:
+        page.evaluate("args=>api(`/api/github/tokens/${args.tier}`,{method:'PUT',body:JSON.stringify({token:args.value})})", {'tier': tier, 'value': secrets.token_hex(20)})

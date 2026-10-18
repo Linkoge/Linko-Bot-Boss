@@ -1,13 +1,33 @@
 """Application-owned, non-forcing backup of main. Network work never holds the queue/checkout fence."""
 import asyncio
 import json
+import os
+import re
+import tempfile
 import time
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 from .secret_check import ScanError, git_bytes, scan
 
 RETRY_SECONDS = 300
 PREFIX = 'github_backup:'
+
+
+@contextmanager
+def token_auth(token):
+    """Credential stays in the network child's environment, never a URL, argument or Git config file."""
+    with tempfile.TemporaryDirectory(prefix='linko-git-auth-') as directory:
+        helper = os.path.join(directory, 'askpass')
+        with open(helper, 'w') as stream:
+            stream.write('#!/bin/sh\ncase "$1" in\n*Username*) printf "%s\\n" x-access-token;;\n'
+                         '*) printf "%s\\n" "$LINKO_GITHUB_CREDENTIAL";;\nesac\n')
+        os.chmod(helper, 0o700)
+        yield {'GIT_ASKPASS': helper, 'LINKO_GITHUB_CREDENTIAL': token,
+               'LC_ALL': 'C', 'GIT_TRACE': '0', 'GIT_TRACE_CURL': '0', 'GIT_CURL_VERBOSE': '0',
+               'GIT_TRACE_PACKET': '0', 'GIT_TRACE_REDACT': '1',
+               'GIT_CONFIG_COUNT': '2', 'GIT_CONFIG_KEY_0': 'credential.helper', 'GIT_CONFIG_VALUE_0': '',
+               'GIT_CONFIG_KEY_1': 'credential.useHttpPath', 'GIT_CONFIG_VALUE_1': 'true'}
 
 
 def github_remote(url):
@@ -21,6 +41,7 @@ class GitHubBackup:
     def __init__(self, db, registry):
         self.db, self.registry = db, registry
         self.job, self.started = None, False
+        self.credentials = None
 
     def request(self, project_id):
         with self.db.transaction() as conn:
@@ -48,7 +69,17 @@ class GitHubBackup:
 
     async def attempt(self, project, state):
         try:
-            result = await asyncio.to_thread(self.push, project['path'])
+            if project.get('github_tier'):
+                try:
+                    if self.credentials is None:
+                        raise ValueError('GitHub settings unavailable')
+                    token = self.credentials(project)
+                except ValueError:
+                    result = {'state': 'needs-attention', 'reason': 'open-github-settings-for-tier-token'}
+                else:
+                    result = await asyncio.to_thread(self.push_with_token, project['path'], token)
+            else:
+                result = await asyncio.to_thread(self.push, project['path'])
         except Exception:
             # Git/SSH and optional hooks can echo credentials. Never store their error text.
             result = {'state': 'needs-attention', 'reason': 'backup-operation-failed'}
@@ -66,9 +97,15 @@ class GitHubBackup:
             self.db.event(conn, 'github_backup.result', result, project['id'])
 
     @staticmethod
-    def push(root):
+    def push_with_token(root, token):
+        with token_auth(token) as env:
+            return GitHubBackup.push(root, env)
+
+    @staticmethod
+    def push(root, auth_env=None):
         def git(*args):
-            return git_bytes(root, *args).decode().strip()
+            network = args[0] in {'ls-remote', 'fetch', 'push'}
+            return git_bytes(root, *args, **({'env': auth_env} if network and auth_env else {})).decode().strip()
 
         # Non-Git projects keep their existing in-place behavior.
         if git_bytes(root, 'rev-parse', '--git-dir', check=False).returncode:
@@ -82,6 +119,12 @@ class GitHubBackup:
             # Push exactly one destination: refuse ambiguous multi-pushurl configurations.
             if len(git('remote', 'get-url', '--push', '--all', 'origin').splitlines()) != 1:
                 return {'state': 'needs-attention', 'reason': 'configure-one-github-origin'}
+            if auth_env:
+                match = re.fullmatch(r'(?:git@github\.com:|https://github\.com/|ssh://git@github\.com/)'
+                                     r'([A-Za-z0-9._-]+/[A-Za-z0-9._-]+?)(?:\.git)?', remote)
+                if not match:
+                    return {'state': 'needs-attention', 'reason': 'configure-github-origin'}
+                remote = 'https://github.com/' + match[1] + '.git'
             branch = 'main'
             if git_bytes(root, 'show-ref', '--verify', '--quiet', 'refs/heads/main', check=False).returncode:
                 branch = 'master'

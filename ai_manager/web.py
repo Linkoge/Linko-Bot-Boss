@@ -12,6 +12,7 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -194,6 +195,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     chat.action_handler = scheduler.manager_action
     chat.restricted = restricted
     github = GitHubProjects(db, registry, settings, pipeline, fetch=github_fetch)
+    pipeline.backups.credentials = github.push_credentials
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
     release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
@@ -298,6 +300,14 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         logging.getLogger(__name__).warning("action.rejected path=%s reason=%s", request.url.path, str(error))
         return JSONResponse({"result": "rejected", "detail": str(error), "message": str(error), "steps": error.steps},
                             status_code=409)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_body(request, error):
+        if request.url.path == '/api/github/token' or request.url.path.startswith('/api/github/tokens/'):
+            # FastAPI's default 422 response includes the submitted input, including credentials.
+            return JSONResponse({'detail': 'Invalid GitHub token request'}, status_code=422)
+        from fastapi.exception_handlers import request_validation_exception_handler
+        return await request_validation_exception_handler(request, error)
 
     @app.exception_handler(CodexError)
     async def unavailable(request, error):
@@ -657,6 +667,18 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.put("/api/github/token", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def github_token(body: GitHubToken):
         return github.save_token(body.token)
+
+    @app.put("/api/github/tokens/{tier}", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_tier_token(tier: str, body: GitHubToken):
+        return github.save_token(body.token, tier)
+
+    @app.post("/api/github/tokens/{tier}/validate", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_validate_token(tier: str):
+        return github.validate_token(tier)
+
+    @app.post("/api/github/tokens/{tier}/remove", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_remove_token(tier: str):
+        return github.remove_token(tier)
 
     @app.put("/api/github/organization", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def github_organization(body: GitHubOrganization):

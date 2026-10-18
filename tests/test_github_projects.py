@@ -15,6 +15,7 @@ from ai_manager.core import Tasks
 from ai_manager.github_projects import ALLOWED, GitHubApi, GitHubProjects, TokenStore
 from ai_manager.web import create_app
 
+COMPANY_PAT = 'ghp_' + secrets.token_hex(18)
 PAT = 'ghp_' + secrets.token_hex(18)  # generated at runtime; never a literal credential-looking value
 
 
@@ -35,6 +36,10 @@ class FakeGitHub:
         if (method, path) == ('GET', '/user'):
             received = {} if self.scopes is None else {'x-oauth-scopes': self.scopes}
             return 200, received, {'login': self.login}
+        if method == 'GET' and path.startswith('/user/memberships/orgs/'):
+            return 200, {}, {'state': 'active', 'role': 'admin'}
+        if method == 'GET' and path.startswith('/orgs/'):
+            return 200, {}, {'members_can_create_public_repositories': True}
         if method == 'POST' and (path == '/user/repos' or path.startswith('/orgs/')):
             owner = 'octo' if path == '/user/repos' else path.split('/')[2]
             name = payload['name']
@@ -67,6 +72,7 @@ def hub(tmp_path):
                         github_token_file=tmp_path / 'config' / 'github-token')
     github = FakeGitHub()
     app = create_app(settings, FakeServer(settings), github_fetch=github)
+    app.state.github_projects.pipeline.backups.tick = lambda: None
     with TestClient(app, base_url='http://localhost') as browser:
         owner = {'username': 'owner', 'password': secrets.token_urlsafe(16)}
         browser.post('/api/setup', json={**owner, 'token': (settings.data_dir / 'setup-token').read_text()})
@@ -76,6 +82,8 @@ def hub(tmp_path):
 
 def with_token(browser, github):
     response = browser.put('/api/github/token', json={'token': PAT})
+    assert response.status_code == 200, response.text
+    response = browser.put('/api/github/tokens/company', json={'token': COMPANY_PAT})
     assert response.status_code == 200, response.text
     github.calls.clear()
 
@@ -312,7 +320,7 @@ def test_rollback_that_cannot_complete_is_reported_exactly(hub, monkeypatch):
 
 def test_token_validation_storage_and_permissions(hub):
     browser, app, settings, github = hub
-    assert browser.get('/api/github').json() == {'configured': False, 'company_org': ''}
+    assert browser.get('/api/github').json()['personal'] == {'configured': False, 'login': '', 'validation': 'missing'}
     github.scopes = 'repo, delete_repo'
     refused = browser.put('/api/github/token', json={'token': PAT})
     assert refused.status_code == 409 and 'only the repo scope' in refused.json()['detail']
@@ -323,8 +331,8 @@ def test_token_validation_storage_and_permissions(hub):
     assert browser.put('/api/github/token', json={'token': 'short'}).status_code == 409
     assert not settings.github_token_file.exists()
     github.scopes = 'repo'
-    assert browser.put('/api/github/token', json={'token': PAT}).json() == {'configured': True, 'login': 'octo'}
-    assert browser.get('/api/github').json() == {'configured': True, 'company_org': ''}
+    assert browser.put('/api/github/token', json={'token': PAT}).json() == {'configured': True, 'login': 'octo', 'validation': 'valid'}
+    assert browser.get('/api/github').json()['personal'] == {'configured': True, 'login': 'octo', 'validation': 'valid'}
     assert settings.github_token_file.read_text().strip() == PAT
     assert settings.github_token_file.stat().st_mode & 0o777 == 0o600
     assert settings.github_token_file.parent.stat().st_mode & 0o777 == 0o700
@@ -376,6 +384,9 @@ def test_all_github_routes_need_the_owner_and_csrf(hub):
     browser, app, settings, github = hub
     routes = (('get', '/api/github', None), ('put', '/api/github/token', {'token': PAT}),
               ('put', '/api/github/organization', {'company_org': 'acme'}),
+              *((method, f'/api/github/tokens/{tier}' + suffix, body)
+                for tier in ('personal', 'company')
+                for method, suffix, body in [('put', '', {'token': PAT}), ('post', '/validate', None), ('post', '/remove', None)]),
               ('post', '/api/github/projects', {'name': 'n'}), ('post', '/api/github/projects/p/rename', {'name': 'n'}))
     for method, path, body in routes:
         anonymous = TestClient(app, base_url='http://localhost')  # no lifespan: the running app is shared
@@ -392,6 +403,7 @@ def test_restricted_instance_rejects_every_github_action(tmp_path):
     settings = Settings(data_dir=tmp_path / 'work' / 'data', project_roots=(tmp_path / 'work',), restricted=True,
                         project_path=project, secure_cookie=False, github_token_file=tmp_path / 'tok')
     app = create_app(settings, FakeServer(settings), github_fetch=github)
+    app.state.github_projects.pipeline.backups.tick = lambda: None
     with TestClient(app, base_url='http://localhost') as browser:
         owner = {'username': 'owner', 'password': secrets.token_urlsafe(16)}
         browser.post('/api/setup', json={**owner, 'token': (settings.data_dir / 'setup-token').read_text()})
@@ -399,6 +411,9 @@ def test_restricted_instance_rejects_every_github_action(tmp_path):
         project_id = app.state.registry.add(project)['id']
         for method, path, body in (('get', '/api/github', None), ('put', '/api/github/token', {'token': PAT}),
                                    ('put', '/api/github/organization', {'company_org': 'acme'}),
+              *((method, f'/api/github/tokens/{tier}' + suffix, body)
+                for tier in ('personal', 'company')
+                for method, suffix, body in [('put', '', {'token': PAT}), ('post', '/validate', None), ('post', '/remove', None)]),
                                    ('post', '/api/github/projects', {'name': 'n'}),
                                    ('post', f'/api/github/projects/{project_id}/rename', {'name': 'n'})):
             response = getattr(browser, method)(path, **({'json': body} if body else {}))
@@ -542,3 +557,206 @@ def test_tier_save_failure_rolls_back_registration(hub):
     assert 'WAS created and was not deleted' in response.json()['detail']
     assert app.state.registry.list() == []
     assert not (settings.project_roots[0] / 'unregistered').exists()
+
+
+@pytest.mark.parametrize('tier,credential', [('personal', PAT), ('company', COMPANY_PAT)])
+def test_separate_token_lifecycle_keeps_values_out_of_responses_and_logs(hub, caplog, tier, credential):
+    browser, app, settings, github = hub
+    caplog.set_level(logging.DEBUG)
+    endpoint = f'/api/github/tokens/{tier}'
+    other = 'company' if tier == 'personal' else 'personal'
+    assert browser.get('/api/github').json()[tier]['validation'] == 'missing'
+    github.login = 'connected'
+    saved = browser.put(endpoint, json={'token': credential})
+    assert saved.status_code == 200 and saved.json()['login'] == 'connected'
+    assert saved.json()['validation'] == 'valid'
+    store = app.state.github_projects.stores[tier]
+    assert store.read() == credential
+    assert store.path.stat().st_mode & 0o777 == 0o600
+    assert not app.state.github_projects.stores[other].configured()
+    github.calls.clear()
+    validated = browser.post(endpoint + '/validate')
+    assert validated.status_code == 200
+    assert github.calls[0][3] == 'Bearer ' + credential
+    replacement = secrets.token_hex(20)
+    github.login = 'replacement'
+    replaced = browser.put(endpoint, json={'token': replacement})
+    assert replaced.status_code == 200 and replaced.json()['login'] == 'replacement'
+    assert store.read() == replacement
+    github.fail['GET', '/user'] = 401
+    rejected = browser.post(endpoint + '/validate')
+    assert rejected.status_code == 409
+    assert browser.get('/api/github').json()[tier]['validation'] == 'invalid'
+    github.scopes = 'repo, delete_repo'
+    bad_replacement = browser.put(endpoint, json={'token': credential})
+    assert bad_replacement.status_code == 409 and store.read() == replacement
+    github.scopes = 'repo'
+    invalid_body = browser.put(endpoint, json={'token': credential * 20})
+    invalid_type = browser.put(endpoint, json={'token': {'value': credential}})
+    assert invalid_body.status_code == invalid_type.status_code == 422
+    removed = browser.post(endpoint + '/remove')
+    assert removed.json() == {'configured': False, 'login': '', 'validation': 'missing'}
+    assert not store.path.exists()
+    assert browser.post(endpoint + '/remove').status_code == 200
+    assert browser.post(endpoint + '/validate').status_code == 409
+    texts = [r.text for r in (saved, validated, replaced, rejected, bad_replacement, invalid_body, invalid_type, removed)]
+    texts += [caplog.text, browser.get('/api/github').text]
+    assert all(credential not in text and replacement not in text for text in texts)
+    database = b''.join(path.read_bytes() for path in settings.data_dir.glob('manager.sqlite3*'))
+    assert credential.encode() not in database and replacement.encode() not in database
+
+
+@pytest.mark.parametrize('tier', ['personal', 'company'])
+@pytest.mark.parametrize('scopes,message', [(None, 'classic'), ('read:org', 'repo scope'),
+                                            ('repo, delete_repo', 'only the repo scope'),
+                                            ('repo, read:org', 'only the repo scope')])
+def test_both_tokens_require_classic_repo_only(hub, tier, scopes, message):
+    browser, app, _, github = hub
+    github.scopes = scopes
+    response = browser.put(f'/api/github/tokens/{tier}', json={'token': PAT})
+    assert response.status_code == 409 and message in response.json()['detail']
+    assert not app.state.github_projects.stores[tier].configured()
+
+
+def test_legacy_file_becomes_personal_without_copying_it_to_company(hub):
+    browser, app, settings, github = hub
+    legacy = TokenStore(settings.github_token_file)
+    legacy.write(PAT)
+    before = legacy.path.stat().st_ino
+    service = GitHubProjects(app.state.db, app.state.registry, settings, app.state.github_projects.pipeline, fetch=github)
+    assert service.store.path == legacy.path and service.store.read() == PAT
+    assert legacy.path.stat().st_ino == before
+    assert service.token_status('personal')['validation'] == 'unvalidated'
+    assert not service.stores['company'].configured()
+    assert service.validate_token('personal')['login'] == 'octo'
+    github.calls.clear()
+    assert service.create('migrated')['tier'] == 'personal'
+    assert github.calls[0][3] == 'Bearer ' + PAT
+    assert not service.stores['company'].configured()
+
+
+def test_company_requires_its_own_token_and_org_without_personal_fallback(hub):
+    browser, app, settings, github = hub
+    assert browser.put('/api/github/token', json={'token': PAT}).status_code == 200
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+    github.calls.clear()
+    response = browser.post('/api/github/projects', json={'name': 'missing', 'tier': 'company', 'public_confirmed': True})
+    assert response.status_code == 409 and 'GitHub settings' in response.json()['detail']
+    assert not (settings.project_roots[0] / 'missing').exists() and github.calls == []
+    browser.put('/api/github/tokens/company', json={'token': COMPANY_PAT})
+    browser.post('/api/github/tokens/personal/remove')
+    github.calls.clear()
+    response = browser.post('/api/github/projects', json={'name': 'missing', 'tier': 'personal'})
+    assert response.status_code == 409 and github.calls == []
+    browser.put('/api/github/organization', json={'company_org': ''})
+    assert browser.post('/api/github/projects', json={'name': 'missing', 'tier': 'company', 'public_confirmed': True}).status_code == 409
+    assert github.calls == []
+
+
+@pytest.mark.parametrize('tier,credential,owner', [('personal', PAT, 'octo'), ('company', COMPANY_PAT, 'acme')])
+def test_create_rename_and_push_use_only_the_tiers_credential(hub, monkeypatch, tier, credential, owner):
+    import asyncio
+
+    from ai_manager import github_backup
+    browser, app, settings, github = hub
+    with_token(browser, github)
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+    github.calls.clear()
+    created = browser.post('/api/github/projects', json={'name': 'first', 'tier': tier, 'public_confirmed': True})
+    assert created.status_code == 200
+    project = created.json()['project']
+    renamed = browser.post(f"/api/github/projects/{project['id']}/rename", json={'name': 'second'})
+    assert renamed.status_code == 200
+    assert [call[3] for call in github.calls] == ['Bearer ' + credential] * 2
+    root = settings.project_roots[0] / 'second'
+    calls = []
+    original = github_backup.git_bytes
+
+    def offline_git(path, *args, **kwargs):
+        if args[0] in {'ls-remote', 'fetch', 'push'}:
+            env = kwargs['env']
+            assert env['LINKO_GITHUB_CREDENTIAL'] == credential
+            assert env['GIT_CONFIG_VALUE_0'] == ''  # Disable host credential helpers.
+            assert f'https://github.com/{owner}/second.git' in args
+            assert credential not in str(args)
+            helper = env['GIT_ASKPASS']
+            assert credential not in open(helper).read()
+            assert os.stat(helper).st_mode & 0o777 == 0o700
+            user = subprocess.run([helper, 'Username'], env={**os.environ, **env}, capture_output=True, text=True, timeout=10)
+            value = subprocess.run([helper, 'Password'], env={**os.environ, **env}, capture_output=True, text=True, timeout=10)
+            assert user.stdout.strip() == 'x-access-token' and value.stdout.strip() == credential
+            calls.append((args, helper))
+            return b''
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(github_backup, 'git_bytes', offline_git)
+    backup = app.state.github_projects.pipeline.backups
+    backup.request(project['id'])
+    state = app.state.db.setting(github_backup.PREFIX + project['id'])
+    asyncio.run(backup.attempt(renamed.json()['project'], state))
+    assert [args[0] for args, _ in calls] == ['ls-remote', 'push']
+    assert not any(os.path.exists(helper) for _, helper in calls)
+    assert app.state.db.setting(github_backup.PREFIX + project['id'])['state'] == 'synced'
+    assert credential not in (root / '.git/config').read_text()
+    browser.post(f'/api/github/tokens/{tier}/remove')
+    calls.clear()
+    asyncio.run(backup.attempt(renamed.json()['project'], state))
+    assert calls == []  # No SSH or other-tier fallback.
+    assert app.state.db.setting(github_backup.PREFIX + project['id'])['state'] == 'needs-attention'
+    assert browser.post(f"/api/github/projects/{project['id']}/rename", json={'name': 'third'}).status_code == 409
+
+
+@pytest.mark.parametrize('membership,policy,expected', [
+    ({'state': 'active', 'role': 'admin'}, {}, 'Organization owner'),
+    ({'state': 'active', 'role': 'member'}, {'members_can_create_public_repositories': True}, 'policy allows'),
+    ({'state': 'active', 'role': 'member'}, {}, 'did not expose creation policy'),
+    ({'state': 'pending', 'role': 'member'}, {}, 'not an active member'),
+    ({'state': 'active', 'role': 'member'}, {'members_can_create_public_repositories': False}, 'does not allow'),
+])
+def test_company_validation_checks_account_membership_and_public_creation_policy(hub, membership, policy, expected):
+    browser, app, _, github = hub
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+
+    def organization_api(method, url, headers, body, timeout):
+        if url.endswith('/user/memberships/orgs/acme'):
+            return 200, {}, membership
+        if url.endswith('/orgs/acme'):
+            return 200, {}, policy
+        return github(method, url, headers, body, timeout)
+
+    app.state.github_projects.apis['company'].fetch = organization_api
+    response = browser.put('/api/github/tokens/company', json={'token': COMPANY_PAT})
+    assert expected in response.text
+    assert response.status_code == (409 if expected in {'not an active member', 'does not allow'} else 200)
+
+
+def test_company_permission_check_reports_api_limit_without_adding_scope(hub):
+    browser, app, _, github = hub
+    browser.put('/api/github/organization', json={'company_org': 'acme'})
+    github.fail['GET', '/user/memberships/orgs/acme'] = 403
+    response = browser.put('/api/github/tokens/company', json={'token': COMPANY_PAT})
+    assert response.status_code == 200 and 'did not expose' in response.json()['org_permission']
+    assert github.calls[-1][3] == 'Bearer ' + COMPANY_PAT
+    browser.put('/api/github/organization', json={'company_org': 'other'})
+    assert browser.get('/api/github').json()['company']['validation'] == 'unvalidated'
+    github.calls.clear()
+    assert browser.post('/api/github/tokens/company/validate').status_code == 200
+    assert ('GET', '/user/memberships/orgs/other') in github.methods()
+
+
+def test_token_store_refuses_files_inside_a_repository(tmp_path):
+    root = tmp_path / 'repo'
+    root.mkdir()
+    run('git', 'init', '-q', str(root))
+    store = TokenStore(root / 'config' / 'credential')
+    with pytest.raises(github_projects.GitHubError, match='outside repositories'):
+        store.write(PAT)
+    assert not store.path.exists()
+
+
+def test_legacy_endpoint_validation_errors_never_echo_submitted_values(hub, caplog):
+    browser, _, _, _ = hub
+    for value in [PAT * 20, {'value': PAT}, [PAT]]:
+        response = browser.put('/api/github/token', json={'token': value})
+        assert response.status_code == 422 and PAT not in response.text
+    assert PAT not in caplog.text
