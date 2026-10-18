@@ -180,7 +180,7 @@ def test_one_saved_setup_can_be_replaced_removed_and_is_frozen_while_pending(wor
     with pytest.raises(ValueError, match='pending deploy'):
         world.pipeline.save_setup(project, original)
     world.pipeline.cancel()
-    assert world.pipeline.save_setup(project, None)['deployment'] == 'no deploy setup; merges only'
+    assert world.pipeline.save_setup(project, None)['deployment'].startswith('no deploy setup')
     assert world.pipeline.request(project)['status'] == 'no deploy setup'
     assert not world.pipeline.pending()
 

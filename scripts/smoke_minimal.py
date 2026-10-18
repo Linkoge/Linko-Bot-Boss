@@ -72,9 +72,11 @@ async def main():
                     raise AssertionError("Routine native development requested approval")
                 result = db.one("SELECT * FROM executions WHERE task_id IS NOT NULL AND delivery='delivered'")
                 if result:
+                    # The fixture project has no saved deploy setup: after the merge the application queues one
+                    # Create deploy setup task, which is not part of the delegated work checked here.
+                    tasks = [t for t in tasks if not t["description"].startswith("Create deploy setup")]
                     assert len(tasks) == 1
                     assert tasks[0]["status"] == "done", tasks[0]
-                    # The fixture project has no saved deploy setup: passing work merges only.
                     work = Path(tasks[0]["workspace"])
                     assert (work / "calculator.py").read_text().find("a + b") >= 0
                     check = subprocess.run(

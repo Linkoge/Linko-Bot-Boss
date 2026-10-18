@@ -37,7 +37,7 @@ def test_owner_can_save_inspect_replace_and_remove_one_project_deploy_setup(clie
     sign_in(browser, app, settings)
     project = app.state.registry.add(settings.project_roots[0] / 'one')
     endpoint = f"/api/projects/{project['id']}/deploy-setup"
-    assert browser.get(endpoint).json()['deployment'] == 'no deploy setup; merges only'
+    assert browser.get(endpoint).json()['deployment'].startswith('no deploy setup; a Create deploy setup task')
     setup = {'service': 'example.service', 'backup_command': ['ops', 'backup'],
              'health_url': 'http://127.0.0.1:9000/health', 'rollback_command': ['ops', 'rollback']}
     assert browser.put(endpoint, json={'setup': setup}).json()['setup'] == setup
@@ -48,7 +48,7 @@ def test_owner_can_save_inspect_replace_and_remove_one_project_deploy_setup(clie
     assert 'rollback_command is mandatory' in rejected.json()['detail']
     assert browser.get(endpoint).json()['setup'] == setup
     assert browser.put(endpoint, json={'setup': None}, headers={'X-CSRF-Token': 'bad'}).status_code == 403
-    assert browser.put(endpoint, json={'setup': None}).json()['deployment'] == 'no deploy setup; merges only'
+    assert browser.put(endpoint, json={'setup': None}).json()['deployment'].startswith('no deploy setup')
 
 
 @pytest.mark.smoke

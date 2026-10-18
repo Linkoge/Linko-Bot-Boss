@@ -106,8 +106,10 @@ def world(tmp_path, monkeypatch):
     core = Core(db, registry, settings, pipeline, lab.factory, gate=lab.gate)
 
     def deployable(flag):
+        # False is a project the owner or a worker declared not deployable: merges only, no Create deploy setup task.
         pipeline.save_setup(project['id'], {'deploy_command': ['true'], 'backup_command': ['true'],
                                              'health_command': ['true'], 'rollback_command': ['true']} if flag else None)
+        db.set_setting('deploy_none:' + project['id'], None if flag else {'reason': 'fixture', 'digest': 'x'})
 
     deployable(True)
 
@@ -278,13 +280,13 @@ async def test_worker_runs_in_isolated_branch_then_merges_and_requests_one_deplo
 
 
 @pytest.mark.asyncio
-async def test_passing_work_always_merges_and_a_project_without_setup_reports_merges_only(world):
+async def test_passing_work_always_merges_and_a_not_deployable_project_reports_why(world):
     world.deployable(False)
     world.tasks.add(world.project["id"], "merge only")
     done = await run_next(world)
     assert done["state"] == "done" and done["merge"]["state"] == "merged" and done["merge"]["deploy"] is False
     assert (world.app / "change-1.txt").exists() and not world.pipeline.pending()
-    assert done['merge']['deployment'] == world.pipeline.summary(world.project['id']) == 'no deploy setup; merges only'
+    assert done['merge']['deployment'] == world.pipeline.summary(world.project['id']) == 'not deployable: fixture'
     assert world.pipeline.request(world.project['id'])['status'] == 'no deploy setup'
     assert "auto_deploy" not in json.dumps([dict(r) for r in world.db.all("SELECT key FROM settings")])
 

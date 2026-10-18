@@ -100,10 +100,10 @@ class Deploy:
                 setup = json.loads(saved[0]) if saved else (
                     {'runtime': self.config} if Path(project[1]).resolve() == self.repo.resolve() else None)
                 if setup is None:
-                    raise ValueError('no deploy setup; merges only')
+                    raise ValueError('no deploy setup')
                 request['setup'] = setup
             elif request.get('project_id'):
-                raise ValueError('no deploy setup; merges only')
+                raise ValueError('no deploy setup')
             else:
                 return  # Initial operator bootstrap before this runtime has a registered project.
         if 'runtime' in setup:

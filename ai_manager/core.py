@@ -4,7 +4,8 @@ watchdog. See README.md.
 States: queued -> running -> done | failed. `held` is a flag on a queued task (skipped until released); order within
 a project is the only dependency. A worker implements on an isolated branch, the application runs the permanent checks
 (the fixed smoke suite plus the test files the branch added or changed), repairs happen in durable rounds (at most 5,
-then the task stops and reports). A passing branch always merges into main; a saved project setup requests the shared deploy script.
+then the task stops and reports). A passing branch always merges into main; a saved project setup requests the shared deploy script,
+and a project without one gets a Create deploy setup task (deploy_auto.py).
 """
 
 import asyncio
@@ -23,6 +24,7 @@ from . import fence
 from .attachments import native_image
 from .codex import RESTRICTED_NOTE, RULES, AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
+from .deploy_auto import ACCEPTANCE, OBJECTIVE, SETUP_FILE, TITLE
 from .fence import Busy, main_branch
 from .listing import CARD_WINDOW, bounded_listing
 from .model_settings import RouteBlocked, assignment_route
@@ -594,12 +596,35 @@ class Core:
                     (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]))
             except Conflict:
                 continue
-            deployment = deployment or {'reason': 'already in main'}
+            deployment = deployment or {}
             requested = bool(deployment.get('id'))
+            text = 'deploy requested' if requested else deployment.get('reason', 'already in main')
+            note = deployment.get('setup_file') or {}
+            if note.get('state') == 'missing':
+                text = 'no deploy setup; ' + self.queue_deploy_setup(task)
+            elif note.get('state') == 'invalid':
+                text = f"invalid {SETUP_FILE}: {note['reason']}; no deploy setup saved"
+            elif note.get('state') == 'none':
+                text = 'not deployable: ' + note['reason']
+            elif note.get('state') == 'declined':
+                text = 'no deploy setup; ' + note['reason']
+            elif note.get('state') == 'seeded':
+                text = note['reason'] + ('; deploy requested' if requested else '; ' + text)
             return {"reason": "", "merge": {"state": "merged" if changed else "already in main", "main": main_head,
-                                            "deploy": requested,
-                                            "deployment": 'deploy requested' if requested else deployment['reason']}}
+                                            "deploy": requested, "deployment": text}}
         raise ValueError("main kept changing while merging; try again")
+
+    def queue_deploy_setup(self, task):
+        """Queue one Create deploy setup task in the project unless one is open; returns a plain status. The task that
+        creates the setup never queues another, so a worker that wrote no usable file cannot start a loop."""
+        if task["description"].startswith(TITLE):
+            return f"{TITLE} merged without a usable {SETUP_FILE}; no further task is queued"
+        open_task = self.db.one("SELECT 1 FROM tasks WHERE project_id=? AND state IN ('queued','running') "
+                                "AND substr(description,1,?)=?", (task["project_id"], len(TITLE), TITLE))
+        if open_task:
+            return TITLE + " already queued"
+        self.tasks.add(task["project_id"], OBJECTIVE, acceptance=ACCEPTANCE)
+        return TITLE + " queued"
 
     # -- ending a run ----------------------------------------------------------------------------------------------
     def event(self, task, eid, kind, payload):

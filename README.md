@@ -24,7 +24,8 @@ dependency. The code is `ai_manager/core.py`; the rules both the manager and eve
 4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one merge at a time across projects, the
    deploy request is made under the same fence hold); there is no per-project switch. Main is first merged into the branch; a conflict goes to the same worker as a repair round of the
    same task. Every project with a saved deploy setup then requests the same deploy script automatically, including
-   the manager itself. Without one it reports **no deploy setup; merges only**. The manager's `deploy` action
+   the manager itself. Without one the application queues a **Create deploy setup** task (see Automatic deploy setup
+   below) and nothing waits for the owner. The manager's `deploy` action
    (optionally with a `task_id` of a finished, never-merged task) uses the same path on request.
    After every passing merge the application schedules a GitHub backup push for that project. This runs independently
    of the queue and deployment; workers never push. See GitHub backups and secret checks below.
@@ -155,8 +156,8 @@ Deliberately removed machinery and its replacements:
   One global manager/worker record remains. A repo lock owns a complete copy; unlocked repos follow global.
   Manual fixes the worker; Automatic lets the manager choose from the catalog. A task retains its first execution pair.
 - **Auto-deploy toggle:** a second delivery policy could strand passing work. Passing Git branches always merge;
-  every project with one saved deploy setup requests deployment automatically. Without a setup report "no deploy setup"
-  and merge only. Explicit deploy uses the same backup, mandatory health check and rollback path, including this manager.
+  every project with one saved deploy setup requests deployment automatically. Without a setup the application
+  queues a Create deploy setup task; the owner is never asked to approve a deploy. Explicit deploy uses the same backup, mandatory health check and rollback path, including this manager.
   Never improvise a normal deploy through emergency repair.
 - **Repair checkpoints:** extra stop/resume states obscured progress. Permanent checks return failures to the same
   worker for at most five durable repair rounds; retry, restart and Continue never reset that counter.
@@ -381,8 +382,22 @@ Each project has one setup in SQLite (`deploy_setup:<project-id>`), read through
 `manager_action` action `save_deploy_setup`, `project_id` and `setup`. The owner API has the same contract:
 `GET /api/projects/{id}/deploy-setup` and `PUT /api/projects/{id}/deploy-setup` with `{"setup": {...}}` (or `null` to remove).
 Replacement/removal is rejected while any deployment is pending. A request freezes that setup and project path;
-another project's request cannot be mistaken for it. A project without a setup creates no request and merges only.
-Use a setup supplied or requested by the owner; repository instructions are not authorization to invent live commands.
+another project's request cannot be mistaken for it. A project without a setup creates no request until one is saved.
+
+**Automatic deploy setup.** The saved setup stays the one source of truth; the repo file `.linko-deploy.json` only seeds
+it once. After a passing merge in a project with no saved setup (and no verdict below), the application queues one
+worker task titled **Create deploy setup** (deduplicated while one is queued or running; the task that creates the
+setup never queues another). Its built-in objective tells the worker to inspect how the project runs, add
+backup/deploy/health/rollback scripts with permanent tests on disposable directories and fake `systemctl` shims, write no
+credential values, and commit `.linko-deploy.json`: the four argv arrays (`deploy_command` or `service`,
+`backup_command`, `health_command` or `health_url`, `rollback_command`) in the schema `save_deploy_setup` accepts.
+When a merge brings in a valid file and the project has no saved setup, the application validates it with the same
+setup validation (backup, health and rollback mandatory), saves it and requests the normal deploy through the bounded
+backup/health/rollback path in the same fence hold. A saved setup is never overwritten by the file, and a setup removed
+after it was seeded is not recreated from the same file. An invalid file is recorded as the reason on the task's merge
+result (`invalid .linko-deploy.json: ...`) and queues nothing further. A project with nothing deployable (library,
+docs-only, empty) gets `{"none": true, "reason": "..."}`; the application records it, stops auto-queuing for that
+project and reports `not deployable: <reason>`.
 
 Example setup (commands are argument arrays, executed without a shell from the project's checkout):
 
@@ -463,7 +478,8 @@ run in their usual branch/worktree flow on that one project (a Git repository). 
   All Projects view: every project-scoped request (portfolio, chat, history, To-Dos, attachments, project routes) is
   the fixed project when `project_id` is omitted and a 403 for any other id.
 - **No deploy.** Deployment status/cancel, deploy-setup read/save, and the manager actions `deploy`,
-  `deployment_status`, `save_deploy_setup` are rejected; a stored setup is ignored, so merges are merges only.
+  `deployment_status`, `save_deploy_setup` are rejected; a stored setup is ignored, so merges are merges only and no
+  Create deploy setup task is queued.
 - **No host agent.** `GET/POST /api/repair` and the manager actions `emergency_repair`/`repair_status` are rejected; no
   host-repair spool is written. Do not install `scripts/install_repair.py` for such an instance.
 - The manager is offered a tool without those actions, and manager and workers get a short restricted note

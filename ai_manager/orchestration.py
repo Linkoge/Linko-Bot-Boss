@@ -19,7 +19,7 @@ from .todos import Todos
 MANAGER_TOOL = {
     "type": "function",
     "name": "manager_action",
-    "description": "Read project code directly with list_files, search_code and read_document (read-only; no execution). Inspect UI with screenshot. Record To-Dos, delegate/control tasks and projects, or retrieve evidence/history. Passing work always merges and deploys if the project has a saved setup; otherwise report no deploy setup. Use deploy for an owner-requested deploy, save_deploy_setup to replace one setup, deployment_status to inspect it. emergency_repair runs host work the owner explicitly asks for in their own chat message (installs, permissions, users, services, config); never a normal deploy. model/effort apply to delegate when the worker setting is Automatic. Reads support offset pagination.",
+    "description": "Read project code directly with list_files, search_code and read_document (read-only; no execution). Inspect UI with screenshot. Record To-Dos, delegate/control tasks and projects, or retrieve evidence/history. Passing work always merges and deploys if the project has a saved setup; otherwise the application auto-queues a Create deploy setup task (report its status). Use deploy for an owner-requested deploy, save_deploy_setup to replace one setup, deployment_status to inspect it. emergency_repair runs host work the owner explicitly asks for in their own chat message (installs, permissions, users, services, config); never a normal deploy. model/effort apply to delegate when the worker setting is Automatic. Reads support offset pagination.",
     "inputSchema": {
         "type": "object",
         "properties": {
@@ -167,7 +167,7 @@ class Scheduler:
                 self.tasks.request_merge(task['id'])
                 return {'merge': 'requested', 'task_id': task['id'],
                         'next': ('the worker merges it and requests deploy' if self.pipeline.deployable(project_id)
-                                 else 'no deploy setup; merges only')}
+                                 else self.pipeline.no_setup(project_id))}
             return self.pipeline.request(project_id, 'owner', args.get('task_id'), params['conversation_id'],
                                          args.get('reason', 'owner requested deploy'))
         offset = args.get("offset", 0)

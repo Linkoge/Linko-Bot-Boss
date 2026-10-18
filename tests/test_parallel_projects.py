@@ -10,7 +10,7 @@ from ai_manager.core import Core
 
 @pytest.fixture
 def two(world):  # noqa: F811
-    """The core's world plus a second Git project; neither has a deploy setup, so no deploy request holds the queues."""
+    """The core's world plus a second Git project; neither is deployable, so no deploy request holds the queues."""
     world.deployable(False)
     other = world.settings.project_roots[0] / "other"
     other.mkdir()
@@ -19,6 +19,7 @@ def two(world):  # noqa: F811
     git(other, "add", "-A")
     git(other, "commit", "-qm", "initial")
     world.other = world.registry.add(other)
+    world.db.set_setting('deploy_none:' + world.other['id'], {'reason': 'fixture', 'digest': 'x'})  # no Create deploy setup task
     world.other_path = other
     world.lab.release = asyncio.Event()  # every worker waits here until the test lets it go
     return world

@@ -13,11 +13,13 @@ import time
 from pathlib import Path
 
 from . import fence
+from .deploy_auto import SETUP_FILE, read_proposal
 from .deploy_setup import validate_setup
 from .fence import Busy, main_branch
 from .github_backup import GitHubBackup
 
 RESTRICTED = 'Not available on a restricted instance'
+NO_SETUP = 'no deploy setup; a Create deploy setup task is queued automatically'
 MERGE_WAIT = 30  # seconds a merge waits for another project's merge to leave the checkout fence
 DEPLOY_WAIT = 1800  # a pending deploy request holds the queue at most this long, then it is withdrawn
 IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
@@ -101,6 +103,45 @@ class Pipeline:
                 self.db.event(conn, 'deployment.setup_saved', {'configured': setup is not None}, project_id)
         return self.status(project_id)
 
+    def no_setup(self, project_id):
+        if self.restricted:
+            return 'no deploy setup; merges only'
+        none = self.db.setting('deploy_none:' + project_id)
+        return 'not deployable: ' + none['reason'] if none else NO_SETUP
+
+    def adopt(self, project_id, root):
+        """Seed the project's one saved setup from the merged `.linko-deploy.json`; never overwrites a saved setup.
+
+        Returns None when nothing applies, else {'state': seeded | none | invalid | missing | declined, 'reason': ...}.
+        'missing' means the application should queue a Create deploy setup task. The file seeds once: a setup the owner
+        removed later is not recreated from the same file.
+        """
+        if self.restricted or self.setup(project_id) is not None:
+            return None
+        state, value, digest = read_proposal(root)
+        none = self.db.setting('deploy_none:' + project_id)
+        seeded = self.db.setting('deploy_seeded:' + project_id)
+        if state == 'invalid':
+            with self.db.transaction() as conn:
+                self.db.event(conn, 'deployment.setup_file_invalid', {'reason': value}, project_id)
+            return {'state': 'invalid', 'reason': value}
+        if state == 'none':
+            if not none or none.get('digest') != digest:
+                self.db.set_setting('deploy_none:' + project_id, {'reason': value, 'digest': digest})
+            return {'state': 'none', 'reason': value}
+        if state == 'setup' and seeded != digest:
+            self.db.set_setting('deploy_seeded:' + project_id, digest)
+            self.db.set_setting('deploy_none:' + project_id, None)
+            self.db.set_setting('deploy_setup:' + project_id, value)
+            with self.db.transaction() as conn:
+                self.db.event(conn, 'deployment.setup_saved', {'configured': True, 'source': SETUP_FILE}, project_id)
+            return {'state': 'seeded', 'reason': 'deploy setup seeded from ' + SETUP_FILE}
+        if none:
+            return {'state': 'none', 'reason': none['reason']}
+        if seeded:
+            return {'state': 'declined', 'reason': 'the saved setup was removed after it was seeded from ' + SETUP_FILE}
+        return {'state': 'missing', 'reason': NO_SETUP}
+
     def deployable(self, project_id):
         return self.setup(project_id) is not None
 
@@ -122,13 +163,13 @@ class Pipeline:
                 'state': read(self.root / 'state.json') if self.pending() else None,
                 'last_result': last,
                 **({'setup': setup, 'deployment': 'deploy setup saved' if setup is not None
-                    else 'no deploy setup; merges only'} if project_id else {})}
+                    else self.no_setup(project_id)} if project_id else {})}
 
     def summary(self, project_id=None):
         """Short fact for the manager prompt."""
         value = self.status(project_id)
         if project_id and not value['setup']:
-            return 'no deploy setup; merges only'
+            return self.no_setup(project_id)
         if value['request']:
             if project_id and value['request'].get('project_id') != project_id:
                 return "another project's deploy holds the queue"
@@ -144,7 +185,7 @@ class Pipeline:
         project = self.registry.get(project_id)
         setup = self.setup(project_id)
         if setup is None:
-            return {'status': 'no deploy setup', 'reason': 'no deploy setup; merges only', 'project_id': project_id}
+            return {'status': 'no deploy setup', 'reason': self.no_setup(project_id), 'project_id': project_id}
         if self.pending():
             pending = read(self.root / 'request.json')
             if pending.get('project_id') != project_id:
@@ -205,16 +246,22 @@ class Pipeline:
         Tasks of different projects run in parallel and share this one fence, so a merge waits briefly for another's.
         When the merge changed main and `deploy` (the arguments of request()) is given, the deploy is requested under
         the same fence hold: no other project can take the single deploy request between merge and request.
-        Returns (head, changed, deployment); deployment is None unless a request was made or answered.
+        A merge that brings in a valid `.linko-deploy.json` first seeds the project's missing setup (adopt()), so the same
+        hold requests its first deploy. Returns (head, changed, deployment); deployment is None unless a request was
+        made or answered; its 'setup_file' key carries the adopt() result when one applies.
         """
         with fence.hold(self.db.path.parent, exclusive=True, wait=MERGE_WAIT):
             if self.pending():
                 raise Busy('a deploy is pending')
             head, changed = merge_into_main(project_path, commit)
             project = self.db.one('SELECT id FROM projects WHERE path=?', (str(project_path),))
+            note = None
             if project:
                 self.backups.request(project['id'])
-            return head, changed, self._request(*deploy) if changed and deploy else None
+                note = self.adopt(project['id'], project_path)
+            seeded = bool(note) and note['state'] == 'seeded'
+            deployment = self._request(*deploy) if deploy and (changed or seeded) else None
+            return head, changed, ({**(deployment or {}), 'setup_file': note} if note else deployment)
 
     def expire(self, max_age=DEPLOY_WAIT):
         """A deploy request that has not finished in time (script not installed, stuck unit, endless idle wait) must not
