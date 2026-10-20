@@ -5,6 +5,7 @@ deploy script (scripts/deploy.py) to deploy main when the project has a saved se
 restarts, health-checks and rolls back; this module only writes its request file and reports its short result. A pending
 request holds new work and merges for at most DEPLOY_WAIT seconds. No AI call decides anything here.
 """
+import ast
 import hashlib
 import json
 import os
@@ -45,7 +46,8 @@ def read(path):
 
 
 def git(root, *args, check=True):
-    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, timeout=120)
+    result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, timeout=120,
+                            env={**os.environ, 'LC_ALL': 'C'})
     if check and result.returncode:
         raise ValueError('git ' + args[0] + ' failed: ' + (result.stderr or result.stdout).strip()[:300])
     return result.stdout.strip() if check else result
@@ -54,16 +56,40 @@ def git(root, *args, check=True):
 def merge_into_main(root, commit):
     """Merge one verified commit into the project's main branch; returns (head, changed). Never forces."""
     branch = main_branch(root)
-    if git(root, 'status', '--porcelain', '--untracked-files=no'):
-        raise ValueError('project checkout has uncommitted changes')
     if git(root, 'symbolic-ref', '-q', '--short', 'HEAD', check=False).stdout.strip() != branch:
         git(root, 'checkout', '--quiet', branch)
+    if git(root, 'status', '--porcelain', '--untracked-files=no'):
+        git(root, 'add', '-u')
+        git(root, *IDENTITY, 'commit', '-m', 'Save local changes in project folder before merging task')
     head = git(root, 'rev-parse', 'HEAD')
     if git(root, 'merge-base', '--is-ancestor', commit, head, check=False).returncode == 0:
         return head, False
-    result = git(root, *IDENTITY, 'merge', '--no-edit', commit, check=False)
+    # Git's ort strategy can overwrite ignored files even with --no-overwrite-ignore.
+    ignored = git(root, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', check=False).stdout
+    if ignored:
+        base = git(root, 'merge-base', head, commit)
+        incoming = git(root, 'diff', '--name-only', '--diff-filter=ACMRT', '-z', base, commit, check=False).stdout
+        paths = [local for local in ignored.split('\0') if local and any(
+            target and (local == target or local.startswith(target + '/') or target.startswith(local + '/'))
+            for target in incoming.split('\0'))]
+        if paths:
+            raise ValueError('Merge blocked by conflicting files: ' + ', '.join(paths))
+    result = git(root, *IDENTITY, '-c', 'core.quotePath=false', 'merge', '--no-edit', '--no-overwrite-ignore',
+                 commit, check=False)
     if result.returncode:
+        paths = git(root, 'diff', '--name-only', '--diff-filter=U', '-z', check=False).stdout.split('\0')
+        paths = [path for path in paths if path]
+        untracked = ('untracked working tree files would be overwritten' in result.stderr
+                     or 'directories would lose untracked files' in result.stderr)
+        if not paths and untracked:
+            # Git indents each blocking path with a tab and C-quotes unusual file names.
+            paths = [ast.literal_eval(line[1:]) if line[1:].startswith('"') else line[1:]
+                     for line in result.stderr.splitlines() if line.startswith('\t')]
         git(root, 'merge', '--abort', check=False)
+        if paths:
+            # A worker can resolve tracked conflicts by syncing main. Local untracked files must be moved by the owner.
+            error = ValueError if untracked else Conflict
+            raise error('Merge blocked by conflicting files: ' + ', '.join(paths))
         raise Conflict('merge conflict with main: ' + (result.stdout + result.stderr).strip()[-300:])
     return git(root, 'rev-parse', 'HEAD'), True
 

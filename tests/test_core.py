@@ -250,6 +250,140 @@ def test_continue_appends_requeues_at_the_end_and_never_resets_the_counter(world
 
 
 # ---- worker flow: queue -> worker -> checks -> merge -> deploy request -------------------------------------------
+@pytest.fixture
+def merge_checkout(tmp_path):
+    repo = tmp_path / 'project'
+    repo.mkdir()
+    git(repo, 'init', '-q', '-b', 'main')
+    (repo / 'owner document.txt').write_text('original\n')
+    git(repo, 'add', '-A')
+    git(repo, 'commit', '-qm', 'initial')
+    git(repo, 'checkout', '-qb', 'task')
+    (repo / 'task.txt').write_text('finished task\n')
+    git(repo, 'add', 'task.txt')
+    git(repo, 'commit', '-qm', 'task work')
+    commit = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'checkout', '-q', 'main')
+    return repo, commit
+
+
+@pytest.mark.parametrize('change', ['modify', 'delete', 'rename'])
+def test_merge_saves_tracked_owner_changes_on_main(merge_checkout, change):
+    repo, commit = merge_checkout
+    document = repo / 'owner document.txt'
+    if change == 'modify':
+        document.write_text('owner edits\n')
+    elif change == 'delete':
+        document.unlink()
+    else:
+        git(repo, 'mv', 'owner document.txt', 'renamed document.txt')
+
+    head, changed = pipeline_module.merge_into_main(repo, commit)
+
+    assert changed and head == git(repo, 'rev-parse', 'main')
+    assert (repo / 'task.txt').read_text() == 'finished task\n'
+    saved = git(repo, 'rev-parse', 'HEAD^1')
+    assert git(repo, 'show', '-s', '--format=%s', saved) == 'Save local changes in project folder before merging task'
+    assert git(repo, 'show', '-s', '--format=%an <%ae>', saved) == 'Linko Bot Boss <bot-boss@linko.invalid>'
+    if change == 'modify':
+        assert document.read_text() == 'owner edits\n'
+        assert git(repo, 'show', saved + ':owner document.txt') == 'owner edits'
+    else:
+        assert not document.exists()
+        assert 'owner document.txt' not in git(repo, 'ls-tree', '-r', '--name-only', saved).splitlines()
+        if change == 'rename':
+            assert (repo / 'renamed document.txt').read_text() == 'original\n'
+            assert git(repo, 'show', saved + ':renamed document.txt') == 'original'
+    assert git(repo, 'status', '--porcelain') == ''
+    assert pipeline_module.merge_into_main(repo, commit) == (head, False)
+
+
+@pytest.mark.parametrize('local_edit', [False, True])
+def test_merge_leaves_untracked_syncthing_files_and_documents_untouched(merge_checkout, local_edit):
+    repo, commit = merge_checkout
+    files = {'.stfolder': b'', '.stversions/old.docx': b'old document', '.stignore': b'private\n',
+             'stray.pdf': b'%PDF-1.7\x00owner data'}
+    for name, content in files.items():
+        path = repo / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content)
+    if local_edit:
+        (repo / 'owner document.txt').write_text('owner edits\n')
+    before = git(repo, 'ls-files', '--others', '--exclude-standard', '-z')
+
+    head, changed = pipeline_module.merge_into_main(repo, commit)
+
+    assert changed and head == git(repo, 'rev-parse', 'main')
+    assert (repo / 'task.txt').read_text() == 'finished task\n'
+    assert git(repo, 'ls-files', '--others', '--exclude-standard', '-z') == before
+    for name, content in files.items():
+        assert (repo / name).read_bytes() == content
+        assert name not in git(repo, 'ls-tree', '-r', '--name-only', 'HEAD').splitlines()
+    if not local_edit:
+        assert head == commit  # untracked files alone create no save commit
+
+
+def test_merge_aborts_overlap_and_preserves_owner_edits_in_history(merge_checkout):
+    repo, _ = merge_checkout
+    git(repo, 'checkout', '-q', 'task')
+    (repo / 'owner document.txt').write_text('worker edits\n')
+    git(repo, 'commit', '-qam', 'overlapping task')
+    commit = git(repo, 'rev-parse', 'HEAD')
+    git(repo, 'checkout', '-q', 'main')
+    (repo / 'owner document.txt').write_text('owner edits\n')
+
+    with pytest.raises(pipeline_module.Conflict, match='owner document.txt'):
+        pipeline_module.merge_into_main(repo, commit)
+
+    assert git(repo, 'show', 'main:owner document.txt') == 'owner edits'
+    assert (repo / 'owner document.txt').read_text() == 'owner edits\n'
+    assert git(repo, 'log', '-1', '--format=%s') == 'Save local changes in project folder before merging task'
+    assert git(repo, 'status', '--porcelain') == ''
+    assert not (repo / 'task.txt').exists()
+    assert not (repo / '.git' / 'MERGE_HEAD').exists()
+    assert git(repo, 'show', commit + ':owner document.txt') == 'worker edits'
+
+
+@pytest.mark.parametrize('name', ['task.txt', 'დოკუმენტი with spaces.txt', 'quoted\tfile.txt', 'ignored-task.txt'])
+def test_merge_reports_untracked_collision_and_keeps_saved_changes(merge_checkout, name):
+    repo, commit = merge_checkout
+    if name != 'task.txt':
+        git(repo, 'checkout', '-q', 'task')
+        git(repo, 'mv', 'task.txt', name)
+        git(repo, 'commit', '-qm', 'rename task document')
+        commit = git(repo, 'rev-parse', 'HEAD')
+        git(repo, 'checkout', '-q', 'main')
+    (repo / 'owner document.txt').write_text('owner edits\n')
+    (repo / name).write_bytes(b'local untracked document\x00')
+    if name == 'ignored-task.txt':
+        (repo / '.git' / 'info' / 'exclude').write_text(name + '\n')
+
+    with pytest.raises(ValueError) as error:
+        pipeline_module.merge_into_main(repo, commit)
+
+    assert not isinstance(error.value, pipeline_module.Conflict)  # propagate paths instead of retrying a main sync
+    assert name in str(error.value)
+    assert git(repo, 'show', 'main:owner document.txt') == 'owner edits'
+    assert (repo / 'owner document.txt').read_text() == 'owner edits\n'
+    assert (repo / name).read_bytes() == b'local untracked document\x00'
+    assert name in git(repo, 'ls-files', '--others', '-z').split('\0')
+    assert git(repo, 'diff', 'HEAD') == ''
+    assert not (repo / '.git' / 'MERGE_HEAD').exists()
+
+
+@pytest.mark.asyncio
+async def test_untracked_merge_collision_reaches_manager_with_file_path(world):
+    world.tasks.add(world.project['id'], 'add a document')
+    (world.app / 'change-1.txt').write_text('local owner document\n')
+
+    done = await run_next(world)
+
+    assert done['state'] == 'failed' and 'change-1.txt' in done['blocker']
+    assert (world.app / 'change-1.txt').read_text() == 'local owner document\n'
+    assert len(world.lab.turns) == 1 and done['rounds'] == 0
+    assert not world.pipeline.pending()
+
+
 @pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_worker_runs_in_isolated_branch_then_merges_and_requests_one_deploy(world):
@@ -392,15 +526,17 @@ async def test_interrupted_repair_round_is_not_charged_twice_and_counter_survive
 
 
 @pytest.mark.asyncio
-async def test_merge_conflict_is_resolved_by_the_same_worker_and_counts_a_round(world):
+@pytest.mark.parametrize('local_edit', [False, True])
+async def test_merge_conflict_is_resolved_by_the_same_worker_and_counts_a_round(world, local_edit):
     task = world.tasks.add(world.project["id"], "edit shared.txt")
 
     async def edit(root, prompt):
         (Path(root) / "shared.txt").write_text("line one\nline two EDITED BY TASK\nline three\n")
         git(root, "commit", "-qam", "task edit")
-        # Meanwhile main moves on the same line.
+        # Meanwhile the owner changes the same line in the project folder.
         (world.app / "shared.txt").write_text("line one\nline two EDITED ON MAIN\nline three\n")
-        git(world.app, "commit", "-qam", "main edit")
+        if not local_edit:
+            git(world.app, "commit", "-qam", "main edit")
         return "edited"
 
     async def resolve(root, prompt):
@@ -416,6 +552,8 @@ async def test_merge_conflict_is_resolved_by_the_same_worker_and_counts_a_round(
     assert (world.app / "shared.txt").read_text() == "line one\nline two EDITED BY BOTH\nline three\n"
     assert world.tasks.get(task["id"])["stage"] == "merge" and len(world.lab.turns) == 2
     assert git(world.app, "status", "--porcelain") == ""  # main was never left mid-merge
+    if local_edit:
+        assert 'Save local changes in project folder before merging task' in git(world.app, 'log', '--format=%s')
 
 
 @pytest.mark.asyncio

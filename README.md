@@ -45,7 +45,12 @@ rules 8–9; worker-only: rule 11).
    the same worker as a repair round, at most 5 times; the task then stops with a plain reason and the manager reports it.
 4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one merge at a time across projects, the
    deploy request is made under the same fence hold); there is no per-project switch. Main is first merged into the branch; a conflict goes to the same worker as a repair round of the
-   same task. Every project with a saved deploy setup then requests the same deploy script automatically, including
+   same task. Before merging into the project folder, tracked local edits, deletions and renames are saved on main
+   with the bot identity and the commit message `Save local changes in project folder before merging task`.
+   Untracked files (including Syncthing files and stray documents) stay untouched and untracked. If a merge conflicts
+   or would overwrite an untracked file, it is aborted with the exact conflicting paths in the error; the saved local
+   commit remains on main. Nothing is forced or discarded. Every project with a saved deploy setup then requests
+   the same deploy script automatically, including
    the manager itself. Without one the application queues a **Create deploy setup** task (see Automatic deploy setup
    below) and nothing waits for the owner. The manager's `deploy` action
    (optionally with a `task_id` of a finished, never-merged task) uses the same path on request.
