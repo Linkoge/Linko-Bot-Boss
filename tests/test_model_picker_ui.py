@@ -28,23 +28,22 @@ def test_dialog_markup_is_the_original_manager_worker_favorites_layout_plus_the_
     assert dialog.index('id="manager-choices"') < dialog.index('id="worker-choices"') < dialog.index('id="manager-favorites"')
 
 
-def test_picker_styles_are_the_original_ones_and_the_switch_is_drawn_like_the_old_bot_switch():
+def test_provider_cards_have_distinct_backgrounds_and_a_vertical_logo():
     css = (STATIC / 'style.css').read_text()
-    rules = [line for line in css.splitlines() if re.search(r'model-|favorite|#model|\.bot-settings', line)
-             and not line.startswith(('#model-dialog section:first-child', '.restricted '))]  # restricted hiding is not picker styling
-    assert len(rules) == 29
-    assert digest('\n'.join(rules)) == '410c53f33ca1983787accd7236aab2fa3116d3459703b16af4ab48da943f59a7'
-    assert '.model-choice-row button[aria-pressed=true]{background:var(--accent-bg)' in css
-    assert '.restricted #model-settings-button,.restricted #models-panel,.restricted #model-dialog{display:none}' in css
+    assert '.provider-card{display:grid;grid-template-columns:minmax(0,1fr) 38px;' in css
+    assert '.provider-card[data-provider=claude]{background:' in css
+    assert '.provider-card .provider-logo{grid-column:2;grid-row:1 / 3;width:38px;' in css
+    assert '.provider-logo[aria-pressed=true]' in css
+    assert '.automatic-pool .model-choice-row button.effort-choice[aria-pressed=true]' in css
     assert '#repo-lock-container button{width:100%;overflow:hidden;text-overflow:ellipsis;' in css
-    # The 81711bd rule for the Bot switch, verbatim apart from the id: two equal columns, 240px, no margin.
-    assert [line for line in css.splitlines() if 'worker-mode' in line] == ['#worker-mode{grid-template-columns:1fr 1fr;margin:0;flex:0 1 240px}']
+    assert '#worker-mode{grid-template-columns:1fr 1fr;margin:0;flex:0 1 240px}' in css
 
 
 def test_client_uses_one_settings_write_path_and_one_repo_toggle():
     js = _js()
-    # Snapshot includes the Users section reusing the existing model and effort controls.
-    assert digest(js) == 'b5e3ba8fd62219ca12407bfb23ccf9022181a8b5d73a02d356da2d683eb2e945'
+    assert "card.prepend(models,levels);container.append(card)" in js
+    assert "logo.innerHTML=PROVIDER_LOGOS[provider]" in js
+    assert "if(!automatic)logo.removeAttribute('aria-pressed')" in js
     assert "renderPair(pair,role,`${user.name} ${titleLevel(role)}`,user,change" in js
     assert "section.hidden=!!state.restricted" in js
     assert "'/api/instance-model-settings?name='+encodeURIComponent(user.name)" in js
@@ -60,7 +59,7 @@ def test_client_uses_one_settings_write_path_and_one_repo_toggle():
 def test_automatic_exists_only_as_the_manual_automatic_switch():
     for path in STATIC.glob('*.js'):
         text = path.read_text()
-        assert 'worker-auto' not in text and 'Automatic' not in text, path.name  # no stray "Automatic" row or button
+        assert 'worker-auto' not in text and "'Automatic'" not in text, path.name  # no stray "Automatic" row or button
     js = _js()
     assert js.count("['manual','automatic']") == 1 and "`${label} ${titleLevel(value)}`" in js
     assert "label='Worker',prefix='worker'" in js
@@ -70,3 +69,13 @@ def test_no_overlapping_pin_global_or_permitted_pairs_controls():
     js = _js().lower()
     assert 'pin' not in js and 'permitted' not in js and 'allowed_pairs' not in js
     assert "modelbutton('global'" not in js and "modelbutton('pin'" not in js
+
+
+def test_pool_toggles_are_independent_and_cannot_remove_the_last_member():
+    js = _js()
+    assert "togglePool(c.worker,'allowed_models',m.model)" in js
+    assert "togglePool(c.worker,'allowed_efforts',e)" in js
+    assert "pair.allowed_models.length===1" in js and "pair.allowed_efforts.length===1" in js
+    assert "if(values.length>1)values.splice(index,1)" in js
+    assert "c.worker=newWorkerPool(panel,provider)" in js
+    assert "?null:" not in js and 'const automatic=!settings.worker' not in js

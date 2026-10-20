@@ -1,8 +1,8 @@
-"""One manager choice and one worker choice, any provider, model and effort the catalog offers, independent of each other.
-What the panel shows is what is saved and dispatched: manager turns use the saved manager pair; a new task runs on the saved
-worker pair or, when the worker is Automatic (null), on whatever the manager picks for it. `manual` remembers the last fixed
-worker so switching Automatic off restores it. A repo lock stores the entire choice; absent locks follow global.
-A task keeps the pair it first ran on."""
+"""Exact manager/manual pairs and provider-scoped automatic worker pools.
+
+The repo record, when locked, overrides the global record. Automatic pools contain explicit model and effort
+lists, so catalog additions never opt themselves in. A task keeps the pair it first ran on.
+"""
 import copy
 import json
 import re
@@ -40,7 +40,9 @@ def global_choice(setting):
     olds = [v for v in (setting('model_settings'), setting('model_settings:claude')) if v]
     if olds:
         old = max(olds, key=lambda v: v['revision'])
-        return {'revision': 0, 'manager': old['manager'], 'worker': old['bot']['manual']}
+        return {'revision': 0, 'manager': old['manager'],
+                'worker': None if old['bot'].get('mode') == 'automatic' else old['bot']['manual'],
+                'manual': old['bot']['manual']}
     routes = setting('model_routes') or {}
     return {'revision': 0, **{k: routes.get(r, DEFAULT[k]) for k, r in (('manager', 'interactive'), ('worker', 'execution'))}}
 
@@ -77,8 +79,8 @@ def _levels(entry):
 
 def choices(server, provider, extra=()):
     """What the picker shows (presentation only; dispatch accepts any catalog model): the provider's three families in
-    their fixed order, each as its newest installed model with Low/Medium/High, then any other model that is currently
-    saved or favorited in `extra`, so a selection made outside the families stays visible and pressed."""
+    their fixed order, each as its newest installed model with Low/Medium/High, then other families and models currently
+    saved, pooled or favorited in `extra`, so a selection made outside the families stays visible and pressed."""
     visible = [m for m in server.catalog if not m.get('hidden') and provider_of(m['model']) == provider]
     result = []
     for name in FAMILIES[provider]:
@@ -89,9 +91,15 @@ def choices(server, provider, extra=()):
                        'levels': [e for e in _levels(best) if e in PICKER_LEVELS] if best else []})
     shown = {c['model'] for c in result}
     for m in visible:
-        if m['model'] in extra and m['model'] not in shown:
+        if (m['model'] in extra or not _family(m['model'])) and m['model'] not in shown:
             shown.add(m['model'])
-            result.append({'name': m.get('displayName') or m['model'], 'model': m['model'], 'levels': _levels(m)})
+            name = m.get('displayName') or m['model']
+            if name in FAMILIES[provider]:
+                name = m['model']  # An older saved version must be distinguishable from its newer family button.
+            result.append({'name': name, 'model': m['model'], 'levels': _levels(m)})
+    for model in sorted(set(extra) - shown):
+        if model and provider_of(model) == provider:
+            result.append({'name': model, 'model': model, 'levels': []})
     return result
 
 
@@ -111,28 +119,96 @@ def set_lock(db, project_id, value, server=None):
             or type(value['locked']) is not bool or type(value['revision']) is not int):
         raise ValueError('Invalid repo lock')
     key = repo_key(db, project_id)
+    # Resolve legacy Automatic before taking the write lock: catalog-backed migration also writes settings.
+    global_settings = current(db, server) if value['locked'] else None
     with db.transaction() as conn:
         if saved(db, project_id)['revision'] != value['revision']:
             raise ValueError('Settings changed; reopen the panel before editing')
         if value['locked'] and not locked(db, project_id):
-            conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(current(db, server))))
+            conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(global_settings)))
         elif not value['locked']:
             conn.execute('DELETE FROM settings WHERE key=?', (key,))
         db.event(conn, 'models.repo_lock', value, project_id)
 
 
+def automatic(worker):
+    return isinstance(worker, dict) and worker.get('mode') == 'automatic'
+
+
+def provider_catalog(server, provider):
+    return [m for m in server.catalog if not m.get('hidden') and provider_of(m['model']) == provider
+            and 'text' in m.get('inputModalities', ['text', 'image'])]
+
+
+def initial_pool(server, provider):
+    entries = provider_catalog(server, provider)
+    return {'mode': 'automatic', 'provider': provider,
+            'allowed_models': list(dict.fromkeys(m['model'] for m in entries if _levels(m))),
+            'allowed_efforts': list(dict.fromkeys(e for m in entries for e in _levels(m)))}
+
+
 def current(db, server=None, project_id=None):
-    """The saved choice; a role saved without a model shows the provider's default model. `manual` is the fixed worker
-    Automatic is switched back to."""
+    """Resolve exact pairs and freeze legacy null Automatic once a provider catalog is available."""
     value = copy.deepcopy(saved(db, project_id))
-    value['manual'] = value.get('manual') or value['worker'] or DEFAULT['worker']
+    value['manual'] = value.get('manual') or (None if automatic(value['worker']) else value['worker']) or DEFAULT['worker']
+    legacy_provider = provider_of(value['manual'].get('model') or value['manager'].get('model'))
     for role in ('manager', 'worker', 'manual'):
-        if server and value[role] and not value[role].get('model'):
+        if server and value[role] and not automatic(value[role]) and not value[role].get('model'):
             try:
                 value[role] = server.route(None, value[role]['effort'])
             except ValueError:
                 pass
+    if value['worker'] is None and server:
+        value['worker'] = initial_pool(server, legacy_provider)
+        # Persist only the migration, without adopting implicit defaults or widening this pool on later reads.
+        if value['worker']['allowed_models']:
+            with db.transaction() as conn:
+                before = saved(db, project_id)
+                if before['worker'] is None:
+                    provider = provider_of((before.get('manual') or {}).get('model') or before['manager'].get('model'))
+                    pool = initial_pool(server, provider)
+                    if not pool['allowed_models']:
+                        return {**value, 'worker': pool}
+                    key = repo_key(db, project_id) if locked(db, project_id) else KEY
+                    migrated = {**before, 'worker': pool}
+                    conn.execute("INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                                 (key, json.dumps(migrated)))
+            return current(db, server, project_id)
     return value
+
+
+def validate_pool(server, worker):
+    if (not isinstance(worker, dict) or set(worker) != {'mode', 'provider', 'allowed_models', 'allowed_efforts'}
+            or worker['mode'] != 'automatic' or not isinstance(worker['provider'], str)
+            or worker['provider'] not in FAMILIES):
+        raise ValueError('Choose an automatic worker provider and pool')
+    for key in ('allowed_models', 'allowed_efforts'):
+        values = worker[key]
+        if (not isinstance(values, list) or not values or any(not isinstance(v, str) or not v for v in values)
+                or len(set(values)) != len(values)):
+            raise ValueError('Automatic worker pool needs at least one model and one effort, without duplicates')
+    entries = provider_catalog(server, worker['provider'])
+    models = {m['model'] for m in entries}
+    efforts = {e for m in entries for e in _levels(m)}
+    if set(worker['allowed_models']) - models:
+        raise ValueError('Automatic worker pool models must be available from the selected provider')
+    if set(worker['allowed_efforts']) - efforts:
+        raise ValueError('Automatic worker pool efforts must be available from the selected provider')
+    return copy.deepcopy(worker)
+
+
+def selection_models(settings):
+    """Keep every saved model visible, including older automatic pool members."""
+    result = {p['model'] for k in ('manager', 'worker', 'manual') if (p := settings.get(k)) and p.get('model')}
+    if automatic(settings['worker']):
+        result.update(settings['worker']['allowed_models'])
+    return result
+
+
+def picker_providers(server, extra=()):
+    """Exact-model choices plus the independent provider effort toggles, including unlit catalog additions."""
+    return {p: {'choices': choices(server, p, extra), 'efforts': initial_pool(server, p)['allowed_efforts']}
+            for p in FAMILIES}
 
 
 def validate_pair(server, pair):
@@ -146,7 +222,7 @@ def save(db, server, value, project_id=None, expected_locked=None):
             or type(value['revision']) is not int or value['revision'] < 0):
         raise ValueError('Invalid model settings')
     new = {'revision': value['revision'] + 1, 'manager': validate_pair(server, value['manager']),
-           'worker': None if value['worker'] is None else validate_pair(server, value['worker'])}
+           'worker': validate_pool(server, value['worker']) if automatic(value['worker']) else validate_pair(server, value['worker'])}
     with db.transaction() as conn:
         is_locked = locked(db, project_id)
         if expected_locked is not None and is_locked != expected_locked:
@@ -154,7 +230,8 @@ def save(db, server, value, project_id=None, expected_locked=None):
         before = saved(db, project_id)
         if before['revision'] != value['revision']:
             raise ValueError('Settings changed; reopen the panel before editing')
-        manual = new['worker'] or before.get('manual') or before['worker'] or DEFAULT['worker']
+        manual = (before.get('manual') or (None if automatic(before['worker']) else before['worker']) or DEFAULT['worker']
+                  if automatic(new['worker']) else new['worker'])
         try:
             new['manual'] = manual if manual.get('model') else server.route(None, manual['effort'])
         except ValueError:
@@ -171,19 +248,34 @@ def manager_route(db, project_id=None):
 
 
 def delegation(db, server, model=None, effort=None, project_id=None):
-    """The pair a new task runs on: the saved worker, or, when the worker is Automatic, the manager's pick
-    (the provider's default model and effort for whatever it leaves out)."""
-    if worker := current(db, project_id=project_id)['worker']:
-        model, effort = worker.get('model'), worker['effort']
-    return server.route(model, effort)
+    """Validate explicit picks; deterministically fill omissions from the saved pool only."""
+    worker = current(db, server, project_id)['worker']
+    if not automatic(worker):
+        return server.route(worker.get('model'), worker['effort'])
+    models, efforts = worker['allowed_models'], worker['allowed_efforts']
+    pool = f"{worker['provider']} models: {', '.join(models)}; efforts: {', '.join(efforts)}"
+    if not models or not efforts:
+        raise ValueError('Automatic worker pool is empty; choose at least one model and one effort in settings')
+    if model is not None and model not in models:
+        raise ValueError(f"{model} is not in the automatic worker pool: {pool}")
+    if effort is not None and effort not in efforts:
+        raise ValueError(f"{effort} is not in the automatic worker pool: {pool}")
+    for candidate in ([model] if model is not None else models):
+        for level in ([effort] if effort is not None else efforts):
+            try:
+                return server.route(candidate, level)
+            except ValueError:
+                if model is not None and effort is not None:
+                    raise  # Explicit unsupported combinations are never silently replaced.
+    raise ValueError(f'No supported execution pair in the automatic worker pool: {pool}')
 
 
 def worker_context(db, server, project_id=None):
-    """What the manager is told about the worker: the fixed pair, or the catalog to pick from when Automatic."""
-    return current(db, server, project_id)['worker'] or {
-        'automatic': 'pass model and effort to delegate; leave them out for the provider default',
-        'available': {m['model']: [e['reasoningEffort'] for e in m['supportedReasoningEfforts']]
-                      for m in server.catalog if not m.get('hidden')}}
+    worker = current(db, server, project_id)['worker']
+    if automatic(worker):
+        return {**worker, 'automatic': 'Pick the cheapest fit from this provider and allowed pool only; pass model and '
+                'effort to delegate. Omitted picks are filled deterministically from this pool.'}
+    return worker
 
 
 def assignment_route(db, server, task):

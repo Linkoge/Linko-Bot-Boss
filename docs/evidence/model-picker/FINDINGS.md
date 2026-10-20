@@ -1,5 +1,11 @@
 # Model picker: visual findings (2026-10-16)
 
+The comparisons below record the earlier picker. The provider-card redesign replaces its Automatic behavior: one
+provider logo is selected, model and effort buttons independently light the saved pool, and new catalog entries
+remain off. Permanent Chromium coverage now verifies provider backgrounds, 38px logos spanning both rows, no horizontal
+overflow at 1200/390/320px, reload, provider switching and prevention of empty model/effort pools. Original screenshots
+remain historical evidence; current settings and dispatch behavior are described in README.md.
+
 Renders: real Chromium, disposable server, same fixture catalog and default saved state for every revision
 (`git archive <rev>` served with that revision's own fixture). Left to right in `side-by-side-*.png`:
 81711bd (Bot Manual/Automatic), 208554a, db292c6 (deployed), new Manual, new Automatic. Widths 1200, 393, 320.
@@ -52,8 +58,8 @@ Permanent evidence:
 - `tests/test_model_picker_browser.py`: active repo heading, visible ON highlight, copying global, both roles' edits,
   Automatic/Manual across reload, scope-aware favorites, unlocked edits updating global, OFF/re-ON discarding prior
   settings, and failed repo refresh clearing all cached controls. Existing rendered layout and Send checks remain.
-- `tests/test_model_picker_ui.py`: original markup hash after removing the new repo header and worker switch, original
-  model/favorite styles, reviewed client hash, plus checks for the single write path and removed worker controls.
+- `tests/test_model_picker_ui.py`: retained section/header markup, provider-card styling and logo placement, independent
+  pool toggles and empty-pool guards, plus the single write path and removed worker controls.
 - `tests/test_todos.py`: Start resolves the source repo's worker using the full repo lock.
 
 Checks use disposable fixture data and allocated localhost ports, fake provider protocol turns, bounded pytest suites

@@ -4,7 +4,7 @@ import json
 
 import pytest
 from fastapi.testclient import TestClient
-from test_model_settings import MODELS, SOL, SONNET, CatalogServer
+from test_model_settings import MODELS, SOL, SONNET, CatalogServer, pool
 from test_model_settings import system as system_fixture
 from test_web import sign_in
 
@@ -14,6 +14,7 @@ from ai_manager.model_settings import (
     assignment_route,
     current,
     delegation,
+    initial_pool,
     locked,
     manager_route,
     save,
@@ -95,7 +96,7 @@ def test_lock_copy_delete_reload_and_all_picks_share_one_scope(system):
     toggle(db, one, True)
     assert saved(db, one) == saved(db)
     pick(db, server, one, manager=MANAGER, worker=LOCAL)
-    pick(db, server, one, worker=None)
+    pick(db, server, one, worker=pool())
     reloaded = Database(settings.db_path)
     assert locked(reloaded, one) and not locked(reloaded, two)
     assert manager_route(reloaded, one) == MANAGER
@@ -104,7 +105,7 @@ def test_lock_copy_delete_reload_and_all_picks_share_one_scope(system):
     # An unlocked repo edits global; a lock's manager, worker and remembered Manual stay isolated.
     pick(db, server, two, manager=LOCAL, worker=MANAGER)
     assert manager_route(db) == manager_route(db, two) == LOCAL
-    assert current(db, server, one)['worker'] is None
+    assert current(db, server, one)['worker'] == pool()
     pick(db, server, one, worker=current(db, server, one)['manual'])
     task = Tasks(db).add(one, 'direct task')
     assert assignment_route(db, server, task) == LOCAL
@@ -133,7 +134,7 @@ def test_schema16_migrates_worker_overrides_once_into_full_locks(system, automat
     reloaded = Database(settings.db_path)
     assert locked(reloaded, one) and not locked(reloaded, two)
     assert manager_route(reloaded, one) == MANAGER
-    assert current(reloaded, server, one)['worker'] == (None if automatic else LOCAL)
+    assert current(reloaded, server, one)['worker'] == (initial_pool(server, 'codex') if automatic else LOCAL)
     assert current(reloaded, server, one)['manual'] == LOCAL
     assert reloaded.all("SELECT key FROM settings WHERE key GLOB 'project_worker:*'") == []
     toggle(reloaded, one, False)
@@ -194,7 +195,7 @@ def test_repo_pair_validation_is_atomic_and_all_catalog_pairs_are_accepted(syste
     assert manager_route(db, one) == delegation(db, server, project_id=one) == custom
 
 
-def test_repo_api_keeps_only_effective_off_family_choices(system):
+def test_repo_api_exposes_other_catalog_families_in_each_scope(system):
     db, _, settings, server, *_ = system
     one, two = two_projects(system)
     for model in ('custom-global', 'custom-repo'):
@@ -209,11 +210,11 @@ def test_repo_api_keeps_only_effective_off_family_choices(system):
         sign_in(client, app, settings)
         for project, extra in ((one, 'custom-repo'), (two, 'custom-global')):
             panel = client.get('/api/model-settings', params={'project_id': project}).json()
-            assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', extra]
+            assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', 'custom-global', 'custom-repo']
             assert panel['providers']['codex']['choices'][-1]['levels'] == ['ultra']
-        pick(db, server, one, worker=None)
+        pick(db, server, one, worker=pool())
         panel = client.get('/api/model-settings', params={'project_id': one}).json()
-        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra']
+        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', 'custom-global', 'custom-repo']
 
 
 def test_lock_freezes_the_current_default_pairs_before_global_provider_changes(system):
@@ -225,3 +226,19 @@ def test_lock_freezes_the_current_default_pairs_before_global_provider_changes(s
     assert current(db, server, one) == before
     assert saved(db, one)['manager'] == before['manager']
     assert saved(db, one)['worker'] == before['worker']
+
+
+def test_lock_migrates_legacy_global_automatic_and_keeps_its_pool_after_catalog_growth(system):
+    db, _, settings, server, *_ = system
+    one, two = two_projects(system)
+    db.set_setting('model_choice', {'revision': 4, 'manager': MANAGER, 'worker': None})
+    set_lock(db, one, {'revision': 4, 'locked': True}, server)
+    pool = initial_pool(server, 'claude')
+    assert saved(db, one)['worker'] == saved(db)['worker'] == pool
+    assert delegation(db, server, project_id=one)['model'].startswith('claude-')
+    pick(db, server, two, worker=GLOBAL)
+    server.catalog.append({**server.catalog[-1], 'model': 'claude-fable-9', 'displayName': 'Fable'})
+    reloaded = Database(settings.db_path)
+    assert current(reloaded, server, one)['worker'] == pool
+    assert current(reloaded, server, two)['worker'] == GLOBAL
+    assert 'claude-fable-9' not in worker_context(reloaded, server, one)['allowed_models']

@@ -87,7 +87,8 @@ async def test_guide_refreshes_existing_manager_threads_and_delegation_stays_ung
     scope = project if project_chat else None
     worker = {'model': SONNET if manager == SOL else SOL, 'effort': 'high'}
     save(db, server, {**current(db, server), 'manager': {'model': manager, 'effort': 'low'},
-                      'worker': None if automatic else worker})
+                      'worker': {'mode': 'automatic', 'provider': 'codex', 'allowed_models': [SOL],
+                                 'allowed_efforts': ['high']} if automatic else worker})
     conversation = chat.conversation(scope)
     db.run('UPDATE conversations SET thread_id=? WHERE id=?', ('old-thread', conversation['id']))
     previous = MANAGER_INSTRUCTIONS.removesuffix('\n' + ARCHITECTURE_GUIDE)

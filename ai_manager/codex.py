@@ -406,8 +406,9 @@ If a page is unreachable or capture fails, explain that limitation; do not claim
 To refine a queued task, continue it with only the added instructions in objective and/or details; both are preserved
 in the worker's objective. acceptance appends criteria. A running task cannot be edited: delegate the
 new work (it runs next) or cancel and continue.
-The context's worker is the owner's fixed model and effort for new tasks. When it says automatic, you pick: pass model
-and effort (any from its available list) to delegate, or leave them out for the provider default.
+The context's worker is the owner's fixed model and effort for new tasks. When it says automatic, pick the cheapest fit
+from its provider, allowed_models and allowed_efforts only. Pass model and effort to delegate; omitted picks are filled
+deterministically from that pool. Out-of-pool picks are rejected; retry within the pool.
 For host work the owner explicitly asks for in their own chat message (installs, permissions/ACLs such as setfacl, users,
 services, reboots, config, or repairing the application) use emergency_repair with objective; it writes the independent host
 repair spool without normal queue checks. Run it through this path yourself; do not hand the owner shell commands to paste.

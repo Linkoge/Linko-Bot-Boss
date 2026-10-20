@@ -12,7 +12,7 @@ from ai_manager.config import Settings
 from ai_manager.core import Tasks
 from ai_manager.db import Database
 from ai_manager.instance_models import ExistingDatabase, listing
-from ai_manager.model_settings import assignment_route, current, delegation, manager_route
+from ai_manager.model_settings import assignment_route, current, delegation, initial_pool, manager_route
 from ai_manager.providers import ProviderServer
 from ai_manager.web import create_app
 
@@ -165,7 +165,7 @@ def test_missing_bad_registry_and_unknown_instance_fail_clearly(pair, tmp_path):
     assert not (tmp_path / 'unreachable').exists()
 
 
-def test_stopped_instance_and_automatic_or_legacy_choices_keep_existing_semantics(tmp_path):
+def test_stopped_instance_migrates_legacy_automatic_and_dispatches_the_same_pool(tmp_path):
     main = tmp_path / 'main'
     main.mkdir()
     user = tmp_path / 'stopped'
@@ -176,11 +176,11 @@ def test_stopped_instance_and_automatic_or_legacy_choices_keep_existing_semantic
     path.mkdir()
     (path / 'installed.json').write_text(json.dumps({'instances': [{'name': 'Offline', 'data': str(user)}]}))
     shown = listing(main, server)[0]['settings']
-    assert shown['manager'] == {'model': MODELS['Astra'], 'effort': 'high'} and shown['worker'] is None
-    assert db.setting('model_choice') is None
+    assert shown['manager'] == {'model': MODELS['Astra'], 'effort': 'high'} and shown['worker'] == initial_pool(server, 'codex')
+    assert db.setting('model_choice')['worker'] == shown['worker']
     from ai_manager.instance_models import save
     confirmed = save(main, server, 'Offline', {**shown, 'manager': {'model': SOL, 'effort': 'low'}})['settings']
-    assert confirmed['worker'] is None
+    assert confirmed['worker'] == shown['worker']
     assert db.setting('model_choice') == confirmed
     assert delegation(ExistingDatabase(user), server, MODELS['Luna'], 'high') == {'model': MODELS['Luna'], 'effort': 'high'}
     restarted = Settings(data_dir=user, project_roots=(tmp_path / 'empty',), secure_cookie=False)

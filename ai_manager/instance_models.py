@@ -61,9 +61,9 @@ def access_error(name, error):
 def panel(entry, server):
     db = ExistingDatabase(entry['data'])
     settings = model_settings.current(db, InstanceCatalog(db, server))
-    keep = {pair.get('model') for pair in (settings['manager'], settings['worker'], settings['manual']) if pair}
+    keep = model_settings.selection_models(settings)
     return {'name': entry['name'], 'settings': settings,
-            'providers': {p: {'choices': model_settings.choices(server, p, keep)} for p in ('codex', 'claude')}}
+            'providers': model_settings.picker_providers(server, keep)}
 
 
 def listing(data, server):

@@ -16,10 +16,13 @@ from ai_manager.model_settings import (
     current,
     delegation,
     favorites,
+    initial_pool,
     insert_favorite,
     manager_route,
+    picker_providers,
     recall_favorite,
     save,
+    selection_models,
     worker_context,
 )
 from ai_manager.orchestration import Scheduler
@@ -121,7 +124,7 @@ def test_picker_shows_the_compact_family_layout_while_dispatch_accepts_any_catal
     codex = choices(server, 'codex')
     assert [(c['name'], c['model'], c['levels']) for c in codex] == [
         ('Luna', MODELS['Luna'], ['low', 'medium', 'high']), ('Sol', SOL, ['low', 'medium', 'high']),
-        ('Astra', MODELS['Astra'], ['low', 'medium', 'high'])]
+        ('Astra', MODELS['Astra'], ['low', 'medium', 'high']), ('Custom X', 'custom-model-x', ['minimal', 'ultra'])]
     claude = choices(server, 'claude')
     assert [c['name'] for c in claude] == ['Haiku', 'Sonnet', 'Opus'] and len(claude) == 3
     assert all(set(c['levels']) <= {'low', 'medium', 'high'} for c in claude)
@@ -150,58 +153,111 @@ def test_a_newer_family_version_replaces_the_older_one_numerically(system):
     assert next(c for c in choices(server, 'claude') if c['name'] == 'Sonnet')['model'] == 'claude-sonnet-5-10'
 
 
+def pool(models=None, efforts=None, provider='codex'):
+    return {'mode': 'automatic', 'provider': provider, 'allowed_models': [MODELS['Luna'], SOL] if models is None else models,
+            'allowed_efforts': ['low', 'high'] if efforts is None else efforts}
+
+
+@pytest.mark.smoke
 @pytest.mark.asyncio
-async def test_automatic_worker_lets_the_manager_pick_any_model_and_the_task_records_what_ran(system):
-    db, registry, _, server, chat, workers, scheduler = system
+async def test_automatic_pool_is_saved_shown_dispatched_and_tasks_keep_their_first_pair(system):
+    db, registry, settings, server, chat, workers, scheduler = system
     project = registry.list()[0]['id']
-    server.catalog.append({'model': 'custom-model-x', 'displayName': 'Custom X', 'isDefault': False,
-                           'supportedReasoningEfforts': [{'reasoningEffort': e} for e in ('minimal', 'ultra')],
-                           'defaultReasoningEffort': 'minimal'})
-    save(db, server, {**current(db, server), 'manager': {'model': SONNET, 'effort': 'low'},
-                      'worker': {'model': MODELS['Luna'], 'effort': 'low'}})
-    auto = save(db, server, {**current(db, server), 'worker': None})
-    assert auto['worker'] is None and current(db, server)['worker'] is None
-    assert auto['manual'] == {'model': MODELS['Luna'], 'effort': 'low'}  # remembered for switching Automatic off
-    assert auto['manager'] == {'model': SONNET, 'effort': 'low'}  # the manager choice is independent of the worker
+    manual = {'model': MODELS['Luna'], 'effort': 'low'}
+    save(db, server, {**current(db, server), 'manager': {'model': SONNET, 'effort': 'low'}, 'worker': manual})
+    auto = save(db, server, {**current(db, server), 'worker': pool()})
+    assert auto['worker'] == pool() and auto['manual'] == manual
+    assert current(Database(settings.db_path), server) == auto
     context = worker_context(db, server)
-    assert 'automatic' in context and set(context['available']) == {m['model'] for m in server.catalog}
+    assert context['provider'] == 'codex' and context['allowed_models'] == pool()['allowed_models']
+    assert context['allowed_efforts'] == ['low', 'high'] and 'cheapest fit' in context['automatic']
 
     async def delegate(objective, **picks):
-        params = {'tool': 'manager_action', 'callId': objective, 'manager_execution_id': 'm-' + objective,
-                  'conversation_id': chat.conversation(project)['id'],
-                  'arguments': {'action': 'delegate', 'objective': objective, **picks}}
-        return await scheduler.manager_action(project, params)
+        return await scheduler.manager_action(project, {
+            'tool': 'manager_action', 'callId': objective, 'manager_execution_id': 'm-' + objective,
+            'conversation_id': chat.conversation(project)['id'],
+            'arguments': {'action': 'delegate', 'objective': objective, **picks}})
 
-    # Unrestricted: any provider, any model, any effort the catalog offers, regardless of the manager's provider.
-    assert (await delegate('luna', model=MODELS['Luna'], effort='high'))['worker_route'] == {'model': MODELS['Luna'], 'effort': 'high'}
-    assert (await delegate('claude', model=SONNET, effort='medium'))['worker_route'] == {'model': SONNET, 'effort': 'medium'}
-    assert (await delegate('default'))['worker_route']['model'] == SOL  # nothing asked for: the provider default
-    assert (await delegate('custom', model='custom-model-x', effort='ultra'))['worker_route'] == {'model': 'custom-model-x', 'effort': 'ultra'}
-    with pytest.raises(ValueError, match='not in the installed'):
-        await delegate('bad pick', model='nope')
-    with pytest.raises(ValueError, match='not supported'):
-        await delegate('bad effort', model=SOL, effort='ultra')
-    CatalogServer.turns.clear()
-    for expected in (MODELS['Luna'], SONNET, SOL):  # the custom model's task stays queued (the worker fixture has no such model)
+    assert (await delegate('sol', model=SOL, effort='high'))['worker_route'] == {'model': SOL, 'effort': 'high'}
+    assert (await delegate('omitted'))['worker_route'] == manual  # never the provider default outside the pool
+    for picks in ({'model': MODELS['Astra']}, {'model': SONNET}, {'effort': 'medium'}):
+        with pytest.raises(ValueError, match='not in the automatic worker pool:.*gpt-6-luna.*gpt-6.1-sol'):
+            await delegate('rejected', **picks)
+    assert len(db.all('SELECT id FROM tasks')) == 2
+    for expected in ({'model': SOL, 'effort': 'high'}, manual):
         task = Tasks(db).claim()
         await workers._run(task)
-        execution = db.one('SELECT * FROM executions WHERE id=?', (task['lease_owner'],))
-        assert execution['model'] == expected and CatalogServer.turns[-1]['model'] == expected  # what actually ran
-        assert Tasks(db).get(task['id'])['worker_route']['model'] == expected
-    # Switching Automatic off restores the remembered fixed worker, which then wins over the manager's pick.
-    back = save(db, server, {**current(db, server), 'worker': current(db, server)['manual']})
-    assert back['worker'] == {'model': MODELS['Luna'], 'effort': 'low'} and worker_context(db, server) == back['worker']
-    assert (await delegate('fixed', model=SONNET, effort='high'))['worker_route'] == {'model': MODELS['Luna'], 'effort': 'low'}
+        assert db.one('SELECT model,effort FROM executions WHERE id=?', (task['lease_owner'],)) == expected
+        assert {k: CatalogServer.turns[-1][k] for k in ('model', 'effort')} == expected
+        save(db, server, {**current(db, server), 'worker': pool([MODELS['Luna']], ['low'])})
+        assert assignment_route(db, server, task) == expected
+    back = save(db, server, {**current(db, server), 'worker': auto['manual']})
+    assert worker_context(db, server) == back['worker'] == manual
+    assert delegation(db, server, SONNET, 'high') == manual
 
 
-def test_a_worker_saved_null_stays_automatic_and_a_fresh_install_is_a_fixed_default_worker(system):
-    db, _, _, server, *_ = system
-    assert current(db, server)['worker'] == {'model': SOL, 'effort': 'medium'}  # default: fixed, provider default model
-    db.set_setting('model_choice', {'revision': 3, 'manager': {'model': SOL, 'effort': 'low'}, 'worker': None})  # no `manual` yet
+def test_legacy_null_migrates_once_and_catalog_additions_stay_off(system):
+    db, _, settings, server, *_ = system
+    assert current(db, server)['worker'] == {'model': SOL, 'effort': 'medium'}
+    db.set_setting('model_choice', {'revision': 3, 'manager': {'model': SOL, 'effort': 'low'}, 'worker': None})
     config = current(db, server)
-    assert config['worker'] is None and config['manual'] == {'model': SOL, 'effort': 'medium'}
-    assert delegation(db, server, MODELS['Astra'], 'high') == {'model': MODELS['Astra'], 'effort': 'high'}
-    assert save(db, server, {**config, 'manager': {'model': SONNET, 'effort': 'low'}})['worker'] is None  # manager edit keeps it
+    assert config['worker'] == initial_pool(server, 'codex')
+    assert config['manual'] == {'model': SOL, 'effort': 'medium'}
+    assert db.setting('model_choice')['worker'] == config['worker']
+    server.catalog.append({**server.catalog[0], 'model': 'gpt-7-fable', 'displayName': 'Fable'})
+    server.catalog[0]['supportedReasoningEfforts'].append({'reasoningEffort': 'ultra'})
+    assert current(Database(settings.db_path), server)['worker'] == config['worker']
+    assert 'ultra' in picker_providers(server)['codex']['efforts']
+    assert 'ultra' not in config['worker']['allowed_efforts']
+    assert 'gpt-7-fable' in [c['model'] for c in choices(server, 'codex')]
+    with pytest.raises(ValueError, match='not in the automatic worker pool'):
+        delegation(db, server, 'gpt-7-fable')
+    assert save(db, server, {**config, 'manager': {'model': SONNET, 'effort': 'low'}})['worker'] == config['worker']
+    assert save(db, server, {**current(db, server), 'worker': {'model': 'gpt-7-fable', 'effort': 'low'}})['worker']['model'] == 'gpt-7-fable'
+
+
+@pytest.mark.parametrize('worker', [None, {**pool(), 'allowed_models': []},
+    {**pool(), 'allowed_efforts': []}, {**pool(), 'provider': 'unknown'}, {**pool(), 'provider': []},
+    pool([SONNET]), pool([SOL, SOL]), {**pool(), 'allowed_efforts': ['ultra']},
+    {**pool(), 'allowed_models': 'gpt-6-luna'}, {**pool(), 'allowed_pairs': []}])
+def test_invalid_pools_are_refused_atomically(system, worker):
+    db, _, _, server, *_ = system
+    before = current(db, server)
+    with pytest.raises(ValueError):
+        save(db, server, {**before, 'worker': worker})
+    assert current(db, server) == before
+
+
+def test_independent_models_and_efforts_use_catalog_support_without_pair_policy(system):
+    db, _, _, server, *_ = system
+    server.catalog[0]['supportedReasoningEfforts'] = [{'reasoningEffort': 'low'}]
+    worker = pool([MODELS['Luna'], SOL], ['high'])
+    save(db, server, {**current(db, server), 'worker': worker})
+    assert delegation(db, server) == {'model': SOL, 'effort': 'high'}
+    assert delegation(db, server, effort='high') == {'model': SOL, 'effort': 'high'}
+    with pytest.raises(ValueError, match='No supported execution pair.*automatic worker pool'):
+        delegation(db, server, model=MODELS['Luna'])
+    with pytest.raises(ValueError, match='not supported'):
+        delegation(db, server, MODELS['Luna'], 'high')
+    # A damaged persisted pool has an explicit server-side error, never a provider fallback.
+    db.set_setting('model_choice', {**current(db, server), 'worker': {**worker, 'allowed_models': []}})
+    with pytest.raises(ValueError, match='pool is empty'):
+        delegation(db, server)
+
+
+def test_claude_legacy_pool_and_catalog_temporarily_unavailable(system):
+    db, _, _, server, *_ = system
+    db.set_setting('model_choice', {'revision': 2, 'manager': {'model': SONNET, 'effort': 'low'},
+                                  'worker': None, 'manual': {'model': SONNET, 'effort': 'high'}})
+    catalog, server.catalog = server.catalog, []
+    assert current(db, server)['worker']['allowed_models'] == []
+    assert db.setting('model_choice')['worker'] is None  # wait for a real catalog to freeze migration
+    with pytest.raises(ValueError, match='pool is empty'):
+        delegation(db, server)
+    server.catalog = catalog
+    migrated = current(db, server)['worker']
+    assert migrated == initial_pool(server, 'claude')
+    assert delegation(db, server)['model'].startswith('claude-')
 
 
 def test_old_per_provider_settings_migrate_to_the_most_recently_edited_choice(system):
@@ -241,7 +297,7 @@ def test_api_saves_exactly_what_the_panel_sent(tmp_path):
         sign_in(client, app, settings)
         panel = client.get('/api/model-settings').json()
         assert set(panel['providers']) == {'codex', 'claude'} and set(panel['settings']) == {'revision', 'manager', 'worker', 'manual'}
-        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra']
+        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', 'Custom X']
         assert [c['name'] for c in panel['providers']['claude']['choices']] == ['Haiku', 'Sonnet', 'Opus']
         choice = {**panel['settings'], 'manager': {'model': SONNET, 'effort': 'high'}, 'worker': {'model': SOL, 'effort': 'medium'}}
         assert client.put('/api/model-settings', json=choice, headers={'X-CSRF-Token': 'bad'}).status_code == 403
@@ -249,17 +305,41 @@ def test_api_saves_exactly_what_the_panel_sent(tmp_path):
         panel = client.get('/api/model-settings').json()
         assert panel['provider'] == 'claude' and panel['settings']['worker'] == {'model': SOL, 'effort': 'medium'}
         assert client.put('/api/model-settings', json=choice).status_code == 409  # stale revision
-        auto = {**client.get('/api/model-settings').json()['settings'], 'worker': None}
-        assert client.put('/api/model-settings', json=auto).json()['worker'] is None  # Automatic worker
-        assert client.get('/api/model-settings').json()['settings']['worker'] is None
+        auto = {**client.get('/api/model-settings').json()['settings'], 'worker': pool()}
+        assert client.put('/api/model-settings', json=auto).json()['worker'] == pool()  # Automatic worker
+        assert client.get('/api/model-settings').json()['settings']['worker'] == pool()
         now = client.get('/api/model-settings').json()['settings']
         assert client.put('/api/model-settings', json={**now, 'worker': {'model': SOL}}).status_code == 409  # a half pair is refused
-        assert client.get('/api/model-settings').json()['settings']['worker'] is None
+        assert client.get('/api/model-settings').json()['settings']['worker'] == pool()
         assert client.get('/api/models').status_code == 404  # the unused models endpoint is gone
-        # A saved or favorited model outside the three families stays visible; nothing else is added to the picker.
+        # New families are available for exact selection and stay off in saved automatic pools.
         now = client.get('/api/model-settings').json()
-        assert 'Custom X' not in [c['name'] for c in now['providers']['codex']['choices']]
+        assert 'Custom X' in [c['name'] for c in now['providers']['codex']['choices']]
         custom = {**now['settings'], 'manager': {'model': 'custom-model-x', 'effort': 'minimal'}}
         assert client.put('/api/model-settings', json=custom).status_code == 200
         names = [c['name'] for c in client.get('/api/model-settings').json()['providers']['codex']['choices']]
         assert names == ['Luna', 'Sol', 'Astra', 'Custom X']
+
+
+def test_legacy_provider_settings_migrate_automatic_without_reusing_the_pair_policy(system):
+    db, _, _, server, *_ = system
+    db.set_setting('model_settings:claude', {'revision': 12, 'manager': {'model': SONNET, 'effort': 'low'},
+        'bot': {'mode': 'automatic', 'manual': {'model': SONNET, 'effort': 'high'},
+                'policy': {'allowed_pairs': []}}})
+    assert current(db, server)['worker'] == initial_pool(server, 'claude')
+    assert db.setting('model_choice')['worker'] == initial_pool(server, 'claude')
+    assert delegation(db, server)['model'].startswith('claude-')
+
+
+def test_new_family_version_stays_off_and_the_old_pool_member_stays_visible(system):
+    db, _, _, server, *_ = system
+    before = save(db, server, {**current(db, server), 'worker': pool()})
+    server.catalog.append({**server.catalog[1], 'model': 'gpt-9-sol'})
+    settings = current(db, server)
+    assert settings == before
+    shown = picker_providers(server, selection_models(settings))['codex']['choices']
+    assert {'name': 'Sol', 'model': 'gpt-9-sol', 'levels': ['low', 'medium', 'high']} in shown
+    assert next(m for m in shown if m['model'] == SOL)['name'] == SOL
+    assert len({m['name'] for m in shown}) == len(shown)
+    with pytest.raises(ValueError, match='not in the automatic worker pool'):
+        delegation(db, server, 'gpt-9-sol')

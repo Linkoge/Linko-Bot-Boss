@@ -1,7 +1,6 @@
 """Real Chromium: the model picker as the owner sees it. Disposable server and data; the provider is a protocol fixture.
 
-Layout numbers are the ones measured on the known-good renderings (208554a4cd for the sections, 81711bd for the Manual |
-Automatic switch) with the same fixture catalog; docs/evidence/model-picker/ holds the screenshots they come from."""
+Provider cards, pool toggles, persistence and exact manual choices at desktop and mobile widths."""
 import os
 import socket
 import sqlite3
@@ -31,7 +30,7 @@ for model, efforts in (('gpt-5.6-sol', ('low', 'medium', 'high', 'xhigh', 'max',
 uvicorn.run(create_app(s, server, CatalogServer), host='127.0.0.1', port=PORT, log_level='error')
 '''
 ROOT = Path(__file__).resolve().parents[1]
-FAMILIES = ['Luna', 'Sol', 'Astra', 'Low', 'Medium', 'High', 'Haiku', 'Sonnet', 'Opus', 'Low', 'Medium', 'High']
+FAMILIES = ['Luna', 'Sol', 'Astra', 'gpt-5.6-terra', 'Low', 'Medium', 'High', 'Haiku', 'Sonnet', 'Opus', 'Low', 'Medium', 'High']
 LUNA, SOL, SONNET = 'gpt-6-luna', 'gpt-6.1-sol', 'claude-sonnet-5-5'
 
 
@@ -112,27 +111,39 @@ def choose(page, key):
 
 
 def pressed(page, container):
-    return page.locator(f'{container} button[aria-pressed=true]').all_inner_texts()
+    return page.locator(f'{container} button[aria-pressed=true]:not(.provider-logo)').all_inner_texts()
 
 
 def saved(page):
     return page.evaluate("()=>api('/api/model-settings')")['settings']
 
 
-@pytest.mark.parametrize('width,height,dialog_width', [(1200, 900, 420), (393, 851, 361), (320, 640, 304)])
+@pytest.mark.parametrize('width,height,dialog_width', [(1200, 900, 420), (390, 851, 358), (320, 640, 304)])
 def test_menu_has_the_known_good_layout_at_desktop_and_narrow_widths(page, width, height, dialog_width):
     page.set_viewport_size({'width': width, 'height': height})
     open_panel(page)
     box = page.locator('#model-dialog').bounding_box()
-    assert box['width'] == dialog_width and 566 <= box['height'] <= 574, box  # one screen, no scrolling at any width
-    assert page.evaluate("()=>modelDialog.scrollHeight<=modelDialog.clientHeight")
+    assert box['width'] == dialog_width and box['height'] <= height - 16, box
+    assert page.evaluate("()=>modelDialog.scrollWidth<=modelDialog.clientWidth")
     heads = page.locator('.model-section-head h2:visible, .model-favorites h2:visible').all_inner_texts()
     assert heads == ['Manager', 'Worker', 'Favorites']
     for section in ('#manager-choices', '#worker-choices'):  # a model row and an effort row per provider, Low/Medium/High
-        assert page.locator(f'{section} button').all_inner_texts() == FAMILIES
+        assert page.locator(f'{section} .model-choice-row button').all_inner_texts() == FAMILIES
         assert page.locator(f'{section} .model-choice-row').count() == 4
         columns = page.locator(f'{section} .model-choice-row').first.evaluate("n=>getComputedStyle(n).gridTemplateColumns.split(' ').length")
         assert columns == 3
+    for section in ('#manager-choices', '#worker-choices'):
+        cards = page.locator(f'{section} .provider-card')
+        assert cards.count() == 2
+        assert cards.nth(0).evaluate('n=>getComputedStyle(n).backgroundColor') != cards.nth(1).evaluate('n=>getComputedStyle(n).backgroundColor')
+        for card in cards.all():
+            logo = card.locator('.provider-logo')
+            assert logo.locator('svg').count() == 1
+            bounds, first, last = (loc.bounding_box() for loc in (logo, card.locator('.model-choice-row').first, card.locator('.model-choice-row').last))
+            assert bounds['width'] == 38 and bounds['y'] == first['y']
+            assert bounds['y'] + bounds['height'] == last['y'] + last['height']
+            assert bounds['x'] > first['x'] + first['width']
+            assert logo.is_disabled()  # label only in manager/manual
     assert page.locator('.favorite-row').count() == 2
     # The Manual | Automatic switch: two equal buttons in the Worker heading row, right-aligned with the close button.
     switch = page.locator('#worker-mode')
@@ -160,26 +171,38 @@ def test_manager_and_worker_are_independent_and_automatic_persists(page, browser
     assert saved(page)['worker'] == {'model': LUNA, 'effort': 'high'}  # a Claude manager with a Codex worker
     assert pressed(page, '#manager-choices') == ['Sonnet', 'High'] and pressed(page, '#worker-choices') == ['Luna', 'High']
     assert pressed(page, '#worker-mode') == ['Manual']
-    # Automatic: the worker is the manager's pick; nothing in the worker rows is pressed; the manager is untouched.
     choose(page, 'worker-automatic')
-    assert saved(page)['worker'] is None and saved(page)['manual'] == {'model': LUNA, 'effort': 'high'}
-    assert pressed(page, '#worker-mode') == ['Automatic'] and pressed(page, '#worker-choices') == []
+    auto = saved(page)['worker']
+    assert auto['mode'] == 'automatic' and auto['provider'] == 'codex'
+    assert saved(page)['manual'] == {'model': LUNA, 'effort': 'high'}
+    assert pressed(page, '#worker-mode') == ['Automatic']
+    assert page.locator('[data-choice="worker-codex-provider"]').get_attribute('aria-pressed') == 'true'
+    # Max is supported only by an older catalog model; its independent toggle remains visible even unlit.
+    assert page.locator('[data-choice="worker-codex-max"]').get_attribute('aria-pressed') == 'false'
+    assert page.locator('[data-choice="worker-codex-max"]').is_enabled()
+    choose(page, 'worker-Astra')
+    choose(page, 'worker-codex-medium')
+    auto = saved(page)['worker']
+    assert 'gpt-6-astra' not in auto['allowed_models'] and 'medium' not in auto['allowed_efforts']
+    assert pressed(page, '#worker-choices') == ['Luna', 'Sol', 'gpt-5.6-terra', 'Low', 'High', 'Xhigh', 'Ultra']
+    assert page.locator('#worker-choices [data-provider=claude] .model-family:enabled').count() == 0
     assert pressed(page, '#manager-choices') == ['Sonnet', 'High']
-    assert page.locator('#worker-choices .effort-choice:enabled').count() == 0  # efforts wait for a model, like any other
     page.locator('#model-close').click()
-    page.reload()  # saved: it survives a reload
+    page.reload()
     page.wait_for_function('()=>state.ready&&!!state.history')
     open_panel(page)
-    assert pressed(page, '#worker-mode') == ['Automatic'] and pressed(page, '#worker-choices') == []
+    assert saved(page)['worker'] == auto
+    assert pressed(page, '#worker-mode') == ['Automatic']
+    assert page.locator('[data-choice="worker-Astra"]').get_attribute('aria-pressed') == 'false'
     # The manager choice and favorites keep working while the worker is Automatic.
     choose(page, 'favorite-insert-0')
     choose(page, 'manager-Opus')
     choose(page, 'manager-claude-low')
-    assert saved(page)['worker'] is None
+    assert saved(page)['worker'] == auto
     page.locator('[data-choice="favorite-recall-0"]').click()
     page.wait_for_function('()=>!modelSaving')
     open_panel(page)
-    assert pressed(page, '#manager-choices') == ['Sonnet', 'High'] and saved(page)['worker'] is None
+    assert pressed(page, '#manager-choices') == ['Sonnet', 'High'] and saved(page)['worker'] == auto
     assert page.locator('[data-choice="favorite-recall-0"]').get_attribute('aria-pressed') == 'true'
     # Fast Send is unaffected: the message goes out at once on the manager's pair, with no worker involved.
     page.locator('#model-close').click()
@@ -194,24 +217,39 @@ def test_manager_and_worker_are_independent_and_automatic_persists(page, browser
     with sqlite3.connect(root / 'data/manager.sqlite3') as connection:
         route = connection.execute("SELECT model,effort FROM executions WHERE task_id IS NULL ORDER BY started_at DESC LIMIT 1").fetchone()
     assert route == (SONNET, 'high')
-    # Automatic is switched off: the remembered fixed worker comes back; picking a model while Automatic is a manual pick.
+    # Manual restores the fixed worker; pool model buttons remain toggles while Automatic is selected.
     open_panel(page)
     choose(page, 'worker-manual')
     assert saved(page)['worker'] == {'model': LUNA, 'effort': 'high'} and pressed(page, '#worker-mode') == ['Manual']
     choose(page, 'worker-automatic')
     choose(page, 'worker-Astra')
-    assert pressed(page, '#worker-mode') == ['Manual'] and pressed(page, '#worker-choices')[0] == 'Astra'
-    assert saved(page)['worker']['model'] == 'gpt-6-astra'
+    assert pressed(page, '#worker-mode') == ['Automatic']
+    assert 'gpt-6-astra' not in saved(page)['worker']['allowed_models']
+    choose(page, 'worker-claude-provider')
+    pool = saved(page)['worker']
+    assert pool['provider'] == 'claude' and all(m.startswith('claude-') for m in pool['allowed_models'])
+    assert page.locator('[data-choice="worker-codex-provider"]').get_attribute('aria-pressed') == 'false'
+    choose(page, 'worker-Opus')
+    choose(page, 'worker-Sonnet')
+    choose(page, 'worker-claude-low')
+    choose(page, 'worker-claude-medium')
+    assert page.locator('[data-choice="worker-Haiku"]').is_disabled()
+    assert page.locator('[data-choice="worker-claude-high"]').is_disabled()
+    assert saved(page)['worker']['allowed_efforts'] == ['high']
     assert saved(page)['manager'] == {'model': SONNET, 'effort': 'high'}
+    page.locator('#model-close').click()
+    # Restore the fixed worker for independent subsequent tests.
+    open_panel(page)
+    choose(page, 'worker-manual')
     page.locator('#model-close').click()
 
 
 def test_picker_stays_compact_with_the_real_catalog_shape(page):
-    """Unrestricted dispatch must not widen the picker: older models and extra efforts in the catalog add no buttons."""
+    """Manual stays compact: newest known families plus new catalog families, with three basic effort buttons."""
     open_panel(page)
     for section in ('#manager-choices', '#worker-choices'):
-        assert page.locator(f'{section} button').count() == 12
-    assert page.locator('#model-dialog button[data-choice]').count() == 12 * 2 + 2 + 2 * 2 + 1  # repo lock
+        assert page.locator(f'{section} button').count() == 15
+    assert page.locator('#model-dialog button[data-choice]').count() == 15 * 2 + 2 + 2 * 2 + 1  # repo lock
     page.locator('#model-close').click()
 
 
@@ -247,7 +285,7 @@ def test_repo_toggle_scopes_every_pick_and_discards_local_state(page, browser_co
     choose(page, 'worker-Luna')
     choose(page, 'worker-codex-high')
     choose(page, 'worker-automatic')
-    assert panel(one)['settings']['worker'] is None
+    assert panel(one)['settings']['worker']['mode'] == 'automatic'
     assert saved(page)['worker'] == {'model': SOL, 'effort': 'medium'}
     assert saved(page)['manager'] == {'model': SOL, 'effort': 'low'}
     page.locator('#model-close').click()
@@ -320,7 +358,7 @@ def test_users_reuse_controls_persist_and_show_access_errors(page, browser_conte
         assert users.is_visible()
         assert users.locator('h3').all_inner_texts() == ['Writer <one>', 'Missing']
         writer = users.locator('[data-instance="Writer <one>"]')
-        assert writer.locator('.model-family').count() == 12
+        assert writer.locator('.model-family').count() == 14
         assert 'cannot access' in users.locator('[data-instance="Missing"] [role=alert]').inner_text()
         choose(page, 'user-0-manager-Luna')
         choose(page, 'user-0-manager-codex-high')
@@ -331,12 +369,12 @@ def test_users_reuse_controls_persist_and_show_access_errors(page, browser_conte
         assert expected['worker'] == {'model': SONNET, 'effort': 'high'}
         assert saved(page) == original
         choose(page, 'user-0-worker-automatic')
-        assert user_db.setting('model_choice')['worker'] is None
+        assert user_db.setting('model_choice')['worker']['provider'] == 'claude'
         page.locator('#model-close').click()
         page.reload()
         page.wait_for_function('()=>state.ready&&!!state.history')
         open_panel(page)
-        assert writer.locator('button[aria-pressed=true]').all_inner_texts() == ['Luna', 'High', 'Automatic']
+        assert writer.locator('button[aria-pressed=true]:not(.provider-logo)').all_inner_texts() == ['Luna', 'High', 'Automatic', 'Haiku', 'Sonnet', 'Opus', 'Low', 'Medium', 'High']
         choose(page, 'user-0-worker-manual')
         assert user_db.setting('model_choice')['worker'] == expected['worker']
         page.screenshot(path=str(tmp_path / 'users-overview.png'))

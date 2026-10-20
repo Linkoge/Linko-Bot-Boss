@@ -526,14 +526,13 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings(project_id: str | None = None):
-        from .model_settings import active, choices, current, favorites, locked
+        from .model_settings import active, current, favorites, locked, picker_providers, selection_models
         try:
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
         saved, marked = current(db, chat.server, project_id), favorites(db, chat.server)
-        keep = {pair.get("model") for pair in (saved["manager"], saved['worker'],
-                                               *(f["pair"] for f in marked if f)) if pair}
+        keep = selection_models(saved) | {f['pair']['model'] for f in marked if f}
         users = {}
         if not restricted and (settings.data_dir / 'deploy' / 'installed.json').exists():
             from .instance_models import listing
@@ -545,7 +544,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 "project_id": project_id, "locked": locked(db, project_id),
                 "repo_name": (db.one("SELECT COALESCE(display_name,name) AS name FROM projects WHERE id=?", (project_id,))["name"]
                               if project_id else "All Projects"),
-                "providers": {p: {"choices": choices(chat.server, p, keep)} for p in ("codex", "claude")}}
+                "providers": picker_providers(chat.server, keep)}
 
     @app.put("/api/projects/{project_id}/model-lock", dependencies=[Depends(require_owner)])
     async def save_repo_lock(project_id: str, body: dict):

@@ -177,7 +177,7 @@ Deliberately removed machinery and its replacements:
 - **Model restrictions / permitted pairs; Pin/Global:** hidden pair policies and overlapping controls could reject or
   misrepresent a saved choice. Manager and worker are independent; any installed catalog model/effort is valid.
   One global manager/worker record remains. A repo lock owns a complete copy; unlocked repos follow global.
-  Manual fixes the worker; Automatic lets the manager choose from the catalog. A task retains its first execution pair.
+  Manual fixes the worker; Automatic limits the manager to one provider and the model/effort pool lit by the owner. A task retains its first execution pair.
 - **Auto-deploy toggle:** a second delivery policy could strand passing work. Passing Git branches always merge;
   every project with one saved deploy setup requests deployment automatically. Without a setup the application
   queues a Create deploy setup task; the owner is never asked to approve a deploy. Explicit deploy uses the same backup, mandatory health check and rollback path, including this manager.
@@ -518,7 +518,8 @@ schema migration), and saves through the existing model validation, optimistic r
 that instance's existing global `settings.model_choice` record and `models.saved` audit event; there is no extra setting
 file, cached choice or second dispatch source. Next chat turns and new tasks read this same record without a restart.
 Existing repository locks and already selected task routes keep their normal semantics. Merely listing an instance never
-saves defaults: instances with no explicit choice, legacy choices and Automatic workers retain their current behavior.
+saves implicit defaults. Legacy Automatic settings freeze a provider pool on first catalog-backed listing, using the
+same migration as the instance itself; exact legacy choices retain their existing behavior.
 The catalog is the main instance's installed model/effort catalog, shared by the picker controls.
 
 This local-data mechanism works even when the user's service or URL is offline. The main service's Linux user needs
@@ -679,16 +680,28 @@ probes, live database changes, service restarts or host installation are part of
   `PUT /api/model-settings?project_id=...&locked=true|false` saves the same effective record with optimistic `revision`
   and scope checks. `PUT /api/projects/{id}/model-lock` accepts `{revision, locked}`. The old worker override API and UI
   are removed. Favorites store manager pairs; Insert reads the current scope and Recall edits the current scope.
-  Manager and worker can use different providers. Per provider the picker shows a model row and effort row: Codex
-  Luna/Sol/Astra and Claude Haiku/Sonnet/Opus, each family's newest installed model with Low/Medium/High. Missing
-  families are disabled. Saved or favorited off-family models stay visible with their supported efforts. Dispatch accepts
-  any catalog model/effort, with no usage-limit fallback or automatic model switching.
-  **Manual | Automatic** remains in the Worker heading. Automatic stores `worker: null`; `manual` remembers the last
-  fixed pair. New tasks then use the manager's explicit delegate model/effort, or provider defaults for omitted values;
-  a fixed worker wins over delegate arguments. Tasks retain their first selected execution pair across later settings
-  changes and record the actual model/effort used. Permanent coverage in `tests/test_model_picker_ui.py`,
-  `tests/test_model_picker_browser.py` and `tests/test_project_worker_models.py` checks layout, toggle/scope, reload,
-  migration, resolution and real thread/turn arguments. Earlier picker visual evidence remains in `docs/evidence/model-picker/`.
+  Manager and worker can use different providers. Each provider has a subtly colored card containing its model and
+  effort rows, plus the OpenAI or Anthropic logo at the right spanning both rows. Manager and Manual worker use one
+  exact model/effort; their logos are labels. The picker shows each known family's newest installed model and other
+  catalog families; saved, pooled or favorited older models stay visible. Missing families are disabled.
+  **Manual | Automatic** remains in the Worker heading. In Automatic, clicking a logo selects exactly one provider;
+  model and effort buttons in that card independently toggle membership. At least one model and one effort must stay
+  lit. The effective `model_choice` record stores `worker: {mode: "automatic", provider, allowed_models, allowed_efforts}`;
+  `manual` remembers the last fixed pair. There are no model/effort pair policies or cross-provider routing.
+  The manager context names this provider and pool and asks for the cheapest fit within it. Explicit out-of-pool
+  delegate arguments are rejected with the pool in the error. Omitted arguments resolve deterministically in saved
+  pool order to the first catalog-supported pair; provider defaults never widen the pool. An explicitly unsupported
+  combination is an error. Empty or unavailable pools produce actionable errors rather than a fallback.
+  Legacy Automatic (`worker: null`, including older settings and repo overrides) freezes all current models/efforts
+  of the remembered worker's provider on first catalog-backed load, falling back to the manager's provider when no
+  worker model is known. The migration persists in the same global or repo-lock record; if the catalog is unavailable,
+  migration waits and dispatch reports the empty pool. New catalog models and efforts stay off in saved pools and
+  remain available for exact selections. Manual selections continue to win over delegate arguments.
+  Tasks retain their first selected execution pair across later settings changes and record the actual model/effort
+  used. Permanent coverage in `tests/test_model_settings.py`, `tests/test_model_picker_ui.py`,
+  `tests/test_model_picker_browser.py` and `tests/test_project_worker_models.py` checks cards at mobile/desktop sizes,
+  independent pools, scope, reload, migration, catalog additions, validation and real thread/turn arguments.
+  Earlier picker visual evidence remains in `docs/evidence/model-picker/`.
 - Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
   To-Do directly to one queued task); read-only project memory brief for the manager with owner-run review
   (temporarily doubled limits in `ai_manager/project_memory.py`: brief target 3000 / maximum 3200 UTF-8 bytes, whole project
@@ -736,7 +749,7 @@ confirmation behavior).
 To-Do **Start** uses authenticated, CSRF-protected `POST /api/todos/{id}/start` to queue
 one task directly with its full title and details verbatim in the worker objective,
 including multi-paragraph text and whitespace at the maximum saved length. The backend resolves the
-source project’s effective worker selection (Automatic uses the provider default),
+source project’s effective worker selection (Automatic selects deterministically within its saved provider pool),
 retains the original conversation and complete source, and archives the entry in the
 same transaction that accepts the task. A durable per-entry handoff makes repeat clicks,
 concurrent requests and retries after a lost response return the original task. Catalog,
