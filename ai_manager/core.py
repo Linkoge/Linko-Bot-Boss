@@ -13,6 +13,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import signal
 import subprocess
 import sys
@@ -22,7 +23,7 @@ from pathlib import Path
 
 from . import fence
 from .attachments import native_image
-from .codex import RESTRICTED_NOTE, RULES, AppServer, CodexError, TurnUsage, process_start
+from .codex import WORKER_RULES, AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
 from .deploy_auto import ACCEPTANCE, OBJECTIVE, SETUP_FILE, TITLE
 from .fence import Busy, main_branch
@@ -38,7 +39,7 @@ REPAIR_ROUNDS = 5
 # A To-Do can contain a 200-character title, a separator and 24000 characters of details.
 MAX_OBJECTIVE_CHARS = 24202
 SMOKE_SECONDS, SUITE_SECONDS, PROBE_SECONDS = 180, 600, 60
-WORKER_INSTRUCTIONS = RULES + "\nYou are a worker. The application runs the permanent checks and merges; you implement.\n"
+WORKER_INSTRUCTIONS = WORKER_RULES + "\nYou are a worker. The application runs the permanent checks and merges; you implement.\n"
 TEST_FILE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 log = logging.getLogger(__name__)
 
@@ -115,6 +116,18 @@ def outcome(failed):
     failures = [line for f in failed for line in f["failures"]]
     return {"ok": not failed, "checks": [f["check"] for f in failed], "failures": failures[:30], "count": len(failures),
             "output": "\n".join(f["output"] for f in failed)[-3000:]}
+
+
+def run_secret_gate(root, base, head="HEAD"):
+    """The delivery secret check, also used by the informational worker command."""
+    hits = scan_secrets(root, base, head)
+    return outcome([{"check": "secrets", "failures": secret_failures(hits), "output": ""}] if hits else [])
+
+
+def self_check_command(root, base):
+    """Use the running manager's installation and interpreter, even for another project's worktree."""
+    script = Path(__file__).resolve().parents[1] / "scripts" / "worker_check.py"
+    return shlex.join([sys.executable, str(script), "--root", str(Path(root).resolve()), "--base", base])
 
 
 # ---- the queue --------------------------------------------------------------------------------------------------
@@ -377,8 +390,7 @@ class Core:
         root = self.workspace(task, project)
         await server.start()
         route = assignment_route(self.db, server, task)
-        instructions = WORKER_INSTRUCTIONS + (RESTRICTED_NOTE if self.settings.restricted else "")
-        thread_id = await server.thread(root, instructions, task["native_thread"], route["model"])
+        thread_id = await server.thread(root, WORKER_INSTRUCTIONS, task["native_thread"], route["model"])
         queue = server.queues[thread_id] = asyncio.Queue()
         server.question_handlers[thread_id] = lambda method, params: self.question(eid, method, params)
         self.db.run("UPDATE executions SET pid=?,process_start=?,model=?,effort=?,thread_id=? WHERE id=?",
@@ -443,6 +455,9 @@ class Core:
     def prompt(self, task, project, root, kind):
         value = {"objective": task["description"],
                  "repair_rounds": {"used": task["rounds"], "limit": REPAIR_ROUNDS}}
+        if task["workspace_base"]:
+            value["self_check"] = {"command": self_check_command(root, task["workspace_base"]),
+                                   "instruction": "Run it before finishing; it is the same check the application will run."}
         if kind == "repair":  # the retained thread already holds the project, context and workspace
             last = task["history"][-1]
             value["repair"] = {"round": task["rounds"], "failed_checks": last["checks"], "failures": last["failures"][:20],
@@ -450,8 +465,7 @@ class Core:
                                "instruction": ("Merge conflicts: resolve every conflict marker keeping both sides' intent, "
                                                "git add, and commit the merge." if "merge" in last["checks"] else
                                                "Remove credentials from every delivered commit, including intermediate commits. "
-                                               "Amend/rebuild only this task's unmerged commits; preserve main. "
-                                               "Allowlist only reviewed synthetic fixtures with exact file/line/rule entries."
+                                               "Amend/rebuild only this task's unmerged commits; preserve main."
                                                if "secrets" in last["checks"] else
                                                "Fix the cause. Do not weaken, skip or delete tests to make them pass.")}
             return value
@@ -588,9 +602,9 @@ class Core:
                 if not result["ok"]:
                     return {"outcome": result}
             try:
-                hits = await asyncio.to_thread(scan_secrets, root, branch, head)
-                if hits:
-                    return {"outcome": outcome([{"check": "secrets", "failures": secret_failures(hits), "output": ""}])}
+                secrets = await asyncio.to_thread(run_secret_gate, root, branch, head)
+                if not secrets["ok"]:
+                    return {"outcome": secrets}
                 main_head, changed, deployment = await asyncio.to_thread(
                     self.pipeline.merge, project["path"], head,
                     (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]))

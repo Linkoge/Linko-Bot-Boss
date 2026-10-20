@@ -9,11 +9,32 @@ import pytest
 from test_model_settings import SOL, SONNET, CatalogServer, current, save
 from test_model_settings import system as system_fixture
 
-from ai_manager.codex import ARCHITECTURE_GUIDE, MANAGER_INSTRUCTIONS
-from ai_manager.core import Tasks
+from ai_manager.codex import ARCHITECTURE_GUIDE, MANAGER_INSTRUCTIONS, RULES, WORKER_RULES
+from ai_manager.core import WORKER_INSTRUCTIONS, Tasks
 from ai_manager.orchestration import MANAGER_TOOL
 
 system = system_fixture
+
+
+@pytest.mark.smoke
+def test_rule_sections_have_one_source_and_manager_retains_all_content():
+    source = (Path(__file__).resolve().parents[1] / 'RULES.md').read_text()
+    before, rest = source.split('<!-- manager-only:start -->')
+    manager_only, after = rest.split('<!-- manager-only:end -->')
+    assert RULES == before + manager_only + after
+    assert MANAGER_INSTRUCTIONS.startswith(RULES)
+    assert WORKER_RULES == before + after
+    assert WORKER_INSTRUCTIONS.startswith(WORKER_RULES)
+    for paragraph in (manager_only.split('\n\n')):
+        if paragraph.strip():
+            assert MANAGER_INSTRUCTIONS.count(paragraph) == 1
+            assert paragraph not in WORKER_INSTRUCTIONS
+    assert 'Managers read/search' in manager_only
+    assert "8. The owner's host agent" in manager_only
+    assert '9. A restricted work instance' in manager_only
+    for number in (*range(1, 8), 10):
+        rule = re.search(rf'(?m)^{number}\. .*', source).group()
+        assert rule in WORKER_RULES
 
 
 @pytest.mark.smoke

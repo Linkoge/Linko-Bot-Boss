@@ -11,7 +11,7 @@ from test_core import world as world_fixture
 
 from ai_manager import github_backup as backup_module
 from ai_manager.github_backup import PREFIX, GitHubBackup, github_remote
-from ai_manager.secret_check import ALLOWLIST, RULES, scan
+from ai_manager.secret_check import RULES, scan
 
 world = world_fixture
 TOKEN = 'ghp_' + 'A' * 36
@@ -73,50 +73,14 @@ def test_only_new_commit_lines_but_includes_deleted_later_secrets(repository):
     assert scan(root, bad, 'HEAD') == []
 
 
-def test_exact_fixture_allowlist_and_invalid_policy(repository):
+def test_dummy_assignments_are_permitted_and_key_rules_are_precise(repository):
     root, base = repository
-    entries = [{'path': 'fixtures/token.txt', 'line': 1, 'rule': 'github-token', 'reason': 'synthetic fixture'},
-               {'path': 'fixtures/test.key', 'line': 0, 'rule': 'sensitive-filename', 'reason': 'empty fixture'}]
-    head = commit(root, {'fixtures/token.txt': TOKEN + '\n', 'fixtures/test.key': '',
-                         ALLOWLIST: json.dumps(entries)})
+    dummy = 'ordinary' * 3
+    assignments = ''.join(f'{name} = "{dummy}"\n'
+                          for name in ('password', 'secret', 'api_key', 'access_token', 'passwd'))
+    head = commit(root, {'config.txt': assignments})
     assert scan(root, base, head) == []
-    head = commit(root, {'real/token.txt': TOKEN + '\n', 'fixtures/token.txt': TOKEN + '\n' + TOKEN + '\n'})
-    assert {(h['file'], h['line']) for h in scan(root, base, head)} == {
-        ('real/token.txt', 1), ('fixtures/token.txt', 2)}
-    head = commit(root, {ALLOWLIST: '[{"path":"*"}]'})
-    assert scan(root, base, head) == [{'file': ALLOWLIST, 'line': 0, 'rule': 'invalid-allowlist'}]
-
-
-def test_reviewed_backup_fixtures_allow_only_exact_historical_coordinates(repository):
-    """Exercise the shipped policy against removed fixtures and unreviewed additions."""
-    policy = (Path(__file__).resolve().parents[1] / ALLOWLIST).read_text()
-    entries = json.loads(policy)
-    assert len(entries) == 20
-    assert all(entry['rule'] == 'credential-assignment' and entry['reason'].startswith('Dummy:')
-               for entry in entries)
-    root, base = repository
-    files = {}
-    for entry in entries:
-        lines = files.setdefault(entry['path'], [])
-        while len(lines) < entry['line']:
-            lines.append('ordinary fixture line\n')
-        lines[entry['line'] - 1] = 'password = "' + 'synthetic-credential' + '"\n'
-    fixture_files = {name: ''.join(lines) for name, lines in files.items()}
-    commit(root, fixture_files)
-    # The head policy must cover reviewed fixtures even after they were deleted.
-    git(root, 'rm', '-r', '.')
-    head = commit(root, {ALLOWLIST: policy})
-    assert scan(root, base, head) == []
-    path = 'tests/test_audio.py'
-    lines = fixture_files[path].splitlines(keepends=True)
-    lines[43] = TOKEN + '\n'  # Same coordinate, different rule remains blocked.
-    lines.append('password = "' + 'unreviewed-credential' + '"\n')
-    head = commit(root, {path: ''.join(lines), 'unreviewed.txt': lines[-1]})
-    assert scan(root, base, head) == [
-        {'file': path, 'line': 44, 'rule': 'github-token'},
-        {'file': path, 'line': 299, 'rule': 'credential-assignment'},
-        {'file': 'unreviewed.txt', 'line': 1, 'rule': 'credential-assignment'},
-    ]
+    assert set(RULES) == {'private-key', 'github-token', 'aws-access-key', 'openai-token'}
 
 
 def test_runtime_data_is_ignored_and_untracked():
@@ -371,14 +335,6 @@ async def test_timed_retry_survives_restart_and_covers_multiple_projects(world, 
     assert git(remote, 'rev-parse', 'main') == git(world.app, 'rev-parse', 'main')
 
 
-def test_allowlist_does_not_cross_repositories(world, repository):
-    root, base = repository
-    entries = [{'path': 'fixture.txt', 'line': 1, 'rule': 'github-token', 'reason': 'synthetic fixture'}]
-    commit(world.app, {ALLOWLIST: json.dumps(entries)})
-    head = commit(root, {'fixture.txt': TOKEN + '\n'})
-    assert scan(root, base, head) == [{'file': 'fixture.txt', 'line': 1, 'rule': 'github-token'}]
-
-
 def test_ui_exposes_safe_backup_status(world):
     from pathlib import Path
 
@@ -393,11 +349,13 @@ def test_ui_exposes_safe_backup_status(world):
     assert 'Local commits retained; retrying automatically.' in source
 
 
-def test_rules_forbid_dummy_credentials_and_dummy_allowlisting():
+def test_rules_require_real_credentials_outside_git_and_runtime_key_fixtures():
     rules = ' '.join((Path(__file__).parent.parent / 'RULES.md').read_text().split())
-    assert 'Never write credential-looking values into tracked files' in rules
-    assert 'fake, dummy or test passwords' in rules and 'environment variables' in rules
-    assert 'Never approve dummy values in `.linko-secret-allowlist.json`' in rules
+    rule10 = rules.split('10. ', 1)[1]
+    assert 'Never commit real credentials' in rule10
+    assert 'environment variables or ignored files' in rule10
+    assert 'Tests needing key-shaped values build them at runtime' in rule10
+    assert len(rule10.split()) < 30
     readme = ' '.join((Path(__file__).parent.parent / 'README.md').read_text().split())
-    assert 'Never commit credential-looking values, even fake ones' in readme
-    assert 'Fix a flagged dummy value; do not allowlist it' in readme
+    assert 'Never commit real credentials' in readme
+    assert 'Tests needing key-shaped values build them at runtime' in readme

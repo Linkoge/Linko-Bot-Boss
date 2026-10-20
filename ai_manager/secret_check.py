@@ -1,18 +1,14 @@
 """Small, dependency-free checks of added lines in delivered Git commits. Never return source text."""
-import json
 import os
 import re
 import subprocess
 from pathlib import PurePosixPath
 
-ALLOWLIST = '.linko-secret-allowlist.json'
 RULES = {
     'private-key': re.compile(r'-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY(?: BLOCK)?-----'),
     'github-token': re.compile(r'\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{22,})\b'),
     'aws-access-key': re.compile(r'\b(?:AKIA|ASIA)[A-Z0-9]{16}\b'),
     'openai-token': re.compile(r'\bsk-(?:proj-|svcacct-)?[A-Za-z0-9_-]{20,}\b'),
-    'credential-assignment': re.compile(
-        r'''(?i)\b(?:[a-z0-9_]*(?:api[_-]?key|access[_-]?token|secret|password|passwd))\b["']?\s*[:=]\s*(?:["']([^\s"']{12,})["']|[a-z0-9_+/=.-]{16,}\s*(?:$|[#;,]))'''),
 }
 
 
@@ -41,33 +37,12 @@ def sensitive(path):
             or name.endswith(('.pem', '.key')) or name.startswith('id_rsa'))
 
 
-def allowlist(root, head):
-    raw = git_bytes(root, 'show', f'{head}:{ALLOWLIST}', check=False)
-    if raw.returncode:
-        return []
-    try:
-        entries = json.loads(raw.stdout)
-        if not isinstance(entries, list):
-            raise ValueError
-        for item in entries:
-            if (not isinstance(item, dict) or set(item) != {'path', 'line', 'rule', 'reason'}
-                    or not isinstance(item['path'], str) or not isinstance(item['reason'], str)
-                    or not item['reason'].strip() or type(item['line']) is not int or item['line'] < 0
-                    or item['rule'] not in {*RULES, 'sensitive-filename'}):
-                raise ValueError
-        return entries
-    except (ValueError, TypeError):
-        raise ScanError('invalid-allowlist') from None
-
-
 def scan(root, base, head):
     """Inspect every commit in base..head (all history if base is None), including removed-later secrets.
 
     Combined merge diffs inspect resolutions, excluding lines simply inherited from either parent.
-    Allowlists are exact path/line/rule entries from the delivered tree, for reviewed synthetic fixtures.
     """
     try:
-        allowed = allowlist(root, head)
         revisions = f'{base}..{head}' if base else head
         commits = git_bytes(root, 'rev-list', '--reverse', revisions).decode().splitlines()
         hits = set()
@@ -95,10 +70,9 @@ def scan(root, base, head):
                                 if pattern.search(content):
                                     hits.add((path, number, rule))
                         number += 1
-        return [{'file': p, 'line': n, 'rule': r} for p, n, r in sorted(hits)
-                if not any(a['path'] == p and a['line'] == n and a['rule'] == r for a in allowed)]
+        return [{'file': p, 'line': n, 'rule': r} for p, n, r in sorted(hits)]
     except ScanError as error:
-        return [{'file': ALLOWLIST if str(error) == 'invalid-allowlist' else '.', 'line': 0, 'rule': str(error)}]
+        return [{'file': '.', 'line': 0, 'rule': str(error)}]
 
 
 def failures(hits):

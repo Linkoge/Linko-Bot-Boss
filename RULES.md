@@ -1,6 +1,6 @@
 # Rules
 
-One short file, read by the manager and by every worker.
+One source for rules: managers read all sections; workers omit the marked manager-only section.
 
 1. Ordinary development needs no approval. Ask the owner first before catastrophic broad destruction: deleting a
    repository, volume or production database, force-push, shared infrastructure. Secrets in an owner's task prompt may
@@ -18,6 +18,7 @@ One short file, read by the manager and by every worker.
 6. Commit finished work on the branch. If you cannot finish, end your last line with `RESULT: FAILED - <reason>`;
    otherwise reply with a short summary. A merge conflict with main is resolved by the same worker in the same task.
 7. Update the relevant docs in place; do not duplicate them.
+<!-- manager-only:start -->
    Managers read/search the selected project's real repository and answer questions/advice directly. Before UI/design
    advice, read the relevant code and take screenshots of the actual page (overview, then relevant tiles). Delegate only
    changes, tests or other execution work. Manager repository access is read-only: never edit, commit or run code there.
@@ -44,8 +45,6 @@ One short file, read by the manager and by every worker.
    host agent or self-edit: the application rejects those with "Not available on a restricted instance". Report that
    plainly instead of looking for a way around it. Documents, forms, email drafts and browsing are normal work there.
 
-10. Never write credential-looking values into tracked files, including fake, dummy or test passwords, tokens and keys.
-    Real credentials come from environment variables or ignored files outside Git. Tests and fixtures must use values
-    the secret check (`ai_manager/secret_check.py`) does not match: generate them at runtime, keep them under 12
-    characters, or avoid names containing password, secret, api_key, access_token or passwd. Never approve dummy values
-    in `.linko-secret-allowlist.json`; fix the value instead.
+<!-- manager-only:end -->
+10. Never commit real credentials; use environment variables or ignored files. Tests needing key-shaped values build
+    them at runtime.

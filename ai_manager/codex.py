@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import re
 import signal
 import time
 import tomllib
@@ -11,7 +12,11 @@ from pathlib import Path
 from .config import Settings
 from .tool_content import ImageResult
 
-RULES = (Path(__file__).resolve().parents[1] / "RULES.md").read_text()
+_RULES_SOURCE = (Path(__file__).resolve().parents[1] / "RULES.md").read_text()
+_MANAGER_START, _MANAGER_END = "<!-- manager-only:start -->", "<!-- manager-only:end -->"
+RULES = _RULES_SOURCE.replace(_MANAGER_START, "").replace(_MANAGER_END, "")
+WORKER_RULES = re.sub(re.escape(_MANAGER_START) + r".*?" + re.escape(_MANAGER_END), "",
+                      _RULES_SOURCE, flags=re.S)
 # Keep the owner-facing guide and manager advice in one place; omit the rest of the README from the prompt.
 _GUIDE_HEADING = "## Architecture design principles\n"
 ARCHITECTURE_GUIDE = (_GUIDE_HEADING + (

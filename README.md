@@ -10,7 +10,9 @@ FastAPI + SQLite + plain JavaScript; Codex or Claude does the thinking and codin
 One queue per project: at most one running task per project, in strict queue order, while tasks of different
 projects run in parallel (no global cap, no exceptions per project). States: **queued → running → done | failed**. A
 **held** task is a queued task with the hold flag set; it is skipped until released. Order within a project is the only
-dependency. The code is `ai_manager/core.py`; the rules both the manager and every worker read are [RULES.md](RULES.md).
+dependency. The code is `ai_manager/core.py`. [RULES.md](RULES.md) is the single source of rules: the manager
+reads all sections; worker instructions omit the marked manager-only section (the manager paragraph of rule 7 and
+rules 8–9).
 
 1. **Worker.** The oldest eligible queued task gets an isolated Git worktree and branch
    (`linko/assignment-<id>`, kept on disk, never deleted). The worker implements, adds the permanent tests for its change
@@ -18,7 +20,21 @@ dependency. The code is `ai_manager/core.py`; the rules both the manager and eve
 2. **Checks.** After every worker turn the application runs the permanent checks: the one fixed smoke suite
    (`python -m pytest -q -m smoke`, 180 s) plus the test files the branch added or changed (600 s). Only permanent
    repository suites can block delivery; one-off probes are informational. Probes run under a 60 s timeout. Checks run
-   with disposable data directories.
+   with disposable `AI_MANAGER_DATA`, `PYTHONPATH` set to the worktree and `AI_MANAGER_SECURE_COOKIE=0`, using
+   the project shared checkout's `.venv/bin/python` when available. Each worker prompt, including repair turns,
+   includes an exact ready-to-run self-check command using the manager installation's interpreter and absolute script
+   path, so it also works from other projects. After committing, run it before finishing:
+
+   ```sh
+   /absolute/manager/.venv/bin/python /absolute/manager/scripts/worker_check.py --root /absolute/project/worktree --base ASSIGNMENT_BASE_COMMIT
+   ```
+
+   The command reuses `run_gate` and the delivery secret scanner, prints the same failure lines and output tail as
+   JSON, and exits 0 for success or 1 for findings. Tests include modified and untracked test files; the secret scan
+   uses the current `main` (or `master`) through `HEAD`, like delivery, including intermediate task commits and
+   excluding inherited main history. It does not commit, merge or modify queue
+   state. This self-check is informational; the application's own checks still decide delivery and run again after
+   syncing main if needed.
 3. **Repair rounds** (a counter on the task row, never reset by retry, restart or continue). A failing check goes back to
    the same worker as a repair round, at most 5 times; the task then stops with a plain reason and the manager reports it.
 4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one merge at a time across projects, the
@@ -206,7 +222,7 @@ that backlog or bypasses GitHub protection.
 
 Delivery also checks **only `main..branch` commits**, after committing worker changes and syncing main, before merging.
 The built-in scanner (`ai_manager/secret_check.py`) checks added lines for obvious GitHub/OpenAI tokens, AWS access-key
-IDs, private-key headers and long literal credential assignments. It flags changed `.env`/`.env.*` files, `*.pem`, `*.key` and
+IDs and private-key headers. It flags changed `.env`/`.env.*` files, `*.pem`, `*.key` and
 `id_rsa*` filenames at any depth (`.env.example` is permitted). Unchanged historical lines are outside the delivery
 scope; merge resolutions are checked without treating inherited main changes as task additions. Findings enter the
 existing five-round repair loop; each finding contains only **file, line, rule** (line 0 for filenames). The worker must
@@ -214,43 +230,9 @@ remove the credential from every affected unmerged task commit, including interm
 approval gate. This is a small obvious-secret check, not comprehensive credential discovery. Gitleaks may be used by an
 operator separately; the application needs no optional scanner, installation, download or external service to check.
 
-Never commit credential-looking values, even fake ones (RULES.md rule 10): real credentials come from environment
-variables or ignored files outside Git, and tests/fixtures generate values at runtime, keep them under 12 characters, or
-avoid password/secret/api_key/access_token/passwd names. Fix a flagged dummy value; do not allowlist it.
-
-Only fixtures that cannot be changed (e.g. file-format samples) can use a committed `.linko-secret-allowlist.json` in
-each repository. Its JSON array has
-exact entries like `{"path":"tests/fixtures/token.txt","line":1,"rule":"github-token","reason":"synthetic fixture"}`.
-Use line 0 with rule `sensitive-filename` for fixture names. Paths are repository-relative; no globs, regex exclusions,
-wildcards or whole-file content bypasses. The delivered tree's policy applies to its history, so an approved fixture
-can be added together with its exact entry. Entries require a nonempty reason; malformed policy fails with a safe rule.
-Review allowlist edits as code: this mechanism is for fixtures, never live credentials. It applies to both delivery and
-backup, and never to another repository.
-
-The backup fixture audit (2026-10-16) classified all 14 originally reported findings as **dummy**. A full-history
-scan at `caaa0d0` additionally found six audio-test fixtures, for 20 distinct path/line/rule findings; all 20 are
-**dummy**, with no real credential found. The exact entries in this repository's `.linko-secret-allowlist.json`
-cover only those historical findings under `credential-assignment`; scanner rules and matching behavior are unchanged.
-Line numbers below are historical added-line coordinates, so they may differ from the current source. Each value was
-reviewed in its test/harness context, including the deleted files; credential values are omitted from this report.
-
-| Finding path | Historical line(s), each classified dummy | Evidence |
-| --- | --- | --- |
-| `.data/auto-deploy-bootstrap/review.diff` | 1336: dummy | Copy of browser setup fixture in archived review diff. |
-| `scripts/browser_audio.py` | 23: dummy; 34: dummy | Synthetic audio key; temporary localhost harness and fake provider. |
-| `scripts/browser_auto_deploy.py` | 54: dummy | Setup password for temporary localhost deployment fixture. |
-| `scripts/browser_deployment.py` | 49: dummy | Setup password for temporary localhost deployment fixture. |
-| `scripts/browser_fetch_recovery.py` | 44: dummy | Setup password for temporary localhost recovery fixture. |
-| `scripts/browser_tasks.py` | 65: dummy | Setup password for temporary localhost task fixture. |
-| `tests/test_audio.py` | 44: dummy; 194: dummy; 222: dummy; 247: dummy; 274: dummy; 298: dummy | Synthetic audio keys; mocked providers/transports, upload deadlines, forwarding and safe-error assertions. |
-| `tests/test_deployment.py` | 240: dummy | TestClient login in temporary deployment admission test. |
-| `tests/test_hardening.py` | 169: dummy; 173: dummy | TestClient setup/login in temporary secure-cookie test. |
-| `tests/test_web.py` | 30: dummy; 33: dummy; 46: dummy; 55: dummy | TestClient authentication fixture and rejected setup requests in temporary test data. |
-
-`.data/` is ignored by Git and has no tracked files in the delivered tree. Its historical review diff remains in
-history; the single reviewed fixture entry above permits that finding without excluding `.data/` from scanning.
-No history rewrite or push is needed for this remediation. Future findings require individual review; if a real
-credential is found, stop and report it without committing its value or adding an exception for it.
+Never commit real credentials (RULES.md rule 10): use environment variables or ignored files. Tests needing
+key-shaped values build them at runtime. Ordinary dummy passwords and credential-like variable names are permitted;
+the scanner matches the four precise key formats above and sensitive filenames.
 
 Enable GitHub's server-side protection as well: repository **Settings → Advanced Security** (under Security and quality)
 → enable **Secret Protection**, then enable **Push protection** in that section. Availability depends on repository and
@@ -259,7 +241,7 @@ plan; an organization may manage this setting. Follow the current
 Provision the service user's normal write access to each origin separately. A protected push rejection stays
 needs-attention and retries; no bypass URL or secret value is exposed or acted on automatically.
 
-Permanent synthetic regression coverage is in `tests/test_github_backup.py`: detection and exact allowlists, safe
+Permanent synthetic regression coverage is in `tests/test_github_backup.py`: precise key and sensitive-filename detection, safe
 diagnostics, optional scanner absence, commit scope and intermediate history, bounded repairs, first-push backlog,
 rejected pushes and later catch-up, diverged history, and queue/merge/deploy progress during backup failure or latency.
 
@@ -483,7 +465,7 @@ run in their usual branch/worktree flow on that one project (a Git repository). 
   Create deploy setup task is queued.
 - **No host agent.** `GET/POST /api/repair` and the manager actions `emergency_repair`/`repair_status` are rejected; no
   host-repair spool is written. Do not install `scripts/install_repair.py` for such an instance.
-- The manager is offered a tool without those actions, and manager and workers get a short restricted note
+- The manager is offered a tool without those actions and gets a short restricted note
   (`RESTRICTED_NOTE` in `ai_manager/codex.py`). `/api/auth-status` reports `restricted`, and the UI then hides All
   Projects, the project menu, the model/effort picker button, the Models settings panel, the GitHub panel,
   Discover/Add project and the Deployment panel (cosmetic: `body.restricted` CSS only, elements stay in the DOM so no script breaks; the server-side
