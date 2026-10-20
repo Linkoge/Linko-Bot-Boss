@@ -28,6 +28,10 @@ def test_rule_sections_have_one_source_and_reach_only_the_intended_role():
     assert WORKER_RULES == re.sub(r'(?s)<!-- manager-only:start -->.*?<!-- manager-only:end -->', '', source).replace(
         '<!-- worker-only:start -->', '').replace('<!-- worker-only:end -->', '')
     assert WORKER_INSTRUCTIONS.startswith(WORKER_RULES)
+    assert "Always reply in the language of the owner's latest own chat message" in MANAGER_INSTRUCTIONS
+    assert 'regardless of the English system prompt' in MANAGER_INSTRUCTIONS
+    assert "Always reply in the language of the owner's latest own chat message" not in WORKER_RULES
+    assert 'regardless of the English system prompt' not in WORKER_INSTRUCTIONS
     assert WORKER_INSTRUCTIONS.count(worker_only) == 1
     assert worker_only not in MANAGER_INSTRUCTIONS
     for paragraph in (manager_only.split('\n\n')):
