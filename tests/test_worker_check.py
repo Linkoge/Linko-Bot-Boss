@@ -11,8 +11,16 @@ from test_core import world as world_fixture
 
 from ai_manager.core import run_gate, run_secret_gate, self_check_command
 from ai_manager.fence import main_branch
+from scripts.worker_check import stale_pitfalls
 
 world = world_fixture
+
+
+@pytest.mark.parametrize("content", [None, b"# Instructions\nSee `missing.py`.\n", b"\xff\xfe"])
+def test_stale_pitfalls_tolerates_absent_section_or_unreadable_document(tmp_path, content):
+    if content is not None:
+        (tmp_path / "AGENTS.md").write_bytes(content)
+    assert stale_pitfalls(tmp_path) == []
 
 
 @pytest.mark.parametrize("failure", [None, "tests", "secrets", "inherited"])
@@ -44,6 +52,22 @@ def test_absolute_command_reuses_gate_and_scanner_for_other_project(tmp_path, mo
         git(shared, "add", "existing.txt")
         git(shared, "commit", "-qm", "upstream addition")
         git(root, "merge", "--no-edit", "main")
+    (root / "docs").mkdir()
+    (root / "docs" / "guide.md").write_text("still here")
+    stale_entry = (
+        "### Old helper   (2026-10-20, task abc123)\n"
+        "When: changing the check helper\n"
+        "Symptom: a surprising import error\n"
+        "Cause: a moved module\n"
+        "Do: use `scripts/removed.py`, `scripts/removed.py:12` and `MISSING.md`; compare `docs/guide.md#usage`."
+    )
+    (root / "AGENTS.md").write_text(
+        "# Project guidance\nSee `outside/missing.md`.\n"
+        "## Known pitfalls\n" + stale_entry + "\n\n"
+        "### Current helper\nDo: read `docs/guide.md`, call `run_gate()`, run `python -m pytest`, "
+        "and see `https://example.com/guide`.\n"
+        "## Other guidance\n### Other entry\nDo: use `outside/missing.md`.\n"
+    )
     data = tmp_path / "untouched-data"
     data.mkdir()
     (data / "sentinel").write_text("keep")
@@ -62,6 +86,8 @@ def test_absolute_command_reuses_gate_and_scanner_for_other_project(tmp_path, mo
     assert result["failures"] == tests["failures"] + secrets["failures"]
     assert result["checks"] == tests["checks"] + secrets["checks"]
     assert result["count"] == tests["count"] + secrets["count"]
+    assert result["ok"] == (tests["ok"] and secrets["ok"])
+    assert result["stale_pitfalls"] == [{"entry": stale_entry, "missing_paths": ["scripts/removed.py", "MISSING.md"]}]
     if failure == "tests":
         assert result["checks"] == ["smoke", "targeted"]
         assert "assert False" in result["output"]
@@ -75,7 +101,8 @@ def test_absolute_command_reuses_gate_and_scanner_for_other_project(tmp_path, mo
 @pytest.mark.smoke
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restricted", [False, True])
-async def test_first_and_repair_prompts_include_exact_command_and_only_worker_rules(world, restricted):
+@pytest.mark.parametrize("failed_check", ["smoke", "secrets", "merge"])
+async def test_first_and_repair_prompts_include_exact_command_and_only_worker_rules(world, restricted, failed_check):
     world.deployable(False)
     world.settings.restricted = restricted
     instructions = []
@@ -93,7 +120,7 @@ async def test_first_and_repair_prompts_include_exact_command_and_only_worker_ru
         return server
 
     world.core.factory = factory
-    world.lab.results = [{"ok": False, "checks": ["secrets"], "count": 1,
+    world.lab.results = [{"ok": False, "checks": [failed_check], "count": 1,
                           "failures": ["config:1: github-token"], "output": ""}]
     world.tasks.add(world.project["id"], "implement")
     done = await run_next(world)
@@ -104,10 +131,15 @@ async def test_first_and_repair_prompts_include_exact_command_and_only_worker_ru
         assert check["command"] == self_check_command(done["workspace"], done["workspace_base"])
         assert shlex.split(check["command"])[2:] == ["--root", done["workspace"], "--base", done["workspace_base"]]
         assert check["instruction"] == "Run it before finishing; it is the same check the application will run."
-    assert "preserve main" in world.lab.turns[1]["repair"]["instruction"]
+    repair = world.lab.turns[1]["repair"]["instruction"]
+    assert {"secrets": "preserve main", "merge": "commit the merge", "smoke": "Fix the cause"}[failed_check] in repair
+    assert ("When the fix reveals a reusable pitfall, add or update its Known pitfalls entry "
+            "(or fix it in code) in the same commit.") in repair
+    assert "repair" not in world.lab.turns[0]
     for text in instructions:
         assert "7. Update the relevant docs in place" in text
         assert "Managers read/search" not in text
         assert "8. The owner's host agent" not in text
         assert "9. A restricted work instance" not in text
         assert "This is a restricted work instance" not in text
+        assert 'Known pitfalls' in text

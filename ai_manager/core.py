@@ -468,6 +468,9 @@ class Core:
                                                "Amend/rebuild only this task's unmerged commits; preserve main."
                                                if "secrets" in last["checks"] else
                                                "Fix the cause. Do not weaken, skip or delete tests to make them pass.")}
+            value["repair"]["instruction"] += (
+                " When the fix reveals a reusable pitfall, add or update its Known pitfalls entry "
+                "(or fix it in code) in the same commit.")
             return value
         value |= {"acceptance_criteria": task["acceptance"],
                   "project": {k: project[k] for k in ("name", "instructions") if project[k]},

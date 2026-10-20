@@ -1,6 +1,6 @@
 # Rules
 
-One source for rules: managers read all sections; workers omit the marked manager-only section.
+One source for rules: each role omits sections marked only for the other role.
 
 1. Ordinary development needs no approval. Ask the owner first before catastrophic broad destruction: deleting a
    repository, volume or production database, force-push, shared infrastructure. Secrets in an owner's task prompt may
@@ -48,3 +48,21 @@ One source for rules: managers read all sections; workers omit the marked manage
 <!-- manager-only:end -->
 10. Never commit real credentials; use environment variables or ignored files. Tests needing key-shaped values build
     them at runtime.
+<!-- worker-only:start -->
+11. Known pitfalls. At the start, read `## Known pitfalls` in the repo-root `AGENTS.md` if it exists, whichever worker
+    provider you use. Write an entry only if this task needed a repair round or hit a non-obvious pitfall another
+    worker would likely hit again in this repo. Prefer fixing it in code (helper, fixture, clearer error, check script);
+    if fixed in code, write no entry and delete any entry the fix makes obsolete (graduation).
+    Create the section/file only when needed; never seed invented lessons. Describe the kind of situation, not this
+    task's facts, in about five lines:
+
+    ### <short title>   (<YYYY-MM-DD>, task <first 6 chars of task id>)
+    When: <the situation it applies to>
+    Symptom: <what goes wrong / the error seen>
+    Cause: <the essence: why>
+    Do: <what to do instead; name files/functions when relevant>
+
+    Correct or delete an entry only on evidence: following it proves it wrong/outdated (say why in the commit message),
+    a code fix makes it obsolete, or its referenced files/functions no longer exist. Never delete a valid entry because
+    the section is long; merge duplicates instead. Put entries in the same commit as the work.
+<!-- worker-only:end -->

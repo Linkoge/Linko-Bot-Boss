@@ -17,14 +17,19 @@ system = system_fixture
 
 
 @pytest.mark.smoke
-def test_rule_sections_have_one_source_and_manager_retains_all_content():
+def test_rule_sections_have_one_source_and_reach_only_the_intended_role():
     source = (Path(__file__).resolve().parents[1] / 'RULES.md').read_text()
-    before, rest = source.split('<!-- manager-only:start -->')
+    shared, rest = source.split('<!-- worker-only:start -->')
+    worker_only, tail = rest.split('<!-- worker-only:end -->')
+    before, rest = (shared + tail).split('<!-- manager-only:start -->')
     manager_only, after = rest.split('<!-- manager-only:end -->')
     assert RULES == before + manager_only + after
     assert MANAGER_INSTRUCTIONS.startswith(RULES)
-    assert WORKER_RULES == before + after
+    assert WORKER_RULES == re.sub(r'(?s)<!-- manager-only:start -->.*?<!-- manager-only:end -->', '', source).replace(
+        '<!-- worker-only:start -->', '').replace('<!-- worker-only:end -->', '')
     assert WORKER_INSTRUCTIONS.startswith(WORKER_RULES)
+    assert WORKER_INSTRUCTIONS.count(worker_only) == 1
+    assert worker_only not in MANAGER_INSTRUCTIONS
     for paragraph in (manager_only.split('\n\n')):
         if paragraph.strip():
             assert MANAGER_INSTRUCTIONS.count(paragraph) == 1
@@ -35,6 +40,26 @@ def test_rule_sections_have_one_source_and_manager_retains_all_content():
     for number in (*range(1, 8), 10):
         rule = re.search(rf'(?m)^{number}\. .*', source).group()
         assert rule in WORKER_RULES
+
+
+@pytest.mark.smoke
+def test_known_pitfalls_guidance_covers_recording_graduation_and_evidence():
+    for guidance in (
+        'At the start, read `## Known pitfalls` in the repo-root `AGENTS.md` if it exists',
+        'whichever worker\n    provider you use',
+        'task needed a repair round or hit a non-obvious pitfall',
+        'Prefer fixing it in code', 'if fixed in code, write no entry', 'graduation',
+        'Create the section/file only when needed; never seed invented lessons',
+        "Describe the kind of situation, not this\n    task's facts",
+        '### <short title>   (<YYYY-MM-DD>, task <first 6 chars of task id>)',
+        'When: <the situation it applies to>', 'Symptom: <what goes wrong / the error seen>',
+        'Cause: <the essence: why>', 'Do: <what to do instead; name files/functions when relevant>',
+        'following it proves it wrong/outdated (say why in the commit message)',
+        'referenced files/functions no longer exist', 'Never delete a valid entry because',
+        'the section is long; merge duplicates instead', 'Put entries in the same commit as the work',
+    ):
+        assert guidance in WORKER_RULES
+        assert guidance not in RULES
 
 
 @pytest.mark.smoke

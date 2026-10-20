@@ -1,6 +1,7 @@
 """Informational worker self-check; no database, queue changes, commits or merges."""
 import argparse
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -9,6 +10,35 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from ai_manager.core import run_gate, run_secret_gate  # noqa: E402
 from ai_manager.fence import main_branch  # noqa: E402
+
+
+def stale_pitfalls(root):
+    """Advisory only: find entries referring to missing backticked repo-relative paths."""
+    try:
+        source = (root / "AGENTS.md").read_text()
+    except (OSError, UnicodeError):
+        return []
+    section = re.search(r"(?ms)^## Known pitfalls[ \t]*\r?\n(.*?)(?=^#{1,2} |\Z)", source)
+    if not section:
+        return []
+    findings = []
+    for entry in re.finditer(r"(?ms)^### [^\n]+\n.*?(?=^### |\Z)", section[1]):
+        missing = []
+        for reference in re.findall(r"`([^`\n]+)`", entry[0]):
+            path = re.sub(r":\d+(?::\d+)?$", "", reference.split("#", 1)[0])
+            # Recognize paths with a slash or extension, not commands, URLs or function calls.
+            if not re.fullmatch(r"(?:[\w.-]+/)*[\w.-]+/?", path) or ".." in Path(path).parts:
+                continue
+            if "/" not in path and not Path(path).suffix:
+                continue
+            try:
+                if not (root / path).exists() and path not in missing:
+                    missing.append(path)
+            except OSError:
+                continue
+        if missing:
+            findings.append({"entry": entry[0].strip(), "missing_paths": missing})
+    return findings
 
 
 def main():
@@ -24,6 +54,7 @@ def main():
               "checks": result["checks"] + secrets["checks"],
               "failures": (result["failures"] + secrets["failures"])[:30],
               "count": result["count"] + secrets["count"]}
+    result["stale_pitfalls"] = stale_pitfalls(root)
     print(json.dumps(result, indent=2))
     return 0 if result["ok"] else 1
 

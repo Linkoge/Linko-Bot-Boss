@@ -11,12 +11,16 @@ One queue per project: at most one running task per project, in strict queue ord
 projects run in parallel (no global cap, no exceptions per project). States: **queued → running → done | failed**. A
 **held** task is a queued task with the hold flag set; it is skipped until released. Order within a project is the only
 dependency. The code is `ai_manager/core.py`. [RULES.md](RULES.md) is the single source of rules: the manager
-reads all sections; worker instructions omit the marked manager-only section (the manager paragraph of rule 7 and
-rules 8–9).
+and worker each omit sections marked only for the other role (manager-only: the manager paragraph of rule 7 and
+rules 8–9; worker-only: rule 11).
 
 1. **Worker.** The oldest eligible queued task gets an isolated Git worktree and branch
    (`linko/assignment-<id>`, kept on disk, never deleted). The worker implements, adds the permanent tests for its change
    and commits. Projects that are not Git repositories run in place, with no checks and no merge.
+   Workers read the repo-root `AGENTS.md`'s `## Known pitfalls` at the start. Reusable lessons from repair rounds or
+   non-obvious repo pitfalls go there in the same commit as the work, unless a code fix removes the need; obsolete
+   entries graduate out. Workers create it only when needed, without invented entries. Lessons travel with the repo,
+   versioned in Git and merged only with passing work; managers do not write them. Failed/cancelled tasks add no lessons.
 2. **Checks.** After every worker turn the application runs the permanent checks: the one fixed smoke suite
    (`python -m pytest -q -m smoke`, 180 s) plus the test files the branch added or changed (600 s). Only permanent
    repository suites can block delivery; one-off probes are informational. Probes run under a 60 s timeout. Checks run
@@ -30,7 +34,9 @@ rules 8–9).
    ```
 
    The command reuses `run_gate` and the delivery secret scanner, prints the same failure lines and output tail as
-   JSON, and exits 0 for success or 1 for findings. Tests include modified and untracked test files; the secret scan
+   JSON, and exits 0 for success or 1 for check failures. Its advisory `stale_pitfalls` list includes Known pitfalls
+   entries with missing backticked repo-relative paths (containing a slash or extension); it never affects checks or
+   exit status. Tests include modified and untracked test files; the secret scan
    uses the current `main` (or `master`) through `HEAD`, like delivery, including intermediate task commits and
    excluding inherited main history. It does not commit, merge or modify queue
    state. This self-check is informational; the application's own checks still decide delivery and run again after
