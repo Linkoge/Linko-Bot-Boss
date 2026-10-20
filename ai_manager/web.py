@@ -4,12 +4,14 @@ import hashlib
 import hmac
 import json
 import logging
+import mimetypes
 import shutil
+import subprocess
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Literal
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -30,7 +32,7 @@ from .db import Database
 from .execution_ui import event_page, execution_page, execution_summary
 from .github_projects import GitHubError, GitHubProjects
 from .orchestration import Scheduler
-from .pipeline import RESTRICTED, Pipeline
+from .pipeline import RESTRICTED, Pipeline, changed_files, valid_download_path
 from .progress import progress
 from .project_ideas import ProjectIdeas
 from .project_memory import MemoryReviews, ProjectMemory
@@ -519,6 +521,35 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         item = attachments.get(identifier)
         return FileResponse(attachments.root / item['stored_name'], media_type='application/octet-stream',
                             filename=item['name'], headers={'X-Content-Type-Options': 'nosniff'})
+
+    @app.get('/api/tasks/{task_id}/files/{snapshot}', dependencies=[Depends(require_owner)])
+    def download_task_file(task_id: str, snapshot: int, path: str):
+        event = db.one("SELECT * FROM events WHERE seq=? AND task_id=? AND kind='task.merge_files'",
+                       (snapshot, task_id))
+        if not event or not valid_download_path(path):
+            raise HTTPException(404, 'Task file not found')
+        scope(event['project_id'])
+        project = registry.get(event['project_id'])
+        root = registry.allowed_path(project['path'])
+        saved = json.loads(event['payload'])
+        try:
+            if path not in changed_files(root, saved['main'], saved['commit']):
+                raise HTTPException(404, 'Task file not found')
+            object_name = saved['commit'] + ':' + path
+            # A gitlink is a commit, not downloadable file content. Never follow workspace symlinks.
+            kind = subprocess.run(['git', '-C', str(root), 'cat-file', '-t', object_name],
+                                  capture_output=True, timeout=60)
+            if kind.returncode or kind.stdout.strip() != b'blob':
+                raise HTTPException(404, 'Task file not found')
+            result = subprocess.run(['git', '-C', str(root), 'show', object_name], capture_output=True, timeout=60)
+            if result.returncode:
+                raise HTTPException(404, 'Task file not found')
+        except (ValueError, OSError, subprocess.SubprocessError):
+            raise HTTPException(404, 'Task file not found') from None
+        filename = path.rsplit('/', 1)[-1]
+        return Response(result.stdout, media_type=mimetypes.guess_type(filename)[0] or 'application/octet-stream',
+                        headers={'Content-Disposition': "attachment; filename*=UTF-8''" + quote(filename, safe=''),
+                                 'X-Content-Type-Options': 'nosniff'})
 
     @app.post("/api/audio/transcribe", dependencies=[Depends(require_owner)])
     async def transcribe_audio(request: Request):

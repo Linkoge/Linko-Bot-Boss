@@ -49,7 +49,12 @@ rules 8–9; worker-only: rule 11).
    with the bot identity and the commit message `Save local changes in project folder before merging task`.
    Untracked files (including Syncthing files and stray documents) stay untouched and untracked. If a merge conflicts
    or would overwrite an untracked file, it is aborted with the exact conflicting paths in the error; the saved local
-   commit remains on main. Nothing is forced or discarded. Every project with a saved deploy setup then requests
+   commit remains on main. Nothing is forced or discarded. Every failed merge attempt also posts download links in
+   the originating chat (once per attempt, up to 20 files with a count of any remaining files). These authenticated
+   downloads serve the added or changed files directly from that attempt's task commit, so they remain available
+   even if the workspace is edited or the branch moves. Deleted and unchanged paths cannot be downloaded;
+   filenames, including Georgian document names, are preserved. No hidden-folder navigation is needed.
+   Every project with a saved deploy setup then requests
    the same deploy script automatically, including
    the manager itself. Without one the application queues a **Create deploy setup** task (see Automatic deploy setup
    below) and nothing waits for the owner. The manager's `deploy` action

@@ -8,10 +8,13 @@ request holds new work and merges for at most DEPLOY_WAIT seconds. No AI call de
 import ast
 import hashlib
 import json
+import logging
 import os
+import re
 import subprocess
 import time
 from pathlib import Path
+from urllib.parse import urlencode
 
 from . import fence
 from .deploy_auto import SETUP_FILE, read_proposal
@@ -51,6 +54,20 @@ def git(root, *args, check=True):
     if check and result.returncode:
         raise ValueError('git ' + args[0] + ' failed: ' + (result.stderr or result.stdout).strip()[:300])
     return result.stdout.strip() if check else result
+
+
+def changed_files(root, main, commit):
+    """NUL-delimited names preserve Unicode, whitespace and Git-quoted characters."""
+    result = git(root, 'diff', '--name-only', '--no-renames', '--diff-filter=ACMRT', '-z',
+                 f'{main}...{commit}', '--', check=False)
+    if result.returncode:
+        raise ValueError('Could not list task files')
+    return [path for path in result.stdout.split('\0') if path]
+
+
+def valid_download_path(path):
+    return bool(path) and '\0' not in path and '\\' not in path and all(
+        part not in {'', '.', '..'} for part in path.split('/'))
 
 
 def merge_into_main(root, commit):
@@ -266,7 +283,34 @@ class Pipeline:
             conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(payload)))
 
     # ---- merge to main ----------------------------------------------------------------------------------------
-    def merge(self, project_path, commit, deploy=None):
+    def report_merge_failure(self, project_path, commit, deploy, attempt_id):
+        """Publish a commit-pinned download snapshot using the existing event/message transaction."""
+        if not deploy or not deploy[2]:
+            return
+        project_id, _, task_id, conversation_id, _ = deploy
+        key = 'merge-files:' + task_id + ':' + attempt_id
+        message_id = 'pipeline-' + hashlib.sha256(key.encode()).hexdigest()[:24]
+        # Resolve both ends once: retries and later edits must not change these downloads.
+        commit = git(project_path, 'rev-parse', '--verify', commit + '^{commit}')
+        main = git(project_path, 'rev-parse', main_branch(project_path))
+        paths = [path for path in changed_files(project_path, main, commit) if valid_download_path(path)]
+        with self.db.transaction() as conn:
+            if conn.execute('SELECT 1 FROM messages WHERE id=?', (message_id,)).fetchone():
+                return
+            self.db.event(conn, 'task.merge_files', {'commit': commit, 'main': main}, project_id, task_id)
+            snapshot = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+            text = 'The merge into the project folder failed. You can download the finished task files here:'
+            for path in paths[:20]:
+                label = re.sub(r'([\\`*_{}\[\]()#+.!|<>-])', r'\\\1', path).replace('\n', ' ').replace('\r', ' ')
+                url = f'/api/tasks/{task_id}/files/{snapshot}?' + urlencode({'path': path})
+                text += f'\n\n- [{label}]({url})'
+            if len(paths) > 20:
+                text += f'\n\n+{len(paths) - 20} more files.'
+            if not paths:
+                text += '\n\nThis task has no added or changed files to download.'
+            self.post(conn, conversation_id, key, text)
+
+    def merge(self, project_path, commit, deploy=None, attempt_id=None):
         """The only path into main: exclusive checkout fence, re-checked pending deploy, then the merge.
 
         Tasks of different projects run in parallel and share this one fence, so a merge waits briefly for another's.
@@ -279,7 +323,14 @@ class Pipeline:
         with fence.hold(self.db.path.parent, exclusive=True, wait=MERGE_WAIT):
             if self.pending():
                 raise Busy('a deploy is pending')
-            head, changed = merge_into_main(project_path, commit)
+            try:
+                head, changed = merge_into_main(project_path, commit)
+            except Exception:
+                try:
+                    self.report_merge_failure(project_path, commit, deploy, attempt_id or commit)
+                except Exception:
+                    logging.getLogger(__name__).exception('Could not publish failed merge downloads')
+                raise
             project = self.db.one('SELECT id FROM projects WHERE path=?', (str(project_path),))
             note = None
             if project:

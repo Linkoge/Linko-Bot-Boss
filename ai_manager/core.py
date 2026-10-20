@@ -588,7 +588,7 @@ class Core:
         if git(root, "rev-list", "--count", f"{task['workspace_base']}..HEAD") == "0":
             return {"reason": "", "merge": {"state": "none", "reason": "no changes"}}
         shared = Path(self.registry.allowed_path(project["path"]))
-        for _ in range(3):  # main can move while we sync; a few quick retries are not repair rounds
+        for attempt in range(3):  # main can move while we sync; a few quick retries are not repair rounds
             branch = main_branch(shared)
             before = head
             sync = git(root, *IDENTITY, "merge", "--no-edit", branch, check=False)
@@ -610,7 +610,8 @@ class Core:
                     return {"outcome": secrets}
                 main_head, changed, deployment = await asyncio.to_thread(
                     self.pipeline.merge, project["path"], head,
-                    (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]))
+                    (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]),
+                    attempt_id=f'{eid}:{head}:{attempt}')
             except Conflict:
                 continue
             deployment = deployment or {}
