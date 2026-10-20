@@ -682,8 +682,9 @@ probes, live database changes, service restarts or host installation are part of
   are removed. Favorites store manager pairs; Insert reads the current scope and Recall edits the current scope.
   Manager and worker can use different providers. Each provider has a subtly colored card containing its model and
   effort rows, plus the OpenAI or Anthropic logo at the right spanning both rows. Manager and Manual worker use one
-  exact model/effort; their logos are labels. The picker shows each known family's newest installed model and other
-  catalog families; saved, pooled or favorited older models stay visible. Missing families are disabled.
+  exact model/effort; their logos are labels. The picker shows only each provider's three known families, using
+  each family's newest installed model; saved, pooled or favorited models also stay visible, including older versions
+  and non-family models. Missing families are disabled. Fresh automatic pools include only the newest family models.
   **Manual | Automatic** remains in the Worker heading. In Automatic, clicking a logo selects exactly one provider;
   model and effort buttons in that card independently toggle membership. At least one model and one effort must stay
   lit. The effective `model_choice` record stores `worker: {mode: "automatic", provider, allowed_models, allowed_efforts}`;
@@ -692,8 +693,8 @@ probes, live database changes, service restarts or host installation are part of
   delegate arguments are rejected with the pool in the error. Omitted arguments resolve deterministically in saved
   pool order to the first catalog-supported pair; provider defaults never widen the pool. An explicitly unsupported
   combination is an error. Empty or unavailable pools produce actionable errors rather than a fallback.
-  Legacy Automatic (`worker: null`, including older settings and repo overrides) freezes all current models/efforts
-  of the remembered worker's provider on first catalog-backed load, falling back to the manager's provider when no
+  Legacy Automatic (`worker: null`, including older settings and repo overrides) freezes the newest known family models
+  and their catalog efforts of the remembered worker's provider on first catalog-backed load, falling back to the manager's provider when no
   worker model is known. The migration persists in the same global or repo-lock record; if the catalog is unavailable,
   migration waits and dispatch reports the empty pool. New catalog models and efforts stay off in saved pools and
   remain available for exact selections. Manual selections continue to win over delegate arguments.

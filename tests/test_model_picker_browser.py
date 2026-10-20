@@ -30,7 +30,7 @@ for model, efforts in (('gpt-5.6-sol', ('low', 'medium', 'high', 'xhigh', 'max',
 uvicorn.run(create_app(s, server, CatalogServer), host='127.0.0.1', port=PORT, log_level='error')
 '''
 ROOT = Path(__file__).resolve().parents[1]
-FAMILIES = ['Luna', 'Sol', 'Astra', 'gpt-5.6-terra', 'Low', 'Medium', 'High', 'Haiku', 'Sonnet', 'Opus', 'Low', 'Medium', 'High']
+FAMILIES = ['Luna', 'Sol', 'Astra', 'Low', 'Medium', 'High', 'Haiku', 'Sonnet', 'Opus', 'Low', 'Medium', 'High']
 LUNA, SOL, SONNET = 'gpt-6-luna', 'gpt-6.1-sol', 'claude-sonnet-5-5'
 
 
@@ -184,7 +184,7 @@ def test_manager_and_worker_are_independent_and_automatic_persists(page, browser
     choose(page, 'worker-codex-medium')
     auto = saved(page)['worker']
     assert 'gpt-6-astra' not in auto['allowed_models'] and 'medium' not in auto['allowed_efforts']
-    assert pressed(page, '#worker-choices') == ['Luna', 'Sol', 'gpt-5.6-terra', 'Low', 'High', 'Xhigh', 'Ultra']
+    assert pressed(page, '#worker-choices') == ['Luna', 'Sol', 'Low', 'High']
     assert page.locator('#worker-choices [data-provider=claude] .model-family:enabled').count() == 0
     assert pressed(page, '#manager-choices') == ['Sonnet', 'High']
     page.locator('#model-close').click()
@@ -245,12 +245,34 @@ def test_manager_and_worker_are_independent_and_automatic_persists(page, browser
 
 
 def test_picker_stays_compact_with_the_real_catalog_shape(page):
-    """Manual stays compact: newest known families plus new catalog families, with three basic effort buttons."""
+    """Manual stays compact: only the newest known families, with three basic effort buttons."""
     open_panel(page)
     for section in ('#manager-choices', '#worker-choices'):
-        assert page.locator(f'{section} button').count() == 15
-    assert page.locator('#model-dialog button[data-choice]').count() == 15 * 2 + 2 + 2 * 2 + 1  # repo lock
+        assert page.locator(f'{section} button').count() == 14
+    assert page.locator('#model-dialog button[data-choice]').count() == 14 * 2 + 2 + 2 * 2 + 1  # repo lock
     page.locator('#model-close').click()
+
+
+def test_saved_non_family_model_stays_pressed_but_is_not_added_to_a_fresh_pool(page):
+    original = saved(page)
+    terra = {'model': 'gpt-5.6-terra', 'effort': 'ultra'}
+    try:
+        page.evaluate("choice=>api('/api/model-settings',{method:'PUT',body:JSON.stringify(choice)})",
+                      {**original, 'manager': terra, 'worker': terra})
+        open_panel(page)
+        assert pressed(page, '#manager-choices') == ['gpt-5.6-terra', 'Ultra']
+        assert pressed(page, '#worker-choices') == ['gpt-5.6-terra', 'Ultra']
+        choose(page, 'worker-automatic')
+        assert set(saved(page)['worker']['allowed_models']) == {LUNA, SOL, 'gpt-6-astra'}
+        assert saved(page)['manual'] == terra
+        assert page.locator('[data-choice="worker-gpt-5.6-terra"]').get_attribute('aria-pressed') == 'false'
+        choose(page, 'worker-manual')
+        assert pressed(page, '#worker-choices') == ['gpt-5.6-terra', 'Ultra']
+        page.locator('#model-close').click()
+    finally:
+        now = saved(page)
+        page.evaluate("choice=>api('/api/model-settings',{method:'PUT',body:JSON.stringify(choice)})",
+                      {**original, 'revision': now['revision']})
 
 
 def test_repo_toggle_scopes_every_pick_and_discards_local_state(page, browser_context):
@@ -358,7 +380,7 @@ def test_users_reuse_controls_persist_and_show_access_errors(page, browser_conte
         assert users.is_visible()
         assert users.locator('h3').all_inner_texts() == ['Writer <one>', 'Missing']
         writer = users.locator('[data-instance="Writer <one>"]')
-        assert writer.locator('.model-family').count() == 14
+        assert writer.locator('.model-family').count() == 12
         assert 'cannot access' in users.locator('[data-instance="Missing"] [role=alert]').inner_text()
         choose(page, 'user-0-manager-Luna')
         choose(page, 'user-0-manager-codex-high')

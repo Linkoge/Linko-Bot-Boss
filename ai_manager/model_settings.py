@@ -79,8 +79,8 @@ def _levels(entry):
 
 def choices(server, provider, extra=()):
     """What the picker shows (presentation only; dispatch accepts any catalog model): the provider's three families in
-    their fixed order, each as its newest installed model with Low/Medium/High, then other families and models currently
-    saved, pooled or favorited in `extra`, so a selection made outside the families stays visible and pressed."""
+    their fixed order, each as its newest installed model with Low/Medium/High. Only models currently saved, pooled
+    or favorited in `extra` are appended, so selections outside the newest families stay visible and pressed."""
     visible = [m for m in server.catalog if not m.get('hidden') and provider_of(m['model']) == provider]
     result = []
     for name in FAMILIES[provider]:
@@ -91,7 +91,7 @@ def choices(server, provider, extra=()):
                        'levels': [e for e in _levels(best) if e in PICKER_LEVELS] if best else []})
     shown = {c['model'] for c in result}
     for m in visible:
-        if (m['model'] in extra or not _family(m['model'])) and m['model'] not in shown:
+        if m['model'] in extra and m['model'] not in shown:
             shown.add(m['model'])
             name = m.get('displayName') or m['model']
             if name in FAMILIES[provider]:
@@ -141,7 +141,9 @@ def provider_catalog(server, provider):
 
 
 def initial_pool(server, provider):
-    entries = provider_catalog(server, provider)
+    """Start with only the newest selectable model of each known family and its catalog efforts."""
+    models = {c['model'] for c in choices(server, provider) if c['levels']}
+    entries = [m for m in provider_catalog(server, provider) if m['model'] in models]
     return {'mode': 'automatic', 'provider': provider,
             'allowed_models': list(dict.fromkeys(m['model'] for m in entries if _levels(m))),
             'allowed_efforts': list(dict.fromkeys(e for m in entries for e in _levels(m)))}
@@ -206,8 +208,9 @@ def selection_models(settings):
 
 
 def picker_providers(server, extra=()):
-    """Exact-model choices plus the independent provider effort toggles, including unlit catalog additions."""
-    return {p: {'choices': choices(server, p, extra), 'efforts': initial_pool(server, p)['allowed_efforts']}
+    """Family choices and retained extras, plus all independent provider catalog effort toggles."""
+    return {p: {'choices': choices(server, p, extra),
+                'efforts': list(dict.fromkeys(e for m in provider_catalog(server, p) for e in _levels(m)))}
             for p in FAMILIES}
 
 

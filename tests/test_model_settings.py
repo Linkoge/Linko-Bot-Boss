@@ -124,7 +124,7 @@ def test_picker_shows_the_compact_family_layout_while_dispatch_accepts_any_catal
     codex = choices(server, 'codex')
     assert [(c['name'], c['model'], c['levels']) for c in codex] == [
         ('Luna', MODELS['Luna'], ['low', 'medium', 'high']), ('Sol', SOL, ['low', 'medium', 'high']),
-        ('Astra', MODELS['Astra'], ['low', 'medium', 'high']), ('Custom X', 'custom-model-x', ['minimal', 'ultra'])]
+        ('Astra', MODELS['Astra'], ['low', 'medium', 'high'])]
     claude = choices(server, 'claude')
     assert [c['name'] for c in claude] == ['Haiku', 'Sonnet', 'Opus'] and len(claude) == 3
     assert all(set(c['levels']) <= {'low', 'medium', 'high'} for c in claude)
@@ -156,6 +156,24 @@ def test_a_newer_family_version_replaces_the_older_one_numerically(system):
 def pool(models=None, efforts=None, provider='codex'):
     return {'mode': 'automatic', 'provider': provider, 'allowed_models': [MODELS['Luna'], SOL] if models is None else models,
             'allowed_efforts': ['low', 'high'] if efforts is None else efforts}
+
+
+@pytest.mark.parametrize('provider,older,newest,custom', [
+    ('codex', 'gpt-6.9-sol', 'gpt-6.10-sol', 'gpt-5.6-terra'),
+    ('claude', 'claude-sonnet-5-9', 'claude-sonnet-5-10', 'claude-custom'),
+])
+def test_initial_pool_uses_only_newest_family_models(system, provider, older, newest, custom):
+    _, _, _, server, *_ = system
+    for model in (newest, custom, older):  # Neither catalog order nor lexicographic order selects the newest.
+        server.catalog.append({**server.catalog[0], 'model': model,
+                               'supportedReasoningEfforts': [{'reasoningEffort': 'low'},
+                                                            {'reasoningEffort': 'ultra' if model == custom else 'high'}]})
+    fresh = initial_pool(server, provider)
+    assert set(fresh['allowed_models']) == {c['model'] for c in choices(server, provider)}
+    assert newest in fresh['allowed_models']
+    assert older not in fresh['allowed_models'] and custom not in fresh['allowed_models']
+    assert 'ultra' not in fresh['allowed_efforts']
+    assert 'ultra' in picker_providers(server)[provider]['efforts']  # Exact catalog efforts remain available.
 
 
 @pytest.mark.smoke
@@ -209,7 +227,7 @@ def test_legacy_null_migrates_once_and_catalog_additions_stay_off(system):
     assert current(Database(settings.db_path), server)['worker'] == config['worker']
     assert 'ultra' in picker_providers(server)['codex']['efforts']
     assert 'ultra' not in config['worker']['allowed_efforts']
-    assert 'gpt-7-fable' in [c['model'] for c in choices(server, 'codex')]
+    assert 'gpt-7-fable' not in [c['model'] for c in choices(server, 'codex')]
     with pytest.raises(ValueError, match='not in the automatic worker pool'):
         delegation(db, server, 'gpt-7-fable')
     assert save(db, server, {**config, 'manager': {'model': SONNET, 'effort': 'low'}})['worker'] == config['worker']
@@ -297,7 +315,7 @@ def test_api_saves_exactly_what_the_panel_sent(tmp_path):
         sign_in(client, app, settings)
         panel = client.get('/api/model-settings').json()
         assert set(panel['providers']) == {'codex', 'claude'} and set(panel['settings']) == {'revision', 'manager', 'worker', 'manual'}
-        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', 'Custom X']
+        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra']
         assert [c['name'] for c in panel['providers']['claude']['choices']] == ['Haiku', 'Sonnet', 'Opus']
         choice = {**panel['settings'], 'manager': {'model': SONNET, 'effort': 'high'}, 'worker': {'model': SOL, 'effort': 'medium'}}
         assert client.put('/api/model-settings', json=choice, headers={'X-CSRF-Token': 'bad'}).status_code == 403
@@ -312,13 +330,30 @@ def test_api_saves_exactly_what_the_panel_sent(tmp_path):
         assert client.put('/api/model-settings', json={**now, 'worker': {'model': SOL}}).status_code == 409  # a half pair is refused
         assert client.get('/api/model-settings').json()['settings']['worker'] == pool()
         assert client.get('/api/models').status_code == 404  # the unused models endpoint is gone
-        # New families are available for exact selection and stay off in saved automatic pools.
+        # Unsaved non-family models stay hidden but remain available for exact selection.
         now = client.get('/api/model-settings').json()
-        assert 'Custom X' in [c['name'] for c in now['providers']['codex']['choices']]
+        assert 'Custom X' not in [c['name'] for c in now['providers']['codex']['choices']]
         custom = {**now['settings'], 'manager': {'model': 'custom-model-x', 'effort': 'minimal'}}
         assert client.put('/api/model-settings', json=custom).status_code == 200
         names = [c['name'] for c in client.get('/api/model-settings').json()['providers']['codex']['choices']]
         assert names == ['Luna', 'Sol', 'Astra', 'Custom X']
+        # A favorite alone retains the extra after all current pairs return to family models.
+        insert_favorite(app.state.db, server, 0)
+        now = client.get('/api/model-settings').json()['settings']
+        assert client.put('/api/model-settings', json={**now, 'manager': {'model': SOL, 'effort': 'low'}}).status_code == 200
+        assert client.get('/api/model-settings').json()['providers']['codex']['choices'][-1]['model'] == 'custom-model-x'
+        app.state.db.set_setting('manager_favorites', [None, None])
+        # Automatic pools and the remembered manual pair each retain non-family models, too.
+        now = client.get('/api/model-settings').json()['settings']
+        assert client.put('/api/model-settings', json={**now, 'worker': {'model': 'custom-model-x', 'effort': 'minimal'}}).status_code == 200
+        now = client.get('/api/model-settings').json()['settings']
+        assert client.put('/api/model-settings', json={**now, 'worker': pool()}).status_code == 200
+        assert client.get('/api/model-settings').json()['providers']['codex']['choices'][-1]['model'] == 'custom-model-x'
+        now = client.get('/api/model-settings').json()['settings']
+        assert client.put('/api/model-settings', json={**now, 'worker': {'model': SOL, 'effort': 'low'}}).status_code == 200
+        now = client.get('/api/model-settings').json()['settings']
+        assert client.put('/api/model-settings', json={**now, 'worker': pool(['custom-model-x'], ['minimal'])}).status_code == 200
+        assert client.get('/api/model-settings').json()['providers']['codex']['choices'][-1]['model'] == 'custom-model-x'
 
 
 def test_legacy_provider_settings_migrate_automatic_without_reusing_the_pair_policy(system):

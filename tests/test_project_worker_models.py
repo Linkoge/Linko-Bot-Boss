@@ -195,7 +195,7 @@ def test_repo_pair_validation_is_atomic_and_all_catalog_pairs_are_accepted(syste
     assert manager_route(db, one) == delegation(db, server, project_id=one) == custom
 
 
-def test_repo_api_exposes_other_catalog_families_in_each_scope(system):
+def test_repo_api_exposes_only_saved_extra_models_in_each_scope(system):
     db, _, settings, server, *_ = system
     one, two = two_projects(system)
     for model in ('custom-global', 'custom-repo'):
@@ -210,11 +210,11 @@ def test_repo_api_exposes_other_catalog_families_in_each_scope(system):
         sign_in(client, app, settings)
         for project, extra in ((one, 'custom-repo'), (two, 'custom-global')):
             panel = client.get('/api/model-settings', params={'project_id': project}).json()
-            assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', 'custom-global', 'custom-repo']
+            assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', extra]
             assert panel['providers']['codex']['choices'][-1]['levels'] == ['ultra']
         pick(db, server, one, worker=pool())
         panel = client.get('/api/model-settings', params={'project_id': one}).json()
-        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', 'custom-global', 'custom-repo']
+        assert [c['name'] for c in panel['providers']['codex']['choices']] == ['Luna', 'Sol', 'Astra', 'custom-repo']
 
 
 def test_lock_freezes_the_current_default_pairs_before_global_provider_changes(system):

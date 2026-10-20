@@ -67,7 +67,8 @@ function selectModel(pair,m){pair.model=m.model;if(!m.levels.includes(pair.effor
 const PICKER_LEVELS=['low','medium','high'];
 function isAutomatic(worker){return worker?.mode==='automatic';}
 function newWorkerPool(panel,provider){
-  const choices=panel.providers[provider].choices.filter(m=>m.levels.length);
+  // The API puts the three newest family choices first; retained extras never opt themselves in.
+  const choices=panel.providers[provider].choices.slice(0,3).filter(m=>m.levels.length);
   return {mode:'automatic',provider,allowed_models:choices.map(m=>m.model),allowed_efforts:[...new Set(choices.flatMap(m=>m.levels))]};
 }
 function togglePool(pool,key,value){
