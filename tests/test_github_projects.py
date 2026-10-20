@@ -493,24 +493,25 @@ def test_company_requires_org_and_explicit_public_confirmation(hub):
     assert github.calls[0][:3] == ('POST', '/user/repos', {'name': 'personal', 'private': True})
 
 
-def test_secret_check_runs_before_company_api_creation_and_blocks_findings(hub, monkeypatch):
+def test_company_creation_allows_key_shaped_project_content(hub, monkeypatch):
     browser, app, settings, github = hub
     with_token(browser, github)
     browser.put('/api/github/organization', json={'company_org': 'acme'})
     initialize = GitHubProjects.initialize
 
-    def contaminated(folder, name, remote):
+    def initialize_with_key_content(folder, name, remote):
         initialize(folder, name, remote)
         (folder / 'config.txt').write_text(PAT)
         run('git', '-C', str(folder), 'add', 'config.txt')
         run('git', '-C', str(folder), '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-qm', 'config')
 
-    monkeypatch.setattr(GitHubProjects, 'initialize', staticmethod(contaminated))
-    response = browser.post('/api/github/projects', json={'name': 'unsafe', 'tier': 'company', 'public_confirmed': True})
-    assert response.status_code == 409 and 'Secret check failed' in response.json()['detail']
+    monkeypatch.setattr(GitHubProjects, 'initialize', staticmethod(initialize_with_key_content))
+    response = browser.post('/api/github/projects', json={'name': 'with-config', 'tier': 'company', 'public_confirmed': True})
+    assert response.status_code == 200, response.text
     assert PAT not in response.text
-    assert github.calls == [] and app.state.registry.list() == []
-    assert not (settings.project_roots[0] / 'unsafe').exists()
+    assert github.calls[0][:3] == ('POST', '/orgs/acme/repos', {'name': 'with-config', 'private': False})
+    assert len(app.state.registry.list()) == 1
+    assert (settings.project_roots[0] / 'with-config' / 'config.txt').read_text() == PAT
 
 
 @pytest.mark.parametrize('status', [401, 403, 404])

@@ -68,7 +68,7 @@ def test_manager_guide_is_the_single_concise_readme_section():
     section = re.search(r'(?ms)^## Architecture design principles\n.*?(?=^## |\Z)', readme).group().strip()
     assert ARCHITECTURE_GUIDE == section
     assert MANAGER_INSTRUCTIONS.count(section) == 1
-    assert '## GitHub backups and secret checks' not in MANAGER_INSTRUCTIONS
+    assert '## GitHub backups' not in MANAGER_INSTRUCTIONS
     assert len(section.split()) <= 550
     for advice in ('advisory only', 'Advice never blocks', 'requires no approval or review receipt',
                    'adds no model or routing restrictions', 'concrete incident', 'shown = saved = dispatched',

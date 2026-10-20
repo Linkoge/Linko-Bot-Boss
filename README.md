@@ -33,12 +33,10 @@ rules 8–9; worker-only: rule 11).
    /absolute/manager/.venv/bin/python /absolute/manager/scripts/worker_check.py --root /absolute/project/worktree --base ASSIGNMENT_BASE_COMMIT
    ```
 
-   The command reuses `run_gate` and the delivery secret scanner, prints the same failure lines and output tail as
+   The command reuses `run_gate`, prints the same failure lines and output tail as
    JSON, and exits 0 for success or 1 for check failures. Its advisory `stale_pitfalls` list includes Known pitfalls
    entries with missing backticked repo-relative paths (containing a slash or extension); it never affects checks or
-   exit status. Tests include modified and untracked test files; the secret scan
-   uses the current `main` (or `master`) through `HEAD`, like delivery, including intermediate task commits and
-   excluding inherited main history. It does not commit, merge or modify queue
+   exit status. Tests include modified and untracked test files. It does not commit, merge or modify queue
    state. This self-check is informational; the application's own checks still decide delivery and run again after
    syncing main if needed.
 3. **Repair rounds** (a counter on the task row, never reset by retry, restart or continue). A failing check goes back to
@@ -62,7 +60,7 @@ rules 8–9; worker-only: rule 11).
    below) and nothing waits for the owner. The manager's `deploy` action
    (optionally with a `task_id` of a finished, never-merged task) uses the same path on request.
    After every passing merge the application schedules a GitHub backup push for that project. This runs independently
-   of the queue and deployment; workers never push. See GitHub backups and secret checks below.
+   of the queue and deployment; workers never push. See GitHub backups below.
 5. **Queue runner** (`ai_manager/runner.py`; independent of any open chat or owner message). A tick every second starts
    the oldest eligible queued task of every project that has nothing running, so a project runs one task at a time and
    different projects run in parallel. Not eligible: held, project paused, waiting for its retry time, or a
@@ -201,7 +199,7 @@ Deliberately removed machinery and its replacements:
   navigation for the manager, with owner-run review; it is not assignment authority or a delivery prerequisite.
 - **Chat modes; tiered/review machinery:** mode switches, helper/reviewer tiers and integration/follow-up paths
   multiplied handoffs and waiting states. The manager answers, inspects or delegates as asked to the project's worker queue;
-  permanent checks and the existing secret check remain, with no separate architecture approval stage.
+  permanent checks remain, with no separate architecture approval stage.
 - **Deploy blocking the queue:** checkout safety still pauses new tasks and merges while a deploy is pending.
   Before backup, a 30-minute deadline withdraws a stuck request and releases the queue; after backup, deployment finishes
   or rolls back. Queued, held and retry-delayed tasks do not block restart; active work does. Preserve this bounded behavior.
@@ -210,9 +208,9 @@ Ship small rollouts: replace one path at a time and delete the old path in the s
 in place. Give a one-line before/after summary, for example: "Before: two worker selectors could disagree; after:
 one saved selection drives display and dispatch."
 
-## GitHub backups and secret checks
+## GitHub backups
 
-The owner has authorized automatic application pushes, including verified existing backlog. Every Git project uses its
+The owner has authorized automatic application pushes, including existing backlog. Every Git project uses its
 single `origin` push URL on `github.com` (SSH or HTTPS). Projects created as Personal or Company use that tier's saved
 token over HTTPS; existing projects without a tier use the service user's Git credentials. The application pushes local `main` (legacy `master` where that is the project's main branch) to the same remote branch. It never forces,
 resets local commits or rewrites history, and the backup itself never creates repositories or changes remote
@@ -221,36 +219,26 @@ their in-place workflow. Missing/unsupported origins or authentication failures 
 
 `ai_manager/github_backup.py` runs network work in a background thread without the checkout fence. A merge requests an
 attempt; failures retain all local commits and retry every five minutes, and a later merge requests another attempt.
-Startup also schedules repositories without a backup receipt, so safe existing backlog does not require another task.
+Startup also schedules repositories without a backup receipt, so existing backlog does not require another task.
 Durable per-project receipts in SQLite settings (`github_backup:<project-id>`) preserve pending work and retry times
-across restarts. Project tabs show **GitHub needs attention** on failure; project API/manager records include the reason,
-retry timestamp and safe findings. Backup failures do not fail tasks, consume repair rounds, or prevent merge/deploy.
+across restarts. Project tabs show **GitHub needs attention** on failure; project API/manager records include the reason
+and retry timestamp. Backup failures do not fail tasks, consume repair rounds, or prevent merge/deploy.
 A later successful push includes all retained commits. Each Git command has a 60-second timeout and no interactive
 credential prompt. Raw Git/SSH/hook output is discarded, since it can contain credentials.
 An untouched repository with an unborn `main` or `master` and an empty GitHub remote is synced with reason
 `empty-repository`; no artificial commit is created. Existing remote history, other local refs or uncommitted files
 still require attention when the local main branch is missing.
 
-Before the first push, and every subsequent attempt, the application queries the actual remote branch and scans every
-unpushed commit, including intermediate secrets deleted later. An empty remote requires scanning all local history;
-shallow history, unavailable history or a diverged remote refuses only the backup. The verified commit ID is pushed
-explicitly, so changes arriving during a push stay pending for another attempt. Local and remote commits remain intact
-on rejection. A secret in existing backlog stays needs-attention for owner remediation; the application never rewrites
-that backlog or bypasses GitHub protection.
-
-Delivery also checks **only `main..branch` commits**, after committing worker changes and syncing main, before merging.
-The built-in scanner (`ai_manager/secret_check.py`) checks added lines for obvious GitHub/OpenAI tokens, AWS access-key
-IDs and private-key headers. It flags changed `.env`/`.env.*` files, `*.pem`, `*.key` and
-`id_rsa*` filenames at any depth (`.env.example` is permitted). Unchanged historical lines are outside the delivery
-scope; merge resolutions are checked without treating inherited main changes as task additions. Findings enter the
-existing five-round repair loop; each finding contains only **file, line, rule** (line 0 for filenames). The worker must
-remove the credential from every affected unmerged task commit, including intermediate commits. There is no owner
-approval gate. This is a small obvious-secret check, not comprehensive credential discovery. Gitleaks may be used by an
-operator separately; the application needs no optional scanner, installation, download or external service to check.
+Before the first push, and every subsequent attempt, the application queries the actual remote branch and verifies
+that it is an ancestor of the local branch. Shallow history, unavailable history or a diverged remote refuses only the
+backup. The verified commit ID is pushed explicitly, so changes arriving during a push stay pending for another attempt.
+Local and remote commits remain intact on rejection. The application does not scan project content for passwords,
+keys or sensitive filenames during backup, creation, delivery or worker self-checks. Existing backup receipts with a
+`secret-check` reason retry through the normal push path; successful attempts replace the old reason and findings.
 
 Never commit real credentials (RULES.md rule 10): use environment variables or ignored files. Tests needing
-key-shaped values build them at runtime. Ordinary dummy passwords and credential-like variable names are permitted;
-the scanner matches the four precise key formats above and sensitive filenames.
+key-shaped values build them at runtime. This is authoring guidance; application checks do not enforce it by scanning
+users' projects.
 
 Enable GitHub's server-side protection as well: repository **Settings → Advanced Security** (under Security and quality)
 → enable **Secret Protection**, then enable **Push protection** in that section. Availability depends on repository and
@@ -259,9 +247,9 @@ plan; an organization may manage this setting. Follow the current
 Provision the service user's normal write access to each origin separately. A protected push rejection stays
 needs-attention and retries; no bypass URL or secret value is exposed or acted on automatically.
 
-Permanent synthetic regression coverage is in `tests/test_github_backup.py`: precise key and sensitive-filename detection, safe
-diagnostics, optional scanner absence, commit scope and intermediate history, bounded repairs, first-push backlog,
-rejected pushes and later catch-up, diverged history, and queue/merge/deploy progress during backup failure or latency.
+Permanent synthetic regression coverage is in `tests/test_github_backup.py`: key-shaped project content passes delivery
+and backup, legacy scan failures retry, first-push backlog is retained, rejected pushes later catch up, diverged history
+is preserved, and queue/merge/deploy progress continues during backup failure or latency.
 
 ### Create and rename a project on GitHub
 
@@ -314,7 +302,7 @@ there is no fallback to the other token or SSH.
 Stored remotes retain the existing SSH URL style. For tiered projects, the backup worker uses the equivalent HTTPS URL
 and an ephemeral askpass helper; the credential is passed only in the network subprocess environment, never in command
 arguments or a remote URL. The helper contains no credential and is removed after the operation. Existing projects
-without a saved tier retain their service-user Git credentials. Secret checks and non-forcing backup behavior remain.
+without a saved tier retain their service-user Git credentials. Non-forcing backup behavior remains.
 
 *Destinations.* Save the single **Company organization** in **Settings → GitHub**, alongside the two token entries.
 Use its GitHub name (1–39 letters/digits with single hyphens between them), not a URL. The saved value is the value
@@ -325,11 +313,9 @@ to make Company unavailable; the create dialog points back to Settings. The main
 the token owner's account via `POST /user/repos`. Company always creates a **public** repository directly in the
 configured organization via `POST /orgs/{configured-org}/repos`. The dialog requires an explicit “will be public”
 confirmation. For Company, the manager prepares `<first project root>/<name>` with `git init -b main` and one initial
-`README.md` commit, then runs the existing secret check over its full history **before** creating the public GitHub
-repository. Findings or a failed check block creation and remove the prepared folder. On success it sets `origin` and
-registers the project so the existing backup can push. Personal creates on GitHub before initializing and registering
-the local project. The backup secret check still runs before pushes for both tiers. No transfer, copy, mirror,
-publication or destination-change action exists. A small Personal/Company label accompanies the selected project's
+`README.md` commit before creating the public GitHub repository. A preparation failure removes the prepared folder.
+On success it sets `origin` and registers the project so the existing backup can push. Personal creates on GitHub before
+initializing and registering the local project. No transfer, copy, mirror, publication or destination-change action exists. A small Personal/Company label accompanies the selected project's
 repository information in the project menu and Settings; the saved tier survives rename and organization changes.
 Labels apply to repositories created through this flow.
 
@@ -350,10 +336,10 @@ If a step fails the action stops, undoes what is safely reversible (renames are 
 folder is removed) and returns the per-step report (`steps`: `done`, `failed`, `rolled back`, `not run`). A repository
 created on GitHub cannot be undone by the application (no delete): the report says so and it must be deleted or
 reused on GitHub. Restricted instances reject all GitHub routes (`/api/github*`) with `Not available on a restricted
-instance`. The push-time secret check is unchanged.
+instance`.
 
 Tests: `tests/test_github_projects.py` covers mocked GitHub creation, rename, fixed tiers, saved organization,
-confirmation and secret checks, rollback, token lifecycles and permissions, legacy migration, each tier's push
+public confirmation, key-shaped project content, rollback, token lifecycles and permissions, legacy migration, each tier's push
 credentials, token-free responses/logs and restricted routes. `tests/test_github_projects_browser.py` covers shared
 editor cancellation and saves, public confirmation, unavailable destinations, Settings persistence, both token
 lifecycles, menu labels/grouping and repository details, All Projects ordering, stash/restore, keyboard focus,
@@ -490,7 +476,7 @@ run in their usual branch/worktree flow on that one project (a Git repository). 
   rejections are the real protection). Word editing and browsing tools stay
   allowed. Rejections use `Not available on a restricted instance` (HTTP 403, or a rejected manager action).
 
-The per-project GitHub backup keeps working through the existing path and its secret check stays on. The synced folder is
+The per-project GitHub backup keeps working through the existing path. The synced folder is
 a Git repository only for that: put `.git` in the folder's Syncthing ignore list (a `.stignore` file in the folder root
 containing `.git`) so Syncthing never syncs repository internals, and add large binaries to `.gitignore` so they are
 neither committed nor pushed.

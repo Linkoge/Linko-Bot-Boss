@@ -9,8 +9,7 @@ import pytest
 from test_core import git, make_checked_repo, run_next
 from test_core import world as world_fixture
 
-from ai_manager.core import run_gate, run_secret_gate, self_check_command
-from ai_manager.fence import main_branch
+from ai_manager.core import run_gate, self_check_command
 from scripts.worker_check import stale_pitfalls
 
 world = world_fixture
@@ -23,8 +22,8 @@ def test_stale_pitfalls_tolerates_absent_section_or_unreadable_document(tmp_path
     assert stale_pitfalls(tmp_path) == []
 
 
-@pytest.mark.parametrize("failure", [None, "tests", "secrets", "inherited"])
-def test_absolute_command_reuses_gate_and_scanner_for_other_project(tmp_path, monkeypatch, failure):
+@pytest.mark.parametrize("failure", [None, "tests", "key_content", "inherited"])
+def test_absolute_command_reuses_gate_for_other_project(tmp_path, monkeypatch, failure):
     shared, base = make_checked_repo(tmp_path)
     venv = shared / ".venv" / "bin"
     (shared / ".venv").symlink_to(sys.prefix, target_is_directory=True)
@@ -41,10 +40,10 @@ def test_absolute_command_reuses_gate_and_scanner_for_other_project(tmp_path, mo
     if failure == "tests":
         (root / "tests" / "test_smoke.py").write_text(
             "import pytest\n@pytest.mark.smoke\ndef test_broken():\n    assert False\n")
-    if failure == "secrets":
+    if failure == "key_content":
         (root / "temporary.txt").write_text("ghp_" + "A" * 36 + "\n")
         git(root, "add", "temporary.txt")
-        git(root, "commit", "-qm", "synthetic finding")
+        git(root, "commit", "-qm", "synthetic key-shaped content")
         git(root, "rm", "temporary.txt")
         git(root, "commit", "-qm", "removed later")
     if failure == "inherited":
@@ -75,24 +74,23 @@ def test_absolute_command_reuses_gate_and_scanner_for_other_project(tmp_path, mo
     monkeypatch.setenv("AI_MANAGER_SECURE_COOKIE", "1")
     monkeypatch.setenv("PYTHONPATH", str(tmp_path / "unrelated"))
     tests = run_gate(root, base)
-    secrets = run_secret_gate(root, main_branch(root))
     before = git(root, "status", "--porcelain"), git(root, "rev-parse", "HEAD")
     command = shlex.split(self_check_command(root, base))
     assert command[0] == sys.executable
     assert Path(command[1]).is_absolute()
     completed = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=60)
     result = json.loads(completed.stdout)
-    assert completed.returncode == (1 if failure in ("tests", "secrets") else 0), completed.stderr
-    assert result["failures"] == tests["failures"] + secrets["failures"]
-    assert result["checks"] == tests["checks"] + secrets["checks"]
-    assert result["count"] == tests["count"] + secrets["count"]
-    assert result["ok"] == (tests["ok"] and secrets["ok"])
+    assert completed.returncode == (1 if failure == "tests" else 0), completed.stderr
+    assert result["failures"] == tests["failures"]
+    assert result["checks"] == tests["checks"]
+    assert result["count"] == tests["count"]
+    assert result["ok"] == tests["ok"]
     assert result["stale_pitfalls"] == [{"entry": stale_entry, "missing_paths": ["scripts/removed.py", "MISSING.md"]}]
     if failure == "tests":
         assert result["checks"] == ["smoke", "targeted"]
         assert "assert False" in result["output"]
-    if failure == "secrets":
-        assert result["failures"] == ["temporary.txt:1: github-token"]
+    if failure == "key_content":
+        assert result["ok"] and result["failures"] == []
         assert "ghp_" + "A" * 36 not in completed.stdout
     assert (git(root, "status", "--porcelain"), git(root, "rev-parse", "HEAD")) == before
     assert list(data.iterdir()) == [data / "sentinel"]
@@ -101,7 +99,7 @@ def test_absolute_command_reuses_gate_and_scanner_for_other_project(tmp_path, mo
 @pytest.mark.smoke
 @pytest.mark.asyncio
 @pytest.mark.parametrize("restricted", [False, True])
-@pytest.mark.parametrize("failed_check", ["smoke", "secrets", "merge"])
+@pytest.mark.parametrize("failed_check", ["smoke", "merge"])
 async def test_first_and_repair_prompts_include_exact_command_and_only_worker_rules(world, restricted, failed_check):
     world.deployable(False)
     world.settings.restricted = restricted
@@ -121,7 +119,7 @@ async def test_first_and_repair_prompts_include_exact_command_and_only_worker_ru
 
     world.core.factory = factory
     world.lab.results = [{"ok": False, "checks": [failed_check], "count": 1,
-                          "failures": ["config:1: github-token"], "output": ""}]
+                          "failures": ["permanent check failed"], "output": ""}]
     world.tasks.add(world.project["id"], "implement")
     done = await run_next(world)
     assert done["state"] == "done" and done["rounds"] == 1
@@ -132,7 +130,7 @@ async def test_first_and_repair_prompts_include_exact_command_and_only_worker_ru
         assert shlex.split(check["command"])[2:] == ["--root", done["workspace"], "--base", done["workspace_base"]]
         assert check["instruction"] == "Run it before finishing; it is the same check the application will run."
     repair = world.lab.turns[1]["repair"]["instruction"]
-    assert {"secrets": "preserve main", "merge": "commit the merge", "smoke": "Fix the cause"}[failed_check] in repair
+    assert {"merge": "commit the merge", "smoke": "Fix the cause"}[failed_check] in repair
     assert ("When the fix reveals a reusable pitfall, add or update its Known pitfalls entry "
             "(or fix it in code) in the same commit.") in repair
     assert "repair" not in world.lab.turns[0]

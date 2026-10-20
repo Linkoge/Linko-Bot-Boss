@@ -8,7 +8,7 @@ import time
 from contextlib import contextmanager
 from urllib.parse import urlsplit
 
-from .secret_check import ScanError, git_bytes, scan
+from .git_commands import GitError, git_bytes
 
 RETRY_SECONDS = 300
 PREFIX = 'github_backup:'
@@ -148,15 +148,12 @@ class GitHubBackup:
                 git('fetch', '--quiet', '--no-tags', '--recurse-submodules=no', remote, 'refs/heads/' + branch)
                 if git_bytes(root, 'merge-base', '--is-ancestor', base, head, check=False).returncode:
                     return {'state': 'needs-attention', 'reason': 'remote-history-diverged'}
-            hits = scan(root, base, head)
-            if hits:
-                return {'state': 'needs-attention', 'reason': 'secret-check', 'findings': hits[:30]}
             if base != head:
-                # Explicit object/ref pair includes the entire safe backlog. Never force/reset/rebase.
+                # Explicit object/ref pair includes the entire backlog. Never force/reset/rebase.
                 git('push', '--porcelain', '--no-follow-tags', '--recurse-submodules=no',
                     remote, head + ':refs/heads/' + branch)
             return {'state': 'synced', 'commit': head, 'reason': 'backlog-verified'}
-        except ScanError:
+        except GitError:
             return {'state': 'needs-attention', 'reason': 'git-push-or-verification-failed'}
 
     async def close(self):

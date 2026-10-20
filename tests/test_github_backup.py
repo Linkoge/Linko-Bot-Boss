@@ -2,7 +2,6 @@
 import asyncio
 import json
 import re
-import subprocess
 import threading
 from pathlib import Path
 
@@ -14,7 +13,6 @@ from ai_manager import github_backup as backup_module
 from ai_manager.codex import RULES as MANAGER_RULES
 from ai_manager.codex import WORKER_RULES
 from ai_manager.github_backup import PREFIX, GitHubBackup, github_remote
-from ai_manager.secret_check import RULES, scan
 
 world = world_fixture
 TOKEN = 'ghp_' + 'A' * 36
@@ -31,126 +29,29 @@ def commit(root, files):
     return git(root, 'rev-parse', 'HEAD')
 
 
-@pytest.fixture
-def repository(tmp_path):
-    root = tmp_path / 'repo'
-    root.mkdir()
-    git(root, 'init', '-q', '-b', 'main')
-    base = commit(root, {'readme': 'initial\n'})
-    return root, base
-
-
-def test_builtin_detection_without_optional_scanner(repository, monkeypatch):
-    root, base = repository
-    # Only Git is needed. No gitleaks invocation, download or dependency is permitted.
-    original = subprocess.run
-
-    def only_git(argv, **kwargs):
-        assert argv[0] == 'git'
-        return original(argv, **kwargs)
-
-    monkeypatch.setattr(subprocess, 'run', only_git)
-    head = commit(root, {'nested/config.txt': '\n' + TOKEN + '\n' + PRIVATE + '\n'
-                        + 'AKIA' + 'Z' * 16 + '\npassword = "' + 'synthetic-credential' + '"\n'
-                        + 'sk-' + 'S' * 40 + '\nAPI_KEY=' + 'unquoted_fixture' * 2 + '\n',
-                         '.env': 'fixture\n', '.env.example': 'example\n', 'nested/.env.local': 'fixture', 'tls.pem': 'fixture',
-                         'cert.key': 'fixture', 'id_rsa.pub': 'fixture'})
-    hits = scan(root, base, head)
-    assert {h['rule'] for h in hits} == {*RULES, 'sensitive-filename'}
-    assert {h['file'] for h in hits if h['rule'] == 'sensitive-filename'} == {
-        '.env', 'nested/.env.local', 'tls.pem', 'cert.key', 'id_rsa.pub'}
-    assert {'file': 'nested/config.txt', 'line': 2, 'rule': 'github-token'} in hits
-    assert all(set(h) == {'file', 'line', 'rule'} for h in hits)
-    assert TOKEN not in json.dumps(hits) and PRIVATE not in json.dumps(hits)
-
-
-def test_only_new_commit_lines_but_includes_deleted_later_secrets(repository):
-    root, _ = repository
-    base = commit(root, {'old.txt': TOKEN + '\nnormal\n'})
-    head = commit(root, {'old.txt': TOKEN + '\nchanged\n'})
-    assert scan(root, base, head) == []  # unchanged old credentials are outside delivery scope
-    bad = commit(root, {'temporary.txt': TOKEN + '\n'})
-    git(root, 'rm', 'temporary.txt')
-    git(root, 'commit', '-qm', 'remove later')
-    assert scan(root, base, 'HEAD') == [{'file': 'temporary.txt', 'line': 1, 'rule': 'github-token'}]
-    assert scan(root, bad, 'HEAD') == []
-
-
-def test_dummy_assignments_are_permitted_and_key_rules_are_precise(repository):
-    root, base = repository
-    dummy = 'ordinary' * 3
-    assignments = ''.join(f'{name} = "{dummy}"\n'
-                          for name in ('password', 'secret', 'api_key', 'access_token', 'passwd'))
-    head = commit(root, {'config.txt': assignments})
-    assert scan(root, base, head) == []
-    assert set(RULES) == {'private-key', 'github-token', 'aws-access-key', 'openai-token'}
-
-
 def test_runtime_data_is_ignored_and_untracked():
     root = Path(__file__).resolve().parents[1]
-    assert git(root, 'check-ignore', '--no-index', '.data/secret-check-regression.txt') == (
-        '.data/secret-check-regression.txt')
+    assert git(root, 'check-ignore', '--no-index', '.data/backup-regression.txt') == '.data/backup-regression.txt'
     assert git(root, 'ls-files', '--', '.data') == ''
 
 
-def test_merge_inherited_main_lines_excluded_and_resolution_checked(repository):
-    root, base = repository
-    git(root, 'checkout', '-qb', 'task')
-    commit(root, {'feature.txt': 'feature\n'})
-    git(root, 'checkout', '-q', 'main')
-    commit(root, {'existing.txt': TOKEN + '\n'})
-    git(root, 'checkout', '-q', 'task')
-    git(root, 'merge', '--no-edit', 'main')
-    assert scan(root, 'main', 'HEAD') == []
-    git(root, 'checkout', '-q', 'main')
-    commit(root, {'readme': 'main edit\n'})
-    git(root, 'checkout', '-q', 'task')
-    commit(root, {'readme': 'branch edit\n'})
-    result = subprocess.run(['git', '-C', str(root), 'merge', 'main'], capture_output=True, timeout=60)
-    assert result.returncode != 0
-    commit(root, {'readme': TOKEN + '\n'})
-    assert {'file': 'readme', 'line': 1, 'rule': 'github-token'} in scan(root, 'main', 'HEAD')
-
-
+@pytest.mark.smoke
 @pytest.mark.asyncio
-async def test_secret_hits_use_normal_repair_and_never_disclose_values(world):
+async def test_delivery_merges_key_shaped_content_without_repair(world):
     world.deployable(False)
 
-    async def bad(root, prompt):
-        commit(root, {'config.txt': TOKEN + '\n'})
+    async def implement(root, prompt):
+        commit(root, {'.env': TOKEN + '\n', 'private.key': PRIVATE + '\n'})
         return 'implemented'
 
-    async def repair(root, prompt):
-        assert prompt['repair']['failed_checks'] == ['secrets']
-        assert TOKEN not in json.dumps(prompt)
-        (root / 'config.txt').write_text('safe\n')
-        git(root, 'add', '-A')
-        git(root, 'commit', '--amend', '--no-edit')
-        return 'repaired'
-
-    world.lab.actions = [bad, repair]
+    world.lab.actions = [implement]
     task = world.tasks.add(world.project['id'], 'synthetic delivery')
     done = await run_next(world)
-    assert done['id'] == task['id'] and done['state'] == 'done' and done['rounds'] == 1
-    assert TOKEN not in json.dumps(done['history'])
+    assert done['id'] == task['id'] and done['state'] == 'done' and done['rounds'] == 0
+    assert len(world.lab.turns) == 1
+    assert (world.app / '.env').read_text() == TOKEN + '\n'
+    assert (world.app / 'private.key').read_text() == PRIVATE + '\n'
     assert world.registry.get(world.project['id'])['github_backup']['state'] == 'pending'
-
-
-@pytest.mark.asyncio
-async def test_secret_repair_budget_is_bounded(world):
-    world.deployable(False)
-
-    async def bad(root, prompt):
-        commit(root, {'config.txt': PRIVATE + '\n'})
-        return 'implemented'
-
-    world.lab.actions = [bad]
-    world.tasks.add(world.project['id'], 'never repaired')
-    done = await run_next(world)
-    assert done['state'] == 'failed' and done['rounds'] == 5
-    assert len(world.lab.turns) == 6
-    assert PRIVATE not in json.dumps(done['history'])
-    assert not (world.app / 'config.txt').exists()
 
 
 @pytest.fixture
@@ -199,19 +100,33 @@ async def test_first_push_verifies_backlog_and_retry_includes_later_merges(world
     assert world.registry.list()[0]['github_backup']['state'] == 'synced'
 
 
+@pytest.mark.smoke
 @pytest.mark.asyncio
-async def test_existing_unsafe_history_never_pushed_even_when_deleted(world, remote):
+async def test_key_shaped_history_pushes_and_legacy_scan_failure_retries(world, remote, monkeypatch):
     commit(world.app, {'config.txt': TOKEN + '\n'})
     git(world.app, 'rm', 'config.txt')
     git(world.app, 'commit', '-qm', 'removed')
+    head = commit(world.app, {'.env': 'sk-' + 'S' * 40, 'private.key': PRIVATE,
+                              'config.txt': 'AKIA' + 'Z' * 16})
+    # Existing receipts retry on their normal deadline and discard obsolete findings on success.
+    world.db.set_setting(PREFIX + world.project['id'], {
+        'state': 'needs-attention', 'reason': 'secret-check', 'retry_at': 123,
+        'generation': 1, 'findings': [{'file': 'config.txt', 'line': 1, 'rule': 'github-token'}],
+    })
     backup = world.pipeline.backups
+    monkeypatch.setattr(backup_module.time, 'time', lambda: 124)
     backup.tick()
     await backup.job
     status = world.registry.get(world.project['id'])['github_backup']
-    assert status['state'] == 'needs-attention' and status['reason'] == 'secret-check'
-    assert status['findings'] == [{'file': 'config.txt', 'line': 1, 'rule': 'github-token'}]
-    assert TOKEN not in json.dumps(status)
-    assert not git(remote, 'for-each-ref')
+    assert status['state'] == 'synced' and 'findings' not in status
+    assert git(remote, 'rev-parse', 'main') == head
+    assert git(remote, 'show', 'main:.env') == 'sk-' + 'S' * 40
+    assert git(remote, 'show', 'main~2:config.txt') == TOKEN
+    later = commit(world.app, {'later.txt': TOKEN})
+    backup.request(world.project['id'])
+    backup.tick()
+    await backup.job
+    assert git(remote, 'rev-parse', 'main') == later
 
 
 @pytest.mark.asyncio
@@ -275,7 +190,7 @@ def test_empty_repository_syncs_without_creating_history(tmp_path, monkeypatch, 
     assert GitHubBackup.push(root) == {'state': 'synced', 'commit': None, 'reason': 'empty-repository'}
     assert git(root, 'for-each-ref') == git(remote, 'for-each-ref') == ''
     assert git(root, 'symbolic-ref', '--short', 'HEAD') == branch
-    # A subsequent first commit still takes the normal scan-and-push path.
+    # A subsequent first commit still takes the normal push path.
     head = commit(root, {'readme': 'first real work\n'})
     assert GitHubBackup.push(root) == {'state': 'synced', 'commit': head, 'reason': 'backlog-verified'}
     assert git(remote, 'rev-parse', branch) == head
@@ -341,8 +256,7 @@ async def test_timed_retry_survives_restart_and_covers_multiple_projects(world, 
 def test_ui_exposes_safe_backup_status(world):
     from pathlib import Path
 
-    status = {'state': 'needs-attention', 'reason': 'secret-check', 'retry_at': 123,
-              'findings': [{'file': 'config', 'line': 1, 'rule': 'github-token'}]}
+    status = {'state': 'needs-attention', 'reason': 'remote-history-diverged', 'retry_at': 123}
     world.db.set_setting(PREFIX + world.project['id'], status)
     assert world.registry.get(world.project['id'])['github_backup'] == status
     assert world.registry.list()[0]['github_backup'] == status
@@ -364,6 +278,7 @@ def test_rules_require_real_credentials_outside_git_and_runtime_key_fixtures(rul
     assert 'environment variables or ignored files' in rule10
     assert 'Tests needing key-shaped values build them at runtime' in rule10
     assert len(rule10.split()) < 30
+    assert 'Application checks do not scan project content for credentials' in rules
     readme = ' '.join((Path(__file__).parent.parent / 'README.md').read_text().split())
     assert 'Never commit real credentials' in readme
     assert 'Tests needing key-shaped values build them at runtime' in readme

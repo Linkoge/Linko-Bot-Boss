@@ -32,8 +32,6 @@ from .model_settings import RouteBlocked, assignment_route
 from .pipeline import IDENTITY, git, merge_tree
 from .recovery import turn_error
 from .runner import Runner, plain
-from .secret_check import failures as secret_failures
-from .secret_check import scan as scan_secrets
 
 REPAIR_ROUNDS = 5
 # A To-Do can contain a 200-character title, a separator and 24000 characters of details.
@@ -116,12 +114,6 @@ def outcome(failed):
     failures = [line for f in failed for line in f["failures"]]
     return {"ok": not failed, "checks": [f["check"] for f in failed], "failures": failures[:30], "count": len(failures),
             "output": "\n".join(f["output"] for f in failed)[-3000:]}
-
-
-def run_secret_gate(root, base, head="HEAD"):
-    """The delivery secret check, also used by the informational worker command."""
-    hits = scan_secrets(root, base, head)
-    return outcome([{"check": "secrets", "failures": secret_failures(hits), "output": ""}] if hits else [])
 
 
 def self_check_command(root, base):
@@ -464,9 +456,6 @@ class Core:
                                "output_tail": last.get("output", "")[-2500:],
                                "instruction": ("Merge conflicts: resolve every conflict marker keeping both sides' intent, "
                                                "git add, and commit the merge." if "merge" in last["checks"] else
-                                               "Remove credentials from every delivered commit, including intermediate commits. "
-                                               "Amend/rebuild only this task's unmerged commits; preserve main."
-                                               if "secrets" in last["checks"] else
                                                "Fix the cause. Do not weaken, skip or delete tests to make them pass.")}
             value["repair"]["instruction"] += (
                 " When the fix reveals a reusable pitfall, add or update its Known pitfalls entry "
@@ -602,9 +591,6 @@ class Core:
             result = await asyncio.to_thread(self.check, root, task["workspace_base"])
             if not result["ok"]:
                 return {"outcome": result}
-        secrets = await asyncio.to_thread(run_secret_gate, root, branch, head)
-        if not secrets["ok"]:
-            return {"outcome": secrets}
         main_head, changed, deployment = await asyncio.to_thread(
             self.pipeline.merge, project["path"], head,
             (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]))

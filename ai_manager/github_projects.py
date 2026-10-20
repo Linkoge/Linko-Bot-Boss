@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import fence, secret_check
+from . import fence
 from .config import CODE_ROOT
 from .pipeline import RESTRICTED
 from .registry import git, safe_remote
@@ -302,19 +302,14 @@ class GitHubProjects:
         steps = []
         self.require_token(tier)
         if company:
-            # Prepare the actual initial project and scan all its history before creating anything public.
-            # No registration means the backup worker cannot push before this check and confirmation.
+            # Prepare the initial project before creating the confirmed public repository.
             folder.mkdir(parents=True)
             try:
                 self.initialize(folder, name, None)
                 step(steps, 'create local folder and git init', 'done', str(folder))
-                if secret_check.scan(folder, None, 'HEAD'):
-                    raise GitHubError('Secret check failed. Company creation was blocked; '
-                                      'remove credentials before creating a public repository')
-                step(steps, 'secret check', 'done')
             except Exception as error:
-                message = str(error) if isinstance(error, GitHubError) else 'Could not prepare and secret-check the project'
-                step(steps, 'prepare and secret-check project', 'failed', message)
+                message = str(error) if isinstance(error, GitHubError) else 'Could not prepare the project'
+                step(steps, 'prepare project', 'failed', message)
                 self.remove_new_folder(folder, steps)
                 raise GitHubError(message + '. No GitHub repository was created', steps) from None
         try:

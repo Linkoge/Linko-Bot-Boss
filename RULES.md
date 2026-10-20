@@ -11,8 +11,9 @@ One source for rules: each role omits sections marked only for the other role.
    worktree or the live database, and never restarts services, deploys or pushes: the application merges and deploys.
 4. Add or update permanent tests in the repository for the change. After every turn the application runs them together
    with the one fixed smoke suite (`python -m pytest -q -m smoke`). Only permanent repository suites can block delivery;
-   one-off probes are informational. Every command that can hang runs under a timeout: 60 seconds for probes, longer
-   only for real suites. Use disposable data directories and ports.
+   one-off probes are informational. Application checks do not scan project content for credentials. Every command
+   that can hang runs under a timeout: 60 seconds for probes, longer only for real suites. Use disposable data
+   directories and ports.
 5. When checks fail the application sends the failure back as a repair round: at most 5 rounds, then the task stops
    and reports. Never weaken, skip or delete tests to pass.
 6. Commit finished work on the branch. If you cannot finish, end your last line with `RESULT: FAILED - <reason>`;
