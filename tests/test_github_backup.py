@@ -1,6 +1,7 @@
 """Synthetic credentials and disposable local remotes only; never contact GitHub."""
 import asyncio
 import json
+import re
 import subprocess
 import threading
 from pathlib import Path
@@ -10,6 +11,8 @@ from test_core import git, run_next
 from test_core import world as world_fixture
 
 from ai_manager import github_backup as backup_module
+from ai_manager.codex import RULES as MANAGER_RULES
+from ai_manager.codex import WORKER_RULES
 from ai_manager.github_backup import PREFIX, GitHubBackup, github_remote
 from ai_manager.secret_check import RULES, scan
 
@@ -349,9 +352,14 @@ def test_ui_exposes_safe_backup_status(world):
     assert 'Local commits retained; retrying automatically.' in source
 
 
-def test_rules_require_real_credentials_outside_git_and_runtime_key_fixtures():
-    rules = ' '.join((Path(__file__).parent.parent / 'RULES.md').read_text().split())
-    rule10 = rules.split('10. ', 1)[1]
+@pytest.mark.parametrize('rules', [
+    (Path(__file__).parent.parent / 'RULES.md').read_text(), MANAGER_RULES, WORKER_RULES,
+], ids=['repository', 'manager', 'worker'])
+def test_rules_require_real_credentials_outside_git_and_runtime_key_fixtures(rules):
+    # Later rules and role markers are not part of the credential rule.
+    match = re.search(r'(?ms)^10\. (.*?)(?=^\d+\. |^<!--|\Z)', rules)
+    assert match is not None, 'Credential rule 10 must be present'
+    rule10 = ' '.join(match[1].split())
     assert 'Never commit real credentials' in rule10
     assert 'environment variables or ignored files' in rule10
     assert 'Tests needing key-shaped values build them at runtime' in rule10
