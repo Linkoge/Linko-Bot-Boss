@@ -29,7 +29,7 @@ from .deploy_auto import ACCEPTANCE, OBJECTIVE, SETUP_FILE, TITLE
 from .fence import Busy, main_branch
 from .listing import CARD_WINDOW, bounded_listing
 from .model_settings import RouteBlocked, assignment_route
-from .pipeline import IDENTITY, Conflict, git
+from .pipeline import IDENTITY, git, merge_tree
 from .recovery import turn_error
 from .runner import Runner, plain
 from .secret_check import failures as secret_failures
@@ -420,7 +420,7 @@ class Core:
             done = await self.deliver(task, project, root, eid)
             if "reason" in done:
                 return self.end(eid, "done", done["reason"], text or None, done.get("merge"))
-            if stop := self.next_round(task["id"], done["outcome"]):  # merge conflict or checks failed after syncing main
+            if stop := self.next_round(task["id"], done["outcome"]):  # checks failed after syncing main
                 return self.end(eid, "failed", stop, text)
 
     def workspace(self, task, project):
@@ -580,7 +580,7 @@ class Core:
 
     # -- merge and deploy ------------------------------------------------------------------------------------------
     async def deliver(self, task, project, root, eid):
-        """Sync main into the branch (the same worker resolves conflicts), merge into main, request the deploy.
+        """Check clean combinations with main, preserve both versions on conflicts, then request the deploy.
 
         Returns {"reason": ..., "merge": ...} when finished, or {"outcome": failing-result} to go round again.
         """
@@ -588,49 +588,43 @@ class Core:
         if git(root, "rev-list", "--count", f"{task['workspace_base']}..HEAD") == "0":
             return {"reason": "", "merge": {"state": "none", "reason": "no changes"}}
         shared = Path(self.registry.allowed_path(project["path"]))
-        for attempt in range(3):  # main can move while we sync; a few quick retries are not repair rounds
-            branch = main_branch(shared)
-            before = head
+        branch = git(shared, "rev-parse", main_branch(shared))
+        before = head
+        already_merged = git(root, "merge-base", "--is-ancestor", head, branch, check=False).returncode == 0
+        _, conflicts = merge_tree(root, branch, head)
+        # Keep the delivered task commit stable so a restart can recover its copy report.
+        if not conflicts and not already_merged:
             sync = git(root, *IDENTITY, "merge", "--no-edit", branch, check=False)
             if sync.returncode:
-                files = git(root, "diff", "--name-only", "--diff-filter=U").splitlines()
-                if not files:
-                    git(root, "merge", "--abort", check=False)
-                    raise ValueError("Could not bring main into the task branch: " + (sync.stderr or sync.stdout).strip()[:300])
-                return {"outcome": outcome([{"check": "merge", "failures": [f"merge: conflict in {p}" for p in files],
-                                             "output": sync.stdout[-1500:]}])}
-            head = git(root, "rev-parse", "HEAD")
-            if head != before:  # main brought changes: the combined result must pass too
-                result = await asyncio.to_thread(self.check, root, task["workspace_base"])
-                if not result["ok"]:
-                    return {"outcome": result}
-            try:
-                secrets = await asyncio.to_thread(run_secret_gate, root, branch, head)
-                if not secrets["ok"]:
-                    return {"outcome": secrets}
-                main_head, changed, deployment = await asyncio.to_thread(
-                    self.pipeline.merge, project["path"], head,
-                    (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]),
-                    attempt_id=f'{eid}:{head}:{attempt}')
-            except Conflict:
-                continue
-            deployment = deployment or {}
-            requested = bool(deployment.get('id'))
-            text = 'deploy requested' if requested else deployment.get('reason', 'already in main')
-            note = deployment.get('setup_file') or {}
-            if note.get('state') == 'missing':
-                text = 'no deploy setup; ' + self.queue_deploy_setup(task)
-            elif note.get('state') == 'invalid':
-                text = f"invalid {SETUP_FILE}: {note['reason']}; no deploy setup saved"
-            elif note.get('state') == 'none':
-                text = 'not deployable: ' + note['reason']
-            elif note.get('state') == 'declined':
-                text = 'no deploy setup; ' + note['reason']
-            elif note.get('state') == 'seeded':
-                text = note['reason'] + ('; deploy requested' if requested else '; ' + text)
-            return {"reason": "", "merge": {"state": "merged" if changed else "already in main", "main": main_head,
-                                            "deploy": requested, "deployment": text}}
-        raise ValueError("main kept changing while merging; try again")
+                raise ValueError("Could not bring main into the task branch: " + (sync.stderr or sync.stdout).strip()[:300])
+        head = git(root, "rev-parse", "HEAD")
+        if head != before:  # main brought changes: the combined result must pass too
+            result = await asyncio.to_thread(self.check, root, task["workspace_base"])
+            if not result["ok"]:
+                return {"outcome": result}
+        secrets = await asyncio.to_thread(run_secret_gate, root, branch, head)
+        if not secrets["ok"]:
+            return {"outcome": secrets}
+        main_head, changed, deployment = await asyncio.to_thread(
+            self.pipeline.merge, project["path"], head,
+            (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]))
+        deployment = deployment or {}
+        requested = bool(deployment.get('id'))
+        text = 'deploy requested' if requested else deployment.get('reason', 'already in main')
+        note = deployment.get('setup_file') or {}
+        if note.get('state') == 'missing':
+            text = 'no deploy setup; ' + self.queue_deploy_setup(task)
+        elif note.get('state') == 'invalid':
+            text = f"invalid {SETUP_FILE}: {note['reason']}; no deploy setup saved"
+        elif note.get('state') == 'none':
+            text = 'not deployable: ' + note['reason']
+        elif note.get('state') == 'declined':
+            text = 'no deploy setup; ' + note['reason']
+        elif note.get('state') == 'seeded':
+            text = note['reason'] + ('; deploy requested' if requested else '; ' + text)
+        return {"reason": "", "merge": {"state": "merged" if changed else "already in main", "main": main_head,
+                                        "deploy": requested, "deployment": text,
+                                        "copies": deployment.get("copies", [])}}
 
     def queue_deploy_setup(self, task):
         """Queue one Create deploy setup task in the project unless one is open; returns a plain status. The task that

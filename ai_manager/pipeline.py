@@ -5,16 +5,13 @@ deploy script (scripts/deploy.py) to deploy main when the project has a saved se
 restarts, health-checks and rolls back; this module only writes its request file and reports its short result. A pending
 request holds new work and merges for at most DEPLOY_WAIT seconds. No AI call decides anything here.
 """
-import ast
 import hashlib
 import json
-import logging
 import os
-import re
 import subprocess
+import tempfile
 import time
 from pathlib import Path
-from urllib.parse import urlencode
 
 from . import fence
 from .deploy_auto import SETUP_FILE, read_proposal
@@ -27,10 +24,6 @@ NO_SETUP = 'no deploy setup; a Create deploy setup task is queued automatically'
 MERGE_WAIT = 30  # seconds a merge waits for another project's merge to leave the checkout fence
 DEPLOY_WAIT = 1800  # a pending deploy request holds the queue at most this long, then it is withdrawn
 IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
-
-
-class Conflict(ValueError):
-    """The branch does not merge cleanly into main."""
 
 
 def atomic(path, value):
@@ -48,30 +41,59 @@ def read(path):
         return None
 
 
-def git(root, *args, check=True):
+def git(root, *args, check=True, env=None, input=None):
     result = subprocess.run(['git', '-C', str(root), *args], capture_output=True, text=True, timeout=120,
-                            env={**os.environ, 'LC_ALL': 'C'})
+                            env={**os.environ, 'LC_ALL': 'C', **(env or {})}, input=input)
     if check and result.returncode:
         raise ValueError('git ' + args[0] + ' failed: ' + (result.stderr or result.stdout).strip()[:300])
     return result.stdout.strip() if check else result
 
 
-def changed_files(root, main, commit):
-    """NUL-delimited names preserve Unicode, whitespace and Git-quoted characters."""
-    result = git(root, 'diff', '--name-only', '--no-renames', '--diff-filter=ACMRT', '-z',
-                 f'{main}...{commit}', '--', check=False)
-    if result.returncode:
-        raise ValueError('Could not list task files')
-    return [path for path in result.stdout.split('\0') if path]
+def merge_tree(root, head, commit):
+    """Preview without changing either checkout; names are NUL-delimited, including Unicode."""
+    result = git(root, 'merge-tree', '--write-tree', '--name-only', '-z', head, commit, check=False)
+    if result.returncode not in {0, 1}:
+        raise ValueError('Could not preview merge: ' + (result.stderr or result.stdout).strip()[:300])
+    tree, *fields = result.stdout.split('\0')
+    paths = []
+    for path in fields:
+        if not path:
+            break
+        paths.append(path)
+    return tree, paths
 
 
-def valid_download_path(path):
-    return bool(path) and '\0' not in path and '\\' not in path and all(
-        part not in {'', '.', '..'} for part in path.split('/'))
+def tree_files(root, tree):
+    entries = git(root, 'ls-tree', '-r', '-z', '--full-tree', tree, check=False)
+    if entries.returncode:
+        raise ValueError('Could not read merge tree')
+    files = {}
+    for entry in entries.stdout.split('\0'):
+        if entry:
+            metadata, path = entry.split('\t', 1)
+            mode, _, oid = metadata.split()
+            files[path] = (mode, oid)
+    return files
+
+
+def overlaps(left, right):
+    return left == right or left.startswith(right + '/') or right.startswith(left + '/')
+
+
+def saved_copies(root, head, commit):
+    """Recover the report after a retry/restart between the Git merge and the chat transaction."""
+    message = git(root, 'log', '-1', '--format=%B', '--fixed-strings',
+                  '--grep=AI task commit: ' + commit, head)
+    for line in message.splitlines():
+        if line.startswith('AI conflict copies: '):
+            return json.loads(line.removeprefix('AI conflict copies: '))
+    return []
 
 
 def merge_into_main(root, commit):
-    """Merge one verified commit into the project's main branch; returns (head, changed). Never forces."""
+    """Return (head, changed, copies), keeping the folder's conflicting files untouched. Never forces."""
+    root = Path(root)
+    commit = git(root, 'rev-parse', '--verify', commit + '^{commit}')
     branch = main_branch(root)
     if git(root, 'symbolic-ref', '-q', '--short', 'HEAD', check=False).stdout.strip() != branch:
         git(root, 'checkout', '--quiet', branch)
@@ -80,35 +102,60 @@ def merge_into_main(root, commit):
         git(root, *IDENTITY, 'commit', '-m', 'Save local changes in project folder before merging task')
     head = git(root, 'rev-parse', 'HEAD')
     if git(root, 'merge-base', '--is-ancestor', commit, head, check=False).returncode == 0:
-        return head, False
-    # Git's ort strategy can overwrite ignored files even with --no-overwrite-ignore.
-    ignored = git(root, 'ls-files', '--others', '--ignored', '--exclude-standard', '-z', check=False).stdout
-    if ignored:
-        base = git(root, 'merge-base', head, commit)
-        incoming = git(root, 'diff', '--name-only', '--diff-filter=ACMRT', '-z', base, commit, check=False).stdout
-        paths = [local for local in ignored.split('\0') if local and any(
-            target and (local == target or local.startswith(target + '/') or target.startswith(local + '/'))
-            for target in incoming.split('\0'))]
-        if paths:
-            raise ValueError('Merge blocked by conflicting files: ' + ', '.join(paths))
-    result = git(root, *IDENTITY, '-c', 'core.quotePath=false', 'merge', '--no-edit', '--no-overwrite-ignore',
-                 commit, check=False)
-    if result.returncode:
-        paths = git(root, 'diff', '--name-only', '--diff-filter=U', '-z', check=False).stdout.split('\0')
-        paths = [path for path in paths if path]
-        untracked = ('untracked working tree files would be overwritten' in result.stderr
-                     or 'directories would lose untracked files' in result.stderr)
-        if not paths and untracked:
-            # Git indents each blocking path with a tab and C-quotes unusual file names.
-            paths = [ast.literal_eval(line[1:]) if line[1:].startswith('"') else line[1:]
-                     for line in result.stderr.splitlines() if line.startswith('\t')]
-        git(root, 'merge', '--abort', check=False)
-        if paths:
-            # A worker can resolve tracked conflicts by syncing main. Local untracked files must be moved by the owner.
-            error = ValueError if untracked else Conflict
-            raise error('Merge blocked by conflicting files: ' + ', '.join(paths))
-        raise Conflict('merge conflict with main: ' + (result.stdout + result.stderr).strip()[-300:])
-    return git(root, 'rev-parse', 'HEAD'), True
+        return head, False, saved_copies(root, head, commit)
+
+    tree, conflicts = merge_tree(root, head, commit)
+    main, task, merged = (tree_files(root, ref) for ref in (head, commit, tree))
+    # Include ignored paths: Git's ort strategy can overwrite them even with --no-overwrite-ignore.
+    local_files = git(root, 'ls-files', '--others', '-z', check=False)
+    if local_files.returncode:
+        raise ValueError('Could not list local untracked files')
+    untracked = [p for p in local_files.stdout.split('\0') if p]
+    collisions = {path for path in merged if any(overlaps(path, local) for local in untracked)
+                  or (path not in main and os.path.lexists(root / path))}
+    conflicts = sorted(set(conflicts) | collisions)
+    if not conflicts:
+        git(root, *IDENTITY, 'merge', '--no-edit', '--no-overwrite-ignore', commit)
+        return git(root, 'rev-parse', 'HEAD'), True, []
+
+    reserved = set(main) | set(task) | set(merged) | set(untracked)
+    copies = []
+    for path in conflicts:
+        merged.pop(path, None)
+        if path in main:
+            merged[path] = main[path]
+        copy = None
+        if path in task:
+            original = Path(path)
+            number = 1
+            while True:
+                suffix = ' (AI version)' + (f' {number}' if number > 1 else '')
+                candidate = str(original.with_name(original.stem + suffix + original.suffix))
+                if not any(overlaps(candidate, name) for name in reserved) and not os.path.lexists(root / candidate):
+                    break
+                number += 1
+            # A file obstructing a parent directory has no adjacent child path. Fail before touching the checkout.
+            if any(os.path.lexists(parent) and (parent.is_symlink() or not parent.is_dir())
+                   for parent in (root / candidate).parents if parent != root and root in parent.parents):
+                raise ValueError('Cannot save AI copy below a local file: ' + path)
+            copy = candidate
+            reserved.add(copy)
+            merged[copy] = task[path]
+        copies.append({'path': path, 'copy': copy})
+
+    # Resolve in a disposable index. No conflict markers, untracked files or task deletions touch the folder.
+    with tempfile.TemporaryDirectory(prefix='linko-merge-') as temp:
+        env = {'GIT_INDEX_FILE': str(Path(temp) / 'index')}
+        git(root, 'read-tree', '--empty', env=env)
+        entries = ''.join(f'{mode} {oid}\t{path}\0' for path, (mode, oid) in sorted(merged.items()))
+        git(root, 'update-index', '-z', '--index-info', env=env, input=entries)
+        tree = git(root, 'write-tree', env=env)
+    listing = '\n'.join(f"- {item['path']} -> {item['copy'] or '(user version kept; AI deleted)'}" for item in copies)
+    message = ('Merge task; preserve user files and save AI versions\n\n' + listing +
+               '\n\nAI task commit: ' + commit + '\nAI conflict copies: ' + json.dumps(copies, ensure_ascii=False))
+    resolved = git(root, *IDENTITY, 'commit-tree', tree, '-p', head, '-p', commit, input=message + '\n')
+    git(root, *IDENTITY, 'merge', '--ff-only', '--no-overwrite-ignore', resolved)
+    return git(root, 'rev-parse', 'HEAD'), True, copies
 
 
 class Pipeline:
@@ -283,54 +330,39 @@ class Pipeline:
             conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(payload)))
 
     # ---- merge to main ----------------------------------------------------------------------------------------
-    def report_merge_failure(self, project_path, commit, deploy, attempt_id):
-        """Publish a commit-pinned download snapshot using the existing event/message transaction."""
-        if not deploy or not deploy[2]:
+    def report_merge_copies(self, commit, copies, deploy):
+        """Use the normal chat transaction, with one stable message key per task commit."""
+        if not copies or not deploy or not deploy[2]:
             return
         project_id, _, task_id, conversation_id, _ = deploy
-        key = 'merge-files:' + task_id + ':' + attempt_id
+        key = 'merge-copies:' + task_id + ':' + commit
         message_id = 'pipeline-' + hashlib.sha256(key.encode()).hexdigest()[:24]
-        # Resolve both ends once: retries and later edits must not change these downloads.
-        commit = git(project_path, 'rev-parse', '--verify', commit + '^{commit}')
-        main = git(project_path, 'rev-parse', main_branch(project_path))
-        paths = [path for path in changed_files(project_path, main, commit) if valid_download_path(path)]
+        text = '\n'.join(
+            f"Both you and the AI changed {item['path']}; your version is kept, " +
+            (f"the AI's is saved as {item['copy']}." if item['copy'] else 'the AI deleted it, so no copy is needed.')
+            for item in copies)
         with self.db.transaction() as conn:
             if conn.execute('SELECT 1 FROM messages WHERE id=?', (message_id,)).fetchone():
                 return
-            self.db.event(conn, 'task.merge_files', {'commit': commit, 'main': main}, project_id, task_id)
-            snapshot = conn.execute('SELECT last_insert_rowid()').fetchone()[0]
-            text = 'The merge into the project folder failed. You can download the finished task files here:'
-            for path in paths[:20]:
-                label = re.sub(r'([\\`*_{}\[\]()#+.!|<>-])', r'\\\1', path).replace('\n', ' ').replace('\r', ' ')
-                url = f'/api/tasks/{task_id}/files/{snapshot}?' + urlencode({'path': path})
-                text += f'\n\n- [{label}]({url})'
-            if len(paths) > 20:
-                text += f'\n\n+{len(paths) - 20} more files.'
-            if not paths:
-                text += '\n\nThis task has no added or changed files to download.'
+            self.db.event(conn, 'task.merge_copies', {'commit': commit, 'copies': copies}, project_id, task_id)
             self.post(conn, conversation_id, key, text)
 
-    def merge(self, project_path, commit, deploy=None, attempt_id=None):
+    def merge(self, project_path, commit, deploy=None):
         """The only path into main: exclusive checkout fence, re-checked pending deploy, then the merge.
 
         Tasks of different projects run in parallel and share this one fence, so a merge waits briefly for another's.
         When the merge changed main and `deploy` (the arguments of request()) is given, the deploy is requested under
         the same fence hold: no other project can take the single deploy request between merge and request.
         A merge that brings in a valid `.linko-deploy.json` first seeds the project's missing setup (adopt()), so the same
-        hold requests its first deploy. Returns (head, changed, deployment); deployment is None unless a request was
-        made or answered; its 'setup_file' key carries the adopt() result when one applies.
+        hold requests its first deploy. Returns (head, changed, details); details carries the deployment response,
+        'copies' for preserved conflict versions and 'setup_file' for the adopt() result, or is None when none apply.
         """
         with fence.hold(self.db.path.parent, exclusive=True, wait=MERGE_WAIT):
             if self.pending():
                 raise Busy('a deploy is pending')
-            try:
-                head, changed = merge_into_main(project_path, commit)
-            except Exception:
-                try:
-                    self.report_merge_failure(project_path, commit, deploy, attempt_id or commit)
-                except Exception:
-                    logging.getLogger(__name__).exception('Could not publish failed merge downloads')
-                raise
+            commit = git(project_path, 'rev-parse', '--verify', commit + '^{commit}')
+            head, changed, copies = merge_into_main(project_path, commit)
+            self.report_merge_copies(commit, copies, deploy)
             project = self.db.one('SELECT id FROM projects WHERE path=?', (str(project_path),))
             note = None
             if project:
@@ -338,7 +370,12 @@ class Pipeline:
                 note = self.adopt(project['id'], project_path)
             seeded = bool(note) and note['state'] == 'seeded'
             deployment = self._request(*deploy) if deploy and (changed or seeded) else None
-            return head, changed, ({**(deployment or {}), 'setup_file': note} if note else deployment)
+            details = dict(deployment or {})
+            if note:
+                details['setup_file'] = note
+            if copies:
+                details['copies'] = copies
+            return head, changed, details or None
 
     def expire(self, max_age=DEPLOY_WAIT):
         """A deploy request that has not finished in time (script not installed, stuck unit, endless idle wait) must not

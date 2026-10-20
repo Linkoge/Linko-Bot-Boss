@@ -401,7 +401,7 @@ def test_deploy_and_merge_agree_on_a_master_branch(runtime):
     git(runtime.repo, 'checkout', '-q', '-b', 'work')
     work = commit(runtime.repo, 'work', **{'README.md': ('# Linko Bot Boss', '# Linko Bot Boss master')})
     git(runtime.repo, 'checkout', '-q', 'master')
-    head, changed = merge_into_main(runtime.repo, work)
+    head, changed, copies = merge_into_main(runtime.repo, work)
     assert changed and head == work and git(runtime.repo, 'symbolic-ref', '--short', 'HEAD') == 'master'
     git(runtime.repo, 'checkout', '-q', '--detach')  # a deploy must return to master, not to a hardcoded main
     runtime.request()

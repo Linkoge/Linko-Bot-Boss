@@ -44,16 +44,18 @@ rules 8–9; worker-only: rule 11).
 3. **Repair rounds** (a counter on the task row, never reset by retry, restart or continue). A failing check goes back to
    the same worker as a repair round, at most 5 times; the task then stops with a plain reason and the manager reports it.
 4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one merge at a time across projects, the
-   deploy request is made under the same fence hold); there is no per-project switch. Main is first merged into the branch; a conflict goes to the same worker as a repair round of the
-   same task. Before merging into the project folder, tracked local edits, deletions and renames are saved on main
-   with the bot identity and the commit message `Save local changes in project folder before merging task`.
-   Untracked files (including Syncthing files and stray documents) stay untouched and untracked. If a merge conflicts
-   or would overwrite an untracked file, it is aborted with the exact conflicting paths in the error; the saved local
-   commit remains on main. Nothing is forced or discarded. Every failed merge attempt also posts download links in
-   the originating chat (once per attempt, up to 20 files with a count of any remaining files). These authenticated
-   downloads serve the added or changed files directly from that attempt's task commit, so they remain available
-   even if the workspace is edited or the branch moves. Deleted and unchanged paths cannot be downloaded;
-   filenames, including Georgian document names, are preserved. No hidden-folder navigation is needed.
+   deploy request is made under the same fence hold); there is no per-project switch. Clean merges of main into the
+   branch are checked again before delivery. Before merging into the project folder, tracked local edits, deletions
+   and renames are saved on main with the bot identity and the commit message
+   `Save local changes in project folder before merging task`.
+   Conflicts complete automatically for every project, including code: the folder's version stays at its original
+   path and the task's version is saved beside it as `<name> (AI version).<ext>` (or `<name> (AI version)` without
+   an extension). Existing names get ` 2`, ` 3`, etc. before the extension; Georgian filenames work too.
+   If the task deleted a file the user changed, the user's file is kept without a copy. The merge commit lists the
+   copies, and one short plain message in the originating chat reports the preserved paths and copies, including
+   across retries. Untracked files (including ignored Syncthing files and stray documents) stay untouched and
+   untracked; a task file that collides with one is saved under the same AI version naming rule.
+   Nothing is forced or discarded, and the checkout fence is unchanged.
    Every project with a saved deploy setup then requests
    the same deploy script automatically, including
    the manager itself. Without one the application queues a **Create deploy setup** task (see Automatic deploy setup
