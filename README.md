@@ -671,6 +671,14 @@ probes, live database changes, service restarts or host installation are part of
 
 - Chat has no modes: the manager does what is asked. Composer with recording/transcription,
   Discard/Upload, arbitrary attachments (only verified raster images become native image input), drafts and sequential Send.
+  New uploads keep an ID-based name with a safe lowercase filename extension, or a MIME-derived extension when
+  the filename has none usable, falling back to `.bin`. Existing `.bin` uploads stay unchanged. Attachment notices
+  carry the exact paths through to delegated workers. The manager can read PDFs (including figures where the
+  provider supports them) via their `.pdf` path. DOCX uploads also get a private `<id>.docx.txt` sidecar containing
+  main-document paragraphs, tabs and line breaks, listed as `text_path` for the manager to read. The stdlib ZIP/XML
+  extraction allows at most 4 MiB of document XML/output and two seconds of processing, rejects XML entities,
+  and does not extract embedded images. Failed extraction is reported in the notice without blocking the original
+  upload. Backups include successful text sidecars. Permanent coverage: `tests/test_attachments.py`.
 - Model settings: one global manager/worker choice and optional repo locks. The header is
   **Manager · [current repo name] · ×**. The repo name is a picker-style toggle showing the active repository tab,
   clearly highlighted when ON. ON creates `model_choice:<project_id>` as a copy of current global `model_choice`;

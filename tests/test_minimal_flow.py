@@ -534,6 +534,11 @@ async def test_uploaded_files_and_photos_reach_delegated_worker(system):
     refs.extend([{'id': 'b'*32, 'name': 'active.svg', 'mime': 'image/svg+xml', 'path': str(path),
                   'native_image': False}, {'id': 'c'*32, 'name': 'bad.png', 'mime': 'image/png',
                   'path': str(path), 'native_image': False}])
+    refs.extend([{'id': 'd'*32, 'name': 'report.pdf', 'mime': 'application/pdf',
+                  'path': str(path.with_name('report.pdf')), 'native_image': False},
+                 {'id': 'e'*32, 'name': 'document.docx', 'mime': 'application/octet-stream',
+                  'path': str(path.with_name('document.docx')),
+                  'text_path': str(path.with_name('document.docx.txt')), 'native_image': False}])
     db.set_setting('execution_attachments:origin-manager', refs)
     captured = []
     class AttachmentFixture(NativeFixture):

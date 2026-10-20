@@ -2,10 +2,15 @@
 import asyncio
 import hashlib
 import json
+import mimetypes
 import re
 import shutil
 import sqlite3
 import time
+import zipfile
+from contextlib import suppress
+from pathlib import Path
+from xml.parsers import expat
 
 from fastapi import HTTPException
 
@@ -15,6 +20,83 @@ MAX_BYTES = 8 * 1024 * 1024
 MAX_FILES = 4
 MAX_STORAGE = 512 * 1024 * 1024
 IMAGES = {'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp'}
+DOCX_MIME = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+MAX_DOCX_XML = 4 * 1024 * 1024
+DOCX_SECONDS = 2
+
+
+def attachment_extension(name, mime):
+    """Keep only a short alphanumeric suffix, never client-supplied path components."""
+    suffix = Path(name).suffix.lower()
+    if re.fullmatch(r'\.[a-z0-9]{1,16}', suffix):
+        return suffix
+    suffix = {**{k: '.' + v for k, v in IMAGES.items()}, DOCX_MIME: '.docx',
+              'application/pdf': '.pdf', 'text/plain': '.txt'}.get(mime)
+    suffix = suffix or mimetypes.guess_extension(mime, strict=False) or '.bin'
+    return suffix if re.fullmatch(r'\.[a-z0-9]{1,16}', suffix) else '.bin'
+
+
+def extract_docx(path):
+    """Extract main-document text without unpacking files or resolving XML entities."""
+    deadline = time.monotonic() + DOCX_SECONDS
+    parts, text_depth, output_bytes = [], 0, 0
+    namespaces = ('http://schemas.openxmlformats.org/wordprocessingml/2006/main}',
+                  'http://purl.oclc.org/ooxml/wordprocessingml/main}')
+    text_tags = {ns + 't' for ns in namespaces}
+    paragraph_tags = {ns + 'p' for ns in namespaces}
+    breaks = {ns + tag: '\t' if tag == 'tab' else '\n'
+              for ns in namespaces for tag in ('tab', 'br', 'cr')}
+
+    def bounded():
+        if time.monotonic() > deadline:
+            raise ValueError('DOCX extraction time limit exceeded')
+
+    def append(text):
+        nonlocal output_bytes
+        bounded()
+        output_bytes += len(text.encode('utf-8'))
+        if output_bytes > MAX_DOCX_XML:
+            raise ValueError('DOCX text size limit exceeded')
+        parts.append(text)
+
+    def start(name, attrs):
+        nonlocal text_depth
+        bounded()
+        if name in text_tags:
+            text_depth += 1
+        elif name in breaks:
+            append(breaks[name])
+
+    def end(name):
+        nonlocal text_depth
+        bounded()
+        if name in text_tags:
+            text_depth -= 1
+        elif name in paragraph_tags:
+            append('\n')
+
+    def reject_entities(*args):
+        raise ValueError('DOCX XML declarations are unsupported')
+
+    parser = expat.ParserCreate(namespace_separator='}')
+    parser.StartElementHandler, parser.EndElementHandler = start, end
+    parser.CharacterDataHandler = lambda text: append(text) if text_depth else None
+    parser.StartDoctypeDeclHandler = parser.EntityDeclHandler = reject_entities
+    with zipfile.ZipFile(path) as archive:
+        bounded()
+        if archive.getinfo('word/document.xml').file_size > MAX_DOCX_XML:
+            raise ValueError('DOCX XML size limit exceeded')
+        with archive.open('word/document.xml') as document:
+            total = 0
+            while chunk := document.read(16384):
+                bounded()
+                total += len(chunk)
+                if total > MAX_DOCX_XML:
+                    raise ValueError('DOCX XML size limit exceeded')
+                parser.Parse(chunk, False)
+            parser.Parse(b'', True)
+    bounded()
+    return ''.join(parts)
 
 
 def native_image(item):
@@ -29,7 +111,7 @@ def backup_attachments(data_dir, database_snapshot, destination):
         items = [json.loads(row[0]) for row in snapshot.execute("SELECT value FROM settings WHERE key LIKE 'attachment:%'")]
     for item in items:
         name = item['stored_name']
-        if not re.fullmatch(r'[0-9a-f]{32}\.(bin|png|jpg|webp)', name):
+        if not re.fullmatch(r'[0-9a-f]{32}\.[a-z0-9]{1,16}', name):
             raise ValueError('Invalid stored attachment reference')
         source = data_dir / 'chat-workspace' / 'attachments' / name
         target = destination / name
@@ -37,6 +119,14 @@ def backup_attachments(data_dir, database_snapshot, destination):
         target.chmod(0o600)
         if hashlib.sha256(target.read_bytes()).hexdigest() != item['sha256']:
             raise ValueError('Attachment backup checksum mismatch')
+        if text_name := item.get('text_name'):
+            if text_name != name + '.txt' or not name.endswith('.docx'):
+                raise ValueError('Invalid attachment text reference')
+            text_target = destination / text_name
+            shutil.copyfile(source.with_name(text_name), text_target)
+            text_target.chmod(0o600)
+            if hashlib.sha256(text_target.read_bytes()).hexdigest() != item['text_sha256']:
+                raise ValueError('Attachment text backup checksum mismatch')
     (destination / 'manifest.json').write_text(json.dumps(items, ensure_ascii=False))
     (destination / 'manifest.json').chmod(0o600)
     return len(items)
@@ -70,11 +160,20 @@ class Attachments:
         return items
 
     def reference(self, item):
+        handling = ('native image; provider support may vary' if native_image(item) else
+                    'file bytes for tool inspection; interpretation is not guaranteed')
+        extra = {}
+        if item['stored_name'].endswith('.pdf'):
+            handling = 'PDF: read path with the Read tool, including figures; provider support may vary'
+        elif item['stored_name'].endswith('.docx'):
+            if item.get('text_name'):
+                extra['text_path'] = str(self.root / item['text_name'])
+                handling = 'DOCX: read text_path for extracted plain text; embedded images are not extracted'
+            else:
+                handling = 'DOCX text extraction failed; original upload retained; report it as unreadable'
         return {'id': item['id'], 'name': item['name'], 'mime': item['mime'], 'size': item['size'],
                 'path': str(self.root / item['stored_name']), 'sha256': item['sha256'],
-                'native_image': native_image(item),
-                'handling': 'native image; provider support may vary' if native_image(item) else
-                            'file bytes for tool inspection; interpretation is not guaranteed'}
+                'native_image': native_image(item), 'handling': handling, **extra}
 
     async def upload(self, request, name, project, conversation):
         chat = self.db.one('SELECT * FROM conversations WHERE id=? AND project_id IS ? AND context=?',
@@ -88,6 +187,7 @@ class Attachments:
             raise HTTPException(429, 'Another file is uploading. Retry shortly.')
         self.busy = True
         path = None
+        text_path = None
         try:
             data = bytearray()
             async with asyncio.timeout(120):
@@ -100,7 +200,7 @@ class Attachments:
             if sum(p.stat().st_size for p in self.root.iterdir() if p.is_file()) + len(data) > MAX_STORAGE:
                 raise HTTPException(507, 'Attachment storage is full. Ask the operator to review retained uploads.')
             identifier = new_id()
-            stored = identifier + '.' + IMAGES.get(mime, 'bin')
+            stored = identifier + attachment_extension(name, mime)
             path = self.root / stored
             with path.open('xb') as file:
                 path.chmod(0o600)
@@ -137,8 +237,24 @@ class Attachments:
             item = {'id': identifier, 'stored_name': stored, 'name': name, 'mime': mime,
                     'native_image': image_ready, 'size': len(data), 'sha256': hashlib.sha256(data).hexdigest(),
                     'project_id': project, 'conversation_id': conversation, 'created_at': time.time()}
+            if stored.endswith('.docx'):
+                try:
+                    text = (await asyncio.to_thread(extract_docx, path)).encode('utf-8')
+                    if sum(p.stat().st_size for p in self.root.iterdir() if p.is_file()) + len(text) > MAX_STORAGE:
+                        raise ValueError('Attachment storage is full')
+                    text_path = path.with_name(stored + '.txt')
+                    with text_path.open('xb') as file:
+                        text_path.chmod(0o600)
+                        file.write(text)
+                    item.update(text_name=text_path.name, text_sha256=hashlib.sha256(text).hexdigest())
+                except Exception:
+                    # Extraction is optional: invalid archives, parser limits and disk errors keep the original.
+                    if text_path:
+                        with suppress(OSError):
+                            text_path.unlink(missing_ok=True)
+                        text_path = None
             self.db.set_setting('attachment:' + identifier, item)
-            path = None
+            path = text_path = None
             return {**{k: item[k] for k in ('id', 'name', 'mime', 'size')},
                     'handling': self.reference(item)['handling']}
         except (TimeoutError, OSError, ValueError):
@@ -146,4 +262,6 @@ class Attachments:
         finally:
             if path:
                 path.unlink(missing_ok=True)
+            if text_path:
+                text_path.unlink(missing_ok=True)
             self.busy = False
