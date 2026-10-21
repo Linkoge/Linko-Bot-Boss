@@ -698,6 +698,32 @@ function editor(title,fields,onSave,reloadContext=true){
     finally{saving=false;cancel.disabled=save.disabled=false;save.textContent='Save';}
   };dialog.showModal();
 }
+function githubRemoteForms(remote){
+  const match=String(remote||'').match(/^(?:git@github\.com:|ssh:\/\/git@github\.com\/|https:\/\/github\.com\/)([A-Za-z0-9._-]+\/[A-Za-z0-9._-]+?)(?:\.git)?\/?$/i);
+  if(!match)return null;
+  const repo=match[1].replace(/\.git$/i,'');
+  return [['SSH',`git@github.com:${repo}.git`],['HTTPS',`https://github.com/${repo}.git`]];
+}
+async function copyRepositoryValue(value,button){
+  try{
+    if(navigator.clipboard?.writeText)await navigator.clipboard.writeText(value);
+    else{
+      const input=element('textarea');input.value=value;input.setAttribute('readonly','');input.style.position='fixed';input.style.opacity='0';$('editor').append(input);input.focus();input.select();
+      const copied=document.execCommand('copy');input.remove();if(!copied)throw new Error('Copy unavailable');
+    }
+    button.textContent='Copied';clearTimeout(button.copyFeedbackTimer);button.copyFeedbackTimer=setTimeout(()=>{button.textContent='Copy';},1400);
+  }catch{button.textContent='Copy failed';clearTimeout(button.copyFeedbackTimer);button.copyFeedbackTimer=setTimeout(()=>{button.textContent='Copy';},1800);}
+}
+function appendRepositoryLinks(remote){
+  if(!remote)return;
+  const github=githubRemoteForms(remote),rows=github||[['Repository',remote]];
+  const section=element('div',undefined,'project-repository-links');section.setAttribute('aria-label','Repository links');
+  for(const [label,value] of rows){
+    const row=element('div',undefined,'project-repository-row'),name=element('span',label,'project-repository-label'),address=element('code',value,'project-repository-value'),button=element('button','Copy','project-repository-copy');
+    button.type='button';button.setAttribute('aria-label',`Copy ${label} repository link`);button.onclick=()=>copyRepositoryValue(value,button);row.append(name,address,button);section.append(row);
+  }
+  $('editor-fields').append(section);
+}
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:(state.restricted?['active','paused']:['active','paused','archived','removed']).map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
 async function sendSubmission(bound=null){
@@ -804,7 +830,7 @@ for(const [tier,ids] of Object.entries(githubTokenForms)){
   form.onsubmit=action(async event=>{event.preventDefault();await perform(event.submitter?.dataset.tokenAction||'save');});
   for(const operation of ['validate','remove'])form.querySelector(`[data-token-action=${operation}]`).onclick=()=>perform(operation);
 }
-function renameProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'display_name',label:'Display name',value:p.display_name||''}],values=>api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,revision:p.revision})}));}
+function renameProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p){editor('Rename project',[{name:'display_name',label:'Display name',value:p.display_name||''}],values=>api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,revision:p.revision})}));appendRepositoryLinks(p.repository);}}
 
 // Keyboard APIs are optional; viewport shrink is a best-effort mobile signal.
 const composerKeyboard={baseline:window.visualViewport?.height||innerHeight,seen:false,closed:false,active:false};

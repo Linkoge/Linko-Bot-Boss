@@ -223,6 +223,37 @@ def test_shared_editor_display_name_save_and_todo_save_still_work(page):
     assert len(requests) == 2 and requests[1].post_data_json['title'] == 'Saved idea'
 
 
+@pytest.mark.parametrize('remote', [
+    'git@github.com:octo/alpha.git',
+    'ssh://git@github.com/octo/alpha.git',
+    'https://github.com/octo/alpha.git',
+])
+def test_project_name_editor_shows_both_copyable_github_forms(page, remote):
+    page.evaluate("remote=>{const p=state.portfolio.projects.find(p=>p.id===state.project);p.repository=remote;renameProject()}", remote)
+    rows = page.locator('.project-repository-row')
+    expect(rows).to_have_count(2)
+    expect(rows.nth(0)).to_contain_text('SSH')
+    expect(rows.nth(0)).to_contain_text('git@github.com:octo/alpha.git')
+    expect(rows.nth(1)).to_contain_text('HTTPS')
+    expect(rows.nth(1)).to_contain_text('https://github.com/octo/alpha.git')
+    copied = page.evaluate("""async()=>{
+      Object.defineProperty(navigator,'clipboard',{configurable:true,value:undefined});
+      let value='';document.execCommand=command=>{value=document.activeElement.value;return command==='copy'};
+      await document.querySelector('.project-repository-copy').onclick();
+      return {value,label:document.querySelector('.project-repository-copy').textContent};
+    }""")
+    assert copied == {'value': 'git@github.com:octo/alpha.git', 'label': 'Copied'}
+
+
+def test_project_name_editor_shows_one_copyable_non_github_remote(page):
+    remote = '/srv/git/alpha'
+    page.evaluate("remote=>{const p=state.portfolio.projects.find(p=>p.id===state.project);p.repository=remote;renameProject()}", remote)
+    rows = page.locator('.project-repository-row')
+    expect(rows).to_have_count(1)
+    expect(rows.first).to_contain_text(remote)
+    expect(rows.first.locator('button')).to_have_attribute('aria-label', 'Copy Repository repository link')
+
+
 def test_successful_write_closes_even_if_the_following_refresh_fails(page, browser_app):
     requests = writes(page)
     name = 'refresh-' + uuid.uuid4().hex[:8]

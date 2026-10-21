@@ -260,7 +260,9 @@ projects are alphabetical. On mobile the menu fills the visible viewport with a 
 button; its content scrolls independently. Compact checkboxes keep larger tap targets. Close or Escape returns focus
 to the menu button, and keyboard navigation stays inside the open menu.
 
-**Change display name** only edits the label; the repository address stays directly underneath it.
+**Change display name** only edits the label; its editor shows compact copy buttons for SSH and HTTPS links when
+the saved remote is on GitHub, regardless of whether that remote is stored as SCP-style SSH, `ssh://` or HTTPS. Other
+remotes appear once with a copy button. The repository address also stays directly underneath the label in the menu.
 **Rename project** appears only when the selected project's token tier is configured. **Create project** is followed
 by a single **Settings** entry, which opens the settings view at **GitHub Settings** with the Personal token field
 focused, alongside the Company token and organization fields. The menu has no duplicate GitHub settings shortcut or

@@ -115,6 +115,12 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent-focus);outli
 #usage-last-refresh{color:var(--muted);font-size:11px;margin:0}
 #usage-refresh{min-height:38px;padding:6px 12px;background:#202734;color:var(--muted);font-size:13px}
 #usage-refresh:hover{background:var(--accent-bg-hover);border-color:var(--accent-border)}
+.project-repository-links{display:grid;gap:6px;margin:0 0 16px;min-width:0}
+.project-repository-row{display:grid;grid-template-columns:52px minmax(0,1fr) auto;align-items:center;gap:8px;min-width:0}
+.project-repository-label{font-size:11px;color:var(--muted)}
+.project-repository-value{min-width:0;overflow-wrap:anywhere;font-size:11px;color:#c0cbda}
+.project-repository-copy{min-height:30px;padding:3px 8px;font-size:11px;border-radius:7px}
+@media(max-width:480px){.project-repository-row{grid-template-columns:42px minmax(0,1fr) auto;gap:5px}.project-repository-copy{padding-inline:6px}}
 @media(max-width:380px){#usage-dialog{padding:10px;width:calc(100% - 16px)}.usage-provider{padding:14px}}
 
 @media(min-width:901px){.workspace-row{padding-inline:16px}}
