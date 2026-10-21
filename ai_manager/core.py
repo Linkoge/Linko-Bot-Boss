@@ -255,8 +255,10 @@ class Tasks:
                     raise ValueError("Added instructions exceed task limits; prior requirements remain intact")
                 fields = {"description": text, "acceptance": extra, "held": 0}
                 if state in {"done", "failed"}:  # counters stay: repair rounds are never reset
-                    fields |= {"state": "queued", "queued_at": now, "blocker": "", "stage": "work", "requeues": 0,
-                               "retry_at": None, "gate_history": "[]"}
+                    merge_retry = task["stage"] == "merge"
+                    fields |= {"state": "queued", "queued_at": now, "blocker": "",
+                               "stage": "merge" if merge_retry else "work", "requeues": 0,
+                               "retry_at": None, "gate_history": task["gate_history"] if merge_retry else "[]"}
             sets = ",".join(f"{k}=?" for k in fields)
             conn.execute(f"UPDATE tasks SET {sets},revision=revision+1,updated_at=? WHERE id=?", (*fields.values(), now, task_id))
             self.db.event(conn, "task." + action, {}, task["project_id"], task_id)

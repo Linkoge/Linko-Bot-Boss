@@ -578,6 +578,27 @@ async def test_owner_deploy_now_merges_a_finished_unmerged_task_without_another_
 
 
 @pytest.mark.asyncio
+async def test_continue_retries_a_failed_merge_without_another_model_turn(world, monkeypatch):
+    original_merge = world.pipeline.merge
+
+    def fail_merge(*args, **kwargs):
+        raise ValueError("temporary merge failure")
+
+    monkeypatch.setattr(world.pipeline, "merge", fail_merge)
+    task = world.tasks.add(world.project["id"], "merge retry")
+    failed = await run_next(world)
+    assert failed["state"] == "failed" and failed["stage"] == "merge"
+    turns = len(world.lab.turns)
+
+    monkeypatch.setattr(world.pipeline, "merge", original_merge)
+    continued = world.tasks.control(task["id"], "continue")
+    assert continued["state"] == "queued" and continued["stage"] == "merge"
+    merged = await run_next(world)
+    assert merged["state"] == "done" and merged["merge"]["state"] == "merged"
+    assert len(world.lab.turns) == turns
+
+
+@pytest.mark.asyncio
 async def test_worker_that_gives_up_fails_with_its_plain_reason_and_nothing_merges(world):
     async def give_up(root, prompt):
         return "I could not reach the database.\nRESULT: FAILED - needs credentials"

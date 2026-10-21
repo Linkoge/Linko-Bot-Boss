@@ -30,6 +30,10 @@ def test_rule_sections_have_one_source_and_reach_only_the_intended_role():
     assert WORKER_INSTRUCTIONS.startswith(WORKER_RULES)
     assert "Always reply in the language of the owner's latest own chat message" in MANAGER_INSTRUCTIONS
     assert 'regardless of the English system prompt' in MANAGER_INSTRUCTIONS
+    assert 'Merges do not need a clean project folder' in MANAGER_INSTRUCTIONS
+    assert 'continue it immediately to retry the merge' in MANAGER_INSTRUCTIONS
+    assert 'never ask the owner to clean, move or rename files' in MANAGER_INSTRUCTIONS
+    assert 'find hidden assignment-workspace folders' in MANAGER_INSTRUCTIONS
     assert "Always reply in the language of the owner's latest own chat message" not in WORKER_RULES
     assert 'regardless of the English system prompt' not in WORKER_INSTRUCTIONS
     assert WORKER_INSTRUCTIONS.count(worker_only) == 1

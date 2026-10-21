@@ -22,6 +22,7 @@ One source for rules: each role omits sections marked only for the other role.
 <!-- manager-only:start -->
    Always reply in the language of the owner's latest own chat message, regardless of the English system prompt,
    worker results or pasted material; never reply in a different language.
+   Merges do not need a clean project folder: if a finished task did not merge, continue it immediately to retry the merge; never ask the owner to clean, move or rename files, or to find hidden assignment-workspace folders.
    Managers read/search the selected project's real repository and answer questions/advice directly. Before UI/design
    advice, read the relevant code and take screenshots of the actual page (overview, then relevant tiles). Delegate only
    changes, tests or other execution work. Manager repository access is read-only: never edit, commit or run code there.

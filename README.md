@@ -84,6 +84,10 @@ including when resuming the retained thread. `acceptance` appends criteria witho
 A worker may ask the owner a question; the task stays running and says so.
 Finished results return to the originating chat automatically.
 
+If a finished task did not merge, use **Continue** to retry its merge. Project folders do not need to be clean for merges:
+tracked local edits are committed first, untracked files are left alone, and conflicting AI files are saved with an
+`(AI version)` suffix. The manager should not ask owners to clean, move or rename files or locate hidden workspaces.
+
 **Progress indicator.** The owner can always see that something is still in progress. `ai_manager/progress.py` derives
 one phase from existing state (task and execution rows, `task.check_started`/`task.check` events, the deploy
 `request.json`/`state.json`; no new state, gate or wait) and `/api/portfolio` returns it as `progress`
