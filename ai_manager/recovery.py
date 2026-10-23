@@ -9,7 +9,7 @@ import signal
 import socket
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
@@ -17,10 +17,44 @@ from .codex import CodexError, process_start
 from .db import new_id
 
 
+RETRY_SECONDS = 300
+
+
 @dataclass
 class Failure:
     kind: str
     retry_at: float | None = None
+
+
+USAGE_LIMITS = {"usageLimitExceeded", "rateLimitExceeded", "usage_limit_exceeded", "rate_limit_exceeded",
+                "insufficient_quota", "slow_down"}
+def usage_limit(error):
+    """True when the provider reported a usage or rate limit."""
+    details = error.details if isinstance(error, CodexError) else error if isinstance(error, dict) else {}
+    data = details.get("data") if isinstance(details.get("data"), dict) else {}
+    info = details.get("codexErrorInfo") or data.get("codexErrorInfo") or data.get("code") or details.get("code")
+    status = details.get("httpStatusCode") or data.get("httpStatusCode") or details.get("status")
+    if isinstance(info, dict):
+        name = next(iter(info), "")
+        value = info.get(name)
+        status = value.get("httpStatusCode") if isinstance(value, dict) else status
+        info = name
+    message = str(details.get("message", str(error))).lower()
+    return (info in USAGE_LIMITS or status == 429
+            or (not info or info in {"other", -32000}) and any(s in message for s in ("usage limit", "rate limit", "quota exceeded")))
+
+
+def limit_failure(error):
+    """A usage limit waits a fixed 5 minutes like a task (no backoff, reset time not consulted); else classify()."""
+    if usage_limit(error):
+        return Failure("usage_limit", time.time() + RETRY_SECONDS)
+    return classify(error)
+
+
+def waiting_text(failure):
+    label = "provider usage limit" if failure.kind == "usage_limit" else "connection"
+    when = datetime.fromtimestamp(failure.retry_at, timezone.utc).strftime("%H:%M UTC") if failure.retry_at else ""
+    return f"Waiting for the {label}; retrying at {when}" if when else f"Waiting for the {label}"
 
 
 def classify(error):
@@ -148,6 +182,8 @@ def defer(db, execution_id, failure, error="", output=None):
         if not row or row["finished_at"] is not None:
             return
         count = row["retry_count"] + 1
+        if failure.kind == "usage_limit":
+            error = waiting_text(failure)
         retry_at = (
             max(time.time() + 1, failure.retry_at) if failure.retry_at else time.time() + delay(count, failure.kind)
         )

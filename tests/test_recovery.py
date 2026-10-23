@@ -73,6 +73,8 @@ class FaultServer(FakeServer):
                 "codexErrorInfo": {"responseStreamDisconnected": {"httpStatusCode": None}},
             },
             "usage": {"message": "Account unavailable", "codexErrorInfo": "usageLimitExceeded"},
+            "http429": {"message": "Too many requests", "codexErrorInfo": {"other": {"httpStatusCode": 429}}},
+            "claude": {"message": "You have reached your usage limit"},
             "permanent": {"message": "Invalid model configuration", "codexErrorInfo": "badRequest"},
         }.get(outcome)
         text = f"Result {len(f.calls)}"
@@ -490,7 +492,7 @@ async def test_delayed_completion_from_previous_native_turn_cannot_finish_retry(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["manager"])
-async def test_notification_only_usage_error_is_reported_without_blocking_after_restart(system, role):
+async def test_notification_only_usage_error_waits_and_retries_after_restart(system, role):
     db, registry, chat, settings = system
     faults = Faults(["usage", "success"])
 
@@ -528,7 +530,7 @@ async def test_notification_only_usage_error_is_reported_without_blocking_after_
         await chat.submit(registry.list()[0]["id"], "Preserve original request")
     await settle(component)
     row = db.one("SELECT * FROM executions WHERE agent_id=?", ("execution" if role == "worker" else "manager",))
-    assert row["status"] == "failed" and row["finished_at"] is not None
+    assert row["status"] == "recovering" and row["finished_at"] is None
     eligible(db)
     component = (
         Core(Database(db.path), registry, settings, Pipeline(Database(db.path), registry), factory)
@@ -537,8 +539,8 @@ async def test_notification_only_usage_error_is_reported_without_blocking_after_
     )
     await component.recover()
     await settle(component)
-    assert db.one("SELECT status FROM executions WHERE id=?", (row["id"],))["status"] == "failed"
-    assert len(faults.calls) == 1
+    assert db.one("SELECT status FROM executions WHERE id=?", (row["id"],))["status"] == "completed"
+    assert len(faults.calls) == 2
 
 
 @pytest.mark.asyncio
@@ -623,3 +625,52 @@ async def test_close_never_signals_recycled_parent_pid(system, monkeypatch):
 
     monkeypatch.setattr("ai_manager.codex.os.killpg", unexpected_signal)
     await server.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["usage", "http429", "claude"])
+async def test_manager_usage_limit_waits_five_minutes_then_reruns(system, outcome):
+    db, registry, chat, settings = system
+    faults = Faults([outcome])
+    chat.server = faults.factory(settings)
+    request = await chat.submit(registry.list()[0]["id"], "Answer me")
+    await settle(chat)
+    row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
+    assert row["status"] == "recovering" and row["finished_at"] is None
+    assert 295 <= row["retry_at"] - time.time() <= 300
+    assert "provider usage limit" in row["error"]
+    assert db.one("SELECT status FROM messages WHERE id=?", (request["message_id"],))["status"] == "waiting"
+    chat.resumed = True
+    await chat.recover()  # not yet due
+    assert not chat.jobs and len(faults.calls) == 1
+    eligible(db)
+    await chat.recover()
+    await settle(chat)
+    assert db.one("SELECT status FROM executions WHERE id=?", (request["execution_id"],))["status"] == "completed"
+    assert db.one("SELECT status FROM messages WHERE id=?", (request["message_id"],))["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_manager_usage_limit_wait_can_be_stopped_and_restart_retries_at_once(system):
+    db, registry, chat, settings = system
+    faults = Faults(["usage", "usage"])
+    chat.server = faults.factory(settings)
+    request = await chat.submit(registry.list()[0]["id"], "Answer me")
+    await settle(chat)
+    restored = Chat(Database(db.path), registry, faults.factory(settings))
+    await restored.recover()  # first pass after a restart ignores the stored retry time
+    await settle(restored)
+    assert len(faults.calls) == 2
+    assert db.one("SELECT status FROM executions WHERE id=?", (request["execution_id"],))["status"] == "recovering"
+    await restored.interrupt(request["execution_id"])
+    row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
+    assert row["status"] == "interrupted" and row["finished_at"] is not None
+
+
+@pytest.mark.asyncio
+async def test_manager_non_limit_error_still_fails(system):
+    db, registry, chat, settings = system
+    chat.server = Faults(["permanent"]).factory(settings)
+    request = await chat.submit(registry.list()[0]["id"], "Answer me")
+    await settle(chat)
+    assert db.one("SELECT status FROM executions WHERE id=?", (request["execution_id"],))["status"] == "failed"

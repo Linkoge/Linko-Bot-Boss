@@ -13,7 +13,7 @@ from .model_settings import manager_route, worker_context
 from .providers import owns_pid
 from .recovery import (
     Failure,
-    classify,
+    limit_failure,
     defer,
     inspect,
     launching,
@@ -55,6 +55,7 @@ class Chat:
     def __init__(self, db: Database, registry: Registry, server: AppServer):
         self.db, self.registry, self.server = db, registry, server
         self.jobs = {}
+        self.resumed = False
         self.action_handler = None
         self.restricted = False
         self.attachments = None
@@ -700,7 +701,7 @@ class Chat:
                     if "reconciled_output" in params:
                         output = params["reconciled_output"]
                     error = turn_error(self.db, execution_id, turn) if turn["status"] != "completed" else {}
-                    failure = classify(error) if turn["status"] == "failed" else None
+                    failure = limit_failure(error) if turn["status"] == "failed" else None
                     if (
                         turn["status"] == "interrupted"
                         and not self.db.one("SELECT stop_requested FROM executions WHERE id=?", (execution_id,))[
@@ -727,7 +728,7 @@ class Chat:
                 defer(self.db, execution_id, Failure("interrupted"), "Service stopped", output)
             raise
         except Exception as error:
-            failure = classify(error)
+            failure = limit_failure(error)
             if failure:
                 if isinstance(error, CodexError) and error.details.get("code") in {-32600, -32601, -32602, -32000}:
                     with self.db.transaction() as conn:
@@ -829,6 +830,11 @@ class Chat:
             self._finish(execution_id, message["id"] if message else "", "interrupted", "Stopped by user", row["output"])
 
     async def recover(self):
+        if not self.resumed:
+            # A restart or deploy retries waiting usage-limit messages at once.
+            self.resumed = True
+            self.db.run("UPDATE executions SET retry_at=NULL WHERE agent_id='manager' AND finished_at IS NULL "
+                        "AND status='recovering' AND recovery_reason='usage_limit'")
         for row in self.db.all(
             "SELECT * FROM executions WHERE agent_id='manager' AND finished_at IS NULL ORDER BY rowid"
         ):
@@ -859,7 +865,7 @@ class Chat:
                     continue
                 if turn and turn["status"] == "failed":
                     error = turn_error(self.db, row["id"], turn)
-                    failure = classify(error)
+                    failure = limit_failure(error)
                     if not failure:
                         self._finish(
                             row["id"], response_id, "failed", error.get("message", "Manager failed"), turn_output(turn)
@@ -892,7 +898,7 @@ class Chat:
                 route = {"model": row["model"], "effort": row["effort"]} if row["model"] else manager_route(self.db, row["project_id"])
                 self.launch(row["id"], response_id, conversation, row["input"], route)
             except Exception as error:
-                failure = classify(error)
+                failure = limit_failure(error)
                 if failure:
                     defer(self.db, row["id"], failure, str(error))
                 else:

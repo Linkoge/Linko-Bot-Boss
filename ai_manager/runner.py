@@ -18,32 +18,14 @@ from datetime import datetime, timezone
 
 from . import fence
 from .codex import CodexError
-from .recovery import classify, owned_alive, reap_orphan
+from .recovery import classify, owned_alive, reap_orphan, usage_limit
 
 WATCHDOG_SECONDS, STALL_SECONDS, RETRY_SECONDS, IDLE_STALL_SECONDS = 60, 1800, 300, 300
-USAGE_LIMITS = {"usageLimitExceeded", "rateLimitExceeded", "usage_limit_exceeded", "rate_limit_exceeded",
-                "insufficient_quota", "slow_down"}
 log = logging.getLogger(__name__)
 
 
 def plain(error):
     return (str(error) or type(error).__name__)[:600]
-
-
-def usage_limit(error):
-    """True when the provider reported a usage or rate limit."""
-    details = error.details if isinstance(error, CodexError) else error if isinstance(error, dict) else {}
-    data = details.get("data") if isinstance(details.get("data"), dict) else {}
-    info = details.get("codexErrorInfo") or data.get("codexErrorInfo") or data.get("code") or details.get("code")
-    status = details.get("httpStatusCode") or data.get("httpStatusCode") or details.get("status")
-    if isinstance(info, dict):
-        name = next(iter(info), "")
-        value = info.get(name)
-        status = value.get("httpStatusCode") if isinstance(value, dict) else status
-        info = name
-    message = str(details.get("message", str(error))).lower()
-    return (info in USAGE_LIMITS or status == 429
-            or (not info or info in {"other", -32000}) and any(s in message for s in ("usage limit", "rate limit", "quota exceeded")))
 
 
 class Runner:

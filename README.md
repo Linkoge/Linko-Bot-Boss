@@ -69,7 +69,11 @@ rules 8–9; worker-only: rule 11).
    once; every task that was running (in any project) is resumed this way. A provider usage limit or a lost connection
    never fails a task: it goes back in the queue with a visible retry
    time and is tried again every 5 minutes, indefinitely (no backoff, no wait counter, the provider's reset time is not
-   consulted, so a limit that resets early is picked up by the next try). Only real errors fail a task. The watchdog (every
+   consulted, so a limit that resets early is picked up by the next try). Only real errors fail a task. Manager chat turns behave the
+   same way for a usage or rate limit (Codex or Claude): the reply is not failed but shows `waiting` with "Waiting for the
+   provider usage limit; retrying at HH:MM UTC", is retried every 5 minutes indefinitely (also without backoff), retries
+   at once after a service restart or deploy, and Stop cancels it. Messages sent meanwhile queue behind it in order.
+   Other permanent errors still fail the reply. The watchdog (every
    minute) requeues a dead or hung worker (30 min without activity) once, then fails it; fails queued tasks of a removed
    project; withdraws a deploy request that is still waiting after 30 min; and reports an idle-queue stall: eligible work
    (not held, project active, retry time passed, no deploy pending) that nothing has started for 5 minutes gets a
