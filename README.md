@@ -259,6 +259,21 @@ Permanent synthetic regression coverage is in `tests/test_github_backup.py`: key
 and backup, legacy scan failures retry, first-push backlog is retained, rejected pushes later catch up, diverged history
 is preserved, and queue/merge/deploy progress continues during backup failure or latency.
 
+### Offline projects and visibility badges
+
+A project whose `github_tier` setting (`github_tier:<project-id>`, the single source of truth) is `offline` is
+local-only. **Create offline project** in the project menu asks for a name, creates the folder next to GitHub-created
+projects, runs `git init -b main` with an initial commit and registers it as offline (`POST /api/projects/offline`);
+nothing contacts GitHub. Offline projects are never uploaded: `ai_manager/github_backup.py` skips them completely (no
+network or git calls, no receipt, no needs-attention state, no retry), rename and token-based push are rejected by the
+backend with a clear error, their GitHub buttons and warnings are hidden, and no code fetches or pushes to any remote
+that happens to be configured. Tasks, worktrees, local merges, tests and deploys work as for other projects.
+
+Each project in the menu shows a badge: **Public** (green), **Private** (red) or **Offline** (gray); none when the
+visibility is unknown. Public/private is cached in `github_visibility:<project-id>` when a repository is created and is
+refreshed by `POST /api/github/visibility/refresh` (stale after 24 hours, at most 5 read-only `GET /repos/{owner}/{repo}`
+calls per request, offline projects excluded). Rendering never calls GitHub. Tests: `tests/test_offline_projects.py`.
+
 ### Create and rename a project on GitHub
 
 The project menu (▾ left of the model picker, main instance only) groups projects/stashed projects, project actions,

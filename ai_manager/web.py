@@ -67,6 +67,10 @@ class GitHubOrganization(BaseModel):
     company_org: str = Field(max_length=200)
 
 
+class OfflineCreate(BaseModel):
+    name: str = Field(max_length=200)
+
+
 class GitHubRename(BaseModel):
     name: str = Field(max_length=200)
 
@@ -728,6 +732,14 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.post("/api/github/projects", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def github_create(body: GitHubCreate):
         return github.create(body.name, body.tier, body.public_confirmed)
+
+    @app.post("/api/projects/offline", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def offline_create(body: OfflineCreate):
+        return github.create_offline(body.name)
+
+    @app.post("/api/github/visibility/refresh", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def github_visibility_refresh():
+        return github.refresh_visibility()
 
     @app.post("/api/github/projects/{project_id}/rename", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def github_rename(project_id: str, body: GitHubRename):

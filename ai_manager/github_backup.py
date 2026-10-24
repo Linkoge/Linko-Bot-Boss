@@ -43,7 +43,12 @@ class GitHubBackup:
         self.job, self.started = None, False
         self.credentials = None
 
+    def offline(self, project_id):
+        return self.db.setting('github_tier:' + project_id) == 'offline'
+
     def request(self, project_id):
+        if self.offline(project_id):
+            return  # offline projects are never backed up: no state, no retry
         with self.db.transaction() as conn:
             row = conn.execute('SELECT value FROM settings WHERE key=?', (PREFIX + project_id,)).fetchone()
             previous = json.loads(row['value']) if row else {}
@@ -57,17 +62,21 @@ class GitHubBackup:
         if not self.started:
             self.started = True
             for project in self.registry.list():
-                if not self.db.setting(PREFIX + project['id']):
+                if project.get('github_tier') != 'offline' and not self.db.setting(PREFIX + project['id']):
                     self.request(project['id'])
         if self.job and not self.job.done():
             return
         for project in self.registry.list():
+            if project.get('github_tier') == 'offline':
+                continue
             state = self.db.setting(PREFIX + project['id'], {})
             if state.get('state') in {'pending', 'needs-attention'} and state.get('retry_at', 0) <= time.time():
                 self.job = asyncio.create_task(self.attempt(project, state))
                 return
 
     async def attempt(self, project, state):
+        if project.get('github_tier') == 'offline':
+            return
         try:
             if project.get('github_tier'):
                 try:

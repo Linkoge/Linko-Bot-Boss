@@ -18,7 +18,7 @@ from pathlib import Path
 from . import fence
 from .config import CODE_ROOT
 from .pipeline import RESTRICTED
-from .registry import git, safe_remote
+from .registry import OFFLINE, git, safe_remote
 
 API = 'https://api.github.com'
 NAME = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$')
@@ -27,8 +27,11 @@ COMPANY_ORG = 'github_company_org'
 REMOTE = re.compile(r'^(?P<prefix>.*?github\.com[:/])(?P<owner>[^/:]+)/(?P<repo>[^/]+?)(?P<suffix>\.git)?/?$')
 # Fixed allow-list; organization creation below also requires an exact match to the saved, validated org.
 # Anything else (in particular DELETE) is refused locally.
-ALLOWED = (('GET', re.compile(r'^/user$')), ('POST', re.compile(r'^/user/repos$')),
+ALLOWED = (('GET', re.compile(r'^/user$')), ('GET', re.compile(r'^/repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')), ('POST', re.compile(r'^/user/repos$')),
            ('PATCH', re.compile(r'^/repos/[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$')))
+OFFLINE_ERROR = 'This is an offline project: it is local-only and GitHub actions are not available'
+VISIBILITY_TTL = 24 * 3600
+VISIBILITY_BATCH = 5
 log = logging.getLogger(__name__)
 
 
@@ -175,6 +178,8 @@ class GitHubProjects:
 
     def push_credentials(self, project):
         tier = project.get('github_tier')
+        if tier == OFFLINE:
+            raise GitHubError(OFFLINE_ERROR)
         return self.require_token(tier)
 
     def company_org(self):
@@ -344,9 +349,54 @@ class GitHubProjects:
             self.remove_new_folder(folder, steps)
             raise GitHubError(self.leftover(repo, steps), steps) from None
         self.db.run('DELETE FROM settings WHERE key=?', ('github_backup:' + project['id'],))  # fresh backup receipt
+        self.registry.cache_repo_visibility(project['id'], 'private' if private else 'public')
         return {'result': 'done', 'message': f'Created {repo.get("full_name", name)} and registered the project',
                 'project': self.registry.get(project['id']), 'repository': repo.get('full_name', name),
                 'private': bool(repo.get('private', private)), 'tier': tier, 'steps': steps}
+
+    def create_offline(self, name):
+        """Local-only project: folder + git init on main, registered as offline. Nothing contacts GitHub."""
+        self.guard()
+        self.check_name(name)
+        folder = self.settings.project_roots[0] / name
+        if folder.exists() or folder.is_symlink() or self.db.one('SELECT 1 FROM projects WHERE path=?', (str(folder),)):
+            raise GitHubError(f'The folder {name} already exists; nothing was created')
+        steps = []
+        folder.mkdir(parents=True)
+        try:
+            self.initialize(folder, name, None)
+            step(steps, 'create local folder and git init', 'done', str(folder))
+            project = self.registry.add(folder, github_tier=OFFLINE)
+            step(steps, 'register in manager', 'done')
+        except Exception as error:
+            step(steps, 'create offline project', 'failed', self.safe_text(error))
+            self.remove_new_folder(folder, steps)
+            raise GitHubError('Could not create the offline project. Nothing was kept', steps) from None
+        return {'result': 'done', 'message': f'Created offline project {name}', 'project': project,
+                'tier': OFFLINE, 'steps': steps}
+
+    def refresh_visibility(self):
+        """Bounded refresh of cached repository visibility: stale entries only, a few per call, never offline."""
+        self.guard()
+        now, checked = time.time(), 0
+        for project in self.registry.list():
+            tier = project.get('github_tier') or 'personal'
+            if tier == OFFLINE or checked >= VISIBILITY_BATCH:
+                continue
+            cached = self.db.setting('github_visibility:' + project['id']) or {}
+            if now - cached.get('checked_at', 0) < VISIBILITY_TTL:
+                continue
+            match = REMOTE.match(git(Path(project['path']), 'remote', 'get-url', 'origin')) if Path(project['path']).is_dir() else None
+            if not match or not self.stores[tier].configured():
+                continue
+            checked += 1
+            try:
+                _, repo = self.apis[tier].request('GET', f'/repos/{match["owner"]}/{match["repo"]}')
+            except GitHubError:
+                continue
+            if isinstance(repo.get('private'), bool):
+                self.registry.cache_repo_visibility(project['id'], 'private' if repo['private'] else 'public')
+        return {'refreshed': checked, 'projects': self.registry.list()}
 
     @staticmethod
     def initialize(folder, name, remote):
@@ -379,6 +429,8 @@ class GitHubProjects:
         self.guard()
         self.check_name(new_name)
         project = self.registry.get(project_id)
+        if project.get('github_tier') == OFFLINE:
+            raise GitHubError(OFFLINE_ERROR)
         if project['status'] == 'removed':
             raise GitHubError('Unknown or removed project')
         old_path = Path(project['path'])

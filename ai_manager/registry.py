@@ -7,6 +7,7 @@ from urllib.parse import urlsplit, urlunsplit
 from .codex import process_start
 from .db import Database, new_id
 
+OFFLINE = 'offline'  # github_tier value: local-only project, never uploaded anywhere
 MEMORY_NAMES = ("PROJECT.md", "STATE.md", "TASKS.md", "DECISIONS.md", "HANDOFF.md")
 
 
@@ -58,7 +59,7 @@ class Registry:
         return resolved
 
     def add(self, path: str | Path, name: str | None = None, *, github_tier: str | None = None) -> dict:
-        if github_tier not in {None, 'personal', 'company'}:
+        if github_tier not in {None, 'personal', 'company', OFFLINE}:
             raise ValueError('Invalid GitHub tier')
         name = validate_display_name(name)
         path = self.allowed_path(path)
@@ -123,6 +124,7 @@ class Registry:
             project["visible"] = json.loads(project.pop("visibility"))
             project["github_backup"] = self.db.setting("github_backup:" + project["id"], {})
             project["github_tier"] = self.db.setting("github_tier:" + project["id"])
+            project["repo_visibility"] = self.repo_visibility(project["id"], project["github_tier"])
         return projects
 
     def get(self, project_id):
@@ -132,7 +134,19 @@ class Registry:
         project["visible"] = self.db.setting("project_visible:" + project_id, True)
         project["github_backup"] = self.db.setting("github_backup:" + project_id, {})
         project["github_tier"] = self.db.setting("github_tier:" + project_id)
+        project["repo_visibility"] = self.repo_visibility(project_id, project["github_tier"])
         return project
+
+    def repo_visibility(self, project_id, tier):
+        """'offline', cached 'public'/'private', or None when unknown. Never a live GitHub call."""
+        if tier == OFFLINE:
+            return OFFLINE
+        return (self.db.setting("github_visibility:" + project_id) or {}).get("value")
+
+    def cache_repo_visibility(self, project_id, value):
+        if value not in {"public", "private"}:
+            raise ValueError("Invalid repository visibility")
+        self.db.set_setting("github_visibility:" + project_id, {"value": value, "checked_at": time.time()})
 
     def set_visibility(self, project_id: str, visible: bool):
         if not isinstance(visible, bool):

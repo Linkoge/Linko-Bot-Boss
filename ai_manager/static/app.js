@@ -116,7 +116,7 @@ function action(fn){return async event=>{const button=event?.currentTarget;if(bu
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
 function showAuth(){clearChatCache();state.history=null;$('messages').replaceChildren();cancelInitialChat();initialChatPosition=true;$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
 async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;state.restricted=!!auth.restricted;document.body.classList.toggle('restricted',state.restricted);$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
-async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[...(state.restricted?[]:[null]),...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;loadGithubStatus();}
+async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[...(state.restricted?[]:[null]),...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;loadGithubStatus();if(!state.restricted)refreshVisibility();}
 let refreshVersion=0,listingLoad=null;
 async function refresh(loadChat=true,older=null){
   const selection=state.selection,project=state.project;
@@ -153,8 +153,10 @@ function projectLabel(p){
   const duplicates=state.portfolio.projects.filter(other=>displayName(other).toLocaleLowerCase()===displayName(p).toLocaleLowerCase());
   return displayName(p)+(duplicates.length>1?` · ${p.name} (${p.id.slice(0,6)})`:'');
 }
+const tierLabel=t=>t==='company'?'Company':t==='offline'?'Offline':'Personal';
+const visibilityBadge=p=>{const v=p.repo_visibility;if(!['public','private','offline'].includes(v))return null;const badge=element('small',v[0].toUpperCase()+v.slice(1),`visibility-badge visibility-${v}`);badge.dataset.badge=v;return badge;};
 function renderProjects(){
-  const repoInfo=$('github-project-repository'),selected=state.portfolio.projects.find(p=>p.id===state.project);repoInfo.replaceChildren();if(selected?.repository){repoInfo.append(document.createTextNode(selected.repository));if(selected.github_tier)repoInfo.append(element('small',selected.github_tier==='company'?'Company':'Personal','github-tier'));}
+  const repoInfo=$('github-project-repository'),selected=state.portfolio.projects.find(p=>p.id===state.project);repoInfo.replaceChildren();if(selected?.repository){repoInfo.append(document.createTextNode(selected.repository));if(selected.github_tier)repoInfo.append(element('small',tierLabel(selected.github_tier),'github-tier'));}
   const scroll=$('project-tabs').scrollLeft,focused=document.activeElement.closest('#projects button')?.dataset.project,globalButton=$('all-projects');
   $('projects').replaceChildren();
   const contexts=state.portfolio.projects.filter(p=>p.visible!==false).sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b));
@@ -212,9 +214,11 @@ function renderProjectMenu(){
     const row=element('div',undefined,'project-menu-row'),checkbox=element('input');checkbox.type='checkbox';checkbox.checked=!stashed;
     checkbox.dataset.visibility=p.id;checkbox.setAttribute('aria-label',`Show ${projectLabel(p)} in navigation`);
     checkbox.onchange=action(()=>setProjectVisibility(p,checkbox.checked));const toggle=element('label',undefined,'project-visibility-toggle');toggle.append(checkbox);row.append(toggle);
+    const badge=visibilityBadge(p);
     if(stashed)row.append(element('span',projectLabel(p)));
     else{const button=element('button',projectLabel(p),state.project===p.id?'selected':'');button.dataset.project=p.id;button.setAttribute('aria-pressed',String(state.project===p.id));
       button.onclick=action(async()=>{closeProjectMenu(true);await selectProject(p.id);});row.append(button);}
+    if(badge)row.append(badge);
     parent.append(row);
   };
   const sorted=[...state.portfolio.projects].sort(compareContexts);
@@ -226,10 +230,11 @@ function renderProjectMenu(){
   const actions=group('Project actions');
   if(state.project){const rename=element('button','Change display name');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};actions.append(rename);}
   if(!state.restricted){
-    const selected=state.portfolio.projects.find(p=>p.id===state.project);if(selected?.repository){const info=element('p',selected.repository,'muted');if(selected.github_tier)info.append(element('small',selected.github_tier==='company'?'Company':'Personal','github-tier'));actions.append(info);}
-    const tier=selected?.github_tier||'personal';
-    if(state.project&&state.githubStatus?.[tier]?.configured){const rename=element('button','Rename project');rename.dataset.project='github-rename';rename.title='Renames the GitHub repository, the local folder and the git remote';rename.onclick=()=>{closeProjectMenu();renameGithubProject();};actions.append(rename);}
+    const selected=state.portfolio.projects.find(p=>p.id===state.project);if(selected?.repository){const info=element('p',selected.repository,'muted');if(selected.github_tier)info.append(element('small',tierLabel(selected.github_tier),'github-tier'));actions.append(info);}
+    const tier=selected?.github_tier||'personal',offline=tier==='offline';
+    if(state.project&&!offline&&state.githubStatus?.[tier]?.configured){const rename=element('button','Rename project');rename.dataset.project='github-rename';rename.title='Renames the GitHub repository, the local folder and the git remote';rename.onclick=()=>{closeProjectMenu();renameGithubProject();};actions.append(rename);}
     const create=element('button','Create project');create.dataset.project='github-create';create.onclick=action(async()=>{closeProjectMenu();await createGithubProject();});actions.append(create);
+    const local=element('button','Create offline project');local.dataset.project='offline-create';local.title='Local-only: git repository on main, never uploaded anywhere';local.onclick=action(async()=>{closeProjectMenu();createOfflineProject();});actions.append(local);
     const settings=element('button','Settings');settings.dataset.project='github-settings';settings.onclick=openGithubSettings;group('Settings').append(settings);
   }
   renderProjectAvailability();
@@ -814,10 +819,12 @@ async function createGithubProject(){
   $('editor-form').querySelector('[type=submit]').disabled=!status.personal.configured&&(!status.company.configured||!status.company_org);
   destination.onchange=()=>{const company=destination.value==='company';confirmation.closest('label').hidden=!company;confirmation.disabled=!company;confirmation.required=company;confirmation.checked=false;};destination.onchange();
 }
+function createOfflineProject(){if($('editor').open)return;editor('Create offline project',[{name:'name',label:'Name (folder name; local-only, never uploaded)',required:true}],async values=>{const result=await api('/api/projects/offline',{method:'POST',body:JSON.stringify({name:values.name})});state.project=result.project.id;return result;});}
 function renameGithubProject(){const p=state.portfolio.projects.find(p=>p.id===state.project);if(p)editor('Rename project',[{name:'name',label:'New name (renames the GitHub repository, local folder and registry name; updates the git remote; visibility unchanged; blocked while a task is running)',value:p.name,required:true}],values=>api(`/api/github/projects/${p.id}/rename`,{method:'POST',body:JSON.stringify({name:values.name})}));}
 function openGithubSettings(){closeProjectMenu();showView('settings');$('github-panel').scrollIntoView({block:'start'});$('github-token').focus({preventScroll:true});loadGithubStatus();}
 const githubTokenForms={personal:{form:'github-token-form',input:'github-token',status:'github-status'},company:{form:'github-company-token-form',input:'github-company-token',status:'github-company-status'}};
 function renderGithubToken(tier,s){const ids=githubTokenForms[tier],form=$(ids.form);$(ids.status).textContent=`${s.login?`Connected as ${s.login}. `:''}Validation: ${s.validation}. ${s.org_permission||''}${s.configured?'':' Paste a token and Save.'}`;for(const button of form.querySelectorAll('button'))button.disabled=button.dataset.tokenAction==='save'?s.configured:!s.configured;}
+async function refreshVisibility(){try{const r=await api('/api/github/visibility/refresh',{method:'POST'});if(!r.refreshed)return;for(const p of r.projects){const known=state.portfolio.projects.find(q=>q.id===p.id);if(known)known.repo_visibility=p.repo_visibility;}renderProjectMenu?.();}catch{}}
 async function loadGithubStatus(){if(state.restricted)return;try{const s=await api('/api/github');state.githubStatus=s;for(const tier of Object.keys(githubTokenForms))renderGithubToken(tier,s[tier]);$('github-company-org').value=s.company_org;}catch(error){$('github-status').textContent=error.message;}}
 $('github-org-form').onsubmit=action(async event=>{event.preventDefault();const s=await api('/api/github/organization',{method:'PUT',body:JSON.stringify({company_org:$('github-company-org').value})});$('github-company-org').value=s.company_org;renderGithubToken('company',s.company);$('github-org-status').textContent=s.company_org?'Company organization saved.':'Company disabled. Configure an organization here to enable it.';});
 for(const [tier,ids] of Object.entries(githubTokenForms)){

@@ -48,6 +48,9 @@ class FakeGitHub:
             self.repos[name] = {'name': name, 'full_name': f'{owner}/{name}', 'private': payload['private'],
                                 'ssh_url': f'git@github.com:{owner}/{name}.git'}
             return 201, {}, self.repos[name]
+        if method == 'GET' and path.startswith('/repos/'):
+            repo = self.repos.get(path.rsplit('/', 1)[1])
+            return (200, {}, repo) if repo else (404, {}, {'message': 'Not Found'})
         if method == 'PATCH' and path.startswith('/repos/'):
             old = path.rsplit('/', 1)[1]
             if old not in self.repos:
@@ -371,7 +374,7 @@ def test_there_is_no_delete_action_anywhere(hub):
     assert {m for m, _ in ALLOWED} == {'GET', 'POST', 'PATCH'}
     with_token(browser, github)
     api = GitHubApi(TokenStore(settings.github_token_file), github)
-    for method, path in (('DELETE', '/repos/octo/alpha'), ('PATCH', '/repos/octo'), ('GET', '/repos/octo/alpha'),
+    for method, path in (('DELETE', '/repos/octo/alpha'), ('PATCH', '/repos/octo'), ('GET', '/repos/octo/alpha/collaborators'),
                          ('POST', '/repos/octo/alpha/transfer'), ('PUT', '/user')):
         with pytest.raises(github_projects.GitHubError):
             api.request(method, path)
