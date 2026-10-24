@@ -51,6 +51,8 @@ async def test_backup_skips_offline_even_with_remote(hub, monkeypatch):
     backups = GitHubBackup(app.state.db, app.state.registry)
     backups.credentials = lambda p: calls.append('credentials') or 'x'
     backups.request(project['id'])
+    app.state.db.set_setting('deploy_setup:' + project['id'], {'deploy_command': ['true']})
+    backups.request(project['id'], commit='a' * 40)  # a successful receipt is still local only
     backups.tick()
     assert backups.job is None
     await backups.attempt(app.state.registry.get(project['id']), {})

@@ -164,6 +164,13 @@ function renderProjects(){
   for(const p of contexts){
     const id=p?.id||null,b=p?element('button',projectLabel(p),'project-button'):globalButton;
     b.classList.toggle('selected',state.project===id);b.title=p?p.path:'Global manager conversation and portfolio';
+    if(p?.github_backup){
+      b.title+=`\nGitHub commit: ${p.github_backup.commit||'unknown'}`;
+      if(p.github_backup.state==='waiting-for-deploy'){
+        b.append(element('span',' · GitHub waiting for deploy','muted'));
+        b.title+='\nGitHub backup: waiting for deploy';
+      }
+    }
     if(p?.github_backup?.state==='needs-attention'){
       b.append(element('span',' · GitHub needs attention','muted'));
       b.title+=`\nGitHub backup: ${p.github_backup.reason}. Local commits retained; retrying automatically.`;

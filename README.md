@@ -66,7 +66,8 @@ rules 8–9; worker-only: rule 11).
    the manager itself. Without one the application queues a **Create deploy setup** task (see Automatic deploy setup
    below) and nothing waits for the owner. The manager's `deploy` action
    (optionally with a `task_id` of a finished, never-merged task) uses the same path on request.
-   After every passing merge the application schedules a GitHub backup push for that project. This runs independently
+   After a successful deploy the application schedules a GitHub backup of the receipt’s commit. Projects without
+   a saved deploy setup schedule their backup after merge. This runs independently
    of the queue and deployment; workers never push. See GitHub backups below.
 5. **Queue runner** (`ai_manager/runner.py`; independent of any open chat or owner message). A tick every second starts
    the oldest eligible queued task of every project that has nothing running, so a project runs one task at a time and
@@ -227,16 +228,21 @@ one saved selection drives display and dispatch."
 
 The owner has authorized automatic application pushes, including existing backlog. Every Git project uses its
 single `origin` push URL on `github.com` (SSH or HTTPS). Projects created as Personal or Company use that tier's saved
-token over HTTPS; existing projects without a tier use the service user's Git credentials. The application pushes local `main` (legacy `master` where that is the project's main branch) to the same remote branch. It never forces,
+token over HTTPS; existing projects without a tier use the service user's Git credentials. The application pushes to
+remote `main` (legacy `master` where that is the project's main branch). It never forces,
 resets local commits or rewrites history, and the backup itself never creates repositories or changes remote
 configuration (only the owner's menu actions below do). Non-Git projects keep
 their in-place workflow. Missing/unsupported origins or authentication failures need attention, without holding work.
 
-`ai_manager/github_backup.py` runs network work in a background thread without the checkout fence. A merge requests an
-attempt; failures retain all local commits and retry every five minutes, and a later merge requests another attempt.
-Startup also schedules repositories without a backup receipt, so existing backlog does not require another task.
+`ai_manager/github_backup.py` runs network work in a background thread without the checkout fence. For projects with
+a saved deploy setup, backup waits for deploy; only a successful deploy receipt requests an attempt, pinned to exactly its commit even if main later advances. Failed, cancelled or rolled-back deploys never
+request a push; a successful repair deploy requests the next backup. Projects without a setup still request an
+attempt after merge. Startup schedules repositories without a receipt using the same deploy gate, and legacy pending
+receipts without a verified target wait for deploy. Offline projects never push. Failures retry the same target every
+five minutes without holding the queue, and never force-push.
 Durable per-project receipts in SQLite settings (`github_backup:<project-id>`) preserve pending work and retry times
-across restarts. Project tabs show **GitHub needs attention** on failure; project API/manager records include the reason
+across restarts. Project tabs show the last backed-up commit in their tooltip, **GitHub waiting for deploy** while gated,
+and **GitHub needs attention** on failure; project API/manager records include the reason
 and retry timestamp. Backup failures do not fail tasks, consume repair rounds, or prevent merge/deploy.
 A later successful push includes all retained commits. Each Git command has a 60-second timeout and no interactive
 credential prompt. Raw Git/SSH/hook output is discarded, since it can contain credentials.

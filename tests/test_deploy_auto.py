@@ -82,6 +82,9 @@ async def test_valid_file_in_a_merge_is_saved_once_and_requests_the_normal_deplo
     assert request['project_id'] == project and request['source'] == 'auto' and request['setup'] == SETUP
     assert setup_tasks(world) == []
     assert (world.app / SETUP_FILE).is_file()
+    assert world.registry.get(project)['github_backup']['state'] == 'waiting-for-deploy'
+    world.pipeline.backups.tick()
+    assert world.pipeline.backups.job is None
     # The file seeds once: after the owner removes the setup the same file does not bring it back.
     world.pipeline.cancel()
     world.pipeline.save_setup(project, None)

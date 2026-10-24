@@ -162,7 +162,7 @@ class Pipeline:
     def __init__(self, db, registry, restricted=False):
         self.db, self.registry, self.job, self.restricted = db, registry, None, restricted
         self.root = db.path.parent / 'deploy'
-        self.backups = GitHubBackup(db, registry)
+        self.backups = GitHubBackup(db, registry, lambda project_id: self.setup(project_id) is not None)
 
     def setup(self, project_id):
         project = self.registry.get(project_id)
@@ -327,6 +327,8 @@ class Pipeline:
                     'rollback_failed': 'Deploy failed and could not be rolled back; the service needs attention',
                     'cancelled': 'Deploy cancelled'}.get(result['status'], 'Deploy ' + result['status'])
             self.post(conn, result.get('conversation_id'), key, f"{text}: {result['reason']}"[:600])
+            if result['status'] == 'success' and result.get('commit') and result.get('project_id'):
+                self.backups.request(result['project_id'], result['commit'], conn=conn)
             conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(payload)))
         return result
 
@@ -367,8 +369,8 @@ class Pipeline:
             project = self.db.one('SELECT id FROM projects WHERE path=?', (str(project_path),))
             note = None
             if project:
-                self.backups.request(project['id'])
                 note = self.adopt(project['id'], project_path)
+                self.backups.request(project['id'])
             seeded = bool(note) and note['state'] == 'seeded'
             deployment = self._request(*deploy) if deploy and (changed or seeded) else None
             details = dict(deployment or {})

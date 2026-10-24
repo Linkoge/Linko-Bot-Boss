@@ -91,8 +91,11 @@ async def test_first_push_verifies_backlog_and_retry_includes_later_merges(world
     done = await run_next(world)
     assert done['state'] == 'done' and done['merge']['deploy']
     assert world.pipeline.pending()
+    backup.tick()
+    assert backup.job is old_job  # the merge is gated until deploy succeeds
+    deploy_result(world, 'success', git(world.app, 'rev-parse', 'main'))
     hook.write_text('#!/bin/sh\nexit 0\n')
-    backup.tick()  # new merge also requests an immediate attempt, even with a deploy pending
+    backup.tick()  # successful deploy requests an immediate attempt
     await backup.job
     assert git(remote, 'rev-parse', 'main') == git(world.app, 'rev-parse', 'main')
     assert git(remote, 'merge-base', '--is-ancestor', backlog, 'main') == ''
@@ -103,6 +106,7 @@ async def test_first_push_verifies_backlog_and_retry_includes_later_merges(world
 @pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_key_shaped_history_pushes_and_legacy_scan_failure_retries(world, remote, monkeypatch):
+    world.deployable(False)
     commit(world.app, {'config.txt': TOKEN + '\n'})
     git(world.app, 'rm', 'config.txt')
     git(world.app, 'commit', '-qm', 'removed')
@@ -221,6 +225,7 @@ def test_missing_main_does_not_hide_local_work_or_remote_history(tmp_path, monke
 
 @pytest.mark.asyncio
 async def test_timed_retry_survives_restart_and_covers_multiple_projects(world, remote, monkeypatch):
+    world.deployable(False)
     backup = world.pipeline.backups
     hook = remote / 'hooks' / 'pre-receive'
     hook.write_text('#!/bin/sh\nexit 1\n')
@@ -262,6 +267,8 @@ def test_ui_exposes_safe_backup_status(world):
     assert world.registry.list()[0]['github_backup'] == status
     source = (Path(__file__).parents[1] / 'ai_manager/static/app.js').read_text()
     assert "p?.github_backup?.state==='needs-attention'" in source
+    assert 'GitHub waiting for deploy' in source
+    assert 'GitHub commit:' in source
     assert 'GitHub needs attention' in source
     assert 'Local commits retained; retrying automatically.' in source
 
@@ -282,3 +289,112 @@ def test_rules_require_real_credentials_outside_git_and_runtime_key_fixtures(rul
     readme = ' '.join((Path(__file__).parent.parent / 'README.md').read_text().split())
     assert 'Never commit real credentials' in readme
     assert 'Tests needing key-shaped values build them at runtime' in readme
+
+
+def deploy_result(world, status, head, receipt_id='deploy-test'):
+    from ai_manager.pipeline import atomic
+    (world.pipeline.root / 'request.json').unlink(missing_ok=True)
+    atomic(world.pipeline.root / 'result.json', {
+        'id': receipt_id, 'project_id': world.project['id'], 'status': status,
+        'commit': head, 'reason': 'fixture deploy outcome',
+    })
+    return world.pipeline.report()
+
+
+@pytest.mark.smoke
+@pytest.mark.asyncio
+async def test_deploy_gates_merge_and_pushes_receipt_commit(world, remote):
+    backup = world.pipeline.backups
+    backup.tick()  # startup must also wait
+    assert backup.job is None
+    world.tasks.add(world.project['id'], 'deploy this change')
+    done = await run_next(world)
+    assert done['merge']['deploy']
+    deployed = git(world.app, 'rev-parse', 'main')
+    backup.tick()
+    assert backup.job is None and git(remote, 'for-each-ref') == ''
+    assert world.registry.get(world.project['id'])['github_backup']['state'] == 'waiting-for-deploy'
+    deploy_result(world, 'success', deployed)
+    newer = commit(world.app, {'not-deployed.txt': 'later change'})
+    backup.tick()
+    await backup.close()
+    status = world.registry.get(world.project['id'])['github_backup']
+    assert git(remote, 'rev-parse', 'main') == status['commit'] == deployed != newer
+    assert world.pipeline.report() is None  # receipt is consumed exactly once
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('outcome', ['failed', 'rolled_back', 'rollback_failed', 'cancelled'])
+async def test_failed_deploy_never_pushes_then_successful_repair_does(world, remote, outcome):
+    backup = world.pipeline.backups
+    world.tasks.add(world.project['id'], 'change')
+    await run_next(world)
+    failed = git(world.app, 'rev-parse', 'main')
+    deploy_result(world, outcome, failed)
+    backup.tick()
+    assert backup.job is None and git(remote, 'for-each-ref') == ''
+    repaired = commit(world.app, {'repair.txt': 'fixed'})
+    deploy_result(world, 'success', repaired, 'repair-deploy')
+    backup.tick()
+    await backup.close()
+    assert git(remote, 'rev-parse', 'main') == repaired
+
+
+@pytest.mark.asyncio
+async def test_legacy_pending_backup_with_setup_waits_for_deploy(world, remote):
+    world.db.set_setting(PREFIX + world.project['id'], {'state': 'pending', 'generation': 1})
+    backup = GitHubBackup(world.db, world.registry)
+    backup.tick()
+    assert backup.job is None and git(remote, 'for-each-ref') == ''
+    assert world.registry.get(world.project['id'])['github_backup']['state'] == 'waiting-for-deploy'
+
+
+@pytest.mark.asyncio
+async def test_verified_retry_survives_restart_and_newer_main(world, remote, monkeypatch):
+    deployed = git(world.app, 'rev-parse', 'main')
+    deploy_result(world, 'success', deployed)
+    hook = remote / 'hooks' / 'pre-receive'
+    hook.write_text('#!/bin/sh\nexit 1\n')
+    hook.chmod(0o700)
+    backup = world.pipeline.backups
+    backup.tick()
+    await backup.close()
+    state = world.registry.get(world.project['id'])['github_backup']
+    assert state['state'] == 'needs-attention' and state['target_commit'] == deployed
+    commit(world.app, {'later.txt': 'unverified'})
+    hook.write_text('#!/bin/sh\nexit 0\n')
+    monkeypatch.setattr(backup_module.time, 'time', lambda: state['retry_at'] + 1)
+    restarted = GitHubBackup(world.db, world.registry)
+    restarted.tick()
+    await restarted.close()
+    assert git(remote, 'rev-parse', 'main') == deployed
+
+
+@pytest.mark.asyncio
+async def test_push_finishing_during_merge_preserves_waiting_state(world, remote, monkeypatch):
+    backup = world.pipeline.backups
+    deployed = git(world.app, 'rev-parse', 'main')
+    deploy_result(world, 'success', deployed)
+    entered, release = threading.Event(), threading.Event()
+    push = GitHubBackup.push
+
+    def waiting(root, **kwargs):
+        entered.set()
+        assert release.wait(10)
+        return push(root, **kwargs)
+
+    monkeypatch.setattr(GitHubBackup, 'push', staticmethod(waiting))
+    backup.tick()
+    try:
+        assert await asyncio.to_thread(entered.wait, 5)
+        world.tasks.add(world.project['id'], 'new merge')
+        await run_next(world)
+    finally:
+        release.set()
+        await backup.close()
+    state = world.registry.get(world.project['id'])['github_backup']
+    assert state['state'] == 'waiting-for-deploy' and state['commit'] == deployed
+    assert git(remote, 'rev-parse', 'main') == deployed
+    job = backup.job
+    backup.tick()
+    assert backup.job is job

@@ -1,11 +1,11 @@
-"""Application-owned, non-forcing backup of main. Network work never holds the queue/checkout fence."""
+"""Application-owned, non-forcing backup: deploy receipts pin targets for deployable projects."""
 import asyncio
 import json
 import os
 import re
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from urllib.parse import urlsplit
 
 from .git_commands import GitError, git_bytes
@@ -38,27 +38,30 @@ def github_remote(url):
 
 
 class GitHubBackup:
-    def __init__(self, db, registry):
+    def __init__(self, db, registry, has_setup=None):
         self.db, self.registry = db, registry
         self.job, self.started = None, False
         self.credentials = None
+        self.has_setup = has_setup or (lambda project_id: self.db.setting('deploy_setup:' + project_id) is not None)
 
     def offline(self, project_id):
         return self.db.setting('github_tier:' + project_id) == 'offline'
 
-    def request(self, project_id):
+    def request(self, project_id, commit=None, conn=None):
         if self.offline(project_id):
             return  # offline projects are never backed up: no state, no retry
-        with self.db.transaction() as conn:
+        with (nullcontext(conn) if conn is not None else self.db.transaction()) as conn:
             row = conn.execute('SELECT value FROM settings WHERE key=?', (PREFIX + project_id,)).fetchone()
             previous = json.loads(row['value']) if row else {}
-            value = {**previous, 'state': 'pending', 'retry_at': 0,
+            waiting = commit is None and self.has_setup(project_id)
+            value = {**previous, 'state': 'waiting-for-deploy' if waiting else 'pending',
+                     'target_commit': commit, 'retry_at': 0,
                      'generation': previous.get('generation', 0) + 1}
             conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                          (PREFIX + project_id, json.dumps(value)))
 
     def tick(self):
-        # A fresh installation also verifies and backs up the existing local backlog, without a new merge.
+        # Existing backlog uses the same deploy gate as new merges.
         if not self.started:
             self.started = True
             for project in self.registry.list():
@@ -70,12 +73,19 @@ class GitHubBackup:
             if project.get('github_tier') == 'offline':
                 continue
             state = self.db.setting(PREFIX + project['id'], {})
+            # Old pending receipts predate deploy gating and have no verified target.
+            if state.get('state') in {'pending', 'needs-attention'} and not state.get('target_commit') and self.has_setup(project['id']):
+                self.request(project['id'])
+                continue
             if state.get('state') in {'pending', 'needs-attention'} and state.get('retry_at', 0) <= time.time():
                 self.job = asyncio.create_task(self.attempt(project, state))
                 return
 
     async def attempt(self, project, state):
-        if project.get('github_tier') == 'offline':
+        if project.get('github_tier') == 'offline' or self.offline(project['id']):
+            return
+        if not state.get('target_commit') and self.has_setup(project['id']):
+            self.request(project['id'])
             return
         try:
             if project.get('github_tier'):
@@ -86,9 +96,11 @@ class GitHubBackup:
                 except ValueError:
                     result = {'state': 'needs-attention', 'reason': 'open-github-settings-for-tier-token'}
                 else:
-                    result = await asyncio.to_thread(self.push_with_token, project['path'], token)
+                    result = await asyncio.to_thread(self.push_with_token, project['path'], token,
+                                                     **({'commit': state['target_commit']} if state.get('target_commit') else {}))
             else:
-                result = await asyncio.to_thread(self.push, project['path'])
+                result = await asyncio.to_thread(self.push, project['path'],
+                                                 **({'commit': state['target_commit']} if state.get('target_commit') else {}))
         except Exception:
             # Git/SSH and optional hooks can echo credentials. Never store their error text.
             result = {'state': 'needs-attention', 'reason': 'backup-operation-failed'}
@@ -97,8 +109,9 @@ class GitHubBackup:
             current = json.loads(row['value']) if row else {}
             if current.get('generation') != state.get('generation'):
                 # A merge arrived while this immutable snapshot was being checked/pushed.
-                result = {**result, 'state': 'pending', 'retry_at': 0}
+                result = {**current, **({'commit': result['commit']} if result.get('state') == 'synced' else {})}
             else:
+                result = {**{k: current[k] for k in ('commit', 'target_commit') if k in current}, **result}
                 result['retry_at'] = time.time() + RETRY_SECONDS if result['state'] == 'needs-attention' else 0
             result |= {'generation': current.get('generation', 0), 'attempted_at': time.time()}
             conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
@@ -106,12 +119,12 @@ class GitHubBackup:
             self.db.event(conn, 'github_backup.result', result, project['id'])
 
     @staticmethod
-    def push_with_token(root, token):
+    def push_with_token(root, token, commit=None):
         with token_auth(token) as env:
-            return GitHubBackup.push(root, env)
+            return GitHubBackup.push(root, env, commit=commit)
 
     @staticmethod
-    def push(root, auth_env=None):
+    def push(root, auth_env=None, commit=None):
         def git(*args):
             network = args[0] in {'ls-remote', 'fetch', 'push'}
             return git_bytes(root, *args, **({'env': auth_env} if network and auth_env else {})).decode().strip()
@@ -149,7 +162,8 @@ class GitHubBackup:
                 if git('status', '--porcelain'):
                     return {'state': 'needs-attention', 'reason': 'uncommitted-files'}
                 return {'state': 'synced', 'commit': None, 'reason': 'empty-repository'}
-            head = local_head.stdout.decode().strip()
+            # Pin the receipt object even if main has advanced or rolled back.
+            head = git('rev-parse', '--verify', commit + '^{commit}') if commit else local_head.stdout.decode().strip()
             # Query the actual push URL, not an occasionally stale origin tracking ref or fetch URL.
             remote_head = git('ls-remote', '--refs', remote, 'refs/heads/' + branch)
             base = remote_head.split()[0] if remote_head else None
