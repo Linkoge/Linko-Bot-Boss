@@ -66,9 +66,15 @@ def changed_tests(root, base):
 
 def secret_check(root, base):
     """Key-shaped literals in the task's commits (base..HEAD) fail like a test, so GitHub push protection never sees them."""
+    # Commits merged in from main are already upstream: only this task's own commits count.
+    def ok(*args):
+        return subprocess.run(["git", "-C", str(root), *args], capture_output=True).returncode == 0
+
+    on_main = ok("symbolic-ref", "-q", "--short", "HEAD") and git(root, "symbolic-ref", "--short", "HEAD") == "main"
+    upstream = ["--not", "main"] if not on_main and ok("rev-parse", "-q", "--verify", "refs/heads/main") else []
     try:
         diff = subprocess.run(["git", "-C", str(root), "log", "-p", "-U0", "--no-color", "--no-ext-diff",
-                               "--format=@@commit %H", f"{base}..HEAD"], capture_output=True, timeout=60, check=True).stdout
+                               "--format=@@commit %H", f"{base}..HEAD", *upstream], capture_output=True, timeout=60, check=True).stdout
     except (subprocess.SubprocessError, OSError):
         return None
     hits = precheck(diff[:5_000_000])

@@ -80,7 +80,7 @@ def test_absolute_command_reuses_gate_for_other_project(tmp_path, monkeypatch, f
     assert Path(command[1]).is_absolute()
     completed = subprocess.run(command, cwd=tmp_path, capture_output=True, text=True, timeout=60)
     result = json.loads(completed.stdout)
-    assert completed.returncode == (1 if failure == "tests" else 0), completed.stderr
+    assert completed.returncode == (1 if failure in ("tests", "key_content") else 0), completed.stderr
     assert result["failures"] == tests["failures"]
     assert result["checks"] == tests["checks"]
     assert result["count"] == tests["count"]
@@ -90,7 +90,8 @@ def test_absolute_command_reuses_gate_for_other_project(tmp_path, monkeypatch, f
         assert result["checks"] == ["smoke", "targeted"]
         assert "assert False" in result["output"]
     if failure == "key_content":
-        assert result["ok"] and result["failures"] == []
+        assert not result["ok"] and result["checks"] == ["secrets"]
+        assert "temporary.txt:1" in result["failures"][0] and "(rule 10)" in result["failures"][0]
         assert "ghp_" + "A" * 36 not in completed.stdout
     assert (git(root, "status", "--porcelain"), git(root, "rev-parse", "HEAD")) == before
     assert list(data.iterdir()) == [data / "sentinel"]
