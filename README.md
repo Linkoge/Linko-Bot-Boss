@@ -238,7 +238,8 @@ their in-place workflow. Missing/unsupported origins or authentication failures 
 a saved deploy setup, backup waits for deploy; only a successful deploy receipt requests an attempt, pinned to exactly its commit even if main later advances. Failed, cancelled or rolled-back deploys never
 request a push; a successful repair deploy requests the next backup. Projects without a setup still request an
 attempt after merge. Startup schedules repositories without a receipt using the same deploy gate, and legacy pending
-receipts without a verified target wait for deploy. Offline projects never push. Failures retry the same target every
+receipts without a verified target wait for deploy. Installed runtime setups are migrated before opening the
+backup write transaction so startup cannot lock against its own migration. Offline projects never push. Failures retry the same target every
 five minutes without holding the queue, and never force-push.
 Durable per-project receipts in SQLite settings (`github_backup:<project-id>`) preserve pending work and retry times
 across restarts. Project tabs show the last backed-up commit in their tooltip, **GitHub waiting for deploy** while gated,
