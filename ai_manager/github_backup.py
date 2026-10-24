@@ -9,6 +9,7 @@ from contextlib import contextmanager, nullcontext
 from urllib.parse import urlsplit
 
 from .git_commands import GitError, git_bytes
+from .push_diagnosis import diagnose, precheck
 
 RETRY_SECONDS = 300
 PREFIX = 'github_backup:'
@@ -103,7 +104,7 @@ class GitHubBackup:
                 result = await asyncio.to_thread(self.push, project['path'],
                                                  **({'commit': state['target_commit']} if state.get('target_commit') else {}))
         except Exception:
-            # Git/SSH and optional hooks can echo credentials. Never store their error text.
+            # Unexpected failure: Git/SSH and hooks can echo credentials, so store no error text at all.
             result = {'state': 'needs-attention', 'reason': 'backup-operation-failed'}
         with self.db.transaction() as conn:
             row = conn.execute('SELECT value FROM settings WHERE key=?', (PREFIX + project['id'],)).fetchone()
@@ -129,6 +130,13 @@ class GitHubBackup:
         def git(*args):
             network = args[0] in {'ls-remote', 'fetch', 'push'}
             return git_bytes(root, *args, **({'env': auth_env} if network and auth_env else {})).decode().strip()
+
+        warnings = []
+
+        def failure(error):
+            token = (auth_env or {}).get('LINKO_GITHUB_CREDENTIAL')
+            return {'state': 'needs-attention', **diagnose(error.output, [token]),
+                    **({'warnings': warnings} if warnings else {})}
 
         # Non-Git projects keep their existing in-place behavior.
         if git_bytes(root, 'rev-parse', '--git-dir', check=False).returncode:
@@ -173,12 +181,19 @@ class GitHubBackup:
                 if git_bytes(root, 'merge-base', '--is-ancestor', base, head, check=False).returncode:
                     return {'state': 'needs-attention', 'reason': 'remote-history-diverged'}
             if base != head:
+                # Advisory only: GitHub's verdict decides, and this never blocks the push.
+                try:
+                    diff = git_bytes(root, 'log', '-p', '-U0', '--no-color', '--no-ext-diff', '--format=@@commit %H',
+                                     (base + '..' if base else '') + head)[:5_000_000]
+                    warnings.extend(precheck(diff))
+                except GitError:
+                    pass
                 # Explicit object/ref pair includes the entire backlog. Never force/reset/rebase.
                 git('push', '--porcelain', '--no-follow-tags', '--recurse-submodules=no',
                     remote, head + ':refs/heads/' + branch)
             return {'state': 'synced', 'commit': head, 'reason': 'backlog-verified'}
-        except GitError:
-            return {'state': 'needs-attention', 'reason': 'git-push-or-verification-failed'}
+        except GitError as error:
+            return failure(error)
 
     async def close(self):
         if self.job:

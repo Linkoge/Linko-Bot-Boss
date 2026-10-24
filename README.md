@@ -296,7 +296,15 @@ across restarts. Project tabs show the last backed-up commit in their tooltip, *
 and **GitHub needs attention** on failure; project API/manager records include the reason
 and retry timestamp. Backup failures do not fail tasks, consume repair rounds, or prevent merge/deploy.
 A later successful push includes all retained commits. Each Git command has a 60-second timeout and no interactive
-credential prompt. Raw Git/SSH/hook output is discarded, since it can contain credentials.
+credential prompt. Raw Git/SSH/hook output is never stored: `ai_manager/push_diagnosis.py` keeps the last 8 KB of
+a failed command's output, masks key-shaped values (GitHub/`sk-`/`xai-`/AWS keys, PEM blocks, `KEY=value`, URL
+credentials, the auth token) and parses it into a safe reason: `github-push-protection` (rule GH013, secret type,
+commit, `path:line`, and GitHub's unblock URL), `rejected-non-fast-forward`, `auth-denied`, `repository-not-found`,
+`network`, `hook-declined` or the generic `git-push-or-verification-failed`. The receipt, the `github_backup.result`
+event and the project API carry `reason`, a readable `message`, `detail` and at most three redacted `excerpt` lines;
+the project menu and tab tooltip show the message. Before pushing, a cheap local scan of the commits being pushed
+adds `warnings` (secret type, `path:line`, commit; never the value) when it sees literal key-shaped strings. It is
+advisory: it never blocks the push and GitHub's verdict wins.
 An untouched repository with an unborn `main` or `master` and an empty GitHub remote is synced with reason
 `empty-repository`; no artificial commit is created. Existing remote history, other local refs or uncommitted files
 still require attention when the local main branch is missing.

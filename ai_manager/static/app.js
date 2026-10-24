@@ -155,6 +155,8 @@ function projectLabel(p){
 }
 const tierLabel=t=>t==='company'?'Company':t==='offline'?'Offline':'Personal';
 const visibilityBadge=p=>{const v=p.repo_visibility;if(!['public','private','offline'].includes(v))return null;const badge=element('small',v[0].toUpperCase()+v.slice(1),`visibility-badge visibility-${v}`);badge.dataset.badge=v;return badge;};
+const backupSummary=g=>g.message||g.reason;
+const backupWarning=g=>(g.warnings||[]).length?'WARN: likely push-protection hits before pushing: '+g.warnings.slice(0,5).map(w=>`${w.type} in ${w.path}:${w.line}${w.commit?` (commit ${w.commit})`:''}`).join('; '):'';
 function renderProjects(){
   const repoInfo=$('github-project-repository'),selected=state.portfolio.projects.find(p=>p.id===state.project);repoInfo.replaceChildren();if(selected?.repository){repoInfo.append(document.createTextNode(selected.repository));if(selected.github_tier)repoInfo.append(element('small',tierLabel(selected.github_tier),'github-tier'));}
   const scroll=$('project-tabs').scrollLeft,focused=document.activeElement.closest('#projects button')?.dataset.project,globalButton=$('all-projects');
@@ -173,7 +175,7 @@ function renderProjects(){
     }
     if(p?.github_backup?.state==='needs-attention'){
       b.append(element('span',' · GitHub needs attention','muted'));
-      b.title+=`\nGitHub backup: ${p.github_backup.reason}. Local commits retained; retrying automatically.`;
+      b.title+=`\nGitHub backup: ${backupSummary(p.github_backup)}. Local commits retained; retrying automatically.`;
     }
     if(['warning','diverged','busy'].includes(p?.github_sync?.state)){b.append(element('span',p.github_sync.state==='diverged'?' · Out of sync with GitHub, needs attention':' · GitHub sync warning','warning'));b.title+='\n'+p.github_sync.reason;}
     b.dataset.project=id||'';b.setAttribute('aria-pressed',String(state.project===id));
@@ -228,6 +230,7 @@ function renderProjectMenu(){
       button.onclick=action(async()=>{closeProjectMenu(true);await selectProject(p.id);});row.append(button);}
     if(badge)row.append(badge);
     if(['warning','diverged','busy'].includes(p.github_sync?.state))row.append(element('span',p.github_sync.reason,'warning'));
+    if(p.github_backup?.state==='needs-attention'){const g=p.github_backup;row.append(element('span',backupSummary(g),'warning backup-reason'));if(backupWarning(g))row.append(element('span',backupWarning(g),'warning backup-warn'));}
     parent.append(row);
   };
   const sorted=[...state.portfolio.projects].sort(compareContexts);
