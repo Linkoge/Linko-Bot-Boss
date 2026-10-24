@@ -618,6 +618,8 @@ instance has one owner login (`python -m ai_manager.cli setup-owner` with that i
 other hard-coded port, path or hostname: the Tailscale name above is documentation, and `scripts/install_service.py`
 only asks Tailscale for a hostname when `--hostname` is not given.
 
+Automated onboarding of a restricted user (Linux user, instance, Cloudflare, Syncthing, Windows script): [docs/ONBOARDING.md](docs/ONBOARDING.md).
+
 A **restricted** instance (`AI_MANAGER_RESTRICTED=1`, the single mode setting) is for work that is not coding: Word
 documents, essays, forms, email, browsing. It requires `AI_MANAGER_PROJECT`, one existing folder, and refuses to start if
 that folder contains or sits inside the application code or the instance's data directory (no self-edit). Workers still

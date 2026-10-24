@@ -238,6 +238,9 @@ provider login, linger and service setup as that user too.
    `python3 scripts/install_deploy.py --instance NAME` (repeat for every instance).
    It registers each instance for coordinated restart and health verification.
 
+For a new restricted user with Windows sync and Cloudflare Access, the automated path is
+[ONBOARDING.md](ONBOARDING.md).
+
 Back up each instance database with its environment loaded using
 `scripts/backup_daily.py`. Restore only to a fresh path with the service stopped;
 provider native thread storage and project files need separate backups.
