@@ -575,12 +575,21 @@ Task dispatch waits for this check and any requested deploy. A failed fetch retr
 
 Diverged branches show “Out of sync with GitHub, needs attention” and stop automatic fetch/update attempts until the
 owner reconciles local main and its origin tracking ref. Tasks can still run with the warning. No automatic merge,
-rebase, reset or force operation resolves divergence. Dirty checkouts are preserved and skipped with a warning.
+rebase, reset or force operation resolves divergence. Dirty checkouts are preserved and skipped with a warning that
+names up to five changed paths (never contents). A failed incoming step records its **operation** (`fetch`, `refs`,
+`merge`, `deploy`, or `update` for an unexpected error) and a **cause** (`auth-denied`, `repository-not-found`,
+`missing-main`, `network`, `missing-ref`, `local-changes`, `local-lock`, `not-fast-forward`, or `unknown` with up to
+three redacted excerpt lines) in the same `github_sync:<project-id>` status, reusing `ai_manager/push_diagnosis.py`
+redaction (`diagnose_incoming`). Only the fetch is retried (two attempts), and only fetch messages say so. The next
+successful sync replaces the status, clearing the warning. Busy/deferred results are informational (muted text, not a
+sync warning); the project menu shows every reason as wrapped text beneath the project name row.
 GitHub receives verified changes about **15 minutes after merge**, once deployment succeeds; the other machine then
 receives them on its next idle check or before its next task. This is intended for machines used in turns, not
 simultaneous editing.
 
 Permanent coverage: `tests/test_github_sync.py` uses disposable bare origins for incoming sync and dispatch gating;
+`tests/test_github_sync_diagnosis.py` covers incoming failure diagnosis/redaction and
+`tests/test_project_menu_layout_browser.py` the mobile/desktop Projects menu geometry in Chromium;
 `tests/test_deploy_instances.py` covers recovery when the main service is current but another instance is stale.
 
 ## Multiple instances and the restricted work instance

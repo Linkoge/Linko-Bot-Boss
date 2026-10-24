@@ -180,7 +180,8 @@ function renderProjects(){
       b.append(element('span',' · GitHub needs attention','muted'));
       b.title+=`\nGitHub backup: ${backupSummary(p.github_backup)}. Local commits retained; retrying automatically.`;
     }
-    if(['warning','diverged','busy'].includes(p?.github_sync?.state)){b.append(element('span',p.github_sync.state==='diverged'?' · Out of sync with GitHub, needs attention':' · GitHub sync warning','warning'));b.title+='\n'+p.github_sync.reason;}
+    if(['warning','diverged','busy'].includes(p?.github_sync?.state)){const sync=p.github_sync;
+      b.append(element('span',sync.state==='diverged'?' · Out of sync with GitHub, needs attention':sync.state==='busy'?' · GitHub sync deferred':' · GitHub sync warning',sync.state==='busy'?'muted':'warning'));b.title+='\n'+sync.reason;}
     b.dataset.project=id||'';b.setAttribute('aria-pressed',String(state.project===id));
     b.onclick=action(()=>selectProject(id));$('projects').append(b);
   }
@@ -232,9 +233,12 @@ function renderProjectMenu(){
     else{const button=element('button',projectLabel(p),state.project===p.id?'selected':'');button.dataset.project=p.id;button.setAttribute('aria-pressed',String(state.project===p.id));
       button.onclick=action(async()=>{closeProjectMenu(true);await selectProject(p.id);});row.append(button);}
     if(badge)row.append(badge);
-    if(['warning','diverged','busy'].includes(p.github_sync?.state))row.append(element('span',p.github_sync.reason,'warning'));
-    if(p.github_backup?.state==='needs-attention'){const g=p.github_backup;row.append(element('span',backupSummary(g),'warning backup-reason'));if(backupWarning(g))row.append(element('span',backupWarning(g),'warning backup-warn'));}
-    if(unverifiedNote(p.github_backup))row.append(element('span',unverifiedNote(p.github_backup),'muted backup-unverified'));
+    // Status text wraps beneath the name row so a long message can never squeeze the project name.
+    const status=element('div',undefined,'project-menu-status');
+    if(['warning','diverged','busy'].includes(p.github_sync?.state))status.append(element('span',p.github_sync.reason,`${p.github_sync.state==='busy'?'muted sync-deferred':'warning sync-reason'}`));
+    if(p.github_backup?.state==='needs-attention'){const g=p.github_backup;status.append(element('span',backupSummary(g),'warning backup-reason'));if(backupWarning(g))status.append(element('span',backupWarning(g),'warning backup-warn'));}
+    if(unverifiedNote(p.github_backup))status.append(element('span',unverifiedNote(p.github_backup),'muted backup-unverified'));
+    if(status.children.length)row.append(status);
     parent.append(row);
   };
   const sorted=[...state.portfolio.projects].sort(compareContexts);

@@ -240,11 +240,15 @@ input,textarea,select{accent-color:var(--accent-solid)}
 
 .chat-trash-controls{display:flex;align-items:center;justify-content:space-between;gap:12px}#chat-menu .chat-trash-controls #restore-trash{width:auto;flex:1}#chat-menu .chat-trash-controls #empty-trash{margin-left:auto;width:44px;min-width:44px;flex:none;text-align:center;padding:10px}#empty-trash svg{display:block;margin:auto}#view-agents,.agent-output{overflow-anchor:none}
 
-.project-menu-row{display:flex;align-items:center;gap:2px;min-height:40px}
-#project-menu .project-menu-row button{flex:1;min-width:0;width:auto}
-#project-menu .project-visibility-toggle{display:grid;place-items:center;flex:none;width:40px;min-height:44px;margin:0;cursor:pointer}
+.project-menu-row{display:grid;grid-template-columns:40px minmax(0,1fr) auto;align-items:center;column-gap:2px;min-height:40px}
+#project-menu .project-menu-row button{min-width:0;width:100%}
+#project-menu .project-menu-row .visibility-badge{margin-left:0;margin-right:8px;white-space:nowrap}
+#project-menu .project-menu-status{grid-column:2/-1;min-width:0;padding-bottom:4px}
+#project-menu .project-menu-status span{display:block;padding:2px 10px;font-size:12px;line-height:1.45;color:var(--muted);overflow-wrap:anywhere}
+#project-menu .project-menu-status span.warning{color:#e4c58b}
+#project-menu .project-visibility-toggle{display:grid;place-items:center;width:40px;min-height:44px;margin:0;cursor:pointer}
 #project-menu input[type=checkbox]{width:16px;height:16px;margin:0;accent-color:var(--accent);cursor:pointer}
-#project-menu .project-menu-row span{min-width:0;overflow-wrap:anywhere;padding:7px 10px;color:var(--muted)}
+#project-menu .project-menu-row>span{min-width:0;overflow-wrap:anywhere;padding:7px 10px;color:var(--muted)}
 #project-menu summary{min-height:44px;padding:9px 10px;box-sizing:border-box;cursor:pointer;color:var(--muted)}
 #project-menu details{border-top:1px solid var(--border);margin:6px 0}
 

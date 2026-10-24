@@ -1,13 +1,50 @@
 """Bounded, fast-forward-only incoming GitHub updates through the existing deploy queue."""
 import asyncio
+import re
 import time
 from contextlib import nullcontext
 
 from . import fence
 from .git_commands import GitError, git_bytes
 from .github_backup import github_remote, token_auth
+from .push_diagnosis import OPERATIONS, diagnose_incoming, redact
 
 PREFIX = 'github_sync:'
+FETCH_ATTEMPTS = 2
+MAX_PATHS = 5
+
+
+def dirty_paths(root):
+    """Bounded, redacted names of changed paths (never contents), for the dirty-checkout warning."""
+    entries = git_bytes(root, 'status', '--porcelain', '-z').decode('utf-8', 'replace').split('\0')
+    paths, skip = [], False
+    for entry in entries:
+        if skip:
+            skip = False
+        elif entry:
+            skip = entry[0] in 'RC'  # the next entry is the rename/copy source
+            paths.append(redact(re.sub(r'[\x00-\x1f\x7f]', '?', entry[3:]), generic=False)[:80])
+    return paths
+
+
+def dirty_warning(paths):
+    shown = ', '.join(paths[:MAX_PATHS])
+    more = f' and {len(paths) - MAX_PATHS} more' if len(paths) > MAX_PATHS else ''
+    return {'state': 'warning', 'cause': 'uncommitted-changes', 'paths': paths[:MAX_PATHS], 'path_count': len(paths),
+            'reason': f'Uncommitted changes in {shown}{more}; update skipped, local files left untouched.'
+                      if paths else 'Uncommitted changes; update skipped.'}
+
+
+def failure(operation, error, secrets=(), attempts=1):
+    """One persisted shape for every failed incoming step: which operation failed and the redacted cause."""
+    if isinstance(error, GitError):
+        found = diagnose_incoming(operation, error.output, secrets, attempts)
+    else:
+        text = redact(str(error), secrets)[:200]
+        found = {'cause': 'unexpected-error', 'excerpt': [],
+                 'message': f'GitHub {OPERATIONS.get(operation, operation)} failed unexpectedly ({type(error).__name__})' + (f': {text}' if text else '.')}
+    return {'state': 'warning', 'operation': operation, 'cause': found['cause'], 'reason': found['message'],
+            'excerpt': found['excerpt']}
 
 
 class GitHubSync:
@@ -63,8 +100,8 @@ class GitHubSync:
     async def attempt(self, project_id, preparing=None):
         try:
             result = await asyncio.to_thread(self.pull, project_id)
-        except Exception:
-            result = {'state': 'warning', 'reason': 'GitHub update failed; work can continue. Retry later.'}
+        except Exception as error:
+            result = failure('update', error)
         self.db.set_setting(PREFIX + project_id, {**result, 'attempted_at': time.time()})
         self.due[project_id] = time.time() + self.interval
         if preparing is not None and result.get('state') != 'busy':
@@ -84,6 +121,7 @@ class GitHubSync:
             return {'state': 'excluded', 'reason': 'No GitHub origin.'}
         if not github_remote(remote):
             return {'state': 'excluded', 'reason': 'No GitHub origin.'}
+        step, token, attempts = 'inspect', None, 1
         try:
             state = self.status(project_id)
             # Preserve the divergence latch even while work is active or the checkout is dirty.
@@ -97,7 +135,7 @@ class GitHubSync:
                     "SELECT 1 FROM tasks WHERE project_id=? AND state='running'", (project_id,)):
                 return {'state': 'busy', 'reason': 'Work or deploy is active; update deferred.'}
             if git('status', '--porcelain'):
-                return {'state': 'warning', 'reason': 'Uncommitted changes; update skipped.'}
+                return dirty_warning(dirty_paths(root))
             token = self.pipeline.backups.credentials(project) if project.get('github_tier') else None
             # Fetch off the checkout fence: an unreachable host cannot hold other projects' queues.
             destination = remote
@@ -106,23 +144,30 @@ class GitHubSync:
                     destination = 'https://github.com/' + remote.split(':', 1)[1]
                 elif remote.startswith('ssh://git@github.com/'):
                     destination = 'https://github.com/' + remote.split('github.com/', 1)[1]
+            step = 'fetch'
             with (token_auth(token) if token else nullcontext(None)) as env:
-                for attempt in range(2):
+                for attempt in range(FETCH_ATTEMPTS):
+                    attempts = attempt + 1
                     try:
                         git('fetch', '--quiet', '--no-tags', '--recurse-submodules=no', destination,
                             'refs/heads/main:refs/remotes/origin/main', env=env)
                         break
                     except GitError:
-                        if attempt:
+                        if attempts == FETCH_ATTEMPTS:
                             raise
+                step, attempts = 'refs', 1
             with fence.hold(self.db.path.parent, exclusive=True):
                 if self.pipeline.pending() or self.db.one(
                         "SELECT 1 FROM tasks WHERE project_id=? AND state='running'", (project_id,)):
                     return {'state': 'busy', 'reason': 'Work or deploy is active; update deferred.'}
                 if git('status', '--porcelain'):
-                    return {'state': 'warning', 'reason': 'Uncommitted changes; update skipped.'}
-                if git('symbolic-ref', '--short', 'HEAD') != 'main':
-                    return {'state': 'warning', 'reason': 'Checkout is not on main; update skipped.'}
+                    return dirty_warning(dirty_paths(root))
+                branch = git_bytes(root, 'symbolic-ref', '--short', 'HEAD', check=False)
+                if branch.stdout.decode().strip() != 'main':
+                    current = redact(branch.stdout.decode().strip(), generic=False)[:80]
+                    return {'state': 'warning', 'cause': 'not-on-main',
+                            'reason': (f"Checkout is on '{current}', not main; update skipped." if current
+                                       else 'Checkout has a detached HEAD, not main; update skipped.')}
                 local, target = git('rev-parse', 'main'), git('rev-parse', 'refs/remotes/origin/main')
                 if local == target:
                     return {'state': 'synced', 'reason': 'Up to date with GitHub.'}
@@ -131,14 +176,16 @@ class GitHubSync:
                 if git_bytes(root, 'merge-base', '--is-ancestor', local, target, check=False).returncode:
                     return {'state': 'diverged', 'local': local, 'remote': target,
                             'reason': 'Out of sync with GitHub, needs attention: both main branches have moved.'}
+                step = 'merge'
                 git('merge', '--ff-only', '--no-overwrite-ignore', target)
+                step = 'deploy'
                 deployment = self.pipeline._request(project_id, 'github-sync', None, None, 'Pulled GitHub updates')
                 return {'state': 'updated', 'commit': target, 'reason': 'Pulled GitHub updates; ' +
                         ('deploy queued.' if deployment.get('id') else 'no deploy setup.')}
         except fence.Busy:
             return {'state': 'busy', 'reason': 'Checkout is busy; update deferred.'}
-        except (GitError, ValueError):
-            return {'state': 'warning', 'reason': 'GitHub fetch failed after bounded retries; work can continue.'}
+        except Exception as error:
+            return failure(step, error, [token], attempts)
 
     async def close(self):
         await asyncio.gather(*self.jobs.values(), return_exceptions=True)

@@ -84,6 +84,15 @@ def _push_protection_message(secrets, urls):
     return text + (': ' + urls[0] if urls else '.')
 
 
+def _excerpt(lines, secrets=()):
+    """At most three short lines that survive the strictest redaction unchanged."""
+    kept = []
+    for line in lines:
+        if line.strip() and redact(line, secrets) == line and len(kept) < 3:
+            kept.append(line.strip()[:200])
+    return kept
+
+
 CLASSES = [
     ('hook-declined', re.compile(r'(?i)hook declined')),
     ('auth-denied', re.compile(r'(?i)authentication failed|permission denied|could not read (?:username|password)|'
@@ -109,10 +118,7 @@ def diagnose(output, secrets=()):
     raw = output.decode('utf-8', 'replace') if isinstance(output, bytes) else (output or '')
     lines = _lines(raw[-TAIL_BYTES:])
     clean = redact(raw[-TAIL_BYTES:], secrets, generic=False)
-    kept = []
-    for line in lines:
-        if line.strip() and redact(line, secrets) == line and len(kept) < 3:
-            kept.append(line.strip()[:200])
+    kept = _excerpt(lines, secrets)
     if 'GH013' in raw or 'Push cannot contain secrets' in raw or re.search(r'(?i)push protection', raw):
         found, urls = _push_protection(lines)
         detail = {'kind': 'push-protection', 'rule': 'GH013', 'secrets': found, 'unblock_urls': urls}
@@ -150,3 +156,45 @@ def precheck(diff):
             if len(hits) >= MAX_HITS:
                 break
     return hits
+
+
+# Incoming (fetch / merge / ref) failures: same redaction and classes, messages name the failing operation.
+OPERATIONS = {'inspect': 'checkout inspection', 'fetch': 'fetch', 'refs': 'ref comparison',
+              'merge': 'fast-forward merge', 'deploy': 'deploy request', 'update': 'update'}
+INCOMING_CLASSES = [
+    ('missing-main', re.compile(r"(?i)couldn't find remote ref|remote ref does not exist")),
+    ('missing-ref', re.compile(r'(?i)unknown revision|bad revision|ambiguous argument|not a valid (?:object|ref)|'
+                               r'needed a single revision|unborn|not a git repository')),
+    ('local-changes', re.compile(r'(?i)would be overwritten|untracked working tree files|local changes')),
+    ('local-lock', re.compile(r'(?i)index\.lock|cannot lock ref|unable to create .*\.lock|another git process')),
+    ('not-fast-forward', re.compile(r'(?i)not possible to fast-forward|diverging|refusing to merge')),
+]
+INCOMING_MESSAGES = {
+    'auth-denied': 'GitHub denied access: authentication failed or the token/key lacks read permission.',
+    'repository-not-found': 'GitHub repository not found, or the credentials cannot see it.',
+    'missing-main': "The remote has no 'main' branch to fetch.",
+    'network': 'Could not reach GitHub (DNS, network error or timeout).',
+    'missing-ref': 'A local or remote-tracking main ref is missing or unreadable.',
+    'local-changes': 'Local files would be overwritten by the update; they were left untouched.',
+    'local-lock': 'Another Git process holds a lock in this checkout.',
+    'not-fast-forward': 'Local main cannot be fast-forwarded to origin/main.',
+}
+
+
+def diagnose_incoming(operation, output, secrets=(), attempts=1):
+    """Classify a failed incoming Git command: {'cause', 'message', 'excerpt'}; only redacted, bounded text."""
+    raw = output.decode('utf-8', 'replace') if isinstance(output, bytes) else (output or '')
+    tail = raw[-TAIL_BYTES:]
+    clean = redact(tail, secrets, generic=False)
+    excerpt = _excerpt(_lines(tail), secrets)
+    classes = ([c for c in CLASSES if c[0] in {'auth-denied', 'repository-not-found', 'network'}]
+               + INCOMING_CLASSES) if operation == 'fetch' else INCOMING_CLASSES
+    cause = next((name for name, pattern in classes if pattern.search(clean)), 'unknown')
+    label = OPERATIONS.get(operation, operation)
+    after = f' after {attempts} attempts' if attempts > 1 else ''
+    if cause == 'unknown':
+        detail = ' | '.join(excerpt)
+        message = f'GitHub {label} failed{after}' + (f': {detail}' if detail else ' for a reason the application could not classify.')
+    else:
+        message = f'GitHub {label} failed{after}: {INCOMING_MESSAGES[cause]}'
+    return {'cause': cause, 'message': message[:400], 'excerpt': excerpt}
