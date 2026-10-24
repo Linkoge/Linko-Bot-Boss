@@ -11,6 +11,7 @@ from .registry import Registry
 def main():
     parser = argparse.ArgumentParser(description="Linko Bot Boss local administration")
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("doctor", help="Read-only installation checks (no secrets)")
     commands.add_parser("discover")
     commands.add_parser("overview")
     add = commands.add_parser("add")
@@ -26,6 +27,10 @@ def main():
     commands.add_parser("revoke-sessions")
     commands.add_parser("serve")
     args = parser.parse_args()
+    if args.command == "doctor":
+        from .doctor import main as doctor
+
+        raise SystemExit(doctor())
     settings = Settings()
     settings.prepare()
     if args.command == "restore":

@@ -543,18 +543,7 @@ a Git repository only for that: put `.git` in the folder's Syncthing ignore list
 containing `.git`) so Syncthing never syncs repository internals, and add large binaries to `.gitignore` so they are
 neither committed nor pushed.
 
-**Create an instance** (the host side, such as its Linux user, the Syncthing folder, Cloudflare Tunnel and Access, is set
-up separately and is not done by the application):
-
-1. Make the folder a Git repository with a `main` branch and an `origin` on GitHub if backups are wanted.
-2. Copy `deploy/instance.env.example` to `~/.config/linko-bot-manager-NAME.env` and set `AI_MANAGER_PROJECT`,
-   `AI_MANAGER_DATA`, `AI_MANAGER_PORT` (a free port, not 8787) and `AI_MANAGER_ALLOWED_HOSTS` (its public hostname).
-3. `python3 scripts/install_service.py --instance NAME --start` installs the template unit
-   `linko-bot-manager@.service` (from `deploy/linko-bot-manager@.service.in`) and enables
-   `linko-bot-manager@NAME.service`. Create its login with the env file loaded
-   (`set -a; . ~/.config/linko-bot-manager-NAME.env; set +a; python -m ai_manager.cli setup-owner`).
-4. `python3 scripts/install_deploy.py --instance NAME` adds it to the deploy list (see below).
-5. Daily database backup of an instance: run `scripts/backup_daily.py` with that env file loaded.
+For the setup procedure, see [optional extra instances](docs/INSTALL.md#6-optional-extra-instances).
 
 **Deploys cover every instance.** `DATA/deploy/installed.json` (the saved runtime setup of the main instance) gets an
 `instances` list: `{"name", "service", "data", "url"}` for each, written by `install_deploy.py --instance NAME` from that
@@ -634,21 +623,9 @@ provider with the normal backoff, as does a limit failure when the other CLI is 
 `scripts/install_repair.py` copies `scripts/emergency_repair.py` to the host launcher, so this takes effect only after
 re-running `install` (see below); requests already running keep the old launcher until then.
 
-**One-time operator bootstrap is required after this code is merged.** From the live checkout, as the service user:
-
-```bash
-python3 scripts/install_repair.py install --conversation EXACT_EXISTING_CHAT_ID --auto-detect   # install / update
-python3 scripts/install_repair.py status                                                        # JSON state
-python3 scripts/install_repair.py uninstall                                                     # remove timer + launcher
-```
-
-`--conversation` is the ID of an existing manager chat where repair results are posted. It is required on the first
-install; later re-runs reuse the stored ID. The chat ID is not shown in the UI or its URL. To find it, while signed in
-to the manager open `/api/chat-history` on the app's origin (add `?project_id=PROJECT_ID` for a project chat, omit it
-for a chat outside any project). The JSON `conversations` list gives each chat's `title` and `id`; copy the `id` of the
-chosen chat exactly. Then run
-`python3 scripts/install_repair.py status` to confirm the repair tool is installed, enabled and active, and shows the
-expected conversation.
+For installation, updating the launcher and finding the result chat ID, see
+[install the host repair agent](docs/INSTALL.md#5-install-the-independent-host-repair-agent).
+Use `python3 scripts/install_repair.py status` to inspect state and `uninstall` to remove it.
 
 Omit `--auto-detect` for explicit requests only. Re-running `install` is idempotent: it rewrites the units, refreshes
 the launcher snapshot and reuses the stored chat ID if `--conversation` is omitted. An optional `--model` passes the
@@ -946,22 +923,9 @@ node --check ai_manager/static/app.js
 PYTHONPATH=. uv run python scripts/browser_smoke.py   # also browser_tasks.py and the other browser_*.py checks
 ```
 
-Audio recording and transcription (see [Whole-session audio recording](#whole-session-audio-recording)) needs three
-things besides the Python dependencies:
-
-1. **ffmpeg on the host**, which provides `ffprobe`: `sudo apt install -y ffmpeg`. Without it the microphone panel
-   reports "Audio needs ffprobe installed on the server."
-2. **`XAI_API_KEY` in the service environment** (the systemd unit or the shell that starts the server, not the
-   checkout). Without it the panel reports "Audio needs XAI_API_KEY in the server environment." Never put the key in
-   the repository or in these docs.
-3. **HTTPS, or localhost for development.** Mobile browsers only grant microphone access in a secure context, so a
-   phone must reach the manager over HTTPS (for example through the tunnel or Tailscale setup below).
-
-Configuration: `AI_MANAGER_DATA` (default `~/.local/share/linko-bot-manager`), `AI_MANAGER_PORT` (8787),
-`AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_RESTRICTED` and `AI_MANAGER_PROJECT` (restricted work instance, see Multiple instances), `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_PUBLIC_HOSTS`, `AI_MANAGER_TRUSTED_PROXIES`, `AI_MANAGER_SECURE_COOKIE`, `AI_MANAGER_CODEX`,
-`AI_MANAGER_CLAUDE`, `AI_MANAGER_CLAUDE_MODELS` (comma-separated Claude model ids offered in the picker, default
-`claude-haiku-5-5,claude-sonnet-5-5,claude-opus-5-5`; any id the installed `claude` accepts), `AI_MANAGER_REPO` (live checkout, tests only). Daily database backup: `scripts/backup_daily.py`
-(restore only to a fresh path with the service stopped; native thread storage and project files are backed up separately).
+Fresh-machine setup, service environment, audio prerequisites, provider login, host repair,
+extra instances, updates and troubleshooting: [Installation guide](docs/INSTALL.md).
+Verify an installation with `uv run python -m ai_manager.cli doctor`, including after reboot.
 
 ## Data and history
 
