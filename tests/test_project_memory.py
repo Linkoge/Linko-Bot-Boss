@@ -345,7 +345,7 @@ def test_long_deployment_result_is_summarised_in_the_manager_context(system):
     assert len(encode(context).encode()) <= CONTEXT_MAXIMUM
 
 
-def test_limits_are_the_doubled_temporary_ones_with_one_context_ceiling():
+def test_limits_have_one_source_and_one_context_ceiling():
     assert (TARGET, MAXIMUM, CONTEXT_MAXIMUM) == (3000, 3200, 4000)
     from ai_manager.project_memory import REVIEW_INSTRUCTIONS
     assert f"<={TARGET} UTF-8 bytes; maximum {MAXIMUM} bytes" in REVIEW_INSTRUCTIONS
@@ -375,13 +375,62 @@ def test_oversize_errors_state_the_actual_size_and_limit(system):
     size = len(encode(big).encode())
     with pytest.raises(ValueError, match=rf"\({size} bytes > {MAXIMUM}\)"):
         activate(memory, project, big)
-    # An existing brief inside the brief limit but with an oversized envelope names the context size and ceiling.
+
+
+def test_oversized_brief_and_envelope_never_block_sending(system):
+    project, memory, before = ready(system)
+    chat = system[2]
     fat = {**before["brief"], "state": ["x" * (MAXIMUM - 400)]}
     activate(memory, project, fat)
     original = chat.registry.get
-    chat.registry.get = lambda pid: {**original(pid), "path": "p" * CONTEXT_MAXIMUM}
+    chat.registry.get = lambda pid: {**original(pid), "path": "p" * 1500}
     try:
-        with pytest.raises(ValueError, match=rf"\(\d+ bytes > {CONTEXT_MAXIMUM}\)"):
-            chat.context(project)
+        prompt, _ = chat.prompt(chat.conversation(project), "hello", "execution", "new-thread", None)
     finally:
         chat.registry.get = original
+    context = {k: v for k, v in prompt["context"].items() if k != "instructions"}
+    assert len(encode(context).encode()) <= CONTEXT_MAXIMUM
+    assert "truncated" in context["brief_notice"]
+    assert context["project_brief"]["goals"] == fat["goals"]  # requirements survive free-text truncation
+    assert memory.snapshot(project)["brief"] == fat  # saved version untouched
+
+
+def test_fit_is_deterministic_and_prefers_free_text():
+    from ai_manager.project_memory import fit, size_of
+    brief = {"purpose": "p", "goals": ["keep me"], "constraints": [], "state": ["s" * 500, "t" * 100],
+             "decisions": [], "pending": [], "sources": [], "recent": []}
+    small, truncated = fit(brief, 300)
+    assert truncated and size_of(small) <= 300 and small == fit(brief, 300)[0]
+    assert small["goals"] == ["keep me"] and fit(brief, 10**6) == (brief, False)
+
+
+def test_snapshot_flags_large_and_oversized_briefs(system):
+    project, memory, before = ready(system)
+    assert before["size_state"] == "ok" and before["context_maximum"] == CONTEXT_MAXIMUM
+    assert activate(memory, project, {**before["brief"], "state": ["x" * (TARGET - 250)]})["size_state"] == "large"
+
+
+@pytest.mark.parametrize("wrap", ["```json\n%s\n```", "Here you go: %s thanks"])
+async def test_review_end_to_end_with_mocked_model_respects_limit(system, wrap):
+    project, memory, old = ready(system)
+    brief = copy.deepcopy(old["brief"])
+    brief["state"] = ["z" * (MAXIMUM + 500)]
+    text = wrap % encode({"brief": brief, "mismatches": [], "sources": ["project:fields"]})
+
+    class Server(FakeServer):
+        async def request(self, method, params, timeout=30):
+            if method == "turn/start":
+                queue = self.queues[params["threadId"]]
+                queue.put_nowait({"method": "item/agentMessage/delta", "params": {"delta": text}})
+                queue.put_nowait({"method": "turn/completed", "params": {"turn": {"id": "t", "status": "completed"}}})
+                return {"turn": {"id": "t"}}
+            return {}
+
+    reviews = MemoryReviews(memory, system[3], Server)
+    ref = reviews.start(project, True)["review"]
+    await asyncio.gather(*list(reviews.jobs.values()))
+    result = memory.get(project, ref)
+    assert result["status"] == "candidate", result.get("error")
+    assert len(encode(result["candidate"]).encode()) <= MAXIMUM
+    assert any("truncated" in m for m in result["mismatches"])
+    assert memory.snapshot(project)["active"] == old["active"]

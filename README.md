@@ -920,8 +920,11 @@ probes, live database changes, service restarts or host installation are part of
   Earlier picker visual evidence remains in `docs/evidence/model-picker/`.
 - Project list with display names, visibility/stash, pause, discovery; To-Do list (never executes by itself; Start hands the
   To-Do directly to one queued task); read-only project memory brief for the manager with owner-run review
-  (temporarily doubled limits in `ai_manager/project_memory.py`: brief target 3000 / maximum 3200 UTF-8 bytes, whole project
-  context ceiling `CONTEXT_MAXIMUM` 4000 bytes; chat reads the ceiling from there and errors state the actual size and limit);
+  (limits live only in `ai_manager/project_memory.py`: brief target 3000 / maximum 3200 UTF-8 bytes, whole project
+  context ceiling `CONTEXT_MAXIMUM` 4000 bytes. An oversized brief never blocks chat: the copy attached to a message is
+  deterministically truncated by `fit()` (free text first, requirements last) with a `brief_notice`, and the saved version is
+  untouched. The Memory view flags briefs above target/maximum; a review candidate over the maximum is truncated and flagged
+  as a mismatch for the owner. Review output may be wrapped in prose/fences; failures show their reason in the review panel);
   chat clear/trash/archive/search. **Archive all** saves the entire conversation and opens a fresh chat.
   **Archive part 10** saves all earlier messages while keeping the latest 10 visible messages
   (usually 5 owner and 5 AI) in the active chat. Both use a named, searchable archive and require

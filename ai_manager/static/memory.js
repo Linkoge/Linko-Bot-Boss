@@ -9,6 +9,7 @@ function renderMemoryReview(){
   if(!project||!snapshot)return;
   memoryText('Active brief',snapshot.brief,$('memory-current')).open=true;
   $('memory-current').append(element('small',`Conservative token upper bound ${snapshot.token_upper_bound}; target ${snapshot.target}. Authoritative docs remain retrievable below.`));
+  if(snapshot.size_state!=='ok')$('memory-current').append(element('p',snapshot.size_state==='oversized'?`This brief exceeds the ${snapshot.maximum}-byte limit. Chat still works but sends a truncated copy; run a review to condense it.`:`This brief is above its ${snapshot.target}-byte target. Consider running a review to condense it.`));
   for(const review of snapshot.review_records){
     const panel=element('article',undefined,'panel');
     panel.append(element('h3',`Review · ${review.status}`),element('p',review.progress));
@@ -51,5 +52,6 @@ $('memory-review').onclick=action(async()=>{
   if(!project)return;
   if(!confirm(`Start full review for ${projectName(project)}? It will inspect project code, descriptions, scoped state and selected historical evidence, using time and Codex allowance. Cost is unknown. Active memory stays unchanged until Apply.`))return;
   await api(`/api/projects/${project}/brief/review`,{method:'POST',body:JSON.stringify({confirmed:true})});
+  notice('Memory review started; progress appears below.');
   if(selection===state.selection)await loadMemory(selection);
 });

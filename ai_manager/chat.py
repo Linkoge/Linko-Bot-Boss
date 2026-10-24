@@ -374,7 +374,7 @@ class Chat:
                 ],
                 "instructions": self.db.setting("global_instructions", ""),
             }
-        from .project_memory import CONTEXT_MAXIMUM, ProjectMemory, encode
+        from .project_memory import ProjectMemory
         p = self.registry.get(project_id)
         memory = ProjectMemory(self.db, self.registry).snapshot(project_id)
         context = {
@@ -382,24 +382,31 @@ class Chat:
             "project_brief": memory["brief"],
             "memory_reference": memory["active"],
         }
-        size = len(encode(context).encode())
-        if size > CONTEXT_MAXIMUM:
-            raise ValueError(
-                f"Project context exceeds token ceiling ({size} bytes > {CONTEXT_MAXIMUM}); condense brief with provenance"
-            )
+        self.fit_context(context)
         return {**context, "instructions": self.db.setting("global_instructions", "")}
+
+    @staticmethod
+    def fit_context(context):
+        """Keep the project context under the ceiling by truncating the brief; never blocks a message."""
+        from .project_memory import CONTEXT_MAXIMUM, fit, size_of
+        body = {k: v for k, v in context.items() if k != "instructions"}
+        size = size_of(body)
+        if size <= CONTEXT_MAXIMUM:
+            return
+        brief = context["project_brief"]
+        room = CONTEXT_MAXIMUM - (size - size_of(brief)) - 200  # Leaves space for the notice.
+        context["project_brief"], _ = fit(brief, max(room, 0))
+        context["brief_notice"] = context.get("brief_notice") or (
+            f"The project brief ({size_of(brief)} bytes) was truncated to fit the {CONTEXT_MAXIMUM}-byte context "
+            "ceiling; the full brief is saved. Ask the owner to run a memory review to condense it."
+        )
 
     def prompt(self, conversation, content, execution_id, thread_id, prior):
         context = self.context(conversation["project_id"])
         from .pipeline import Pipeline
         context['deployment'] = Pipeline(self.db, self.registry).summary(conversation['project_id'])
         if conversation['project_id']:
-            from .project_memory import CONTEXT_MAXIMUM, encode
-            size = len(encode({k: v for k, v in context.items() if k != 'instructions'}).encode())
-            if size > CONTEXT_MAXIMUM:
-                raise ValueError(
-                    f'Default project context exceeds token ceiling ({size} bytes > {CONTEXT_MAXIMUM}); condense with provenance'
-                )
+            self.fit_context(context)
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         source = self.db.one("SELECT e.*,t.state AS task_status,t.blocker,t.rounds,t.merge FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery_execution=?", (execution_id,))
         prompt = {"message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}

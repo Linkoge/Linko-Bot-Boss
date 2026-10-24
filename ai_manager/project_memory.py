@@ -16,15 +16,54 @@ from .model_settings import manager_route
 FIELDS = ("purpose", "goals", "constraints", "state", "decisions", "pending", "sources", "recent")
 PROTECTED = ("goals", "constraints", "decisions", "pending")
 TARGET = 3000
-MAXIMUM = 3200  # Temporary doubled limit; leaves room for the project identity/retrieval envelope below CONTEXT_MAXIMUM.
+MAXIMUM = 3200  # Largest brief a version may hold; leaves room for the project identity/retrieval envelope.
 CONTEXT_MAXIMUM = 4000  # Ceiling for the whole project context sent to the manager, brief included.
+# These three constants are the only source of the limits: chat, review prompts, validation and the UI read them.
+ELLIPSIS = " [...truncated]"
+
+
+def size_of(value):
+    return len(encode(value).encode())
+
+
+def fit(brief, limit):
+    """Deterministically shrink a brief to `limit` UTF-8 bytes; returns (brief, truncated).
+
+    Never raises. Free-text fields (purpose, state, sources, recent) are cut first, longest entry first;
+    protected requirement fields are cut only if nothing else is left, so they survive whenever possible.
+    The stored version is never touched: callers keep the full brief as the saved version.
+    """
+    out = json.loads(encode(brief))
+    truncated = False
+    for fields in (("purpose", "state", "sources", "recent"), PROTECTED):
+        while size_of(out) > limit:
+            slots = []
+            for key in fields:
+                if key == "purpose":
+                    slots.append((out[key], out, key))
+                elif key == "recent":
+                    slots += [(d[k], d, k) for d in out[key] for k in ("report", "verification", "effect", "change")]
+                else:
+                    slots += [(v, out[key], i) for i, v in enumerate(out[key])]
+            slots = [t for t in slots if len(t[0].encode()) > len(ELLIPSIS) + 8]
+            if not slots:
+                break
+            value, holder, index = max(slots, key=lambda t: len(t[0].encode()))
+            excess = size_of(out) - limit
+            keep = max(8, len(value.encode()) - excess - len(ELLIPSIS))
+            cut = value.encode()[:keep].decode(errors="ignore").rstrip() + ELLIPSIS
+            if size_of(cut) >= size_of(value):
+                break  # No further progress possible; never loop.
+            holder[index] = cut
+            truncated = True
+    return out, truncated
 
 
 def encode(value):
     return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
 
 
-def validate(brief):
+def validate(brief, enforce_size=True):
     if not isinstance(brief, dict) or set(brief) != set(FIELDS):
         raise ValueError(
             "Brief must contain purpose, goals, constraints, state, decisions, pending, sources and recent"
@@ -47,8 +86,8 @@ def validate(brief):
             raise ValueError("Every delivery needs id/date/change/effect/verification/deployment/report")
         if delivery["deployment"] not in {"not_requested", "pending", "failed", "deployed"}:
             raise ValueError("Invalid deployment status")
-    size = len(encode(brief).encode())
-    if size > MAXIMUM:
+    size = size_of(brief)
+    if enforce_size and size > MAXIMUM:
         raise ValueError(
             f"Brief exceeds conservative token ceiling ({size} bytes > {MAXIMUM}); "
             "condense with provenance, never remove requirements; active memory is unchanged"
@@ -144,9 +183,15 @@ class ProjectMemory:
         return {
             **control,
             "brief": version["brief"],
-            "token_upper_bound": len(encode(version["brief"]).encode()),
+            "token_upper_bound": size_of(version["brief"]),
             "target": TARGET,
             "maximum": MAXIMUM,
+            "context_maximum": CONTEXT_MAXIMUM,
+            "size_state": "oversized"
+            if size_of(version["brief"]) > MAXIMUM
+            else "large"
+            if size_of(version["brief"]) > TARGET
+            else "ok",
             "budget_method": "UTF-8 byte upper bound",
         }
 
@@ -222,12 +267,17 @@ class ProjectMemory:
         return review
 
     def candidate(self, project_id, ref, brief, mismatches, sources):
-        validate(brief)
+        validate(brief, enforce_size=False)
         if not isinstance(mismatches, list) or any(not isinstance(m, str) or not m.strip() for m in mismatches):
             raise ValueError("Review mismatches must be text")
+        mismatches = list(mismatches)
+        if size_of(brief) > MAXIMUM:
+            # A model that overshoots the limit gets a deterministic condensation, flagged for the owner.
+            brief, _ = fit(brief, MAXIMUM)
+            mismatches.append(f"Candidate exceeded the {MAXIMUM}-byte brief limit and was truncated; check the diff")
+        validate(brief)
         review = self.get(project_id, ref)
         old = self.get(project_id, review["base"])["brief"]
-        mismatches = list(mismatches)
         protected_changes = {}
         # Enforce surfacing removals, even when the model fails to mention them.
         for field in (*PROTECTED, "state"):
@@ -312,6 +362,20 @@ class ProjectMemory:
             )
             self.activate(conn, project_id, control, prior["brief"], "owner rollback to " + version)
         return self.snapshot(project_id)
+
+
+def parse_output(text):
+    """Accept the review JSON bare or wrapped in prose/code fences; fail with a readable message."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        start, end = text.find("{"), text.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                return json.loads(text[start : end + 1])
+            except ValueError:
+                pass
+    raise ValueError("Review did not return a JSON brief: " + text[:200].replace("\n", " "))
 
 
 REVIEW_TOOL = {
@@ -568,17 +632,18 @@ class MemoryReviews:
                     self.memory.review_update(project_id, ref, usage=usage.record(params.get("tokenUsage", {})))
                 if method == "turn/completed":
                     if params["turn"]["status"] != "completed":
-                        raise ValueError("Review did not complete")
+                        detail = (params["turn"].get("error") or {}).get("message", "")
+                        raise ValueError("Review did not complete" + (": " + str(detail) if detail else ""))
                     output = params.get("reconciled_output", output)
                     self.memory.review_update(project_id, ref, output=output)
-                    result = json.loads(output)
-                    sources = result["sources"]
-                    if not isinstance(sources, list) or not sources or any(s not in observed for s in sources):
+                    result = parse_output(output)
+                    sources = result.get("sources")
+                    if not isinstance(sources, list) or not any(s in observed for s in sources):
                         raise ValueError("Candidate references must come from inspected sources")
                     files = self.files(self.memory.registry.allowed_path(project["path"]))
                     if files and not any(s.startswith("file:") for s in observed):
                         raise ValueError("Review did not inspect relevant project files")
-                    self.memory.candidate(project_id, ref, result["brief"], result["mismatches"], observed)
+                    self.memory.candidate(project_id, ref, result["brief"], result.get("mismatches", []), observed)
                     return
         except asyncio.CancelledError:
             self.memory.review_update(
