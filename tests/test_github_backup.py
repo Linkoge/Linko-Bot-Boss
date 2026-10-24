@@ -398,3 +398,21 @@ async def test_push_finishing_during_merge_preserves_waiting_state(world, remote
     job = backup.job
     backup.tick()
     assert backup.job is job
+
+
+@pytest.mark.smoke
+@pytest.mark.asyncio
+async def test_startup_backup_migrates_installed_setup_before_backup_transaction(world, remote):
+    from ai_manager.pipeline import atomic
+
+    project_id = world.project['id']
+    world.db.run('DELETE FROM settings WHERE key=?', ('deploy_setup:' + project_id,))
+    installed = {'repo': str(world.app), 'data': str(world.db.path.parent)}
+    atomic(world.pipeline.root / 'installed.json', installed)
+    assert world.db.setting('deploy_setup:' + project_id) is None
+    # This uses the real Pipeline.setup migration, which takes its own write transaction.
+    world.pipeline.backups.tick()
+    assert world.db.setting('deploy_setup:' + project_id) == {'runtime': installed}
+    assert world.registry.get(project_id)['github_backup']['state'] == 'waiting-for-deploy'
+    assert world.pipeline.backups.job is None
+    assert git(remote, 'for-each-ref') == ''

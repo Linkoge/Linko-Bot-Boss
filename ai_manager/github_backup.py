@@ -50,10 +50,12 @@ class GitHubBackup:
     def request(self, project_id, commit=None, conn=None):
         if self.offline(project_id):
             return  # offline projects are never backed up: no state, no retry
+        # setup() may migrate the installed runtime and write settings itself. Resolve it
+        # before taking the backup write transaction to avoid a nested SQLite writer.
+        waiting = commit is None and self.has_setup(project_id)
         with (nullcontext(conn) if conn is not None else self.db.transaction()) as conn:
             row = conn.execute('SELECT value FROM settings WHERE key=?', (PREFIX + project_id,)).fetchone()
             previous = json.loads(row['value']) if row else {}
-            waiting = commit is None and self.has_setup(project_id)
             value = {**previous, 'state': 'waiting-for-deploy' if waiting else 'pending',
                      'target_commit': commit, 'retry_at': 0,
                      'generation': previous.get('generation', 0) + 1}
