@@ -76,6 +76,7 @@ def hub(tmp_path):
     github = FakeGitHub()
     app = create_app(settings, FakeServer(settings), github_fetch=github)
     app.state.github_projects.pipeline.backups.tick = lambda: None
+    app.state.github_projects.pipeline.sync.tick = lambda: None
     with TestClient(app, base_url='http://localhost') as browser:
         owner = {'username': 'owner', 'password': secrets.token_urlsafe(16)}
         browser.post('/api/setup', json={**owner, 'token': (settings.data_dir / 'setup-token').read_text()})
@@ -407,6 +408,7 @@ def test_restricted_instance_rejects_every_github_action(tmp_path):
                         project_path=project, secure_cookie=False, github_token_file=tmp_path / 'tok')
     app = create_app(settings, FakeServer(settings), github_fetch=github)
     app.state.github_projects.pipeline.backups.tick = lambda: None
+    app.state.github_projects.pipeline.sync.tick = lambda: None
     with TestClient(app, base_url='http://localhost') as browser:
         owner = {'username': 'owner', 'password': secrets.token_urlsafe(16)}
         browser.post('/api/setup', json={**owner, 'token': (settings.data_dir / 'setup-token').read_text()})

@@ -206,3 +206,21 @@ def test_service_installer_installs_the_template_and_enables_one_instance(tmp_pa
     assert ['systemctl', '--user', 'enable', '--now', 'linko-bot-manager@work.service'] in calls
     with pytest.raises(SystemExit, match='lowercase'):
         module.install_instance(repo, home, units, '/usr/bin/codex', '../x', True)
+
+
+def test_stale_instance_restarts_even_when_main_already_runs_target(runtime, work):
+    work.start()
+    target = commit(runtime.repo, 'main already updated', **{
+        'README.md': ('# Linko Bot Boss', '# Linko Bot Boss (current main)')})
+    # Simulate a prior restart that updated only the main service.
+    subprocess.run(runtime.config['service_cmds']['stop'], check=True, timeout=60)
+    subprocess.run(runtime.config['service_cmds']['start'], check=True, timeout=60)
+    main_only = deploy_script.Deploy({**runtime.config, 'instances': []})
+    main_only.wait_health(target)
+    assert runtime.running() == target and work.running() == runtime.base
+    runtime.request()
+    result = runtime.run()
+    assert result['status'] == 'success'
+    assert result['previous'] == target
+    assert runtime.running() == work.running() == target
+    assert (Path(result['backup']) / 'work' / 'before.sqlite3').exists()

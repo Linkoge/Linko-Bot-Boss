@@ -268,6 +268,16 @@ class Deploy:
         except (OSError, ValueError):
             return None
 
+    def instances_current(self, commit):
+        for instance in self.instances:
+            try:
+                status, body = self.http('/api/auth-status', url=instance['url'])
+                if status != 200 or json.loads(body).get('release_commit') != commit:
+                    return False
+            except (OSError, ValueError):
+                return False
+        return True
+
     def health(self, commit):
         """App responds with the expected code, scheduler runs, auth boundary holds and a session works."""
         if self.setup:
@@ -426,7 +436,7 @@ class Deploy:
                 raise Stop('failed', 'live checkout is busy: ' + str(error)) from error
             if not self.setup and not previous:
                 raise Stop('failed', 'previous release unknown; cannot guarantee code and database rollback')
-            if previous == target and not request.get('emergency'):
+            if previous == target and not request.get('emergency') and self.instances_current(target):
                 self.wait_health(target)
                 raise Stop('success', f'{target[:10]} is already live; nothing to deploy')
             tests = None if self.setup else self.config.get('test_cmd')

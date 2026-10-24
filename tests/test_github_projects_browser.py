@@ -25,6 +25,7 @@ s = Settings()
 github = FakeGitHub()
 app = create_app(s, FakeServer(s), github_fetch=github)
 app.state.github_projects.pipeline.backups.tick = lambda: None
+app.state.github_projects.pipeline.sync.tick = lambda: None
 app.state.github_projects.store.write(PAT)
 app.state.github_projects.stores['company'].write(COMPANY_PAT)
 app.state.github_projects.save_company_org('acme')
@@ -491,7 +492,7 @@ def test_project_menu_labels_groups_repository_and_global_order(page, browser_ap
     menu = page.locator('#project-menu')
     assert all('…' not in label and '...' not in label for label in menu.locator('button, summary').all_inner_texts())
     actions = menu.get_by_role('group', name='Project actions', exact=True)
-    assert actions.locator('button').all_inner_texts() == ['Change display name', 'Rename project', 'Create project', 'Create offline project']
+    assert actions.locator('button').all_inner_texts() == ['Change display name', 'Pull updates now', 'Rename project', 'Create project', 'Create offline project']
     assert actions.locator('[data-project=rename] + p').inner_text() == page.evaluate(
         '()=>state.portfolio.projects.find(p=>p.id===state.project).repository')
     assert menu.get_by_role('button', name='GitHub settings', exact=True).count() == 0
@@ -541,3 +542,15 @@ def test_menu_stash_restore_keeps_global_available_and_last(page, width):
     page.locator(f'#project-menu [data-project="{project}"]').click()
     expect(page.locator('#message-input')).to_have_value('Retained draft')
     expect(page.locator('#projects button').last).to_have_attribute('id', 'all-projects')
+
+
+def test_pull_updates_button_calls_project_route_and_shows_result(page):
+    selected = page.evaluate('()=>state.project')
+    calls = []
+    def result(route):
+        calls.append(route.request.url)
+        route.fulfill(json={'state': 'synced', 'reason': 'Up to date with GitHub.'})
+    page.route('**/api/projects/*/pull', result)
+    menu_action(page, 'github-pull')
+    expect(page.locator('#notice-text')).to_have_text('Up to date with GitHub.')
+    assert len(calls) == 1 and calls[0].endswith(f'/api/projects/{selected}/pull')

@@ -39,6 +39,7 @@ class Settings:
     github_company_token_file: Path | None = field(
         default_factory=lambda: Path(p).expanduser() if (p := os.getenv("AI_MANAGER_GITHUB_COMPANY_TOKEN_FILE")) else None
     )
+    github_sync_seconds: int = field(default_factory=lambda: int(os.getenv("AI_MANAGER_GITHUB_SYNC_SECONDS", "300")))
     session_seconds: int = field(default_factory=lambda: int(os.getenv("AI_MANAGER_SESSION_SECONDS", "2592000")))
     allowed_hosts: tuple[str, ...] = field(
         default_factory=lambda: tuple(

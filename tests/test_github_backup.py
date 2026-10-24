@@ -398,3 +398,14 @@ async def test_push_finishing_during_merge_preserves_waiting_state(world, remote
     job = backup.job
     backup.tick()
     assert backup.job is job
+
+
+def test_backup_request_migrates_installed_setup_before_write_transaction(world):
+    from ai_manager.pipeline import atomic
+    pid = world.project['id']
+    world.db.run('DELETE FROM settings WHERE key=?', ('deploy_setup:' + pid,))
+    config = {'repo': str(world.app), 'data': str(world.settings.data_dir)}
+    atomic(world.pipeline.root / 'installed.json', config)
+    world.pipeline.backups.request(pid)
+    assert world.pipeline.setup(pid) == {'runtime': config}
+    assert world.registry.get(pid)['github_backup']['state'] == 'waiting-for-deploy'

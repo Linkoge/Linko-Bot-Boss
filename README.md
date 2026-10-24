@@ -304,7 +304,7 @@ by a single **Settings** entry, which opens the settings view at **GitHub Settin
 focused, alongside the Company token and organization fields. The menu has no duplicate GitHub settings shortcut or
 disabled rename hint. The token forms are absent from the main project navigation. Restricted instances continue to
 hide the project menu, All Projects, and GitHub settings.
-The repository actions remain create and rename; **there is no repository delete code or route**. The API client
+The repository actions are create, rename and Pull updates now (see Incoming GitHub updates); **there is no repository delete code or route**. The API client
 refuses every request except `GET /user`, `GET /user/memberships/orgs/{configured-org}`, `GET /orgs/{configured-org}`,
 `POST /user/repos`, `POST /orgs/{configured-org}/repos` (exactly the saved organization only), and
 `PATCH /repos/{owner}/{repo}` (`ai_manager/github_projects.py`).
@@ -334,10 +334,10 @@ and [organization details API](https://docs.github.com/en/rest/orgs/orgs#get-an-
 checks and their scope limitations. See the
 [GitHub organization repository API](https://docs.github.com/en/rest/repos/repos#create-an-organization-repository).
 
-Each tier uses its own token for **create, rename and application backup push**. A missing token disables its create
-option, hides its menu rename action, and blocks rename/push at the API. The create dialog points to GitHub Settings;
+Each tier uses its own token for **create, rename, application backup push and incoming fetch**. A missing token disables its create
+option, hides its menu rename action, and blocks rename/push and warns on incoming fetch. The create dialog points to GitHub Settings;
 there is no fallback to the other token or SSH.
-Stored remotes retain the existing SSH URL style. For tiered projects, the backup worker uses the equivalent HTTPS URL
+Stored remotes retain the existing SSH URL style. For tiered projects, backup and incoming sync use the equivalent HTTPS URL
 and an ephemeral askpass helper; the credential is passed only in the network subprocess environment, never in command
 arguments or a remote URL. The helper contains no credential and is removed after the operation. Existing projects
 without a saved tier retain their service-user Git credentials. Non-forcing backup behavior remains.
@@ -483,6 +483,29 @@ forwards its public hostname to it. Single owner, username/password login; there
 
 Permanent coverage: `tests/test_public_access.py` and `tests/test_sessions.py` (disposable data; cookie security,
 sliding renewal, expiration and revocation in both instance modes).
+
+## Incoming GitHub updates
+
+Machines used in turns automatically fetch GitHub origins every five minutes and immediately before dispatching
+work for that project. Set `AI_MANAGER_GITHUB_SYNC_SECONDS` to change this interval (seconds, minimum 10).
+Offline projects and projects without a GitHub origin never fetch. Restricted instances do not sync their checkout.
+The top-corner project menu includes **Pull updates now** and reports the result; project rows show sync warnings.
+
+Only a clean checkout on `main` can fast-forward to a strictly newer `origin/main`. Active project tasks defer the
+update. A saved deploy setup uses the existing bounded deploy request queue, backup, full tests, restart, mandatory
+health check and rollback; self-updates use the same installed self-deploy adapter and restart all instances together.
+Task dispatch waits for this check and any requested deploy. A failed fetch retries once (each Git command has a
+60-second timeout), warns, and allows work to proceed. Other projects continue while the fetch runs.
+
+Diverged branches show “Out of sync with GitHub, needs attention” and stop automatic fetch/update attempts until the
+owner reconciles local main and its origin tracking ref. Tasks can still run with the warning. No automatic merge,
+rebase, reset or force operation resolves divergence. Dirty checkouts are preserved and skipped with a warning.
+GitHub receives verified changes about **15 minutes after merge**, once deployment succeeds; the other machine then
+receives them on its next idle check or before its next task. This is intended for machines used in turns, not
+simultaneous editing.
+
+Permanent coverage: `tests/test_github_sync.py` uses disposable bare origins for incoming sync and dispatch gating;
+`tests/test_deploy_instances.py` covers recovery when the main service is current but another instance is stale.
 
 ## Multiple instances and the restricted work instance
 

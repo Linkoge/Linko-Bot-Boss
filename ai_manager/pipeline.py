@@ -18,6 +18,7 @@ from .deploy_auto import SETUP_FILE, read_proposal
 from .deploy_setup import validate_setup
 from .fence import Busy, main_branch
 from .github_backup import GitHubBackup
+from .github_sync import GitHubSync
 
 RESTRICTED = 'Not available on a restricted instance'
 NO_SETUP = 'no deploy setup; a Create deploy setup task is queued automatically'
@@ -163,6 +164,7 @@ class Pipeline:
         self.db, self.registry, self.job, self.restricted = db, registry, None, restricted
         self.root = db.path.parent / 'deploy'
         self.backups = GitHubBackup(db, registry, lambda project_id: self.setup(project_id) is not None)
+        self.sync = GitHubSync(self)
 
     def setup(self, project_id):
         project = self.registry.get(project_id)

@@ -201,6 +201,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     attachments = Attachments(db, settings)
     chat.attachments = attachments
     pipeline = Pipeline(db, registry, restricted)
+    pipeline.sync.interval = max(10, settings.github_sync_seconds)
     core = Core(db, registry, settings, pipeline, worker_factory)
     scheduler = Scheduler(db, registry, settings, core, chat, pipeline)
     chat.action_handler = scheduler.manager_action
@@ -679,7 +680,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         task_page = tasks.page(project_id, through=task_through, older=older == 'tasks')
         return {
             "scope_project_id": project_id,
-            "projects": registry.list(),
+            "projects": [{**p, "github_sync": pipeline.sync.status(p["id"])} for p in registry.list()],
             "global_last_used_at": db.setting("global_last_used_at", 0),
             "tasks": task_page['tasks'],
             "task_cursor": task_page['cursor'],
@@ -704,7 +705,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def add_project(body: ProjectBody):
         return registry.add(body.path, body.name)
 
-    # GitHub actions: create and rename only. There is intentionally no delete route or delete code.
+    # GitHub actions and incoming updates. There is intentionally no delete route or delete code.
+    @app.post("/api/projects/{project_id}/pull", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def github_pull(project_id: str):
+        registry.get(project_id)
+        return await asyncio.shield(pipeline.sync.start(project_id))
+
     @app.get("/api/github", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def github_status():
         return github.status()

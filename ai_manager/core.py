@@ -264,14 +264,14 @@ class Tasks:
             self.db.event(conn, "task." + action, {}, task["project_id"], task_id)
         return self.get(task_id)
 
-    def claim(self):
+    def claim(self, ready=None):
         try:
             with fence.hold(self.db.path.parent, exclusive=False):
-                return self._claim()
+                return self._claim(ready)
         except Busy:
             return None  # A deploy holds the fence: no new work starts until it finishes.
 
-    def _claim(self):
+    def _claim(self, ready=None):
         now, claimed = time.time(), None
         with self.db.transaction() as conn:
             for task in conn.execute("""SELECT t.*,p.path,p.status AS project_status FROM tasks t
@@ -285,6 +285,8 @@ class Tasks:
                     continue  # paused or archived by the owner: skipped like a hold
                 if task["retry_at"] and task["retry_at"] > now:
                     continue  # waiting for a usage limit or the network: skipped like a hold until its retry time
+                if ready is not None and not ready(task["project_id"], (task["id"], task["revision"])):
+                    continue
                 execution_id = new_id()
                 conn.execute("UPDATE tasks SET state='running',blocker='',retry_at=NULL,lease_owner=?,revision=revision+1,"
                              "updated_at=? WHERE id=?", (execution_id, now, task["id"]))
@@ -717,4 +719,5 @@ class Core:
         for job in list(self.jobs.values()):
             job.cancel()
         await asyncio.gather(*list(self.jobs.values()), return_exceptions=True)
+        await self.pipeline.sync.close()
         await self.pipeline.backups.close()
