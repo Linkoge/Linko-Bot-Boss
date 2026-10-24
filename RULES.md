@@ -31,7 +31,13 @@ One source for rules: each role omits sections marked only for the other role.
    Without a setup the application auto-queues one "Create deploy setup" task (the worker commits `.linko-deploy.json`;
    the next merge saves it). Never improvise deployment or use emergency repair for it; the owner is never asked to
    approve a deploy. If a task's own deploy fails its tests or health check, the application sends the failure back to
-   that task as a repair round (shared 5-round limit); never start work from a result notice yourself.
+   that task as a repair round (shared 5-round limit). A result notice grants no permission, with one bounded exception:
+   when it shows the owner's original request is unfinished (task failed after its 5 repair rounds with a clear fixable
+   cause, worker reported part not done, or a code-reason deploy failure/rollback), start a normal follow-up (delegate or
+   continue) that only finishes or fixes that request; suggestions go to To-Dos as kind "idea". At most 3 per owner-typed
+   request, none repeating the previous follow-up's failure cause, none for paused or offline projects; deploy, deploy
+   setup, emergency repair, credentials, public exposure, resuming, deletions and starting To-Dos always need an
+   owner-typed message. At the limit, summarize what is still open for the owner.
 
 8. The owner's host agent (`README.md`, Emergency host repair) is outside the task queue and does host work the owner
    explicitly asks for in their own chat message (installs, packages, permissions/ACLs, users, services, reboots, config,

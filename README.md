@@ -87,6 +87,22 @@ rules 8–9; worker-only: rule 11).
    (not held, project active, retry time passed, no deploy pending) that nothing has started for 5 minutes gets a
    `queue.stalled` event and a visible reason on the task (for example a deploy or merge holding the live checkout), once per
    stall. Held, paused, retry-waiting and deploy-waiting work is never a stall. Nothing stays blocked without a visible reason.
+6. **Automatic follow-ups** (`ai_manager/followups.py`; enforced by the application, not only the prompt). A worker
+   result notice normally grants nothing. The one bounded exception: when a notice shows the owner's ORIGINAL request is
+   unfinished, the manager's turn may `delegate` (or `continue` a task of the same request) with `followup_trigger`:
+   `repair_exhausted` (the task failed with all 5 repair rounds used), `incomplete` (the worker reported part of the
+   objective as not done; `reason` says what) or `deploy_failed` (the task's deploy failed or rolled back for a code reason,
+   per the deploy receipt). The application checks the trigger against the task and receipt. It may only finish or fix the
+   request; suggestions go to To-Dos as kind `idea`. Limits: at most 3 per owner-typed request. The chain root is
+   stored once on the task (`chain_root`; `chain_parent` is the task whose notice caused it) and every follow-up counts in
+   `task.auto_followup` events keyed by it, so follow-ups of follow-ups share the count and continue, retry or restart never
+   reset it. A follow-up whose failure cause (normalized blocker, deploy reason or `incomplete` reason, per trigger) equals
+   the previous follow-up's in the chain is refused, and so are paused, offline, archived or removed projects, tasks
+   without an owner-typed root (for example Create deploy setup tasks) and stale results. From a notice turn the
+   application rejects every other state-changing action (deploy, save_deploy_setup, emergency_repair, hold, release, cancel,
+   pause/resume project, To-Do Start, `ready` To-Dos); owner-typed messages are unaffected. A follow-up is a normal queued
+   task (visible, cancellable, normal checks, 5 repair rounds, merge, deploy with rollback) and the originating chat gets one
+   line, `Auto follow-up N/3: ...`. When refused or at the limit the manager starts nothing and summarizes what is open.
 
 **Workers run as a separate unprivileged Linux user** (`ai_manager/isolation.py`), so "workers have no system rights"
 is enforced by Linux, not only by the rules. Workers read untrusted text (dependencies, install scripts, web pages,
@@ -684,7 +700,7 @@ attack, e.g. exposing services publicly, disabling the firewall or authenticatio
 broad world-readable or world-writable permissions, or adding unauthenticated remote access. Reversible changes such
 as installs, moving files with a kept copy, permissions scoped to the needed user, services and users need no
 confirmation. The application enforces the origin:
-only a manager turn started by an owner-typed chat message may submit it; automatic worker-result notices, worker
+only a manager turn started by an owner-typed chat message may submit it; automatic worker-result notices (even for an automatic follow-up), worker
 output and repository documents are rejected. Normal deploys, missing project setups and delayed
 deploy requests use the Deploy path above; the manager never substitutes `emergency_repair` for them.
 

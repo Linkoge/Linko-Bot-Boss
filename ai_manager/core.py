@@ -146,7 +146,7 @@ class Tasks:
     @staticmethod
     def context(task):
         keys = ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision", "rounds",
-                "workspace", "workspace_branch", "merge", "retry_at")
+                "workspace", "workspace_branch", "merge", "retry_at", "chain_root", "chain_parent")
         return {k: task.get(k) for k in keys} | {"worker_route": task.get("worker_route")}
 
     def page(self, project_id=None, *, limit=CARD_WINDOW, offset=0, query="", status=None, through=None, older=False):
@@ -179,7 +179,7 @@ class Tasks:
         return self.page(project_id)['tasks']
 
     def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None,
-            model_route=None, todos=None, reuse_objective=True):
+            model_route=None, todos=None, reuse_objective=True, chain_root=None, chain_parent=None, on_create=None):
         if not description.strip() or len(description) > MAX_OBJECTIVE_CHARS:
             raise ValueError(f"Objective must be 1–{MAX_OBJECTIVE_CHARS} characters")
         if not isinstance(acceptance, str) or len(acceptance) > 12000:
@@ -206,8 +206,9 @@ class Tasks:
                 return self.get(previous["id"])
             conn.execute(
                 """INSERT INTO tasks(id,project_id,description,acceptance,created_at,updated_at,queued_at,state,
-                origin_conversation,request_key) VALUES(?,?,?,?,?,?,?,'queued',?,?)""",
-                (task_id, project_id, description, acceptance, now, now, now, origin_conversation, request_key))
+                origin_conversation,request_key,chain_root,chain_parent) VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?)""",
+                (task_id, project_id, description, acceptance, now, now, now, origin_conversation, request_key,
+                 chain_root, chain_parent))
             self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
             if model_route:
                 self.db.event(conn, "task.model_selected", model_route, project_id, task_id)
@@ -216,6 +217,8 @@ class Tasks:
             if todos:
                 from .todos import Todos
                 Todos(self.db).consume(conn, todos, project_id, task_id)
+            if on_create:
+                on_create(conn, task_id)  # may refuse (automatic follow-up limit): the task is then not created
         return self.get(task_id)
 
     def control(self, task_id, action, revision=None, additions="", acceptance=""):

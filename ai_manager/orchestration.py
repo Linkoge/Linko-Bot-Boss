@@ -8,6 +8,7 @@ import logging
 
 from .chat import internal_result
 from .core import Tasks
+from .followups import TRIGGERS, Followups
 from .history import Maintenance
 from .pipeline import RESTRICTED
 from .project_memory import ProjectMemory
@@ -76,7 +77,8 @@ MANAGER_TOOL = {
             "title": {"type": "string"},
             "details": {"type": "string", "description": "To-Do details, or additional instructions for continue; appended alongside objective."},
             "path": {"type": "string"},
-            "reason": {"type": "string"},
+            "reason": {"type": "string", "description": "Why; for an automatic follow-up with followup_trigger 'incomplete', exactly what part of the original request is not done."},
+            "followup_trigger": {"type": "string", "enum": list(TRIGGERS), "description": "Only in a turn started by a worker result notice, for delegate/continue that finishes or fixes the owner's ORIGINAL request: repair_exhausted (task failed after all repair rounds), incomplete (worker reported part not done), deploy_failed (deploy failed or rolled back for a code reason). Omit in owner-typed turns."},
             "query": {"type": "string"},
             "status": {"type": "string", "enum": ["queued", "held", "running", "done", "failed"]},
             "message_id": {"type": "string"},
@@ -111,6 +113,7 @@ class Scheduler:
         self.error = ""
         self.pipeline = pipeline or core.pipeline
         self.restricted = settings.restricted
+        self.followups = Followups(db, registry, self.pipeline)
 
     async def manager_action(self, selected_project, params):
         args = params["arguments"]
@@ -131,8 +134,9 @@ class Scheduler:
             sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
             if sources:
                 args = {**args, 'todos': sources}
-        if internal and action in {'delegate', 'continue', 'hold', 'release', 'cancel', 'resume_project', 'deploy', 'save_deploy_setup', 'emergency_repair'}:
-            raise ValueError('Worker result notices are not explicit owner authorization; the owner decides what happens next')
+        # A result notice is not the owner: only reads, idea To-Dos and a bounded delegate/continue get through.
+        followup = self.followups.authorize(action, args, selected_project, params) if internal else None
+        chain_root = followup["root"] if followup else params.get("manager_execution_id")
         if args.get("todos") and action not in {"delegate", "continue"}:
             raise ValueError("To-Do ids go only with delegate or continue, when the owner asks to start them")
         for entry_id in args.get("todos", []):
@@ -277,6 +281,9 @@ class Scheduler:
                 project_id, args["objective"], params["conversation_id"],
                 f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",
                 acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
+                chain_root=chain_root, chain_parent=followup and followup["parent"],
+                on_create=followup and (lambda conn, task_id: self.followups.reserve(
+                    conn, followup, task_id, params, args["objective"])),
             )
             return self.tasks.context(task)
         if action in {"hold", "release", "cancel", "continue"}:
@@ -294,6 +301,8 @@ class Scheduler:
                         (params["manager_execution_id"], task["id"])).fetchone()
                     if previous:
                         return self.tasks.context(task)  # replayed call
+                    if followup:
+                        self.followups.reserve(conn, followup, task["id"], params, additions or args.get("reason", ""))
                     if args.get("todos"):
                         Todos(self.db).consume(conn, args["todos"], project_id, task["id"])
                     if selected:
