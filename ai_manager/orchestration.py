@@ -358,7 +358,8 @@ class Scheduler:
 
     async def tick(self):
         async with self.lock:
-            self.pipeline.report()
+            if receipt := self.pipeline.report():
+                await asyncio.to_thread(self.core.repair_deploy, receipt)
             await self.core.runner.tick()  # first: no chat state can keep queued work from starting
             await self.observer.observe({key: self.chat.server for key in self.chat.jobs})
             await self.chat.recover()

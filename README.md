@@ -41,6 +41,13 @@ rules 8–9; worker-only: rule 11).
    syncing main if needed.
 3. **Repair rounds** (a counter on the task row, never reset by retry, restart or continue). A failing check goes back to
    the same worker as a repair round, at most 5 times; the task then stops with a plain reason and the manager reports it.
+   The same counter covers deploy failures: when the deploy of a task's own merge (request with `task_id`) ends `failed` or
+   `rolled_back` because the full test suite or the health check failed (the receipt's `repairable` flag), the application
+   itself re-queues that task as a repair round (`Core.repair_deploy`, run when the receipt is reported). The failure text
+   is the deploy reason (failing test summary), the branch is brought up to current `main`, and the fix merges and
+   auto-deploys as usual. After 5 rounds the task stops as failed ("Deploy failed and could not be fixed: ...") with a
+   normal result notice. Only the application's own receipt triggers this, never worker or notice text. Withdrawal, a busy
+   or dirty checkout, lock/idle timeouts, backup or setup problems and deploys without a task are reported, not re-queued.
 4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one merge at a time across projects, the
    deploy request is made under the same fence hold); there is no per-project switch. Clean merges of main into the
    branch are checked again before delivery. Before merging into the project folder, tracked local edits, deletions
@@ -379,7 +386,8 @@ fence, back up, deploy `main`, check health, and automatically roll back on fail
 checks precede the merge. The installed manager runtime adapter also runs its full backend suite once, backs up SQLite,
 restarts its service and checks scheduler/authentication health; failures restore code and database. External command
 and user-systemd service setups use the same consumer, lock, queue deadline, backup/health/rollback phases and receipts.
-No repository-name or manager-only deployment policy remains. The short
+A test or health failure of a task's own deploy goes back to that task as a repair round (see Repair rounds above); the
+receipt carries `repairable` for it. No repository-name or manager-only deployment policy remains. The short
 result is `DATA/deploy/last-deploy.txt`. While a request is pending no new work starts and nothing merges, in any project (the
 checkout fence, `ai_manager/fence.py`; running tasks of other projects finish or wait to merge, and the deploy waits for idle across all of them), but never for more than 30 minutes: the watchdog withdraws a request that has not
 reached its backup by then (the wait for idle is bounded the same way), tells the originating chat, and the queue runs on.

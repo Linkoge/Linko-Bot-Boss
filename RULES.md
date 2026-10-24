@@ -30,7 +30,8 @@ One source for rules: each role omits sections marked only for the other role.
    and rollback. Passing merges auto-deploy through the same bounded 30-minute queue path; explicit deploy uses it too.
    Without a setup the application auto-queues one "Create deploy setup" task (the worker commits `.linko-deploy.json`;
    the next merge saves it). Never improvise deployment or use emergency repair for it; the owner is never asked to
-   approve a deploy.
+   approve a deploy. If a task's own deploy fails its tests or health check, the application sends the failure back to
+   that task as a repair round (shared 5-round limit); never start work from a result notice yourself.
 
 8. The owner's host agent (`README.md`, Emergency host repair) is outside the task queue and does host work the owner
    explicitly asks for in their own chat message (installs, packages, permissions/ACLs, users, services, reboots, config,

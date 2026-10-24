@@ -556,6 +556,54 @@ class Core:
                           task["project_id"], task_id)
         return stop
 
+    def repair_deploy(self, receipt):
+        """The application's own deploy receipt for a task's merge failed on tests or health: send it back to that task as
+        a repair round (shared counter, at most REPAIR_ROUNDS). Withdrawals and infrastructure failures are not repairable
+        and only get reported. Returns True when the task was re-queued or stopped."""
+        if (receipt.get("status") not in {"failed", "rolled_back"} or not receipt.get("repairable")
+                or not receipt.get("task_id") or receipt.get("source") not in {"auto", "owner"}):
+            return False
+        try:
+            task = self.tasks.get(receipt["task_id"])
+        except ValueError:
+            return False
+        if task["state"] != "done" or not task["workspace_branch"]:
+            return False
+        if self.db.one("SELECT 1 FROM events WHERE task_id=? AND kind='task.deploy_repair' AND payload LIKE ?",
+                       (task["id"], '%"' + receipt["id"] + '"%')):
+            return False
+        project = self.registry.get(task["project_id"])
+        shared = Path(self.registry.allowed_path(project["path"]))
+        reason = f"Deploy {receipt['status'].replace('_', ' ')} after merge: {receipt['reason']}"
+        failure = {"ok": False, "checks": ["deploy"], "count": 1, "failures": [reason[:600]], "output": reason[-2500:]}
+        base = None
+        if root := task["workspace"]:
+            try:  # the repair starts from the current main: the merged branch is brought up to it and diffed against it
+                base = git(shared, "rev-parse", main_branch(shared))
+                git(Path(root), *IDENTITY, "merge", "--no-edit", base)
+            except (ValueError, OSError, subprocess.SubprocessError) as error:
+                log.warning("task %s: could not bring main into its branch for a deploy repair: %s", task["id"], error)
+                base = None
+        stop = self.next_round(task["id"], failure)
+        now = time.time()
+        with self.db.transaction() as conn:
+            self.db.event(conn, "task.deploy_repair", {"deploy": receipt["id"], "reason": reason[:600], "stop": stop},
+                          task["project_id"], task["id"])
+            if stop:
+                stop = "Deploy failed and could not be fixed: " + stop
+                eid = new_id()  # a finished run of its own so the normal result notice reaches the owner
+                conn.execute("""INSERT INTO executions(id,task_id,project_id,agent_id,status,error,started_at,finished_at,
+                    worktree,branch,delivery) VALUES(?,?,?,'execution','failed',?,?,?,?,?,'pending')""",
+                             (eid, task["id"], task["project_id"], stop, now, now, task["workspace"], task["workspace_branch"]))
+                conn.execute("UPDATE tasks SET state='failed',blocker=?,revision=revision+1,updated_at=? WHERE id=?",
+                             (stop, now, task["id"]))
+                self.db.event(conn, "worker.finished", {"status": "failed", "error": stop}, task["project_id"], task["id"], eid)
+            else:
+                conn.execute("UPDATE tasks SET state='queued',queued_at=?,blocker='',requeues=0,retry_at=NULL,held=0,"
+                             "workspace_base=COALESCE(?,workspace_base),revision=revision+1,updated_at=? WHERE id=?",
+                             (now, base, now, task["id"]))
+        return True
+
     def check(self, root, base):
         return unresolved(root) or self.gate(root, base)
 

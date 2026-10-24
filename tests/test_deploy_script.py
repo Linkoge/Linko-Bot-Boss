@@ -173,7 +173,7 @@ def test_unhealthy_release_rolls_back_code_and_database(runtime):
     runtime.request()
     result = runtime.run()
     assert result['status'] == 'rolled_back' and result['commit'] == bad and result['previous'] == good
-    assert 'scheduler' in result['reason'] and 'restored' in result['reason']
+    assert 'scheduler' in result['reason'] and 'restored' in result['reason'] and result['repairable'] is True
     assert git(runtime.repo, 'rev-parse', 'HEAD') == good == git(runtime.repo, 'rev-parse', 'main')
     assert git(runtime.repo, 'rev-parse', 'linko-failed-' + result['id']) == bad
     assert runtime.running() == good
@@ -259,7 +259,7 @@ def test_not_idle_within_the_limit_fails_without_restart(runtime):
     deploy.busy = lambda: {'unfinished_executions': 1}
     runtime.request()
     result = deploy.main()
-    assert result['status'] == 'failed' and 'not idle' in result['reason'] and runtime.running() == runtime.base
+    assert result['status'] == 'failed' and 'not idle' in result['reason'] and not result.get('repairable') and runtime.running() == runtime.base
 
 
 def test_hold_and_withdrawal_stop_the_deploy_before_any_restart(runtime):
@@ -295,10 +295,12 @@ def test_failing_tests_dirty_checkout_and_missing_install_change_nothing(runtime
     runtime.request()
     result = runtime.run()
     assert result['status'] == 'failed' and 'full backend suite failed' in result['reason'] and '1 failed' in result['reason']
+    assert result['repairable'] is True
     runtime.config['test_cmd'] = [sys.executable, '-c', 'raise SystemExit(0)']
     (runtime.repo / 'README.md').write_text('local edit\n')
     runtime.request()
-    assert 'uncommitted' in runtime.run()['reason']
+    dirty = runtime.run()
+    assert 'uncommitted' in dirty['reason'] and not dirty.get('repairable')
     git(runtime.repo, 'checkout', '--', 'README.md')
     assert (runtime.state / 'pid').read_text() == pid and runtime.running() == runtime.base
     runtime.request()

@@ -62,9 +62,14 @@ def run(argv, cwd=None, timeout=300, check=True, env=None):
 class Stop(Exception):
     """Ends the deploy with a status before anything was changed."""
 
-    def __init__(self, status, reason):
+    def __init__(self, status, reason, repairable=False):
         super().__init__(reason)
         self.status = status
+        self.repairable = repairable  # a code change can fix it (failing tests or health), unlike busy/lock/setup problems
+
+
+class HealthFailed(RuntimeError):
+    """The health check still failed at its deadline."""
 
 
 class Deploy:
@@ -184,7 +189,7 @@ class Deploy:
     def finish(self, request, status, reason, **extra):
         result = {'id': self.id, 'status': status, 'reason': reason[:500], 'finished_at': time.time(),
                   'requested_at': request.get('requested_at'), 'project_id': request.get('project_id'),
-                  'task_id': request.get('task_id'), 'conversation_id': request.get('conversation_id'), **extra}
+                  'task_id': request.get('task_id'), 'source': request.get('source'), 'conversation_id': request.get('conversation_id'), **extra}
         atomic(self.root / 'results' / (self.id + '.json'), result)
         atomic(self.root / 'result.json', result)
         if request.get('project_id'):
@@ -307,7 +312,7 @@ class Deploy:
                 return self.health(commit)
             except Exception as error:
                 if time.monotonic() >= deadline:
-                    raise RuntimeError('health check failed: ' + str(error)) from error
+                    raise HealthFailed('health check failed: ' + str(error)) from error
                 self.sleep(1)
 
     # ---- database ------------------------------------------------------------------------------------------------
@@ -428,7 +433,7 @@ class Deploy:
             if tests and not request.get('skip_tests'):
                 result = run(tests, cwd=self.repo, timeout=self.config.get('test_seconds', 3600), check=False)
                 if result.returncode:
-                    raise Stop('failed', 'full backend suite failed: ' + (result.stdout + result.stderr).strip()[-300:])
+                    raise Stop('failed', 'full backend suite failed: ' + (result.stdout + result.stderr).strip()[-300:], repairable=True)
             if request.get('emergency'):
                 emergency_stop()
             self.state('waiting_idle', commit=target)
@@ -495,7 +500,8 @@ class Deploy:
                     self.wait_health(previous)
                 except Exception as restart_error:
                     return self.finish(request, 'rollback_failed', str(stop) + '; restart failed: ' + str(restart_error))
-            return self.finish(request, stop.status, str(stop), commit=target, previous=previous)
+            return self.finish(request, stop.status, str(stop), commit=target, previous=previous,
+                               repairable=stop.repairable)
         except Exception as error:
             if not stopped:
                 return self.finish(request, 'failed', str(error), commit=target, previous=previous)
@@ -520,9 +526,10 @@ class Deploy:
                                    commit=target, previous=previous, backup=str(backups))
             if not changed:
                 return self.finish(request, 'failed', str(error)[:300] + '; service restarted',
-                                   commit=target, previous=previous)
+                                   commit=target, previous=previous, repairable=isinstance(error, HealthFailed))
             return self.finish(request, 'rolled_back', f'{str(error)[:300]}; code and data restored to '
-                               f'{(previous or "backed-up release")[:20]}', commit=target, previous=previous, backup=str(backups))
+                               f'{(previous or "backed-up release")[:20]}', commit=target, previous=previous, backup=str(backups),
+                               repairable=isinstance(error, HealthFailed))
         finally:
             fenced.close()
 

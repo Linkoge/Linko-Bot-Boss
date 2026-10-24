@@ -312,15 +312,15 @@ class Pipeline:
                          ('pipeline-' + hashlib.sha256(key.encode()).hexdigest()[:24], conversation_id, text, time.time()))
 
     def report(self):
-        """Tell the originating conversation about a finished deploy exactly once."""
+        """Tell the originating conversation about a finished deploy exactly once; returns the receipt when it was new."""
         result = read(self.root / 'result.json')
         if not result or self.pending():
-            return
+            return None
         with self.db.transaction() as conn:
             key = 'deploy_reported:' + result['id']
             if conn.execute('SELECT 1 FROM settings WHERE key=?', (key,)).fetchone():
-                return
-            payload = {k: result.get(k) for k in ('id', 'status', 'reason', 'commit', 'previous')}
+                return None
+            payload = {k: result.get(k) for k in ('id', 'status', 'reason', 'commit', 'previous', 'repairable', 'source')}
             self.db.event(conn, 'deployment.result', payload, result.get('project_id'), result.get('task_id'))
             text = {'success': 'Deploy succeeded', 'failed': 'Deploy failed; nothing changed',
                     'rolled_back': 'Deploy failed and was rolled back',
@@ -328,6 +328,7 @@ class Pipeline:
                     'cancelled': 'Deploy cancelled'}.get(result['status'], 'Deploy ' + result['status'])
             self.post(conn, result.get('conversation_id'), key, f"{text}: {result['reason']}"[:600])
             conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(payload)))
+        return result
 
     # ---- merge to main ----------------------------------------------------------------------------------------
     def report_merge_copies(self, commit, copies, deploy):
