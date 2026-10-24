@@ -32,7 +32,7 @@ def test_manifest_assets_and_cache_boundaries(client):  # noqa: F811
         height = int.from_bytes(response.content[20:24], 'big')
         assert icon['sizes'] == f'{width}x{height}'
     urls = re.findall(r'(?:src|href)="(/static/assets/[^\"]+)"', html.text)
-    assert len(urls) == 9
+    assert len(urls) == 10
     for url in urls:
         response = browser.get(url)
         _, _, _, digest, name = url.split('/', 4)
