@@ -22,6 +22,10 @@ class Settings:
         default_factory=lambda: Path(p).expanduser() if (p := os.getenv("AI_MANAGER_PROJECT")) else None
     )
     port: int = field(default_factory=lambda: int(os.getenv("AI_MANAGER_PORT", "8787")))
+    # Ignored KEY=VALUE credentials for the Add User screen (Tailscale API key, Cloudflare/Syncthing tokens); outside git.
+    onboarding_config: Path = field(
+        default_factory=lambda: Path(os.getenv("AI_MANAGER_ONBOARDING_CONFIG", "~/.config/linko-onboarding.env")).expanduser()
+    )
     codex_bin: str = field(default_factory=lambda: os.getenv("AI_MANAGER_CODEX", "codex"))
     # Services often lack ~/.local/bin on PATH, where the Claude Code installer puts it.
     claude_bin: str = field(default_factory=lambda: os.getenv("AI_MANAGER_CLAUDE") or shutil.which("claude")

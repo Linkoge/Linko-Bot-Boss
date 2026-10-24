@@ -469,6 +469,7 @@ def test_fresh_schema_contains_only_current_storage(system):
         "chat_requests",
         "todos",
         "project_ideas",
+        "onboarding",
         "questions",
         "sqlite_sequence",
     }

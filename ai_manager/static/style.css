@@ -295,7 +295,8 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #model-dialog section:first-child .model-section-head{gap:6px}
 
 .restricted #all-projects,.restricted #project-menu-button,.restricted #discover,.restricted #add-project,.restricted #deployment-panel,.restricted #model-settings-button,.restricted #models-panel,.restricted #model-dialog{display:none}
-.restricted #github-panel{display:none}
+.restricted #github-panel,.restricted #onboarding-dialog{display:none}
+#onboarding-dialog{max-width:560px;width:calc(100% - 16px);max-height:calc(var(--app-height,100dvh) - 16px);overflow:auto;padding:12px 14px}#onboarding-dialog h3{margin:12px 0 6px;color:var(--muted);font-size:13px}#onboarding-dialog label{display:block;margin:8px 0}#onboarding-dialog input:not([type=checkbox]),#onboarding-dialog textarea{display:block;width:100%}#onboarding-dialog textarea{font:12px monospace}.onboarding-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.onboarding-state.failed,.onboarding-problem{color:var(--accent)}.onboarding-state.done,.onboarding-ok{color:#7ad99b}.onboarding-steps{list-style:none;padding:0;margin:0}.onboarding-step{padding:4px 0;overflow-wrap:anywhere}.onboarding-step.failed,.onboarding-step.refused{color:var(--accent)}.onboarding-hint{color:var(--muted);font-size:12px}.onboarding-login{user-select:all;overflow-wrap:anywhere;white-space:pre-wrap}.onboarding-list{display:flex;gap:6px;flex-wrap:wrap}
 
 .visibility-badge{margin-left:.5rem;padding:.1rem .4rem;border-radius:.4rem;font-size:.75rem;color:#fff}.visibility-public{background:#1a7f37}.visibility-private{background:#c62828}.visibility-offline{background:#6b7280}
 .github-tier{display:inline-block;margin-left:.5rem;padding:.1rem .4rem;border:1px solid currentColor;border-radius:.4rem;font-size:.75rem}

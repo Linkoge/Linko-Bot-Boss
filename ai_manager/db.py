@@ -61,6 +61,15 @@ CREATE TABLE IF NOT EXISTS project_ideas(
 CREATE TABLE IF NOT EXISTS chat_archives(
  conversation_id TEXT PRIMARY KEY REFERENCES conversations(id),
  title TEXT NOT NULL, archived_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS onboarding(
+ id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, email TEXT NOT NULL, windows_folder TEXT NOT NULL,
+ domain TEXT NOT NULL DEFAULT '', memory_max TEXT NOT NULL DEFAULT '1G',
+ state TEXT NOT NULL DEFAULT 'pending' CHECK(state IN ('pending','enrolling','provisioning','done','failed')),
+ auto_apply INTEGER NOT NULL DEFAULT 0, device_id TEXT NOT NULL DEFAULT '', pc_hostname TEXT NOT NULL DEFAULT '',
+ tailscale_ip TEXT NOT NULL DEFAULT '', token_hash TEXT, token_expires_at REAL,
+ pending_action TEXT CHECK(pending_action IN ('plan','apply')), requested_at REAL,
+ steps TEXT NOT NULL DEFAULT '[]', error TEXT NOT NULL DEFAULT '', login_secret TEXT,
+ created_at REAL NOT NULL, updated_at REAL NOT NULL);
 """
 
 

@@ -219,7 +219,7 @@ function renderProjectMenu(){
   const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;
   const content=$('project-menu-content');content.replaceChildren();
   const group=label=>{const section=element('div',undefined,'project-menu-group');section.setAttribute('role','group');section.setAttribute('aria-label',label);content.append(section);return section;};
-  if(!state.restricted){const ideas=element('button','Project ideas');ideas.dataset.project='ideas';ideas.onclick=()=>{closeProjectMenu(true);showView('ideas');};group('Future projects').append(ideas);}
+  if(!state.restricted){const ideas=element('button','Project ideas');ideas.dataset.project='ideas';ideas.onclick=()=>{closeProjectMenu(true);showView('ideas');};group('Future projects').append(ideas);const addUser=element('button','Add user');addUser.dataset.project='add-user';addUser.onclick=action(openOnboarding);group('Users').append(addUser);}
   const projects=group('Projects and stashed projects');
   const global=element('button','◈ All Projects · global context',!state.project?'selected':'');
   global.dataset.project='';global.setAttribute('aria-pressed',String(!state.project));

@@ -3,15 +3,23 @@
   Enrolls this Windows PC for Linko onboarding. Run in an elevated PowerShell; safe to re-run.
 .DESCRIPTION
   Installs Tailscale (joins with an auth key), OpenSSH Server (authorizes the management server key, SSH reachable only
-  from the Tailscale range), and Syncthing (starts at logon). Prints hostname, Tailscale IP and Syncthing device ID for
-  `python -m ai_manager.provision add-user`. Nothing secret is embedded: pass the keys as parameters or environment
-  variables (TAILSCALE_AUTHKEY, LINKO_MANAGEMENT_PUBKEY). See docs/ONBOARDING.md.
+  from the Tailscale range), and Syncthing (starts at logon). With -ManagerDeviceId/-FolderId/-WindowsFolder it also trusts
+  the management Syncthing device and pre-creates the share, so no Syncthing GUI click is needed. With -ManagerUrl and
+  -EnrollmentToken it then reports hostname, Tailscale IP and Syncthing device ID to the manager over the tailnet (one
+  time); otherwise it prints them for `python -m ai_manager.provision add-user`. The owner UI's Add User screen embeds
+  this very file in a one-line command; nothing else is downloaded. Only a single-use Tailscale auth key and a one-time
+  enrollment token are passed in - never an API key. See docs/ONBOARDING.md.
 .EXAMPLE
   .\Linko-Setup.ps1 -TailscaleAuthKey $env:TAILSCALE_AUTHKEY -ManagementPublicKey (Get-Content .\manager.pub -Raw)
 #>
 param(
     [string]$TailscaleAuthKey = $env:TAILSCALE_AUTHKEY,
-    [string]$ManagementPublicKey = $env:LINKO_MANAGEMENT_PUBKEY
+    [string]$ManagementPublicKey = $env:LINKO_MANAGEMENT_PUBKEY,
+    [string]$WindowsFolder,
+    [string]$ManagerUrl,
+    [string]$ManagerDeviceId,
+    [string]$FolderId,
+    [string]$EnrollmentToken
 )
 $ErrorActionPreference = 'Stop'
 
@@ -78,8 +86,54 @@ for ($i = 0; $i -lt 15 -and -not $deviceId; $i++) {
     if (-not $deviceId) { Start-Sleep -Seconds 2 }
 }
 
+# Syncthing: trust the management device and pre-create the share through the local API (idempotent), so the share
+# needs no click in the Syncthing GUI once the manager adds this PC.
+if ($ManagerDeviceId -and $FolderId -and $WindowsFolder) {
+    New-Item -ItemType Directory -Force -Path $WindowsFolder | Out-Null
+    $configXml = Join-Path $env:LOCALAPPDATA 'Syncthing\config.xml'
+    for ($i = 0; $i -lt 30 -and -not (Test-Path $configXml); $i++) { Start-Sleep -Seconds 2 }
+    if (-not (Test-Path $configXml)) { throw 'Syncthing did not create its configuration; open Syncthing once and re-run.' }
+    [xml]$syncthingConfig = Get-Content $configXml
+    $api = "http://$($syncthingConfig.configuration.gui.address)"
+    $headers = @{ 'X-API-Key' = $syncthingConfig.configuration.gui.apikey }
+    for ($i = 0; $i -lt 30; $i++) {
+        try { Invoke-RestMethod -Headers $headers -Uri "$api/rest/system/ping" | Out-Null; break } catch { Start-Sleep -Seconds 2 }
+    }
+    $known = Invoke-RestMethod -Headers $headers -Uri "$api/rest/config/devices"
+    if (-not ($known | Where-Object { $_.deviceID -eq $ManagerDeviceId })) {
+        $device = @{ deviceID = $ManagerDeviceId; name = 'linko-manager'; addresses = @('dynamic'); autoAcceptFolders = $true }
+        Invoke-RestMethod -Method Put -Headers $headers -ContentType 'application/json' -Uri "$api/rest/config/devices/$ManagerDeviceId" `
+            -Body ($device | ConvertTo-Json -Depth 5) | Out-Null
+    }
+    $shares = Invoke-RestMethod -Headers $headers -Uri "$api/rest/config/folders"
+    if (-not ($shares | Where-Object { $_.id -eq $FolderId })) {
+        $share = @{ id = $FolderId; label = $FolderId; path = $WindowsFolder; type = 'sendreceive'; fsWatcherEnabled = $true
+                    devices = @(@{ deviceID = $ManagerDeviceId }) }
+        Invoke-RestMethod -Method Put -Headers $headers -ContentType 'application/json' -Uri "$api/rest/config/folders/$FolderId" `
+            -Body ($share | ConvertTo-Json -Depth 5) | Out-Null
+    }
+    Write-Host "ok: Syncthing trusts the manager and shares $WindowsFolder"
+}
+
+# Report to the manager over the tailnet: one POST, authenticated by the one-time token, accepted once.
+$reported = $false
+if ($ManagerUrl -and $EnrollmentToken) {
+    $report = @{ token = $EnrollmentToken; hostname = ($env:COMPUTERNAME -replace '[^A-Za-z0-9-]', '-'); tailscale_ip = $tsIp; device_id = $deviceId } | ConvertTo-Json
+    for ($i = 0; $i -lt 10 -and -not $reported; $i++) {
+        try {
+            Invoke-RestMethod -Method Post -Uri "$ManagerUrl/api/enroll/report" -ContentType 'application/json' -Body $report -TimeoutSec 20 | Out-Null
+            $reported = $true
+        } catch { Start-Sleep -Seconds 6 }
+    }
+}
+
 Write-Host ''
-Write-Host 'Give these three values to the provisioning command:'
+if ($reported) {
+    Write-Host 'Done. This PC reported in; continue in the Add User screen on the manager.'
+} else {
+    if ($ManagerUrl) { Write-Host 'Could not reach the manager over the tailnet (token used already, or expired?). Give these values to the owner:' }
+    else { Write-Host 'Give these three values to the provisioning command:' }
+}
 Write-Host "  Hostname:            $env:COMPUTERNAME"
 Write-Host "  Tailscale IP:        $tsIp"
 Write-Host "  Syncthing device ID: $deviceId"

@@ -1,0 +1,9 @@
+[Unit]
+Description=Linko Add User host helper (planning and provisioning through the root-owned launcher, via sudo)
+
+[Service]
+Type=oneshot
+ExecStart=@START@
+UMask=0077
+TimeoutStartSec=2h
+KillMode=control-group

@@ -36,6 +36,27 @@ def instance_entry(home, name):
             'url': 'http://127.0.0.1:' + port}
 
 
+def merge_instances(existing, entries):
+    """Instances already listed (including hand-edited service_cmds for another Linux user) are kept; named ones are upserted."""
+    kept = {i['name']: i for i in existing}
+    kept.update({entry['name']: entry for entry in entries})
+    return list(kept.values())
+
+
+def register_instances(data, entries):
+    """Upsert instance entries into an installed DATA/deploy/installed.json (also used by the Add User screen).
+    Returns True when the file changed."""
+    path = data / 'deploy' / 'installed.json'
+    config = deploy_read(path)
+    if not config:
+        raise ValueError('Deploys are not installed: run scripts/install_deploy.py first')
+    merged = merge_instances(config.get('instances', []), entries)
+    if merged == config.get('instances', []):
+        return False
+    atomic(path, {**config, 'instances': merged})
+    return True
+
+
 def install(repo, data, home, instances=()):
     venv_python = repo / '.venv/bin/python'
     python3 = shutil.which('python3')
@@ -44,10 +65,9 @@ def install(repo, data, home, instances=()):
     if any(ch in str(repo) + str(data) for ch in ' \n\r"%'):
         raise SystemExit('Use paths without spaces or systemd escape characters')
     uv = shutil.which('uv') or str(home / '.local/bin/uv')
-    # Instances already listed (including hand-edited service_cmds for another Linux user) are kept; named ones are upserted.
-    kept = {i['name']: i for i in (deploy_read(data / 'deploy' / 'installed.json') or {}).get('instances', [])}
-    kept.update({name: instance_entry(home, name) for name in instances})
-    config = {'repo': str(repo), 'data': str(data), 'service': 'linko-bot-manager.service', 'instances': list(kept.values()),
+    kept = merge_instances((deploy_read(data / 'deploy' / 'installed.json') or {}).get('instances', []),
+                           [instance_entry(home, name) for name in instances])
+    config = {'repo': str(repo), 'data': str(data), 'service': 'linko-bot-manager.service', 'instances': kept,
               'url': 'http://127.0.0.1:' + os.getenv('AI_MANAGER_PORT', '8787'), 'uv': uv if Path(uv).exists() else None,
               'test_cmd': suite_command(venv_python),
               'installed_at': time.time()}

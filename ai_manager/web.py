@@ -29,11 +29,14 @@ from .core import Core, Tasks
 from .db import Database
 from .execution_ui import event_page, execution_page, execution_summary
 from .github_projects import GitHubError, GitHubProjects
+from .enrollment import in_tailnet
+from .onboarding import NeedsAuthKey, Onboarding, Unknown
 from .orchestration import Scheduler
 from .pipeline import RESTRICTED, Pipeline
 from .progress import progress
 from .repair_progress import host_requests
 from .project_ideas import ProjectIdeas
+from .provision import DEVICE_RE, ProvisionError
 from .project_memory import MemoryReviews, ProjectMemory
 from .proxy import client_ip, is_https, parse_trusted
 from .registry import Registry, git
@@ -89,6 +92,37 @@ class ProjectUpdate(BaseModel):
     instructions: str | None = Field(default=None, max_length=10000)
     priority: int | None = Field(default=None, ge=0, le=100)
     status: str | None = None
+
+
+class OnboardingBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    name: str = Field(max_length=40)
+    email: str = Field(max_length=200)
+    windows_folder: str = Field(max_length=300)
+    domain: str = Field(default="", max_length=200)
+    memory_max: str = Field(default="", max_length=10)
+    device_id: str = Field(default="", max_length=80)
+    auto_apply: bool = Field(default=False, strict=True)
+
+
+class OnboardingUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+    device_id: str | None = Field(default=None, max_length=80)
+    auto_apply: bool | None = Field(default=None, strict=True)
+
+
+class EnrollmentBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    auth_key: str | None = Field(default=None, max_length=300, repr=False)
+
+
+class EnrollReport(BaseModel):
+    """The only thing the enrolled PC may send; nothing else is read."""
+    model_config = {"extra": "forbid"}
+    token: str = Field(min_length=20, max_length=100, pattern=r"^[A-Za-z0-9_-]+$", repr=False)
+    hostname: str = Field(min_length=1, max_length=63, pattern=r"^[A-Za-z0-9][A-Za-z0-9-]*$")
+    tailscale_ip: str = Field(min_length=7, max_length=15)
+    device_id: str = Field(pattern=DEVICE_RE.pattern)
 
 
 class MessageBody(BaseModel):
@@ -208,6 +242,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     chat.action_handler = scheduler.manager_action
     chat.restricted = restricted
     github = GitHubProjects(db, registry, settings, pipeline, fetch=github_fetch)
+    onboarding = Onboarding(db, settings, settings.onboarding_config)
     pipeline.backups.credentials = github.push_credentials
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
@@ -234,6 +269,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     app.state.db, app.state.registry, app.state.chat, app.state.auth = db, registry, chat, auth
     app.state.core, app.state.scheduler = core, scheduler
     app.state.github_projects = github
+    app.state.onboarding = onboarding
     app.state.audio = audio
     app.state.attachments = attachments
     app.state.memory, app.state.memory_reviews = memory, reviews
@@ -257,7 +293,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             origin = request.headers.get("origin")
             if origin and urlsplit(origin).netloc != request.headers.get("host"):
                 return JSONResponse({"detail": "Origin rejected"}, status_code=403)
-            if request.url.path not in {"/api/login", "/api/setup"}:
+            # /api/enroll/report authenticates with its own single-use token (see enroll_report) instead of a session.
+            if request.url.path not in {"/api/login", "/api/setup", "/api/enroll/report"}:
                 session = auth.session(request.cookies.get("ai_manager_session"))
                 if not session:
                     return JSONResponse({"detail": "Login required"}, status_code=401)
@@ -319,8 +356,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         if request.url.path == '/api/github/token' or request.url.path.startswith('/api/github/tokens/'):
             # FastAPI's default 422 response includes the submitted input, including credentials.
             return JSONResponse({'detail': 'Invalid GitHub token request'}, status_code=422)
+        if request.url.path == '/api/enroll/report' or request.url.path.endswith('/enrollment'):
+            return JSONResponse({'detail': 'Invalid enrollment request'}, status_code=422)
         from fastapi.exception_handlers import request_validation_exception_handler
         return await request_validation_exception_handler(request, error)
+
+    @app.exception_handler(ProvisionError)
+    async def provision_failed(request, error):
+        logging.getLogger(__name__).warning("action.rejected path=%s reason=%s", request.url.path, str(error))
+        return JSONResponse({"result": "rejected", "detail": str(error), "message": str(error)}, status_code=409)
+
+    @app.exception_handler(Unknown)
+    async def unknown_record(request, error):
+        return JSONResponse({"detail": str(error)}, status_code=404)
 
     @app.exception_handler(CodexError)
     async def unavailable(request, error):
@@ -420,6 +468,64 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             conn.execute("DELETE FROM sessions")
             db.event(conn, "owner.sessions_revoked", {})
         return {"revoked": True}
+
+    owner_only = [Depends(require_owner), Depends(unrestricted)]
+
+    @app.get("/api/onboarding", dependencies=owner_only)
+    def onboarding_list():
+        return {"entries": onboarding.list(), "installed": onboarding.installed(),
+                "tailscale_api": bool(onboarding.config().get("TAILSCALE_API_KEY")), "domain": onboarding.config().get("LINKO_DOMAIN", "")}
+
+    @app.post("/api/onboarding", dependencies=owner_only)
+    def onboarding_create(body: OnboardingBody):
+        return onboarding.create(body.model_dump(exclude={"auto_apply"}), body.auto_apply)
+
+    @app.get("/api/onboarding/{record_id}", dependencies=owner_only)
+    def onboarding_get(record_id: str):
+        return onboarding.get(record_id)
+
+    @app.patch("/api/onboarding/{record_id}", dependencies=owner_only)
+    def onboarding_update(record_id: str, body: OnboardingUpdate):
+        return onboarding.settings_update(record_id, body.device_id, body.auto_apply)
+
+    @app.post("/api/onboarding/{record_id}/preview", dependencies=owner_only)
+    def onboarding_preview(record_id: str):
+        return onboarding.preview(record_id)
+
+    @app.post("/api/onboarding/{record_id}/apply", dependencies=owner_only)
+    def onboarding_apply(record_id: str):
+        return onboarding.apply(record_id)
+
+    @app.post("/api/onboarding/{record_id}/enrollment", dependencies=owner_only)
+    async def onboarding_enrollment(record_id: str, body: EnrollmentBody):
+        try:
+            return await asyncio.to_thread(onboarding.enrollment_command, record_id, body.auth_key)
+        except NeedsAuthKey as error:
+            return JSONResponse({"result": "rejected", "detail": str(error), "message": str(error), "needs_auth_key": True},
+                                status_code=409)
+
+    @app.post("/api/onboarding/{record_id}/login", dependencies=owner_only)
+    def onboarding_login(record_id: str):
+        return onboarding.reveal_login(record_id)
+
+    @app.post("/api/enroll/report")
+    async def enroll_report(body: EnrollReport, request: Request):
+        """The enrolled PC's single report. Not reachable through the public tunnel or from outside the tailnet; the
+        enrollment token (random, single use, two hours, stored hashed) is the credential. It records nothing else."""
+        if restricted:
+            raise HTTPException(404, "Not found")
+        address = client_ip(request, trusted_proxies)
+        if request.headers.get("cf-connecting-ip") or request.headers.get("cf-ray") or not in_tailnet(address):
+            raise HTTPException(403, "Only reachable from the tailnet")
+        if not in_tailnet(body.tailscale_ip):
+            raise HTTPException(422, "Invalid enrollment request")
+        try:
+            auth.throttle(address)
+            return await asyncio.to_thread(onboarding.report, body.token, body.hostname, body.tailscale_ip, body.device_id)
+        except PermissionError as error:
+            raise HTTPException(403, str(error)) from error
+        except ValueError as error:
+            raise HTTPException(429, str(error)) from error
 
     @app.get("/api/history", dependencies=[Depends(require_owner)])
     def history(project_id: str | None = None, search: str = "", before: str | None = None,

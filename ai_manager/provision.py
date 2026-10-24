@@ -5,16 +5,24 @@ when the check said todo. All checks run before any change, so a refusal (a host
 Syncthing folder path in use) leaves the host untouched. API tokens come from the environment or an ignored config file
 outside git (default ~/.config/linko-onboarding.env); nothing secret is written to generated files or the receipt.
 Runbook: docs/ONBOARDING.md.
+
+The web app (never root) reaches the privileged part through a spool: it writes `<data>/onboarding/requests/<id>.json`,
+a user path unit starts `sudo -n python3 -I <root-owned copy of this file> --data <data> tick`, and `tick` validates the
+request again, runs the same `provision()` as root and writes `<data>/onboarding/results/<id>.json`. This module is
+therefore standard library only at import time (the root copy runs outside the repository).
 """
 import argparse
+import fcntl
 import json
 import os
+import pwd
 import re
 import secrets
 import socket
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -23,14 +31,39 @@ from pathlib import Path
 EXISTS, TODO, REFUSE = "exists", "todo", "refuse"
 NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,30}$")
 EMAIL_RE = re.compile(r"^[^@\s,\"']+@[^@\s,\"']+\.[^@\s,\"']+$")
+ID_RE = re.compile(r"^[0-9a-f]{32}$")
+DEVICE_RE = re.compile(r"^[A-Z0-9]{7}(-[A-Z0-9]{7}){7}$")
+DOMAIN_RE = re.compile(r"^(?=.{4,200}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
+MEMORY_RE = re.compile(r"^[1-9][0-9]{0,5}[MG]$")
+FOLDER_RE = re.compile(r"^[^\x00-\x1f\x7f'\"`\u2018\u2019\u201c\u201d$]{1,260}$")
 FIRST_PORT, LAST_PORT = 8788, 8899
 DEFAULT_CONFIG = Path("~/.config/linko-onboarding.env")
+HOST_CONFIG = Path("/etc/linko/onboarding.json")
 CF_API = "https://api.cloudflare.com/client/v4"
 CREDENTIAL_NOTE = "AI provider login (Codex/Claude) is a manual step done as the new user; nothing is copied from the owner."
 
 
 class ProvisionError(Exception):
     pass
+
+
+def validate_request(fields):
+    """The one validation of what an owner may ask for (CLI, web app and the root `tick` all use it)."""
+    clean = {key: str(fields.get(key) or "").strip() for key in ("name", "email", "windows_folder", "domain", "memory_max", "device_id")}
+    clean["memory_max"] = clean["memory_max"] or "1G"
+    if not NAME_RE.match(clean["name"]):
+        raise ProvisionError("name: lowercase letters, digits and dashes, starting with a letter (2-31 characters)")
+    if not EMAIL_RE.match(clean["email"]) or len(clean["email"]) > 200:
+        raise ProvisionError("email is not a valid address")
+    if not FOLDER_RE.match(clean["windows_folder"]):
+        raise ProvisionError("windows folder: 1-260 characters, no quotes, backticks, $ or control characters")
+    if clean["domain"] and not DOMAIN_RE.match(clean["domain"]):
+        raise ProvisionError("domain is not a valid DNS name")
+    if not MEMORY_RE.match(clean["memory_max"]):
+        raise ProvisionError("memory limit looks like 512M or 2G")
+    if clean["device_id"] and not DEVICE_RE.match(clean["device_id"]):
+        raise ProvisionError("Syncthing device ID looks like AAAAAAA-BBBBBBB-... (8 groups of 7)")
+    return clean
 
 
 def load_config(path, environ):
@@ -43,12 +76,15 @@ def load_config(path, environ):
             if line and not line.startswith("#") and "=" in line:
                 key, value = line.split("=", 1)
                 values[key.strip()] = value.strip().strip("\"'")
-    values.update({k: v for k, v in environ.items() if k.startswith(("CLOUDFLARE_", "SYNCTHING_", "LINKO_")) and v})
+    values.update({k: v for k, v in environ.items() if k.startswith(("CLOUDFLARE_", "SYNCTHING_", "TAILSCALE_", "LINKO_")) and v})
     return values
 
 
 def run_command(argv, **kwargs):
-    done = subprocess.run(argv, capture_output=True, text=True, timeout=120, **kwargs)
+    try:
+        done = subprocess.run(argv, capture_output=True, text=True, timeout=120, **kwargs)
+    except (OSError, subprocess.SubprocessError) as error:
+        return 127, f"{argv[0]}: {error}"
     return done.returncode, (done.stdout + done.stderr).strip()
 
 
@@ -96,6 +132,8 @@ class Plan:
     http: object = http_json
     port_free: object = port_is_free
     port: int = 0
+    service_user: str = ""  # the Linux user the manager runs as: gets scoped access to the new instance's data
+    syncthing_user: str = ""  # the Linux user the Syncthing daemon runs as: gets scoped access to the new folder
 
     @property
     def home(self):
@@ -319,6 +357,89 @@ class StartService(Step):
         return "started"
 
 
+def acl_entries(plan, path):
+    """{'user:x': 'rwx', 'default:user:x': 'rwx'} of one path, or None when it does not exist yet."""
+    code, output = plan.run(["getfacl", "-p", "-c", str(path)])
+    if code:
+        return None
+    entries = {}
+    for line in output.splitlines():
+        parts = line.split("#")[0].strip().split(":")
+        if parts[0] in ("user", "default") and len(parts) >= 3 and "user" in parts[:2] and parts[-2]:
+            entries[":".join(parts[:-1])] = parts[-1]
+    return entries
+
+
+def acl_missing(plan, wanted):
+    """wanted: [(path, entry, perms)]. The entries that are absent or grant less than asked (read/write/execute bits)."""
+    missing = []
+    cache = {}
+    for path, entry, perms in wanted:
+        have = cache.setdefault(path, acl_entries(plan, path))
+        got = (have or {}).get(entry, "---")
+        if any(bit != "-" and got[i] != bit for i, bit in enumerate(perms)):
+            missing.append((path, entry, perms))
+    return missing
+
+
+class Acl(Step):
+    """Named-user ACL entries on exactly the listed paths; nothing else is opened (no chmod, no group or other bits)."""
+
+    def wanted(self):
+        raise NotImplementedError
+
+    def check(self):
+        missing = acl_missing(self.plan, self.wanted())
+        if not missing:
+            return EXISTS, "ACL entries already present"
+        return TODO, "setfacl " + ", ".join(sorted({f"{e}:{p}" for _, e, p in missing})) + " on " + ", ".join(sorted({str(x) for x, _, _ in missing}))
+
+    def apply(self):
+        for path, entry, perms in acl_missing(self.plan, self.wanted()):
+            spec = entry.replace("default:", "d:").replace("user:", "u:")
+            recursive = self.recursive(path)
+            argv = ["setfacl", *(["-R"] if recursive else []), "-m", f"{spec}:{perms.replace('x', 'X') if recursive else perms}", str(path)]
+            sh(self.plan, argv)
+        return "created"
+
+    def recursive(self, path):
+        return False
+
+
+class SyncthingAccess(Acl):
+    """The Syncthing daemon user reads and writes the new folder only; everything above it just gets search (x)."""
+    title = "syncthing user access to the folder"
+
+    def wanted(self):
+        p, who = self.plan, self.plan.syncthing_user
+        if p.skip_syncthing or not who or who == p.name:
+            return []
+        return [(p.home, f"user:{who}", "--x"), (p.project.parent, f"user:{who}", "--x"),
+                (p.project, f"user:{who}", "rwx"), (p.project, f"default:user:{who}", "rwx"),
+                # files Syncthing creates later stay editable by the instance's own user
+                (p.project, f"default:user:{p.name}", "rwx")]
+
+    def recursive(self, path):
+        return path == self.plan.project
+
+
+class ServiceAccess(Acl):
+    """The manager's own service user reads the instance's data (deploy snapshots, health checks, Users model list)."""
+    title = "manager access to the instance data"
+
+    def wanted(self):
+        p, who = self.plan, self.plan.service_user
+        if not who or who == p.name:
+            return []
+        wanted = [(p.home, f"user:{who}", "--x")]
+        for parent in (p.home / ".local", p.home / ".local/share"):
+            wanted.append((parent, f"user:{who}", "--x"))
+        return wanted + [(p.data, f"user:{who}", "rwx"), (p.data, f"default:user:{who}", "rwx")]
+
+    def recursive(self, path):
+        return path == self.plan.data
+
+
 class Cloudflare(Step):
     def api(self, method, path, body=None):
         token = self.plan.config.get("CLOUDFLARE_API_TOKEN", "")
@@ -418,7 +539,9 @@ class SyncDevice(Syncthing):
 
     def check(self):
         if not self.plan.syncthing_device:
-            raise ProvisionError("--syncthing-device-id is required (printed by Linko-Setup.ps1)")
+            if not self.plan.apply:  # preview before the PC has reported in
+                return TODO, "add the Windows device (its ID arrives when the PC reports in)"
+            raise ProvisionError("the Syncthing device ID of the PC is required (reported by Linko-Setup.ps1)")
         devices = self.api("GET", "/rest/config/devices") or []
         if any(d.get("deviceID") == self.plan.syncthing_device for d in devices):
             return EXISTS, "device already known; its settings are not changed"
@@ -456,15 +579,18 @@ class SyncFolder(Syncthing):
 
 def build_steps(plan):
     steps = [LinuxUser, Directories, GitInit, Port, EnvFile, SystemdUnit, OwnerLogin, StartService]
+    if plan.service_user:
+        steps.append(ServiceAccess)
     if not plan.skip_cloudflare:
         steps += [TunnelRoute, DnsRecord, AccessApp]
     if not plan.skip_syncthing:
-        steps += [SyncDevice, SyncFolder]
+        steps += ([SyncthingAccess] if plan.syncthing_user else []) + [SyncDevice, SyncFolder]
     return [cls(plan) for cls in steps]
 
 
-def provision(plan):
-    """Run all checks first, then (with plan.apply) reconcile. Returns the receipt: list of (title, status, detail)."""
+def provision(plan, progress=None):
+    """Run all checks first, then (with plan.apply) reconcile. Returns the receipt: list of (title, status, detail).
+    `progress(rows)` is called with the whole table (finished rows plus the rest as planned) after every applied step."""
     steps = build_steps(plan)
     for step in steps:
         try:
@@ -473,19 +599,21 @@ def provision(plan):
             step.state, step.detail = REFUSE, str(error)
     if any(s.state == REFUSE for s in steps):
         return [(s.title, "refused" if s.state == REFUSE else "not run", s.detail) for s in steps]
-    receipt = []
-    for step in steps:
-        if step.state == EXISTS:
-            receipt.append((step.title, "skipped", step.detail))
-        elif not plan.apply:
-            receipt.append((step.title, "planned", step.detail))
-        else:
+    rows = [[s.title, "skipped" if s.state == EXISTS else "planned", s.detail] for s in steps]
+    if plan.apply:
+        for index, step in enumerate(steps):
+            if step.state == EXISTS:
+                continue
             try:
-                receipt.append((step.title, step.apply(), step.detail))
+                rows[index][1] = step.apply()
             except ProvisionError as error:
-                receipt.append((step.title, "failed", str(error)))
+                rows[index][1:] = ["failed", str(error)]
+                rows = rows[:index + 1]
                 break
-    return receipt
+            finally:
+                if progress:
+                    progress(rows)
+    return [tuple(r) for r in rows]
 
 
 def print_receipt(receipt, plan, out=print):
@@ -508,9 +636,113 @@ def create_owner(email, password_file):
     Auth(Database(settings.db_path), settings).setup(email, password)
 
 
+def read_private(path):
+    """Read a spool file without following a symlink planted by the (less privileged) service user."""
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd) as stream:
+        return stream.read(65536)
+
+
+def write_result(directory, name, value, owner):
+    """Atomically replace a result file, owned by the service user (we run as root) and private to it."""
+    fd, temporary = tempfile.mkstemp(dir=directory, prefix=".result-")
+    try:
+        with os.fdopen(fd, "w") as stream:
+            json.dump(value, stream)
+        os.chmod(temporary, 0o600)
+        if os.geteuid() == 0:
+            os.chown(temporary, owner.pw_uid, owner.pw_gid)
+        os.replace(temporary, directory / name)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def take_login(plan):
+    """The generated first login as {'email','password'}; the file is deleted as soon as it was read."""
+    file = plan.data / "initial-login.txt"
+    try:
+        email, password = file.read_text().splitlines()[:2]
+    except (OSError, ValueError):
+        return None
+    file.unlink(missing_ok=True)
+    return {"email": email, "password": password}
+
+
+def handle_request(path, host, directory, run=run_command, http=http_json, extra=None):
+    """One spooled request, as root: re-validate everything (the file is only as trustworthy as the service user)."""
+    owner = pwd.getpwnam(host["service_user"])
+    request = json.loads(read_private(path))
+    identifier = request.get("id", "")
+    if not ID_RE.match(identifier) or path.name != identifier + ".json" or request.get("action") not in ("plan", "apply"):
+        raise ProvisionError("malformed request")
+    fields = validate_request(request)
+    config = load_config(host["config_file"], {})
+    domain = fields["domain"] or config.get("LINKO_DOMAIN", "")
+    plan = Plan(name=fields["name"], email=fields["email"], windows_folder=fields["windows_folder"], domain=domain or "local",
+                repo=Path(host["repo"]), python=host["app_python"], home_base=Path(host.get("home_base", "/home")), config=config,
+                apply=request["action"] == "apply", memory_max=fields["memory_max"], syncthing_device=fields["device_id"],
+                skip_cloudflare=not domain, service_user=host["service_user"],
+                syncthing_user=config.get("SYNCTHING_USER") or host["service_user"], run=run, http=http,
+                syncthing_url=config.get("SYNCTHING_URL", "http://127.0.0.1:8384"),
+                systemd_dir=Path(host.get("systemd_dir", "/etc/systemd/system")), **(extra or {}))
+    result = {"id": identifier, "action": request["action"], "finished": False, "receipt": []}
+
+    def publish(rows):
+        write_result(directory, identifier + ".json", {**result, "receipt": rows, "port": plan.port}, owner)
+
+    receipt = provision(plan, publish)
+    result.update(finished=True, receipt=receipt, port=plan.port, data=str(plan.data), unit=plan.unit_name, hostname=plan.hostname)
+    if plan.apply and all(status not in ("failed", "refused", "not run") for _, status, _ in receipt):
+        result["login"] = take_login(plan)
+    write_result(directory, identifier + ".json", result, owner)
+
+
+def tick(data, host_config=HOST_CONFIG, run=run_command, http=http_json, root_required=True, extra=None):
+    """Handle every spooled request once. Started by the user path unit through the sudoers rule; safe to repeat."""
+    if root_required and os.geteuid() != 0:
+        raise ProvisionError("tick runs as root through the sudoers rule (docs/ONBOARDING.md)")
+    host = json.loads(Path(host_config).read_text())
+    if host.get("data") != str(data):
+        raise ProvisionError("data directory does not match the installed configuration")
+    root = Path(data) / "onboarding"
+    requests, results = root / "requests", root / "results"
+    if not requests.is_dir() or not results.is_dir():
+        return 0
+    handled = 0
+    with (root / "tick.lock").open("a") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        for path in sorted(requests.glob("*.json")):
+            try:
+                handle_request(path, host, results, run, http, extra)
+            except (ProvisionError, ValueError, OSError, KeyError) as error:
+                write_result(results, path.stem + ".json" if ID_RE.match(path.stem) else ".invalid", {
+                    "id": path.stem, "finished": True, "receipt": [("request", "failed", str(error)[:300])]},
+                    pwd.getpwnam(host["service_user"]))
+            path.unlink(missing_ok=True)
+            handled += 1
+    return handled
+
+
+def control_service(host, action, name, run=run_command):
+    """Stop/start one onboarded instance's unit for coordinated deploys; only units this tool wrote."""
+    unit = Path(host.get("systemd_dir", "/etc/systemd/system")) / f"linko-bot-manager-{name}.service"
+    if not NAME_RE.match(name) or not unit.is_file() or f"restricted instance {name}\n" not in unit.read_text():
+        raise ProvisionError(f"{name} is not an onboarded instance")
+    code, output = run(["systemctl", action, unit.name])
+    if code:
+        raise ProvisionError(output[-300:])
+
+
 def main(argv=None, environ=None):
     parser = argparse.ArgumentParser(prog="ai_manager.provision")
+    parser.add_argument("--data", help="spool commands (tick, service): the manager's data directory, as in the sudoers rule")
+    parser.add_argument("--host-config", type=Path, default=HOST_CONFIG, help=argparse.SUPPRESS)
     commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("tick", help="root: handle spooled web-app requests (started through sudo by a user path unit)")
+    service = commands.add_parser("service", help="root: stop/start one onboarded instance (deploy coordination)")
+    service.add_argument("action", choices=["stop", "start"])
+    service.add_argument("name")
     add = commands.add_parser("add-user", help="onboard one restricted user/instance (dry run unless --apply)")
     add.add_argument("--name", required=True)
     add.add_argument("--email", required=True)
@@ -520,6 +752,7 @@ def main(argv=None, environ=None):
     add.add_argument("--memory-max", default="1G")
     add.add_argument("--home-base", type=Path, default=Path("/home"))
     add.add_argument("--config", type=Path, default=DEFAULT_CONFIG, help="ignored KEY=VALUE credentials file outside git")
+    add.add_argument("--service-user", help="the Linux user the manager runs as: it and the Syncthing daemon get scoped ACL access")
     add.add_argument("--skip-cloudflare", action="store_true")
     add.add_argument("--skip-syncthing", action="store_true")
     add.add_argument("--apply", action="store_true", help="make the changes (default is a dry run)")
@@ -528,23 +761,40 @@ def main(argv=None, environ=None):
     owner.add_argument("--email", required=True)
     owner.add_argument("--password-file", required=True)
     args = parser.parse_args(argv)
+    if args.command in ("tick", "service"):
+        try:
+            if not args.data:
+                parser.error("--data is required")
+            host = json.loads(args.host_config.read_text())
+            if args.command == "tick":
+                tick(args.data, args.host_config)
+            else:
+                if host.get("data") != args.data:
+                    raise ProvisionError("data directory does not match the installed configuration")
+                control_service(host, args.action, args.name)
+        except (ProvisionError, OSError, ValueError) as error:
+            print(f"onboarding: {error}", file=sys.stderr)
+            return 1
+        return 0
     if args.command == "create-owner":
         create_owner(args.email, args.password_file)
         return 0
     config = load_config(args.config, os.environ if environ is None else environ)
     domain = args.domain or config.get("LINKO_DOMAIN", "")
-    if not NAME_RE.match(args.name):
-        parser.error("--name: lowercase letters, digits and dashes, starting with a letter (2-31 characters)")
-    if not EMAIL_RE.match(args.email):
-        parser.error("--email is not a valid address")
+    try:
+        fields = validate_request({"name": args.name, "email": args.email, "windows_folder": args.windows_folder,
+                                   "domain": domain, "memory_max": args.memory_max, "device_id": args.syncthing_device_id})
+    except ProvisionError as error:
+        parser.error(str(error))
     if not domain and not args.skip_cloudflare:
         parser.error("--domain (or LINKO_DOMAIN) is required unless --skip-cloudflare")
     if args.apply and args.dry_run:
         parser.error("--apply and --dry-run exclude each other")
     plan = Plan(name=args.name, email=args.email, windows_folder=args.windows_folder, domain=domain or "local",
                 repo=Path(__file__).resolve().parents[1], python=sys.executable, home_base=args.home_base, config=config,
-                apply=args.apply, memory_max=args.memory_max, syncthing_device=args.syncthing_device_id or "",
-                skip_cloudflare=args.skip_cloudflare, skip_syncthing=args.skip_syncthing)
+                apply=args.apply, memory_max=fields["memory_max"], syncthing_device=fields["device_id"],
+                skip_cloudflare=args.skip_cloudflare, skip_syncthing=args.skip_syncthing,
+                service_user=args.service_user or "", syncthing_user=config.get("SYNCTHING_USER") or args.service_user or "")
     receipt = provision(plan)
     print_receipt(receipt, plan)
     return 1 if any(s in ("failed", "refused") for _, s, _ in receipt) else 0

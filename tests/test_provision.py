@@ -21,6 +21,7 @@ class World:
         self.st_devices = [{'deviceID': 'EXISTING'}]
         self.st_folders = [{'id': 'shared', 'path': '/data/shared'}]
         self.owner = None
+        self.acls = {}
 
     def run(self, argv, **kw):
         self.calls.append(('run', argv))
@@ -32,6 +33,17 @@ class World:
             return (0, '') if argv[2] in self.enabled else (1, '')
         if argv[0] == 'systemctl' and argv[1] == 'enable':
             self.enabled.add(argv[-1])
+        if argv[0] == 'getfacl':
+            if not Path(argv[-1]).exists():
+                return 1, 'No such file or directory'
+            lines = ['# file: ' + argv[-1], 'user::rwx', 'group::---', 'other::---']
+            return 0, '\n'.join(lines + [f'{key}:{perm}   #effective:{perm}' for key, perm in self.acls.get(argv[-1], {}).items()])
+        if argv[0] == 'setfacl':
+            parts = argv[argv.index('-m') + 1].split(':')
+            default = parts[0] == 'd'
+            who, perm = parts[-2], parts[-1]
+            self.acls.setdefault(argv[-1], {})[('default:' if default else '') + 'user:' + who] = perm.replace('X', 'x')
+            return 0, ''
         if argv[0] == 'runuser' and 'git' in argv:
             (Path(argv[-1]) / '.git').mkdir(exist_ok=True)
         if argv[0] == 'runuser' and 'create-owner' in argv:
@@ -90,7 +102,7 @@ class World:
         return pv.Plan(**args)
 
     def mutating(self):
-        return [c for c in self.calls if (c[0] == 'run' and c[1][0] in ('useradd', 'chown', 'runuser')) or c[0] in ('PUT', 'POST')]
+        return [c for c in self.calls if (c[0] == 'run' and c[1][0] in ('useradd', 'chown', 'runuser', 'setfacl')) or c[0] in ('PUT', 'POST')]
 
 
 @pytest.fixture
@@ -213,3 +225,63 @@ def test_powershell_script_static():
 def test_onboarding_doc_linked():
     assert (ROOT / 'docs/ONBOARDING.md').is_file()
     assert 'ONBOARDING.md' in (ROOT / 'README.md').read_text() and 'ONBOARDING.md' in (ROOT / 'docs/INSTALL.md').read_text()
+
+
+def test_acl_steps_are_scoped_to_the_new_folder_and_idempotent(world):
+    over = dict(service_user='boss', syncthing_user='syncd')
+    first = status(pv.provision(world.plan(True, **over)))
+    assert first['syncthing user access to the folder'] == 'created' and first['manager access to the instance data'] == 'created'
+    plan = world.plan(True, **over)
+    calls = [c[1] for c in world.calls if c[0] == 'run' and c[1][0] == 'setfacl']
+    allowed = {plan.home, plan.project.parent, plan.project, plan.data, plan.home / '.local', plan.home / '.local/share'}
+    assert calls and {a[-1] for a in calls} <= {str(p) for p in allowed}
+    assert {a[-1] for a in calls if '-R' in a} == {str(plan.project), str(plan.data)}  # recursion: only these two folders
+    for argv in calls:  # named users only: never group, other, mask or a chmod
+        assert re.fullmatch(r'(d:)?u:(syncd|boss|anna):[r-][w-][xX-]', argv[argv.index('-m') + 1]), argv
+    assert not [c for c in world.calls if c[0] == 'run' and c[1][0] == 'chmod']
+    # the Syncthing user sees the parents only as search (x), the folder itself fully
+    assert world.acls[str(plan.home)]['user:syncd'] == '--x' and world.acls[str(plan.project)]['user:syncd'] == 'rwx'
+    assert world.acls[str(plan.project)]['default:user:anna'] == 'rwx'
+    before = len(calls)
+    second = pv.provision(world.plan(True, **over))
+    assert set(status(second).values()) == {'skipped'}
+    assert len([c for c in world.calls if c[0] == 'run' and c[1][0] == 'setfacl']) == before
+
+
+def test_acl_dry_run_changes_nothing_and_plans_only_missing_entries(world):
+    receipt = status(pv.provision(world.plan(False, service_user='boss', syncthing_user='syncd')))
+    assert receipt['syncthing user access to the folder'] == 'planned' and not world.acls
+    assert not [c for c in world.calls if c[0] == 'run' and c[1][0] == 'setfacl']
+
+
+def test_acl_steps_absent_without_users_or_with_skip_syncthing(world):
+    titles = [t for t, _, _ in pv.provision(world.plan(False))]
+    assert not [t for t in titles if 'user access' in t or 'manager access' in t]
+    titles = [t for t, _, _ in pv.provision(world.plan(False, service_user='boss', syncthing_user='syncd', skip_syncthing=True))]
+    assert 'manager access to the instance data' in titles and 'syncthing user access to the folder' not in titles
+
+
+def test_preview_before_the_pc_reports_in_plans_the_device_but_apply_refuses(world):
+    preview = status(pv.provision(world.plan(False, syncthing_device='')))
+    assert preview['syncthing device'] == 'planned'
+    assert status(pv.provision(world.plan(True, syncthing_device='')))['syncthing device'] == 'refused'
+    assert world.mutating() == []
+
+
+def test_request_validation_is_strict():
+    ok = dict(name='anna', email='a@b.co', windows_folder='C:\\Work', domain='example.com', memory_max='2G',
+              device_id='-'.join(['ABCDEFG'] * 8))
+    assert pv.validate_request(ok)['memory_max'] == '2G'
+    for field, bad in (('name', 'Anna'), ('name', 'a;b'), ('name', '../x'), ('email', 'x y@z.co'), ('windows_folder', "C:\\a'b"),
+                       ('windows_folder', 'C:\\a$b'), ('windows_folder', 'C:\\a\nb'), ('domain', 'a b.com'),
+                       ('memory_max', '1G; rm'), ('device_id', 'nope')):
+        with pytest.raises(pv.ProvisionError):
+            pv.validate_request({**ok, field: bad})
+
+
+def test_powershell_script_enrollment_static():
+    text = (ROOT / 'deploy/windows/Linko-Setup.ps1').read_text()
+    for name in ('WindowsFolder', 'ManagerUrl', 'ManagerDeviceId', 'FolderId', 'EnrollmentToken'):
+        assert re.search(rf'\[string\]\${name}\b', text)
+    assert 'api/enroll/report' in text and 'autoAcceptFolders' in text and '/rest/config/folders/' in text
+    assert not re.search(r'(CLOUDFLARE|SYNCTHING_API|TAILSCALE_API)', text)

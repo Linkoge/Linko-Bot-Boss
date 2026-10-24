@@ -1,0 +1,9 @@
+[Unit]
+Description=Start the Linko Add User host helper when the manager spools a request
+
+[Path]
+DirectoryNotEmpty=@DATA@/onboarding/requests
+Unit=linko-bot-manager-onboarding.service
+
+[Install]
+WantedBy=default.target
