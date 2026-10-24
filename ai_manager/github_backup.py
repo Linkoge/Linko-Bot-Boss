@@ -43,6 +43,7 @@ class GitHubBackup:
         self.db, self.registry = db, registry
         self.job, self.started = None, False
         self.credentials = None
+        self.manual = set()  # projects with an owner-requested push running; the background job stays out
         self.has_setup = has_setup or (lambda project_id: self.db.setting('deploy_setup:' + project_id) is not None)
 
     def offline(self, project_id):
@@ -69,7 +70,7 @@ class GitHubBackup:
             for project in self.registry.list():
                 if project.get('github_tier') != 'offline' and not self.db.setting(PREFIX + project['id']):
                     self.request(project['id'])
-        if self.job and not self.job.done():
+        if (self.job and not self.job.done()) or self.manual:
             return
         for project in self.registry.list():
             if project.get('github_tier') == 'offline':
@@ -89,6 +90,35 @@ class GitHubBackup:
         if not state.get('target_commit') and self.has_setup(project['id']):
             self.request(project['id'])
             return
+        target = state.get('target_commit')
+        if state.get('unverified') and state.get('commit') and target and target != state['commit'] \
+                and await asyncio.to_thread(self.contains, project['path'], target, state['commit']):
+            # The owner already pushed a newer main; an older deploy must not be pushed over it.
+            result = {'state': 'synced', 'commit': state['commit'], 'reason': 'pushed-before-verification',
+                      'unverified': True, 'unverified_at': state.get('unverified_at')}
+        else:
+            result = await self.run_push(project, target)
+        with self.db.transaction() as conn:
+            row = conn.execute('SELECT value FROM settings WHERE key=?', (PREFIX + project['id'],)).fetchone()
+            current = json.loads(row['value']) if row else {}
+            if current.get('generation') != state.get('generation'):
+                # A merge arrived while this immutable snapshot was being checked/pushed.
+                synced = result.get('state') == 'synced'
+                result = {**{k: v for k, v in current.items() if not (synced and k in ('unverified', 'unverified_at')
+                                                                      and not result.get('unverified'))},
+                          **({'commit': result['commit']} if synced else {})}
+            else:
+                keep = ('commit', 'target_commit') + (('unverified', 'unverified_at') if result['state'] != 'synced' else ())
+                result = {**{k: current[k] for k in keep if k in current}, **result}
+                result['retry_at'] = time.time() + RETRY_SECONDS if result['state'] == 'needs-attention' else 0
+            result |= {'generation': current.get('generation', 0), 'attempted_at': time.time()}
+            conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                         (PREFIX + project['id'], json.dumps(result)))
+            self.db.event(conn, 'github_backup.result', result, project['id'])
+
+    async def run_push(self, project, commit=None, unverified=False):
+        """One push path for the background job and the owner's manual override."""
+        extra = {**({'commit': commit} if commit else {}), **({'unverified': True} if unverified else {})}
         try:
             if project.get('github_tier'):
                 try:
@@ -96,37 +126,56 @@ class GitHubBackup:
                         raise ValueError('GitHub settings unavailable')
                     token = self.credentials(project)
                 except ValueError:
-                    result = {'state': 'needs-attention', 'reason': 'open-github-settings-for-tier-token'}
-                else:
-                    result = await asyncio.to_thread(self.push_with_token, project['path'], token,
-                                                     **({'commit': state['target_commit']} if state.get('target_commit') else {}))
-            else:
-                result = await asyncio.to_thread(self.push, project['path'],
-                                                 **({'commit': state['target_commit']} if state.get('target_commit') else {}))
+                    return {'state': 'needs-attention', 'reason': 'open-github-settings-for-tier-token'}
+                return await asyncio.to_thread(self.push_with_token, project['path'], token, **extra)
+            return await asyncio.to_thread(self.push, project['path'], **extra)
         except Exception:
             # Unexpected failure: Git/SSH and hooks can echo credentials, so store no error text at all.
-            result = {'state': 'needs-attention', 'reason': 'backup-operation-failed'}
-        with self.db.transaction() as conn:
-            row = conn.execute('SELECT value FROM settings WHERE key=?', (PREFIX + project['id'],)).fetchone()
-            current = json.loads(row['value']) if row else {}
-            if current.get('generation') != state.get('generation'):
-                # A merge arrived while this immutable snapshot was being checked/pushed.
-                result = {**current, **({'commit': result['commit']} if result.get('state') == 'synced' else {})}
-            else:
-                result = {**{k: current[k] for k in ('commit', 'target_commit') if k in current}, **result}
-                result['retry_at'] = time.time() + RETRY_SECONDS if result['state'] == 'needs-attention' else 0
-            result |= {'generation': current.get('generation', 0), 'attempted_at': time.time()}
-            conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
-                         (PREFIX + project['id'], json.dumps(result)))
-            self.db.event(conn, 'github_backup.result', result, project['id'])
+            return {'state': 'needs-attention', 'reason': 'backup-operation-failed'}
 
     @staticmethod
-    def push_with_token(root, token, commit=None):
+    def contains(root, ancestor, descendant):
+        return git_bytes(root, 'merge-base', '--is-ancestor', ancestor, descendant, check=False).returncode == 0
+
+    async def push_now(self, project_id):
+        """Owner override: push the current main HEAD without waiting for the deploy gate. Never forces."""
+        project = self.registry.get(project_id)
+        if project.get('github_tier') == 'offline' or self.offline(project_id):
+            raise ValueError('Offline projects are never pushed to GitHub')
+        if project_id in self.manual:
+            raise ValueError('A GitHub push is already running for this project')
+        self.manual.add(project_id)
+        try:
+            if self.job and not self.job.done():
+                await asyncio.gather(self.job, return_exceptions=True)
+            result = await self.run_push(project, unverified=True)
+            with self.db.transaction() as conn:
+                row = conn.execute('SELECT value FROM settings WHERE key=?', (PREFIX + project_id,)).fetchone()
+                current = json.loads(row['value']) if row else {}
+                if result.get('state') == 'synced' and result.get('commit'):
+                    now = time.time()
+                    receipt = {'state': 'synced', 'commit': result['commit'], 'reason': result['reason'],
+                               'retry_at': 0, 'attempted_at': now, 'generation': current.get('generation', 0) + 1}
+                    # A deploy already verified exactly this commit: nothing is unverified.
+                    if not (current.get('state') in {'pending', 'needs-attention'}
+                            and current.get('target_commit') == result['commit']):
+                        receipt |= {'unverified': True, 'unverified_at': now}
+                    conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                                 (PREFIX + project_id, json.dumps(receipt)))
+                    result = {**{k: v for k, v in result.items() if k != 'unverified'},
+                              **{k: receipt[k] for k in ('unverified', 'unverified_at') if k in receipt}}
+                self.db.event(conn, 'github_backup.manual', result, project_id)
+            return result
+        finally:
+            self.manual.discard(project_id)
+
+    @staticmethod
+    def push_with_token(root, token, commit=None, unverified=False):
         with token_auth(token) as env:
-            return GitHubBackup.push(root, env, commit=commit)
+            return GitHubBackup.push(root, env, commit=commit, unverified=unverified)
 
     @staticmethod
-    def push(root, auth_env=None, commit=None):
+    def push(root, auth_env=None, commit=None, unverified=False):
         def git(*args):
             network = args[0] in {'ls-remote', 'fetch', 'push'}
             return git_bytes(root, *args, **({'env': auth_env} if network and auth_env else {})).decode().strip()
@@ -191,6 +240,8 @@ class GitHubBackup:
                 # Explicit object/ref pair includes the entire backlog. Never force/reset/rebase.
                 git('push', '--porcelain', '--no-follow-tags', '--recurse-submodules=no',
                     remote, head + ':refs/heads/' + branch)
+            if unverified:
+                return {'state': 'synced', 'commit': head, 'reason': 'pushed-before-verification', 'unverified': True}
             return {'state': 'synced', 'commit': head, 'reason': 'backlog-verified'}
         except GitError as error:
             return failure(error)

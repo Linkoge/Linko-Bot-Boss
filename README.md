@@ -305,6 +305,18 @@ event and the project API carry `reason`, a readable `message`, `detail` and at 
 the project menu and tab tooltip show the message. Before pushing, a cheap local scan of the commits being pushed
 adds `warnings` (secret type, `path:line`, commit; never the value) when it sees literal key-shaped strings. It is
 advisory: it never blocks the push and GitHub's verdict wins.
+**Push to GitHub now** (project menu, next to **Pull updates now**; GitHub-origin projects only, never offline ones, and
+the server refuses offline projects) is the owner's manual override of the deploy gate: after a one-line confirmation
+("This pushes main without waiting for the full tests. Continue?") `POST /api/projects/<id>/push` (owner session and
+CSRF token required; manager/worker turns and automatic notices never call it) pushes exactly the current local main
+HEAD through the same `GitHubBackup.push` code, credentials and redacted failure diagnosis as the background backup
+(`unverified=True` flag), never forcing. The menu shows the result: success, or the parsed reason (for example the
+secret-scanning message with file and line). A successful manual push is recorded in the receipt as
+`unverified` (commit, `unverified_at`) and shown as "pushed before verification"; it also ends the waiting gate, so the
+background job does not push again. A later successful deploy of the same commit makes the receipt normal/verified
+(its attempt finds the remote already there, so nothing is pushed twice); a deploy of an older commit is not pushed over
+the newer main. A failed manual push leaves the receipt and the gate untouched. A newer failing deploy changes nothing on
+GitHub; the existing auto-repair handles it.
 An untouched repository with an unborn `main` or `master` and an empty GitHub remote is synced with reason
 `empty-repository`; no artificial commit is created. Existing remote history, other local refs or uncommitted files
 still require attention when the local main branch is missing.

@@ -1,5 +1,6 @@
 """Chromium project-menu and shared-editor regressions against a disposable app with a mocked GitHub transport."""
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -554,3 +555,47 @@ def test_pull_updates_button_calls_project_route_and_shows_result(page):
     menu_action(page, 'github-pull')
     expect(page.locator('#notice-text')).to_have_text('Up to date with GitHub.')
     assert len(calls) == 1 and calls[0].endswith(f'/api/projects/{selected}/pull')
+
+
+def open_menu(page):
+    page.locator('#project-menu-button').click()
+    return page.locator('#project-menu [data-project="github-push"]')
+
+
+def test_push_now_button_confirms_and_renders_success_in_menu(page):
+    calls = []
+
+    def fulfil(route):
+        calls.append(route.request.method)
+        route.fulfill(json={'state': 'synced', 'commit': 'abcdef1234567890', 'reason': 'pushed-before-verification',
+                            'unverified': True})
+    page.route('**/api/projects/*/push', fulfil)
+    messages = []
+    handler = lambda dialog: (messages.append(dialog.message), dialog.dismiss())  # noqa: E731
+    page.on('dialog', handler)
+    button = open_menu(page)
+    expect(button).to_have_text('Push to GitHub now')
+    button.click()
+    assert messages == ['This pushes main without waiting for the full tests. Continue?'] and calls == []
+    page.remove_listener('dialog', handler)
+    page.once('dialog', lambda dialog: dialog.accept())
+    button.click()
+    expect(page.locator('#project-menu .push-result')).to_contain_text('Pushed abcdef1')
+    assert calls == ['POST']
+
+
+def test_push_now_button_renders_parsed_rejection_reason(page):
+    page.route('**/api/projects/*/push', lambda route: route.fulfill(json={
+        'state': 'needs-attention', 'reason': 'github-push-protection',
+        'message': 'GitHub push protection blocked a GitHub token in src/a.py:7', 'excerpt': ['GH013 rule violation']}))
+    page.once('dialog', lambda dialog: dialog.accept())
+    open_menu(page).click()
+    result = page.locator('#project-menu .push-result')
+    expect(result).to_contain_text('src/a.py:7')
+    expect(result).to_have_class(re.compile('warning'))
+
+
+def test_push_now_button_hidden_for_offline_projects(page):
+    page.evaluate("()=>{const p=state.portfolio.projects.find(p=>p.id===state.project);p.github_tier='offline';}")
+    page.locator('#project-menu-button').click()
+    expect(page.locator('#project-menu [data-project="github-push"]')).to_have_count(0)

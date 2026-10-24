@@ -156,6 +156,8 @@ function projectLabel(p){
 const tierLabel=t=>t==='company'?'Company':t==='offline'?'Offline':'Personal';
 const visibilityBadge=p=>{const v=p.repo_visibility;if(!['public','private','offline'].includes(v))return null;const badge=element('small',v[0].toUpperCase()+v.slice(1),`visibility-badge visibility-${v}`);badge.dataset.badge=v;return badge;};
 const backupSummary=g=>g.message||g.reason;
+const unverifiedNote=g=>g?.unverified&&g.commit?`GitHub: pushed before verification (${g.commit.slice(0,7)}${g.unverified_at?`, ${new Date(g.unverified_at*1000).toLocaleString()}`:''}) · unverified`:'';
+const pushText=r=>r.state==='synced'?(r.commit?`Pushed ${r.commit.slice(0,7)} to GitHub (before verification).`:'Nothing to push.'):`GitHub push failed: ${r.message||r.reason}${(r.excerpt||[]).length?' — '+r.excerpt.join(' | '):''}${backupWarning(r)?' '+backupWarning(r):''}`;
 const backupWarning=g=>(g.warnings||[]).length?'WARN: likely push-protection hits before pushing: '+g.warnings.slice(0,5).map(w=>`${w.type} in ${w.path}:${w.line}${w.commit?` (commit ${w.commit})`:''}`).join('; '):'';
 function renderProjects(){
   const repoInfo=$('github-project-repository'),selected=state.portfolio.projects.find(p=>p.id===state.project);repoInfo.replaceChildren();if(selected?.repository){repoInfo.append(document.createTextNode(selected.repository));if(selected.github_tier)repoInfo.append(element('small',tierLabel(selected.github_tier),'github-tier'));}
@@ -173,6 +175,7 @@ function renderProjects(){
         b.title+='\nGitHub backup: waiting for deploy';
       }
     }
+    if(unverifiedNote(p?.github_backup))b.title+='\n'+unverifiedNote(p.github_backup);
     if(p?.github_backup?.state==='needs-attention'){
       b.append(element('span',' · GitHub needs attention','muted'));
       b.title+=`\nGitHub backup: ${backupSummary(p.github_backup)}. Local commits retained; retrying automatically.`;
@@ -231,6 +234,7 @@ function renderProjectMenu(){
     if(badge)row.append(badge);
     if(['warning','diverged','busy'].includes(p.github_sync?.state))row.append(element('span',p.github_sync.reason,'warning'));
     if(p.github_backup?.state==='needs-attention'){const g=p.github_backup;row.append(element('span',backupSummary(g),'warning backup-reason'));if(backupWarning(g))row.append(element('span',backupWarning(g),'warning backup-warn'));}
+    if(unverifiedNote(p.github_backup))row.append(element('span',unverifiedNote(p.github_backup),'muted backup-unverified'));
     parent.append(row);
   };
   const sorted=[...state.portfolio.projects].sort(compareContexts);
@@ -245,6 +249,13 @@ function renderProjectMenu(){
     const selected=state.portfolio.projects.find(p=>p.id===state.project);if(selected?.repository){const info=element('p',selected.repository,'muted');if(selected.github_tier)info.append(element('small',tierLabel(selected.github_tier),'github-tier'));actions.append(info);}
     const tier=selected?.github_tier||'personal',offline=tier==='offline';
     if(state.project&&!offline){const pull=element('button','Pull updates now');pull.dataset.project='github-pull';pull.onclick=action(async()=>{pull.disabled=true;try{const result=await api(`/api/projects/${state.project}/pull`,{method:'POST'});notice(result.reason);await refresh(false);}finally{pull.disabled=false;}});actions.append(pull);}
+    if(state.project&&!offline&&selected?.repository){const push=element('button','Push to GitHub now');push.dataset.project='github-push';push.title='Pushes main without waiting for the full tests';
+      push.onclick=action(async()=>{if(!confirm('This pushes main without waiting for the full tests. Continue?'))return;push.disabled=true;const project=state.project;
+        try{const result=await api(`/api/projects/${project}/push`,{method:'POST'});state.pushResult={project,ok:result.state==='synced',text:pushText(result)};}
+        catch(error){state.pushResult={project,ok:false,text:`GitHub push failed: ${error.message}`};}
+        finally{push.disabled=false;}
+        await refresh(false);renderProjectMenu();});actions.append(push);
+      if(state.pushResult?.project===state.project)actions.append(element('p',state.pushResult.text,`push-result ${state.pushResult.ok?'muted':'warning'}`));}
     if(state.project&&!offline&&state.githubStatus?.[tier]?.configured){const rename=element('button','Rename project');rename.dataset.project='github-rename';rename.title='Renames the GitHub repository, the local folder and the git remote';rename.onclick=()=>{closeProjectMenu();renameGithubProject();};actions.append(rename);}
     const create=element('button','Create project');create.dataset.project='github-create';create.onclick=action(async()=>{closeProjectMenu();await createGithubProject();});actions.append(create);
     const local=element('button','Create offline project');local.dataset.project='offline-create';local.title='Local-only: git repository on main, never uploaded anywhere';local.onclick=action(async()=>{closeProjectMenu();createOfflineProject();});actions.append(local);

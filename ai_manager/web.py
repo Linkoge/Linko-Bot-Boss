@@ -724,6 +724,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         registry.get(project_id)
         return await asyncio.shield(pipeline.sync.start(project_id))
 
+    @app.post("/api/projects/{project_id}/push", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def github_push(project_id: str):
+        return await asyncio.shield(pipeline.backups.push_now(project_id))
+
     @app.get("/api/github", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def github_status():
         return github.status()
