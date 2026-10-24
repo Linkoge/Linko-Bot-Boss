@@ -145,8 +145,14 @@ class Scheduler:
             repair = Repair(self.settings.data_dir)
             if action == 'repair_status':
                 return repair.records()
+            from .model_settings import repair_route
+            try:
+                await self.chat.server.start()
+                route = repair_route(self.db, self.chat.server, args.get('project_id') or selected_project)
+            except Exception:
+                route = {}  # Broken settings or provider must not block the host agent: it uses its fallback provider.
             return repair.submit('manager:' + str(params.get('manager_execution_id')), args.get('objective', ''),
-                                 params['conversation_id'])
+                                 params['conversation_id'], route.get('provider'), route.get('model'), route.get('effort'))
         if action in {'deployment_status', 'save_deploy_setup'}:
             project_id = args.get('project_id') or selected_project
             if selected_project and project_id != selected_project:

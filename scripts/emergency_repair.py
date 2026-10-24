@@ -138,7 +138,7 @@ class Repair:
         row.setdefault('notices', []).append(text)
         self.save(row)
 
-    def submit(self, key, instructions, conversation, provider=None, model=None):
+    def submit(self, key, instructions, conversation, provider=None, model=None, effort=None):
         if (not isinstance(key, str) or not key or not isinstance(instructions, str) or not instructions.strip()
                 or not isinstance(conversation, str) or not conversation):
             raise ValueError('request key, instructions and originating conversation are required')
@@ -153,15 +153,25 @@ class Repair:
                 if row['status'] not in FINAL:
                     # Do not silently lose another chat's request or its instructions.
                     raise ValueError('Repair already active: ' + row['id'])
+            # The app records its saved worker selection; the installed provider is only the fallback without one.
+            fallback = not provider
             row = {'id': hashlib.sha256(key.encode()).hexdigest()[:32], 'key': key,
                    'instructions': instructions, 'conversation_id': conversation,
-                   'provider': provider or self.config.get('provider', 'codex'),
-                   'model': model or self.config.get('model'), 'status': 'pending', 'attempts': 0,
+                   'provider': provider or self.config.get('provider') or 'codex',
+                   'model': model or (self.config.get('model') if fallback else None), 'effort': effort,
+                   'fallback_provider': fallback, 'status': 'pending', 'attempts': 0,
                    'retry_at': 0, 'created_at': time.time(), 'delivered': 0, 'delivery_attempts': 0}
             if row['provider'] not in {'codex', 'claude'}:
                 raise ValueError('provider must be codex or claude')
-            self.notice(row, 'Emergency repair accepted: ' + row['id'])
+            self.notice(row, 'Emergency repair accepted: ' + row['id'] + ' on ' + self.runs_on(row))
             return row
+
+    @staticmethod
+    def runs_on(row):
+        text = row['provider'].title() + (' ' + row['model'] if row.get('model') else '')
+        if row.get('effort'):
+            text += ' (' + row['effort'] + ')'
+        return text + (' [fallback provider: the app gave no selection]' if row.get('fallback_provider') else '')
 
     def healthy(self):
         try:
@@ -233,6 +243,8 @@ class Repair:
             args = [binary, 'exec']
             if row.get('session'):
                 args += ['resume', row['session']]
+            if row.get('effort'):
+                model += ['-c', 'model_reasoning_effort="' + row['effort'] + '"']
             return args + ['--json', '--dangerously-bypass-approvals-and-sandbox', '--skip-git-repo-check', *model,
                            '--output-last-message', str(output), '-']
         args = [binary, '-p', '--output-format', 'stream-json', '--verbose', '--strict-mcp-config',
@@ -355,12 +367,14 @@ class Repair:
                         continue
                     row['attempts'] += 1
                     row['status'] = 'running'
-                    self.notice(row, f"Emergency repair {row['id']} running, attempt {row['attempts']}.")
+                    self.notice(row, f"Emergency repair {row['id']} running on {self.runs_on(row)}, attempt {row['attempts']}.")
                     self.deliver(row)
                     try:
                         result = (provider or self.provider)(row, lock)
                         row['status'], row['result'] = 'succeeded', result
-                        self.notice(row, 'Emergency repair succeeded:\n' + result)
+                        after = (f" on {row['provider'].title()} after switching from {row['switched_from'].title()}"
+                                 if row.get('switched_from') else '')
+                        self.notice(row, 'Emergency repair succeeded' + after + ':\n' + result)
                     except Exception as error:
                         row['error'] = str(error)[-8000:]
                         retryable = isinstance(error, (TimeoutError, ConnectionError)) or (
@@ -373,7 +387,8 @@ class Repair:
                                 old = row['provider']
                                 row['provider'], row['switched_from'], row['switched_after'] = other, old, row['attempts']
                                 row.pop('session', None)
-                                row['model'] = self.config.get(other + '_model')
+                                row['model'], row['effort'] = self.config.get(other + '_model'), None
+                                row['fallback_provider'] = False
                                 row['retry_at'] = 0
                                 self.notice(row, f'Emergency repair: {old.title()} usage limit; switching to '
                                                  f'{other.title()}. ' + row['error'])

@@ -184,7 +184,7 @@ request repair after a prolonged outage. The installer snapshots the launcher
 outside the checkout into `DATA/repair/launcher.py`, installs the repair user timer,
 and tries enabling linger. Confirm installed/enabled/active and the conversation
 in `status`. Re-run `install` after updates to refresh the snapshot; subsequent
-runs can omit `--conversation`. Use `--provider claude` for Claude repair.
+runs can omit `--conversation`. Requests from the app run on the app's saved worker selection; `--provider` only sets the fallback for requests without one (default: the installed, logged-in CLI, Claude if both).
 
 Until the worker user below is installed, this host agent runs as the service user
 and **has no root privileges**. Never add blanket passwordless sudo

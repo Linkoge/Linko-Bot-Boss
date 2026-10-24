@@ -311,9 +311,10 @@ function renderMemory(){$('memory-list').replaceChildren();if(!state.detail){$('
 const PROGRESS_STALE_MS=90000;
 function hostRepairLabel(r){
   const minutes=Math.max(0,Math.round((r.elapsed||0)/60)),step=r.last_step?' · '+r.last_step:'',attempt=` · attempt ${r.attempt}/${r.max_attempts}`;
-  if(r.stale)return `Host agent possibly stuck · ${minutes} min · no activity for ${Math.round((r.idle||0)/60)} min${attempt}${step}`;
+  const on=r.provider?` on ${r.provider}${r.model?' '+r.model:''}${r.effort?' '+r.effort:''}`:'';
+  if(r.stale)return `Host agent possibly stuck${on} · ${minutes} min · no activity for ${Math.round((r.idle||0)/60)} min${attempt}${step}`;
   const head={queued:'Host agent queued',running:'Host agent working',retrying:'Host agent working (retry)',waiting:'Host agent waiting to retry',done:'Host agent finished',failed:'Host agent failed'}[r.state]||'Host agent';
-  return head+(r.state==='queued'?'':` · ${minutes} min${attempt}`)+step;
+  return head+on+(r.state==='queued'?'':` · ${minutes} min${attempt}`)+step;
 }
 // Host repair requests run outside the queue; the portfolio carries them. Shown in the submitting chat (or everywhere when unknown).
 function hostRepairLabels(){

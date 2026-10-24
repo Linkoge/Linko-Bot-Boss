@@ -26,7 +26,20 @@ def turn_seconds_arg(value):
     return seconds
 
 
-def install(repo, data, home, conversation, provider='codex', model=None, auto_detect=False,
+def detect_provider(home, env=os.environ):
+    """The fallback provider: the one whose CLI is installed and logged in, claude preferred if both are. Failing that,
+    an installed CLI (claude first), else claude."""
+    claude = env.get('AI_MANAGER_CLAUDE', str(home / '.local/bin/claude'))
+    codex = env.get('AI_MANAGER_CODEX', 'codex')
+    present = {'claude': shutil.which(claude) is not None, 'codex': shutil.which(codex) is not None}
+    login = {'claude': (home / '.claude/.credentials.json').is_file(), 'codex': (home / '.codex/auth.json').is_file()}
+    for names in ([n for n in present if present[n] and login[n]], [n for n in present if present[n]]):
+        if names:
+            return names[0]
+    return 'claude'
+
+
+def install(repo, data, home, conversation, provider=None, model=None, auto_detect=False,
             turn_seconds=None, activate=True, privileged=None):
     """privileged: ExecStart argv for the root-owned launcher (install_worker_user.repair_command); None keeps the
     service user's own snapshot."""
@@ -45,6 +58,7 @@ def install(repo, data, home, conversation, provider='codex', model=None, auto_d
     shutil.copyfile(repo / 'scripts/emergency_repair.py', temporary)
     os.chmod(temporary, 0o700)
     os.replace(temporary, target)
+    provider = provider or detect_provider(home)
     atomic(root / 'installed.json', {'repo': str(repo), 'conversation_id': conversation, 'provider': provider,
            'model': model, 'auto_detect': auto_detect, 'codex_bin': os.getenv('AI_MANAGER_CODEX', 'codex'),
            'claude_bin': os.getenv('AI_MANAGER_CLAUDE', str(home / '.local/bin/claude')),
@@ -100,7 +114,7 @@ def status(data, home):
         return systemctl(*args, TIMER, check=False).stdout.strip()
 
     return {'installed': bool(config) and (root / 'launcher.py').is_file() and all((units / u).is_file() for u in UNITS),
-            'enabled': unit('is-enabled'), 'active': unit('is-active'), 'conversation': config.get('conversation_id'),
+            'fallback_provider': config.get('provider'), 'enabled': unit('is-enabled'), 'active': unit('is-active'), 'conversation': config.get('conversation_id'),
             'auto_detect': config.get('auto_detect'), 'turn_seconds': config.get('turn_seconds', DEFAULT_TURN_SECONDS),
             'launcher': str(root / 'launcher.py'),
             'as_root': 'ExecStart=/usr/bin/sudo ' in read_text(units / UNITS[0]),
@@ -123,7 +137,9 @@ def main(argv=None):
     commands = parser.add_subparsers(dest='command', required=True)
     add = commands.add_parser('install', help='Idempotent; re-run to refresh the launcher snapshot')
     add.add_argument('--conversation', help='Exact existing chat ID for results (required on first install)')
-    add.add_argument('--provider', choices=['codex', 'claude'], default='codex')
+    add.add_argument('--provider', choices=['codex', 'claude'],
+                     help='Fallback only, for requests with no provider from the app (default: the installed, '
+                          'logged-in CLI; claude if both)')
     add.add_argument('--model')
     add.add_argument('--turn-seconds', type=turn_seconds_arg,
                      help='Provider CLI turn timeout (300..86400 seconds)')

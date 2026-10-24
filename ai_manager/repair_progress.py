@@ -130,7 +130,8 @@ def request_progress(root, receipt, config, now):
         state = 'retrying'
     activity = max(log_at, receipt.get('updated_at') or 0, started)
     stale = state in {'running', 'retrying'} and now - activity > turn
-    row = {'id': receipt['id'], 'state': state, 'provider': receipt.get('provider'),
+    row = {'id': receipt['id'], 'state': state, 'provider': receipt.get('provider'), 'model': receipt.get('model'),
+           'effort': receipt.get('effort'),
            'conversation_id': receipt.get('conversation_id'), 'attempt': attempts,
            'max_attempts': config.get('max_attempts') or DEFAULT_MAX_ATTEMPTS,
            'started_at': started or None, 'deadline': receipt.get('deadline'),

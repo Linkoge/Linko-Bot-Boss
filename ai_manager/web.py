@@ -345,13 +345,21 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return Repair(settings.data_dir).records()
 
     @app.post('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
-    def request_repair(body: dict):
+    async def request_repair(body: dict):
         from scripts.emergency_repair import Repair
+        from .model_settings import repair_route
         conversation = body.get('conversation_id')
         if not db.one('SELECT 1 FROM conversations WHERE id=?', (conversation,)):
             raise HTTPException(400, 'Select an existing originating conversation')
+        route = {k: body.get(k) for k in ('provider', 'model', 'effort')}
+        if not route['provider']:
+            try:
+                await chat.server.start()
+                route = repair_route(db, chat.server, body.get('project_id'))
+            except Exception:
+                route = {}  # The host agent must work while settings or the provider are broken: fallback provider.
         return Repair(settings.data_dir).submit(body.get('request_id'), body.get('instructions', ''), conversation,
-                                                body.get('provider'), body.get('model'))
+                                                route.get('provider'), route.get('model'), route.get('effort'))
 
     @app.get('/api/deployment', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def deployment_status():

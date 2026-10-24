@@ -699,12 +699,23 @@ that conversation is unknown. A running request with no log activity for longer 
 show nothing. `started_at` is written by the launcher, so re-run `install` to get exact start times (older receipts fall
 back to the deadline).
 
-**Provider fallback.** A request starts on its provider (`--provider`, config `provider`, default Codex). When a turn
+**Which provider and model.** Shown = saved = dispatched: when the manager's `emergency_repair` action (or `POST
+/api/repair` without a provider) submits a request, the app records the provider, model and effort of its saved worker
+selection in the request, the same single source that dispatches queue workers (the project's repo lock if the request is
+project-scoped, otherwise the global worker record; in Automatic mode its provider with the first allowed model/effort,
+as `delegate` fills omitted picks). The launcher runs exactly that, and the chip and the chat's accepted/running notices
+show it. Changing the selection affects the next request. There is no separate host-agent provider setting. The
+installer's `--provider` is only the **fallback provider** for requests that carry none (the owner CLI escape hatch, or the
+app being down or its settings unreadable). Its default is the CLI that is installed and logged in, Claude if both
+(otherwise any installed CLI, else Claude); `status` shows it as `fallback_provider`. Effort is applied to Codex
+(`model_reasoning_effort`); the Claude CLI turn uses its model only.
+
+**Provider fallback.** A request starts on its provider (see **Which provider and model** below). When a turn
 fails with a usage, rate-limit or quota error and the other CLI (Codex <-> Claude, config `<provider>_bin` or `PATH`) is
 available, the next attempt switches to it and retries promptly instead of waiting out the exponential backoff. The
 old provider's session id is cleared (a Codex thread cannot resume in Claude), the model is cleared unless
 `codex_model`/`claude_model` is set in the installed config, and the attempt carries the usual `RECOVERY` reconcile
-note. The receipt notices record it (`Codex usage limit; switching to Claude`). The `max_attempts` budget and the
+note. The receipt notices record it (`Codex usage limit; switching to Claude`) and the final chat result names the provider it finished on (`succeeded on Claude after switching from Codex`). The `max_attempts` budget and the
 states are unchanged, so switching back and forth stays inside it. Connection and timeout failures keep the current
 provider with the normal backoff, as does a limit failure when the other CLI is not installed.
 `scripts/install_repair.py` copies `scripts/emergency_repair.py` to the host launcher, so this takes effect only after
@@ -718,7 +729,7 @@ default to two hours; set a per-install timeout with `python3 scripts/install_re
 
 Omit `--auto-detect` for explicit requests only. Re-running `install` is idempotent: it rewrites the units, refreshes
 the launcher snapshot and reuses the stored chat ID if `--conversation` is omitted. An optional `--model` passes the
-exact model directly to the CLI; Claude uses `--provider claude`. Omitting `--turn-seconds` on a re-run keeps its
+exact model directly to the CLI for fallback requests only; `--provider` sets the fallback provider. Omitting `--turn-seconds` on a re-run keeps its
 stored value. `status` reports installed/enabled/active state and the stored settings. `uninstall` disables the timer and removes the units, launcher and config but keeps request
 receipts and logs. The installer copies a standalone launcher to `DATA/repair/launcher.py` outside the
 checkout/venv and enables independent `linko-bot-manager-repair.service` and `.timer` user units (no dependency on

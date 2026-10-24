@@ -273,6 +273,12 @@ def delegation(db, server, model=None, effort=None, project_id=None):
     raise ValueError(f'No supported execution pair in the automatic worker pool: {pool}')
 
 
+def repair_route(db, server, project_id=None):
+    """The provider, model and effort a host repair request runs on: exactly what a new queue worker would get."""
+    route = delegation(db, server, project_id=project_id)
+    return {'provider': provider_of(route['model']), 'model': route['model'], 'effort': route['effort']}
+
+
 def worker_context(db, server, project_id=None):
     worker = current(db, server, project_id)['worker']
     if automatic(worker):
