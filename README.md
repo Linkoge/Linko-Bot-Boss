@@ -626,12 +626,14 @@ re-running `install` (see below); requests already running keep the old launcher
 
 For installation, updating the launcher and finding the result chat ID, see
 [install the host repair agent](docs/INSTALL.md#5-install-the-independent-host-repair-agent).
-Use `python3 scripts/install_repair.py status` to inspect state and `uninstall` to remove it.
+Use `python3 scripts/install_repair.py status` to inspect state and `uninstall` to remove it. Provider CLI turns
+default to two hours; set a per-install timeout with `python3 scripts/install_repair.py install --turn-seconds N`
+(300–86400 seconds). Existing hosts must re-run `python3 scripts/install_repair.py install` to refresh the launcher.
 
 Omit `--auto-detect` for explicit requests only. Re-running `install` is idempotent: it rewrites the units, refreshes
 the launcher snapshot and reuses the stored chat ID if `--conversation` is omitted. An optional `--model` passes the
-exact model directly to the CLI; Claude uses `--provider claude`. `status` reports installed/enabled/active state and
-the stored settings. `uninstall` disables the timer and removes the units, launcher and config but keeps request
+exact model directly to the CLI; Claude uses `--provider claude`. Omitting `--turn-seconds` on a re-run keeps its
+stored value. `status` reports installed/enabled/active state and the stored settings. `uninstall` disables the timer and removes the units, launcher and config but keeps request
 receipts and logs. The installer copies a standalone launcher to `DATA/repair/launcher.py` outside the
 checkout/venv and enables independent `linko-bot-manager-repair.service` and `.timer` user units (no dependency on
 `linko-bot-manager.service`). It does not deploy or restart the application, and tries `loginctl enable-linger` (it
@@ -663,8 +665,8 @@ Requests, instructions, attempts, status, errors, final result and pending chat 
 receipts under `DATA/repair/requests`; native JSONL/output logs live under `DATA/repair/runs`. The request key is
 idempotent forever. A different request while a repair is active is rejected with its receipt ID; its instructions
 are not silently discarded. A host-wide flock permits one repair at a time; the CLI inherits it across launcher
-failure. Verified orphan process groups are killed only after their recorded 30-minute deadline. The systemd unit
-also kills its own cgroup at 35 minutes. Interrupted attempts consume the same durable five-attempt budget; completed
+failure. Verified orphan process groups are killed only after their recorded turn deadline. The systemd unit allows
+five additional minutes before killing its own cgroup. Interrupted attempts consume the same durable five-attempt budget; completed
 native results are reconciled from logs before another turn. Otherwise the retained native session is resumed with
 instructions to inspect effects/receipts before repeating operations. A crash before a native session ID was emitted
 can require a new session; retained logs and reconciliation instructions still apply. This does not promise exactly-once
@@ -673,7 +675,8 @@ holding the lock: the unit's cgroup timeout handles installed runs; a manual ope
 terminating it. The launcher never breaks an unproven lock to start a duplicate.
 
 Connection/timeouts and usage/rate-limit errors retry at 1, 2, 4, 8 minutes (one-hour delay cap); five total attempts,
-30 minutes per turn, with counters and retry deadlines preserved across restart. Other errors fail immediately.
+two hours per turn by default (configurable from 300 to 86400 seconds), with counters and retry deadlines preserved
+across restart. Other errors fail immediately.
 There is no provider fallback or indefinite usage-limit loop. Unattended detection, when enabled, checks app health
 and read-only task activity each timer wake. Thirty minutes of app outage or running task silence requests a repair;
 pending owner questions are excluded. A durable incident key prevents relaunching a completed/failed repair for the

@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from emergency_repair import atomic, read
+from emergency_repair import DEFAULT_TURN_SECONDS, atomic, read
 
 UNITS = ('linko-bot-manager-repair.service', 'linko-bot-manager-repair.timer')
 TIMER = UNITS[1]
@@ -18,10 +18,23 @@ def systemctl(*args, check=True):
     return subprocess.run(['systemctl', '--user', *args], check=check, timeout=30, capture_output=True, text=True)
 
 
-def install(repo, data, home, conversation, provider='codex', model=None, auto_detect=False, activate=True):
+def turn_seconds_arg(value):
+    seconds = int(value)
+    if not 300 <= seconds <= 86400:
+        raise argparse.ArgumentTypeError('must be between 300 and 86400 seconds')
+    return seconds
+
+
+def install(repo, data, home, conversation, provider='codex', model=None, auto_detect=False,
+            turn_seconds=None, activate=True):
     if any(c in str(repo) + str(data) + str(home) + sys.executable for c in ' \n\r"%'):
         raise ValueError('Use paths without spaces or systemd escape characters')
     root = data / 'repair'
+    previous = read(root / 'installed.json', {})
+    if turn_seconds is None:
+        turn_seconds = previous.get('turn_seconds', DEFAULT_TURN_SECONDS)
+    if not isinstance(turn_seconds, int) or not 300 <= turn_seconds <= 86400:
+        raise ValueError('turn_seconds must be between 300 and 86400')
     # Copy the standalone launcher outside the checkout and venv, so a broken app import/deploy cannot disable it.
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     target = root / 'launcher.py'
@@ -32,7 +45,7 @@ def install(repo, data, home, conversation, provider='codex', model=None, auto_d
     atomic(root / 'installed.json', {'repo': str(repo), 'conversation_id': conversation, 'provider': provider,
            'model': model, 'auto_detect': auto_detect, 'codex_bin': os.getenv('AI_MANAGER_CODEX', 'codex'),
            'claude_bin': os.getenv('AI_MANAGER_CLAUDE', str(home / '.local/bin/claude')),
-           'url': 'http://127.0.0.1:' + os.getenv('AI_MANAGER_PORT', '8787')})
+           'url': 'http://127.0.0.1:' + os.getenv('AI_MANAGER_PORT', '8787'), 'turn_seconds': turn_seconds})
     units = home / '.config/systemd/user'
     units.mkdir(parents=True, exist_ok=True)
     # Use host Python, never the application's .venv.
@@ -48,7 +61,7 @@ ExecStart={python} {target} --data {data} tick
 Environment=PATH={home}/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=-{home}/.config/linko-bot-manager.env
 UMask=0077
-TimeoutStartSec=35min
+TimeoutStartSec={turn_seconds + 300}s
 KillMode=control-group
 ''')
     (units / 'linko-bot-manager-repair.timer').write_text('''[Unit]
@@ -75,7 +88,8 @@ def status(data, home):
 
     return {'installed': bool(config) and (root / 'launcher.py').is_file() and all((units / u).is_file() for u in UNITS),
             'enabled': unit('is-enabled'), 'active': unit('is-active'), 'conversation': config.get('conversation_id'),
-            'auto_detect': config.get('auto_detect'), 'launcher': str(root / 'launcher.py'),
+            'auto_detect': config.get('auto_detect'), 'turn_seconds': config.get('turn_seconds', DEFAULT_TURN_SECONDS),
+            'launcher': str(root / 'launcher.py'),
             'requests': len(list((root / 'requests').glob('*.json')))}
 
 
@@ -97,6 +111,8 @@ def main(argv=None):
     add.add_argument('--conversation', help='Exact existing chat ID for results (required on first install)')
     add.add_argument('--provider', choices=['codex', 'claude'], default='codex')
     add.add_argument('--model')
+    add.add_argument('--turn-seconds', type=turn_seconds_arg,
+                     help='Provider CLI turn timeout (300..86400 seconds)')
     add.add_argument('--auto-detect', action='store_true', help='Also request repairs after 30 minutes of outage')
     commands.add_parser('status')
     commands.add_parser('uninstall')
@@ -114,7 +130,7 @@ def main(argv=None):
         if not conversation:
             parser.error('install requires --conversation on first run')
         target = install(Path(__file__).resolve().parents[1], data, home, conversation,
-                         args.provider, args.model, args.auto_detect)
+                         args.provider, args.model, args.auto_detect, args.turn_seconds)
         try:
             lingering = subprocess.run(['loginctl', 'enable-linger'], timeout=30, capture_output=True).returncode == 0
         except OSError:

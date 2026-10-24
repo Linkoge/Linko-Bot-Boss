@@ -267,7 +267,7 @@ def test_install_status_uninstall_are_idempotent_and_independent(tmp_path, monke
     monkeypatch.setattr(module.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0))
     units = home / '.config/systemd/user'
 
-    module.main(['install', '--conversation', 'origin', '--auto-detect'])
+    module.main(['install', '--conversation', 'origin', '--auto-detect', '--turn-seconds', '5400'])
     first = {p.name: p.read_text() for p in units.iterdir()}
     assert set(first) == set(module.UNITS)
     service, timer = first[module.UNITS[0]], first[module.UNITS[1]]
@@ -279,9 +279,11 @@ def test_install_status_uninstall_are_idempotent_and_independent(tmp_path, monke
     assert {p.name: p.read_text() for p in units.iterdir()} == first
     config = json.loads((data / 'repair/installed.json').read_text())
     assert config['conversation_id'] == 'origin' and config['auto_detect'] is False
+    assert config['turn_seconds'] == 5400 and 'TimeoutStartSec=5700s' in service
 
     state = module.status(data, home)
     assert state['installed'] and state['enabled'] == 'enabled' and state['conversation'] == 'origin'
+    assert state['turn_seconds'] == 5400
 
     (data / 'repair/requests').mkdir()
     (data / 'repair/requests/keep.json').write_text('{}')
@@ -292,6 +294,44 @@ def test_install_status_uninstall_are_idempotent_and_independent(tmp_path, monke
     assert not module.status(data, home)['installed']
     with pytest.raises(SystemExit):
         module.main(['install'])  # no stored or given conversation
+
+
+@pytest.mark.parametrize('value', ['299', '86401'])
+def test_install_rejects_turn_timeout_out_of_range(tmp_path, monkeypatch, value):
+    module = load_installer()
+    monkeypatch.setenv('AI_MANAGER_DATA', str(tmp_path / 'data'))
+    monkeypatch.setattr(module.Path, 'home', classmethod(lambda cls: tmp_path / 'home'))
+    monkeypatch.setattr(module.subprocess, 'run', lambda *a, **k: subprocess.CompletedProcess(a, 0))
+    with pytest.raises(SystemExit):
+        module.main(['install', '--conversation', 'origin', '--turn-seconds', value])
+
+
+def test_turn_timeout_default_and_configured_process_deadline(repair, tmp_path, monkeypatch):
+    from scripts.emergency_repair import DEFAULT_TURN_SECONDS
+
+    assert DEFAULT_TURN_SECONDS == 7200
+    repair.config.update(turn_seconds=12345, codex_bin=fake_cli(tmp_path, 'print("done")\n'))
+    request(repair)
+    waits = []
+    original = subprocess.Popen
+
+    class CapturedProcess:
+        def __init__(self, *args, **kwargs):
+            self.process = original(*args, **kwargs)
+            self.pid = self.process.pid
+            self.returncode = None
+
+        def wait(self, timeout=None):
+            waits.append(timeout)
+            self.returncode = self.process.wait(timeout=timeout)
+            return self.returncode
+
+    monkeypatch.setattr('scripts.emergency_repair.subprocess.Popen', CapturedProcess)
+    before = time.time()
+    repair.run()
+    row = current(repair)
+    assert waits[0] == 12345
+    assert before + 12345 <= row['deadline'] <= time.time() + 12345
 
 
 def test_installed_watchdog_requests_repair_while_main_service_is_down(tmp_path):

@@ -16,6 +16,7 @@ import urllib.request
 from pathlib import Path
 
 FINAL = {'succeeded', 'failed'}
+DEFAULT_TURN_SECONDS = 7200
 INSTRUCTIONS = """You are the owner's host agent, outside the normal task queue. You carry out whatever host work the
 owner's request describes: installs and packages, permissions/ACLs, users, services, Syncthing-style setup, reboots,
 config, and repairing the application. Normal queue worker rules do not apply to you.
@@ -228,10 +229,10 @@ class Repair:
                                        stdout=stream, stderr=subprocess.STDOUT, start_new_session=True,
                                        pass_fds=(lock.fileno(),))
             row['pid'], row['process_start'] = process.pid, identity(process.pid)
-            row['deadline'] = time.time() + self.config.get('turn_seconds', 1800)
+            row['deadline'] = time.time() + self.config.get('turn_seconds', DEFAULT_TURN_SECONDS)
             self.save(row)
             try:
-                process.wait(timeout=self.config.get('turn_seconds', 1800))
+                process.wait(timeout=self.config.get('turn_seconds', DEFAULT_TURN_SECONDS))
             except subprocess.TimeoutExpired:
                 raise TimeoutError('Repair turn timed out')
             finally:
