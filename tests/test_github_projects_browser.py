@@ -493,7 +493,7 @@ def test_project_menu_labels_groups_repository_and_global_order(page, browser_ap
     menu = page.locator('#project-menu')
     assert all('…' not in label and '...' not in label for label in menu.locator('button, summary').all_inner_texts())
     actions = menu.get_by_role('group', name='Project actions', exact=True)
-    assert actions.locator('button').all_inner_texts() == ['Change display name', 'Pull updates now', 'Rename project', 'Create project', 'Create offline project']
+    assert actions.locator('button').all_inner_texts() == ['Change display name', 'Pull updates now', 'Push to GitHub now', 'Rename project', 'Create project', 'Create offline project']
     assert actions.locator('[data-project=rename] + p').inner_text() == page.evaluate(
         '()=>state.portfolio.projects.find(p=>p.id===state.project).repository')
     assert menu.get_by_role('button', name='GitHub settings', exact=True).count() == 0
