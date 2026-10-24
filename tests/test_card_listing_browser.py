@@ -1,6 +1,7 @@
 """Real browser card counts, paging, controls and compressed history retrieval."""
 import json
 
+from browser_sync import refreshed
 from test_card_listing import seed
 from test_model_picker_browser import browser_context, page, server  # noqa: F401
 
@@ -13,6 +14,12 @@ def ids(browser_page, kind):
     attribute = 'task' if kind == 'task' else 'execution'
     return browser_page.locator(f'#{kind}-list [data-{attribute}-id]').evaluate_all(
         f'nodes=>nodes.map(n=>n.dataset.{attribute}Id)')
+
+
+def settle(browser_page, count, agents=None):
+    """Controls and scope switches render through a refresh that the app's own poll may supersede and finish."""
+    browser_page.wait_for_function("""([t,a])=>document.querySelectorAll('#task-list [data-task-id]').length===t&&
+      (a===null||document.querySelectorAll('#agent-list [data-execution-id]').length===a)""", arg=[count, agents])
 
 
 def test_cards_default_ten_paging_refresh_scope_reload_controls_and_history(page, browser_context):  # noqa: F811
@@ -54,13 +61,13 @@ def test_cards_default_ten_paging_refresh_scope_reload_controls_and_history(page
     page.wait_for_function('()=>state.portfolio.tasks.length===28')
     first_twenty = ids(page, 'task')
     assert len(first_twenty) == len(set(first_twenty)) == 28
-    page.evaluate('()=>refresh(false)')
+    refreshed(page, 'refresh(false)')
     assert ids(page, 'task') == first_twenty
     page.locator('[data-view=agents]').click()
     page.locator('#agents-older').click()
     page.wait_for_function('()=>state.portfolio.executions.length===28')
     assert len(set(ids(page, 'agent'))) == 28
-    page.evaluate('()=>refresh(false)')
+    refreshed(page, 'refresh(false)')
     assert len(ids(page, 'agent')) == 28
     # A late older response from the previous scope must never replace the new scope.
     page.route('**/api/portfolio?*', delay_older)
@@ -75,6 +82,7 @@ def test_cards_default_ten_paging_refresh_scope_reload_controls_and_history(page
     # Scope changes reset both independent windows, including rapid switches.
     page.evaluate('([one,two])=>Promise.all([selectProject(one),selectProject(two)])', projects)
     assert page.evaluate('state.project') == two
+    settle(page, 14, 14)
     assert len(ids(page, 'task')) == len(ids(page, 'agent')) == 14
     assert all(id.startswith('two-') for id in ids(page, 'task') + ids(page, 'agent'))
     page.evaluate('(one)=>selectProject(one)', one)
@@ -88,18 +96,21 @@ def test_cards_default_ten_paging_refresh_scope_reload_controls_and_history(page
     held = page.locator('[data-task-id=one-active-1]')
     held.get_by_role('button', name='Release', exact=True).click()
     held.get_by_role('button', name='Hold', exact=True).wait_for()
+    settle(page, 14)
     assert len(ids(page, 'task')) == 14
     held.get_by_role('button', name='Hold', exact=True).click()
     held.get_by_role('button', name='Release', exact=True).wait_for()
     held.get_by_role('button', name='Cancel', exact=True).click()
     held.get_by_role('button', name='Continue', exact=True).wait_for()
+    settle(page, 13)
     assert len(ids(page, 'task')) == 13  # 3 active + exactly 10 terminal.
     held.get_by_role('button', name='Continue', exact=True).click()
     held.get_by_role('button', name='Hold', exact=True).wait_for()
+    settle(page, 14)
     assert len(ids(page, 'task')) == 14
     # Finish a previously old task: ordinary refresh must still have ten terminal cards.
     db.run("UPDATE tasks SET state='done',updated_at=1000 WHERE id='one-active-0'")
-    page.evaluate('()=>refresh(false)')
+    refreshed(page, 'refresh(false)')
     assert len(ids(page, 'task')) == 13
     assert len([id for id in ids(page, 'task') if id in {f'one-task-{i}' for i in range(26)} | {'one-active-0'}]) == 10
     # Load all older history in each list, without losing pages on periodic refresh.
@@ -109,7 +120,7 @@ def test_cards_default_ten_paging_refresh_scope_reload_controls_and_history(page
     page.wait_for_function('()=>state.portfolio.tasks.length===30')
     assert page.locator('#tasks-older').is_hidden()
     assert len(set(ids(page, 'task'))) == 30
-    page.evaluate('()=>refresh(false)')
+    refreshed(page, 'refresh(false)')
     assert len(ids(page, 'task')) == 30
     assert page.locator('#tasks-older').is_hidden()
     page.locator('[data-task-id=one-task-0]').get_by_role('button', name='History', exact=True).click()

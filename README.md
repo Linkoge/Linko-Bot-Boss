@@ -461,7 +461,12 @@ project menu.
 `scripts/deploy.py` is the only deploy mechanism for every project with a saved setup: wait for idle under the checkout
 fence, back up, deploy `main`, check health, and automatically roll back on failure after changes begin. Passing task
 checks precede the merge. The installed manager runtime adapter also runs its full backend suite once, backs up SQLite,
-restarts its service and checks scheduler/authentication health; failures restore code and database. External command
+restarts its service and checks scheduler/authentication health; failures restore code and database. The suite is
+`scripts/full_suite.py` from the commit being deployed (the installer saves `[.venv python, scripts/full_suite.py]` as
+`test_cmd`; an older saved `python -m pytest ...` command is run as that same script), so its parallel mode has one
+definition; see Run and develop. `test_seconds` in `DATA/deploy/installed.json` (default 3600) still bounds the whole run.
+The suite runs before `uv sync` (which waits for the stopped service), so a venv without pytest-xdist (the first deploy
+that adds it) runs the parallel phase in one process instead of failing; the next deploy is parallel. External command
 and user-systemd service setups use the same consumer, lock, queue deadline, backup/health/rollback phases and receipts.
 A test or health failure of a task's own deploy goes back to that task as a repair round (see Repair rounds above); the
 receipt carries `repairable` for it. No repository-name or manager-only deployment policy remains. The short
@@ -1038,11 +1043,24 @@ uv run playwright install chromium               # manager screenshots and brows
 # browser_pwa.py opens a headed Chromium app window: on a display-less host run it as `xvfb-run -a uv run python scripts/browser_pwa.py`
 uv run python -m ai_manager.cli setup-owner     # first time only
 uv run pytest -q -m smoke                       # the fixed smoke suite, every task
-uv run pytest -q                                # full suite: run by the deploy script
+uv run python scripts/full_suite.py              # full suite as the deploy runs it: parallel, then the serial tests
+uv run pytest -q                                # the same full suite in one process, for debugging (also -p no:xdist)
 uv run ruff check ai_manager scripts tests
 node --check ai_manager/static/app.js
 PYTHONPATH=. uv run python scripts/browser_smoke.py   # also browser_tasks.py and the other browser_*.py checks
 ```
+
+`scripts/full_suite.py` runs every test not marked `serial` under pytest-xdist (`-n` = 1.5 workers per core, capped at
+`MAX_WORKERS` = 6; `--dist loadfile` keeps each file on one worker in order, because browser modules share one page),
+then the `serial` tests alone. On the 4-core host it takes 215-225 s (about 190 s parallel + 25 s serial) instead of
+583 s serially; the floor is CPU, since browsers, uvicorn services, git and ffmpeg keep the cores busy. Tests must
+stay safe side by side: ephemeral ports (`bind(('127.0.0.1', 0))`), `tmp_path` data directories, no fixed shared files,
+and stable parametrize ids (never runtime-random values: every worker must collect the same test names). Load widens
+browser races: a test's `refresh()` may be superseded by the app's own poll and return `false` unrendered, so use
+`tests/browser_sync.py` `refreshed()` or wait for the rendered state rather than asserting right after the call. Mark a test
+`@pytest.mark.serial` only when sharing the host changes its meaning; today that is the full deploy flow in
+`tests/test_core_deploy.py`, whose real gate runs a nested smoke suite against `SMOKE_BUDGET_SECONDS`. The smoke suite
+itself is always run single-process. Extra arguments go to both phases, e.g. `scripts/full_suite.py -k deploy`.
 
 Fresh-machine setup, service environment, audio prerequisites, provider login, host repair,
 extra instances, updates and troubleshooting: [Installation guide](docs/INSTALL.md).

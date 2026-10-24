@@ -565,7 +565,7 @@ def test_tier_save_failure_rolls_back_registration(hub):
     assert not (settings.project_roots[0] / 'unregistered').exists()
 
 
-@pytest.mark.parametrize('tier,credential', [('personal', PAT), ('company', COMPANY_PAT)])
+@pytest.mark.parametrize('tier,credential', [('personal', PAT), ('company', COMPANY_PAT)], ids=['personal', 'company'])
 def test_separate_token_lifecycle_keeps_values_out_of_responses_and_logs(hub, caplog, tier, credential):
     browser, app, settings, github = hub
     caplog.set_level(logging.DEBUG)
@@ -659,7 +659,8 @@ def test_company_requires_its_own_token_and_org_without_personal_fallback(hub):
     assert github.calls == []
 
 
-@pytest.mark.parametrize('tier,credential,owner', [('personal', PAT, 'octo'), ('company', COMPANY_PAT, 'acme')])
+@pytest.mark.parametrize('tier,credential,owner', [('personal', PAT, 'octo'), ('company', COMPANY_PAT, 'acme')],
+                         ids=['personal', 'company'])
 def test_create_rename_and_push_use_only_the_tiers_credential(hub, monkeypatch, tier, credential, owner):
     import asyncio
 
