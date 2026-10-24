@@ -25,12 +25,16 @@ def option(argv, flag):
 def test_the_suite_runs_in_parallel_then_runs_serial_tests_alone():
     suite = load('full_suite')
     assert 1 <= suite.WORKERS <= suite.MAX_WORKERS
-    (first, parallel), (second, serial) = suite.phases(['-k', 'x'])
+    (first, parallel), (second, serial) = suite.phases(['-k', 'x'], xdist=True)
     assert (first, second) == ('parallel', 'serial')
     assert option(parallel, '-n') == [str(suite.WORKERS)]
     assert option(parallel, '--dist') == ['loadfile']  # a module's shared browser page stays on one worker
     assert option(parallel, '-m') == ['pytest', 'not serial'] and parallel[-2:] == ['-k', 'x']
     assert '-n' not in serial and 'no:xdist' in option(serial, '-p') and option(serial, '-m') == ['pytest', 'serial']
+    # A dev dependency: an environment synced from the lock file has it (the deploy syncs after its first test run).
+    assert '"pytest-xdist' in (ROOT / 'pyproject.toml').read_text()
+    (_, fallback), _ = suite.phases([], xdist=False)  # a venv not yet synced with the new lock file
+    assert '-n' not in fallback and option(fallback, '-m') == ['pytest', 'not serial']
 
 
 def test_a_failing_phase_fails_the_suite_and_is_named_last(monkeypatch, capsys):

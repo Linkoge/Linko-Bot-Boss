@@ -9,6 +9,7 @@ worker in file order (`--dist loadfile`), because browser modules share one page
 run; the exit status is non-zero when either fails, and the last line names the failed phase for the deploy receipt.
 Plain `python -m pytest -q` still runs the whole suite in one process, for debugging.
 """
+import importlib.util
 import os
 import subprocess
 import sys
@@ -19,10 +20,14 @@ MAX_WORKERS = 6
 WORKERS = max(1, min((os.cpu_count() or 1) * 3 // 2, MAX_WORKERS))
 PYTEST = ['-m', 'pytest', '-q', '-p', 'no:cacheprovider']
 NO_TESTS = 5  # pytest's exit status when a selection collects nothing
+# The deploy tests the new commit before it syncs dependencies (only once the service is stopped), so the first deploy
+# that adds pytest-xdist runs with a venv without it: phase 1 then runs in one process instead of failing on `-n`.
+XDIST = importlib.util.find_spec('xdist') is not None
 
 
-def phases(args=(), workers=WORKERS):
-    return [('parallel', [sys.executable, *PYTEST, '-n', str(workers), '--dist', 'loadfile', '-m', 'not serial', *args]),
+def phases(args=(), workers=WORKERS, xdist=XDIST):
+    spread = ['-n', str(workers), '--dist', 'loadfile'] if xdist else []
+    return [('parallel', [sys.executable, *PYTEST, *spread, '-m', 'not serial', *args]),
             ('serial', [sys.executable, *PYTEST, '-p', 'no:xdist', '-m', 'serial', *args])]
 
 
@@ -39,6 +44,8 @@ def run(name, argv):
 
 def main(args):
     failed = []
+    if not XDIST:
+        print('pytest-xdist is not installed in this environment; the parallel phase runs in one process', flush=True)
     for name, argv in phases(args):
         code, last = run(name, argv)
         if code:
