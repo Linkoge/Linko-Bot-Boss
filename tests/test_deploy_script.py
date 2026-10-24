@@ -229,11 +229,10 @@ def test_waits_for_idle_and_never_restarts_while_work_runs(runtime):
     thread = threading.Thread(target=lambda: holder.update(result=deploy.main()))
     thread.start()
     state_file = runtime.data / 'deploy/state.json'
-    for _ in range(100):
-        if (deploy_script.read(state_file) or {}).get('phase') == 'waiting_idle':
-            break
-        time.sleep(.1)
-    time.sleep(1)
+    log = runtime.data / 'deploy/deploy.log'
+    deadline = time.monotonic() + 10  # the busy report is written to state.json, then logged
+    while time.monotonic() < deadline and 'waiting for idle: {' not in (log.read_text() if log.exists() else ''):
+        time.sleep(.05)
     waiting = deploy_script.read(state_file)
     assert waiting['phase'] == 'waiting_idle'
     assert waiting['busy'] == {'unfinished_executions': 1} and waiting['pid'] == os.getpid()
@@ -280,7 +279,9 @@ def test_hold_and_withdrawal_stop_the_deploy_before_any_restart(runtime):
     holder = {}
     thread = threading.Thread(target=lambda: holder.update(result=deploy.main()))
     thread.start()
-    time.sleep(1)
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline and 'busy' not in (deploy_script.read(runtime.data / 'deploy/state.json') or {}):
+        time.sleep(.05)
     (runtime.data / 'deploy/request.json').unlink()  # owner cancels while waiting for idle
     thread.join(30)
     assert holder['result']['status'] == 'cancelled' and holder['result']['id'] == request['id']

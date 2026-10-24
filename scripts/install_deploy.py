@@ -17,7 +17,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from deploy import atomic  # noqa: E402
+from deploy import atomic, suite_command  # noqa: E402
 from deploy import read as deploy_read  # noqa: E402
 
 UNITS = ('linko-bot-manager-deploy.service', 'linko-bot-manager-deploy.path')
@@ -49,7 +49,7 @@ def install(repo, data, home, instances=()):
     kept.update({name: instance_entry(home, name) for name in instances})
     config = {'repo': str(repo), 'data': str(data), 'service': 'linko-bot-manager.service', 'instances': list(kept.values()),
               'url': 'http://127.0.0.1:' + os.getenv('AI_MANAGER_PORT', '8787'), 'uv': uv if Path(uv).exists() else None,
-              'test_cmd': [str(venv_python), '-m', 'pytest', '-q', '-p', 'no:cacheprovider'],
+              'test_cmd': suite_command(venv_python),
               'installed_at': time.time()}
     atomic(data / 'deploy' / 'installed.json', config)
     directory = home / '.config/systemd/user'

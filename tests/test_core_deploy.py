@@ -56,6 +56,7 @@ class Flow:
         return self.core.tasks.get(task["id"])
 
 
+@pytest.mark.serial  # its real gate runs the copy's smoke suite under SMOKE_BUDGET_SECONDS
 @pytest.mark.asyncio
 async def test_full_flow_task_to_merge_to_deploy_to_healthy_service(runtime, monkeypatch):
     from ai_manager.core import run_gate  # the real checks: the private copy's own smoke suite, in the task worktree

@@ -35,6 +35,20 @@ IDLE = {
 }
 KEEP_BACKUPS = 10
 IDLE_SECONDS = 1800  # the wait for idle is bounded; the app withdraws a request this old (pipeline.DEPLOY_WAIT)
+HEALTH_RETRY_SECONDS = 0.25  # poll a restarting service briefly; the health window bounds the total wait
+SUITE = 'scripts/full_suite.py'  # the full backend suite's one definition, including its parallel mode
+
+
+def suite_command(python):
+    """The installed runtime's test command: the target commit's own suite runner, from the checkout."""
+    return [str(python), SUITE]
+
+
+def test_command(saved):
+    """Installs from before scripts/full_suite.py saved a serial `python -m pytest ...`; run the one definition."""
+    if saved and list(saved[1:3]) == ['-m', 'pytest']:
+        return suite_command(saved[0])
+    return saved
 
 
 def atomic(path, value):
@@ -323,7 +337,7 @@ class Deploy:
             except Exception as error:
                 if time.monotonic() >= deadline:
                     raise HealthFailed('health check failed: ' + str(error)) from error
-                self.sleep(1)
+                self.sleep(HEALTH_RETRY_SECONDS)
 
     # ---- database ------------------------------------------------------------------------------------------------
     def backup(self, destination):
@@ -439,7 +453,7 @@ class Deploy:
             if previous == target and not request.get('emergency') and self.instances_current(target):
                 self.wait_health(target)
                 raise Stop('success', f'{target[:10]} is already live; nothing to deploy')
-            tests = None if self.setup else self.config.get('test_cmd')
+            tests = None if self.setup else test_command(self.config.get('test_cmd'))
             if tests and not request.get('skip_tests'):
                 result = run(tests, cwd=self.repo, timeout=self.config.get('test_seconds', 3600), check=False)
                 if result.returncode:

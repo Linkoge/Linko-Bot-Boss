@@ -32,7 +32,12 @@ def test_load_older_chat_worker_events_and_complete_output(page, browser_context
     assert page.locator('#messages [data-message]').count() == 30
     assert page.locator('#chat-older').count() == 0 and page.get_by_text('Load older messages').count() == 0
     page.wait_for_function('()=>!initialChatPosition')
-    scroll_to_top = "()=>{$('messages').scrollTop=0}"
+    # The app reacts to a scroll only once the previous page has finished loading (state.olderLoading). A slow sync after
+    # the reload can leave the list already at the top, where setting scrollTop=0 fires no scroll event; start below it.
+    scroll_to_top = """async()=>{const m=$('messages'),frame=()=>new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));
+      for(let i=0;i<200&&(state.olderLoading||!state.olderHasMore);i++)await new Promise(r=>setTimeout(r,25));
+      if(m.scrollTop<80){m.scrollTop=m.scrollHeight;await frame();}
+      m.scrollTop=0}"""
     page.evaluate(scroll_to_top)
     page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===60")
     page.evaluate(scroll_to_top)

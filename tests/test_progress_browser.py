@@ -22,6 +22,14 @@ def inject(page, holder):
     page.route('**/api/portfolio*', handle)
 
 
+def refreshed(page):
+    """Refresh until one call renders: the app's own poll can supersede a refresh, which then returns false unrendered."""
+    for _ in range(20):
+        if page.evaluate('()=>refresh()'):
+            return
+    raise AssertionError('every refresh was superseded')
+
+
 def boxes(page):
     return [page.locator(s).bounding_box() for s in ('#messages', '#chat-form', '.composer-area')]
 
@@ -41,11 +49,11 @@ def test_every_phase_shows_its_label_without_taking_layout_space_then_clears(pag
     page.set_viewport_size({'width': width, 'height': height})
     holder = {'progress': IDLE}
     inject(page, holder)
-    page.evaluate('()=>refresh()')
+    refreshed(page)
     idle = boxes(page)
     for name, label in PHASES:
         holder['progress'] = phase(name, label)
-        page.evaluate('()=>refresh()')
+        refreshed(page)
         chip = page.locator('#progress-chip')
         chip.wait_for(state='visible')
         assert chip.inner_text() == label and chip.get_attribute('data-phase') == name
@@ -67,7 +75,7 @@ def test_every_phase_shows_its_label_without_taking_layout_space_then_clears(pag
         assert style['border'] == '0px' and style['radius'] == '0px'
         assert style['background'] == 'rgba(0, 0, 0, 0)' and style['dot'] == 'none'
     holder['progress'] = IDLE  # done, failed, rolled back or stopped: nothing in progress
-    page.evaluate('()=>refresh()')
+    refreshed(page)
     page.locator('#progress-chip').wait_for(state='hidden')
     assert page.locator('#progress-chip').inner_text() == '' and boxes(page) == idle
     assert page.locator('#status-label').inner_text() == 'Ready to help'
@@ -76,7 +84,7 @@ def test_every_phase_shows_its_label_without_taking_layout_space_then_clears(pag
 def test_manager_reply_keeps_its_own_indicator_and_stale_state_does_not_spin(page):
     holder = {'progress': phase('merge', 'Merging')}
     inject(page, holder)
-    page.evaluate('()=>refresh()')
+    refreshed(page)
     page.locator('#progress-chip').wait_for(state='visible')
     page.evaluate("()=>{state.execution='reply';renderProgress();}")  # a streaming reply shows the message + Stop instead
     assert page.locator('#progress-chip').is_hidden()
@@ -90,7 +98,7 @@ def test_manager_reply_keeps_its_own_indicator_and_stale_state_does_not_spin(pag
 def test_switching_project_clears_the_previous_project_phase(page):
     holder = {'progress': phase('checks', 'Running checks')}
     inject(page, holder)
-    page.evaluate('()=>refresh()')
+    refreshed(page)
     page.locator('#progress-chip').wait_for(state='visible')
     holder['progress'] = IDLE
     page.evaluate('()=>selectProject(null)')
@@ -110,12 +118,12 @@ def test_deploy_after_merge_shows_from_the_saved_request_and_survives_reload(pag
         page.wait_for_function("()=>!$('progress-chip').hidden")
         assert page.locator('#progress-chip').inner_text() == 'Deploying: running tests'
         (deploy / 'state.json').write_text(json.dumps({'id': 'browser1', 'phase': 'verifying', 'at': time.time()}))
-        page.evaluate('()=>refresh()')
+        refreshed(page)
         page.wait_for_function("()=>$('progress-chip').textContent==='Health check'")
     finally:
         (deploy / 'request.json').unlink(missing_ok=True)
         (deploy / 'state.json').unlink(missing_ok=True)
-    page.evaluate('()=>refresh()')
+    refreshed(page)
     page.locator('#progress-chip').wait_for(state='hidden')
     page.reload()
     page.wait_for_function('()=>state.ready&&!!state.history')
