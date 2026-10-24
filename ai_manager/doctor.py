@@ -1,4 +1,5 @@
 """Read-only installation diagnostics. Never echo host configuration or subprocess output."""
+import hashlib
 import json
 import os
 import re
@@ -8,6 +9,8 @@ import stat
 import subprocess
 from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
+
+from . import isolation
 
 TIMEOUT = 3
 SERVICE = 'linko-bot-manager.service'
@@ -55,11 +58,12 @@ def health(url, host='localhost'):
 
 
 class Doctor:
-    def __init__(self, home=None, repo=None, output=print):
+    def __init__(self, home=None, repo=None, output=print, isolation_config=isolation.CONFIG):
         self.home = home or Path.home()
         self.repo = repo or Path(__file__).resolve().parents[1]
         self.output = output
         self.failed = False
+        self.isolation_config = isolation_config
 
     def report(self, ok, label, fix, *, warning=False):
         status = 'PASS' if ok else 'WARN' if warning else 'FAIL'
@@ -215,7 +219,48 @@ class Doctor:
         self.report(props.get('ActiveState') == 'active' and props.get('UnitFileState') == 'enabled',
                     'repair timer enabled and active',
                     'run python3 scripts/install_repair.py install; check systemctl --user status linko-bot-manager-repair.timer')
+        self.worker_isolation(data)
         return int(self.failed)
+
+    def worker_isolation(self, data):
+        """Worker user present and actually isolated; only the repair launcher reaches root; no blanket NOPASSWD."""
+        found = isolation.detect(self.isolation_config)
+        install = 'sudo python3 scripts/install_worker_user.py install (README "How work runs")'
+        self.report(bool(found), 'worker user installed', install + "; until then workers run with your user's rights",
+                    warning=True)
+        _, listing = command(['sudo', '-n', '-l'])
+        self.report(not isolation.blanket_nopasswd(listing), 'no blanket NOPASSWD sudo for the service user',
+                    'remove the temporary NOPASSWD: ALL rule (README "Emergency host repair")', warning=not found)
+        if not found:
+            return
+        config = json.loads(Path(self.isolation_config).read_text())
+
+        def same(installed, source):
+            try:
+                return hashlib.sha256(Path(installed).read_bytes()).digest() == \
+                    hashlib.sha256((self.repo / source).read_bytes()).digest()
+            except OSError:
+                return False
+        self.report(same(found.launcher, 'scripts/worker_launcher.py') and
+                    same(config.get('repair_launcher', ''), 'scripts/emergency_repair.py'),
+                    'root-owned launchers match this checkout', install)
+        code, text = command([*found.prefix(), 'probe', '--read', str(self.home / '.config/linko-bot-manager.env'),
+                              '--read', str(self.home / '.ssh'), '--read', str(data / 'manager.sqlite3'),
+                              '--write', str(data / 'repair')])
+        try:
+            result = json.loads(text) if code == 0 else {}
+            reached = [*result['read'].values(), *result['write'].values()]
+        except (ValueError, KeyError, TypeError, AttributeError):
+            reached = [True]
+        self.report(not any(reached), 'worker isolation working (no env file, ~/.ssh, database or repair spool)',
+                    install + '; then rerun doctor')
+        unit = self.home / '.config/systemd/user/linko-bot-manager-repair.service'
+        try:
+            privileged = str(config.get('repair_launcher')) in unit.read_text()
+        except OSError:
+            privileged = False
+        self.report(privileged, 'repair timer runs the root-owned launcher',
+                    'as the service user: python3 scripts/install_repair.py install', warning=True)
 
 
 def main():

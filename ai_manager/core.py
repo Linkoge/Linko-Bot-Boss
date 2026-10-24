@@ -21,7 +21,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import fence
+from . import fence, isolation
 from .attachments import native_image
 from .codex import WORKER_RULES, AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
@@ -327,6 +327,7 @@ class Core:
         self.db, self.registry, self.settings, self.pipeline = db, registry, settings, pipeline
         self.tasks, self.factory, self.gate, self.stall = Tasks(db), server_factory, gate, stall
         self.jobs, self.servers, self.cancelling = {}, {}, set()
+        self.gates = {}  # execution id -> directories opened to the isolated worker user, closed when the run ends
         self.runner = Runner(self, stall)  # starts, resumes and unsticks work: ai_manager/runner.py
 
     # -- scheduling ------------------------------------------------------------------------------------------------
@@ -365,6 +366,7 @@ class Core:
         eid, started = task["lease_owner"], time.monotonic()
         server = self.servers[eid] = self.factory(self.settings, native=True)
         try:
+            self.isolate(task, eid, server)
             await self.work(task, eid, server)
         except asyncio.CancelledError:
             if eid not in self.cancelling:
@@ -378,12 +380,33 @@ class Core:
             self.runner.failed(task, eid, error)
         finally:
             await server.close()
+            if gate := self.gates.pop(eid, None):
+                await asyncio.to_thread(gate[0].close, *gate[1])
             self.servers.pop(eid, None)
             self.db.run("UPDATE executions SET latency_ms=? WHERE id=? AND latency_ms IS NULL", ((time.monotonic() - started) * 1000, eid))
+
+    def isolate(self, task, eid, server):
+        """Run this worker as the unprivileged worker user when installed; otherwise say plainly that it is not."""
+        found = isolation.detect()
+        if found and hasattr(server, "isolate"):
+            server.isolate(found, eid)
+            self.event(task, eid, "worker.isolation", {"user": found.user})
+        else:
+            log.warning("task %s: %s", task["id"], isolation.WARNING)
+            self.event(task, eid, "worker.isolation", {"warning": isolation.WARNING})
+
+    async def open_workspace(self, eid, server, root, project):
+        if not isinstance(found := getattr(server, "isolation", None), isolation.Isolation):
+            return
+        shared = Path(self.registry.allowed_path(project["path"]))
+        paths = [root] if shared.resolve() == Path(root).resolve() else [root, shared]
+        self.gates[eid] = (found, paths)
+        await asyncio.to_thread(found.open, root, shared)
 
     async def work(self, task, eid, server):
         project = self.registry.get(task["project_id"])
         root = self.workspace(task, project)
+        await self.open_workspace(eid, server, root, project)
         await server.start()
         route = assignment_route(self.db, server, task)
         thread_id = await server.thread(root, WORKER_INSTRUCTIONS, task["native_thread"], route["model"])
@@ -481,6 +504,8 @@ class Core:
         """Run one native turn to completion and return its final message. Errors go to the runner (wait or fail)."""
         images = [{"type": "localImage", "path": i["path"]} for i in prompt.get("task_context", {}).get("attachments", [])
                   if native_image(i)]
+        if images and isinstance(found := getattr(server, "isolation", None), isolation.Isolation):
+            await asyncio.to_thread(found.share, [i["path"] for i in images])
         return await self.stream(eid, server, thread_id, queue, prompt, route, images, task)
 
     async def stream(self, eid, server, thread_id, queue, prompt, route, images, task):

@@ -4,6 +4,7 @@ The owner picks the active provider for new work. Existing assignments and manag
 their exact model, so a pinned Codex assignment still runs on Codex after switching to Claude.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -26,6 +27,9 @@ class ClaudeServer(AppServer):
         host = Path(__file__).with_name('claude_host.py')  # Self-contained; independent of cwd/sys.path.
         args = [sys.executable, '-I', str(host), 'app-server',
                 '--data', str(self.settings.data_dir), '--claude', self.settings.claude_bin]
+        if self.isolation:
+            # The host keeps its thread files in the data directory; each `claude` turn runs as the worker user.
+            args += ['--worker-prefix', json.dumps(self.isolation.prefix()), '--worker-tag', self.worker_tag]
         return args + ['--native'] if self.native else args
 
 
@@ -40,6 +44,13 @@ class ProviderServer:
             backend.tool_handlers = self.tool_handlers
         self.threads = {}
         self.current = None
+        self.isolation = None
+
+    def isolate(self, isolation, tag):
+        self.isolation = isolation
+        for backend in self.backends.values():
+            if hasattr(backend, 'isolate'):
+                backend.isolate(isolation, tag)
 
     def __setattr__(self, name, value):
         super().__setattr__(name, value)

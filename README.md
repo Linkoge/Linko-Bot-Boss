@@ -88,6 +88,56 @@ rules 8–9; worker-only: rule 11).
    `queue.stalled` event and a visible reason on the task (for example a deploy or merge holding the live checkout), once per
    stall. Held, paused, retry-waiting and deploy-waiting work is never a stall. Nothing stays blocked without a visible reason.
 
+**Workers run as a separate unprivileged Linux user** (`ai_manager/isolation.py`), so "workers have no system rights"
+is enforced by Linux, not only by the rules. Workers read untrusted text (dependencies, install scripts, web pages,
+error output); injected instructions must not reach root, keys or the host agent.
+
+- **Who runs what.** The manager app and the repair spool belong to the service user (for example `codex` or `mint1`).
+  Every queue worker's provider process runs as the worker user (default `linko-worker`): the whole Codex App Server,
+  or each `claude -p` turn (the Claude host process stays the service user's, because it keeps thread files in the
+  data directory). The worker user has no sudo rights, no login shell and no membership in sudo/adm/libvirt/kvm/docker
+  groups. Only the host repair agent reaches root (see [Emergency host repair](#emergency-host-repair)).
+- **How it starts.** The app runs exactly one fixed command through sudo, never a shell:
+  `sudo -n -u linko-worker /usr/bin/python3 -I /usr/local/lib/linko/worker-launcher.py run --tag EXECUTION_ID codex -- ARGS`.
+  The root-owned launcher (a copy of `scripts/worker_launcher.py`) runs only the Codex or Claude executable configured in
+  root-owned `/etc/linko/worker.json`. It gives the program a clean environment: the worker's home, the installed PATH
+  and a run tag, with no service env file values such as `XAI_API_KEY`. The service user cannot signal another user's
+  processes, so cancel, stall and shutdown use `worker-launcher.py kill --tag EXECUTION_ID`. It signals every
+  worker-user process carrying that run's tag, including ones started after restart recovery.
+- **What a worker can reach.** Its own task workspace (read/write), its project's checkout (read) and Git directory
+  (read/write, for commits on its branch), the toolchain directories the installer opened (provider CLIs, node, uv
+  Pythons, the manager checkout used by the self-check command), its own home with its own provider logins and uv
+  cache, and the network (installs and downloads keep working). It cannot read `~/.config/linko-bot-manager*.env`,
+  `~/.ssh`, the provider logins of the service user, the database, the repair spool, deploy files, backups or other
+  projects' checkouts. The app opens a task's workspace and project checkout with ACLs on its own files when the run
+  starts (`setfacl`; no root needed) and closes them (`u:linko-worker:---`) when it ends. Default ACLs keep files
+  created by either user usable by both, so checks and merges as the service user work unchanged. Attached images of
+  a task are made readable to the worker individually.
+- **Provider logins for workers.** The worker user has its own Claude and Codex logins in its own home
+  (`/var/lib/linko-worker`); the service user's logins are never shared. Log in, or log in again after expiry, as an
+  administrator:
+  `sudo -u linko-worker -H codex login --device-auth` and `sudo -u linko-worker -H claude` (then `/login`). Use the
+  executables listed in `/etc/linko/worker.json` if they are not on root's PATH. Never commit or copy credential files.
+- **Install, check, remove.** `sudo python3 scripts/install_worker_user.py install` (once per machine, by the owner or
+  the host agent; `--dry-run` prints the plan, re-running is idempotent and refreshes the launcher copies after
+  updates). `status` prints a read-only report, including a probe of what the worker user can reach.
+  `uninstall` restores same-user mode: it removes the sudoers drop-in, config and launchers, removes the worker's ACL
+  entries and gives files the worker created back to the service user. Add `--remove-user` to delete the account.
+  Options: `--worker-user`, `--data`, `--projects`, `--codex`, `--claude`, `--toolchain DIR` (repeatable). Defaults come
+  from the service env file. The installer creates the user and the root-owned launchers, `/etc/linko/worker.json`
+  and `/etc/sudoers.d/linko-worker` (checked with `visudo -cf` before it is put in place). It also sets the directory
+  ACLs: search-only on the way to workspaces, project roots and toolchain, and an explicit no-access entry for every
+  other entry there, including the repair spool.
+- **Fallback.** Without the installation (or with `AI_MANAGER_WORKER_ISOLATION=off`), workers run as the service user
+  exactly as before. The queue never stalls, but the Tasks view shows "Workers run with your user's rights" and every
+  run records a `worker.isolation` event with that warning (an isolated run records the worker user). Activate it when
+  no task is running: a worker's native thread from before the switch belongs to the other user's provider history.
+- **Checks.** `doctor` reports the worker user, the launchers matching this checkout, a live isolation probe (env file,
+  `~/.ssh`, database and spool unreachable), the repair timer using the root launcher, and no blanket `NOPASSWD: ALL`
+  for the service user. Permanent coverage: `tests/test_worker_isolation.py` (mocked sudo/setfacl, no real users).
+  Its opt-in probe `LINKO_ISOLATION_PROBE=1 python -m pytest tests/test_worker_isolation.py -k installed` checks a real
+  installation.
+
 Owner controls on a task: **Hold / Release** (queued), **Cancel** (queued or running; the branch is kept),
 **Continue** appends instructions to queued/held tasks and releases a hold; failed/done tasks re-queue at the end,
 with counters preserved. Manager `continue` accepts added instructions in `objective`, `details`, or both;
@@ -612,6 +662,29 @@ usage preflight, queue, project pause or deploy-pending checks. Provider authent
 still apply. The two stop cases above require specific owner confirmation: unattended agents must stop and return
 a failed result asking for that confirmation. As with other native workers, this is an agent instruction convention,
 not a sandbox; the request authorizes the host work, restarts and deploys it describes.
+
+**Root only for the host agent, only from owner requests.** With the worker user installed (see
+[How work runs](#how-work-runs)), `/etc/sudoers.d/linko-worker` also lets the service user run exactly one command as
+root without a password. It runs the root-owned copy of this launcher (`/usr/local/lib/linko/repair-launcher.py`,
+root:root 0755, not writable by the service or worker user):
+`/usr/bin/sudo -n /usr/bin/python3 -I /usr/local/lib/linko/repair-launcher.py --data DATA tick`. After installing the
+worker user, re-run `python3 scripts/install_repair.py install` as the service user. Its timer then uses that exact
+command, and `status` shows `"as_root": true`. The launcher drops to the service user's effective ids for the spool,
+logs and database, so they stay the service user's files. It becomes root only to start the provider CLI turn. The
+agent is told to run the app's commands, Git and deploy script as the service user (`runuser -u USER -- ...`,
+`systemctl --user -M USER@ ...`). The root agent uses root's own provider login: once, `sudo -H codex login
+--device-auth` and/or `sudo -H claude`. Requests still enter only through the spool. It belongs to the service user
+and the worker user has an explicit no-access ACL on it, so only the app (owner-typed turns) and the owner's terminal
+can submit them. Re-run `sudo python3 scripts/install_worker_user.py install` after changing `scripts/emergency_repair.py`
+(doctor reports a stale copy). `install_worker_user.py uninstall` followed by `install_repair.py install` returns to the
+earlier same-user host agent.
+
+**Remove the temporary blanket NOPASSWD rule** (added on mint1 so the host agent could do VM/firewall work unattended).
+After the steps above, the service user needs no other sudo right. Find the rule:
+`sudo grep -rn NOPASSWD /etc/sudoers /etc/sudoers.d`. Delete only the line granting everything, for example
+`mint1 ALL=(ALL) NOPASSWD: ALL`, with `sudo visudo -f /etc/sudoers.d/FILE` (or `sudo visudo` for the main file). Never
+touch `/etc/sudoers.d/linko-worker`. Verify with `sudo -l` as that user: only the two `linko` rules may say NOPASSWD.
+Then confirm the agent still works with a small owner request. `doctor` reports any remaining `NOPASSWD: ALL`.
 
 **Provider fallback.** A request starts on its provider (`--provider`, config `provider`, default Codex). When a turn
 fails with a usage, rate-limit or quota error and the other CLI (Codex <-> Claude, config `<provider>_bin` or `PATH`) is

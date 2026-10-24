@@ -9,6 +9,7 @@ import sys
 from pathlib import Path
 
 from emergency_repair import DEFAULT_TURN_SECONDS, atomic, read
+from install_worker_user import repair_command
 
 UNITS = ('linko-bot-manager-repair.service', 'linko-bot-manager-repair.timer')
 TIMER = UNITS[1]
@@ -26,7 +27,9 @@ def turn_seconds_arg(value):
 
 
 def install(repo, data, home, conversation, provider='codex', model=None, auto_detect=False,
-            turn_seconds=None, activate=True):
+            turn_seconds=None, activate=True, privileged=None):
+    """privileged: ExecStart argv for the root-owned launcher (install_worker_user.repair_command); None keeps the
+    service user's own snapshot."""
     if any(c in str(repo) + str(data) + str(home) + sys.executable for c in ' \n\r"%'):
         raise ValueError('Use paths without spaces or systemd escape characters')
     root = data / 'repair'
@@ -45,7 +48,9 @@ def install(repo, data, home, conversation, provider='codex', model=None, auto_d
     atomic(root / 'installed.json', {'repo': str(repo), 'conversation_id': conversation, 'provider': provider,
            'model': model, 'auto_detect': auto_detect, 'codex_bin': os.getenv('AI_MANAGER_CODEX', 'codex'),
            'claude_bin': os.getenv('AI_MANAGER_CLAUDE', str(home / '.local/bin/claude')),
-           'url': 'http://127.0.0.1:' + os.getenv('AI_MANAGER_PORT', '8787'), 'turn_seconds': turn_seconds})
+           'url': 'http://127.0.0.1:' + os.getenv('AI_MANAGER_PORT', '8787'), 'turn_seconds': turn_seconds,
+           # sudo resets PATH; the root host agent needs this one to find node-based provider CLIs.
+           'path': os.getenv('PATH', '/usr/local/bin:/usr/bin:/bin')})
     units = home / '.config/systemd/user'
     units.mkdir(parents=True, exist_ok=True)
     # Use host Python, never the application's .venv.
@@ -53,11 +58,12 @@ def install(repo, data, home, conversation, provider='codex', model=None, auto_d
                    if path.is_file()), None)
     if not python:
         raise ValueError('A host python3 is required')
+    start = ' '.join(privileged) if privileged else f'{python} {target} --data {data} tick'
     (units / 'linko-bot-manager-repair.service').write_text(f'''[Unit]
 Description=Independent Linko emergency repair and result delivery
 [Service]
 Type=oneshot
-ExecStart={python} {target} --data {data} tick
+ExecStart={start}
 Environment=PATH={home}/.local/bin:/usr/local/bin:/usr/bin:/bin
 EnvironmentFile=-{home}/.config/linko-bot-manager.env
 UMask=0077
@@ -79,6 +85,13 @@ WantedBy=timers.target
     return target
 
 
+def read_text(path):
+    try:
+        return path.read_text()
+    except OSError:
+        return ''
+
+
 def status(data, home):
     root, units = data / 'repair', home / '.config/systemd/user'
     config = read(root / 'installed.json', {})
@@ -90,6 +103,7 @@ def status(data, home):
             'enabled': unit('is-enabled'), 'active': unit('is-active'), 'conversation': config.get('conversation_id'),
             'auto_detect': config.get('auto_detect'), 'turn_seconds': config.get('turn_seconds', DEFAULT_TURN_SECONDS),
             'launcher': str(root / 'launcher.py'),
+            'as_root': 'ExecStart=/usr/bin/sudo ' in read_text(units / UNITS[0]),
             'requests': len(list((root / 'requests').glob('*.json')))}
 
 
@@ -129,13 +143,15 @@ def main(argv=None):
         conversation = args.conversation or read(data / 'repair/installed.json', {}).get('conversation_id')
         if not conversation:
             parser.error('install requires --conversation on first run')
+        privileged = repair_command(data)
         target = install(Path(__file__).resolve().parents[1], data, home, conversation,
-                         args.provider, args.model, args.auto_detect, args.turn_seconds)
+                         args.provider, args.model, args.auto_detect, args.turn_seconds, privileged=privileged)
         try:
             lingering = subprocess.run(['loginctl', 'enable-linger'], timeout=30, capture_output=True).returncode == 0
         except OSError:
             lingering = False
-        print('Repair timer enabled. Host launcher: ' + str(target))
+        print('Repair timer enabled. Host launcher: ' + (privileged[4] + ' (as root through sudo)' if privileged
+                                                         else str(target)))
         if not lingering:
             print('Warning: could not enable lingering; run `loginctl enable-linger $USER` for unattended '
                   'operation after logout/reboot.')

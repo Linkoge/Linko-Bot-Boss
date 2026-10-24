@@ -12,6 +12,7 @@ import json
 import math
 import os
 import signal
+import subprocess
 import sys
 import tempfile
 import time
@@ -99,10 +100,12 @@ def usage_windows(payload):
 
 
 class Host:
-    def __init__(self, data, claude, native):
+    def __init__(self, data, claude, native, worker_prefix=None, worker_tag=None):
         self.dir = Path(data) / 'claude-threads'
         self.dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.claude, self.native = claude, native
+        # Isolated worker (ai_manager/isolation.py): turns run as the worker user through the fixed launcher argv.
+        self.worker_prefix, self.worker_tag = worker_prefix, worker_tag
         # Unix socket paths are short (108 bytes); keep it in a private temporary directory.
         self.socket = Path(tempfile.mkdtemp(prefix='linko-claude-')) / 'host.sock'
         self.running = {}  # thread_id -> {'turn', 'process', 'interrupted'}
@@ -166,7 +169,25 @@ class Host:
             self.socket.parent.rmdir()
             for state in self.running.values():
                 if state['process'].returncode is None:
-                    state['process'].kill()
+                    self.stop(state['process'], signal.SIGKILL)
+
+    def command(self, args, cwd):
+        if not self.worker_prefix:
+            return args
+        return [*self.worker_prefix, 'run', '--tag', self.worker_tag, '--cwd', cwd, 'claude', '--', *args[1:]]
+
+    def stop(self, process, sig):
+        """Signal a turn. A worker-user turn cannot be signalled by this user; the launcher signals it by run tag."""
+        try:
+            process.send_signal(sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+        if self.worker_prefix:
+            try:
+                subprocess.run([*self.worker_prefix, 'kill', '--tag', self.worker_tag, '--signal', str(int(sig))],
+                               capture_output=True, timeout=15)
+            except (OSError, subprocess.SubprocessError):
+                pass
 
     async def handle(self, message):
         method, params = message['method'], message.get('params') or {}
@@ -267,8 +288,8 @@ class Host:
                 '-I', str(bridge), str(self.socket), thread['id']]}}}
             args += ['--mcp-config', json.dumps(config)]
         process = await asyncio.create_subprocess_exec(
-            *args, cwd=thread['cwd'], stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.DEVNULL, limit=64 * 1024 * 1024)
+            *self.command(args, thread['cwd']), cwd=thread['cwd'], stdin=asyncio.subprocess.PIPE,
+            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL, limit=64 * 1024 * 1024)
         process.stdin.write(text.encode())
         process.stdin.close()
         self.running[thread['id']] = {'turn': turn['id'], 'process': process, 'interrupted': False}
@@ -281,11 +302,11 @@ class Host:
             return {}
         state['interrupted'] = True
         if state['process'].returncode is None:
-            state['process'].send_signal(signal.SIGINT)
+            await asyncio.to_thread(self.stop, state['process'], signal.SIGINT)
             try:
                 await asyncio.wait_for(state['process'].wait(), 5)
             except TimeoutError:
-                state['process'].kill()
+                await asyncio.to_thread(self.stop, state['process'], signal.SIGKILL)
         return {}
 
     # Turn translation --------------------------------------------------------------------
@@ -338,7 +359,7 @@ class Host:
         finally:
             state = self.running.pop(thread_id, {})
             if process.returncode is None:
-                process.kill()
+                self.stop(process, signal.SIGKILL)
         if state.get('interrupted'):
             status, error = 'interrupted', None
         elif result and not result.get('is_error'):
@@ -432,8 +453,10 @@ def main():
     parser.add_argument('--data', required=True)
     parser.add_argument('--claude', default='claude')
     parser.add_argument('--native', action='store_true')
+    parser.add_argument('--worker-prefix', type=json.loads)
+    parser.add_argument('--worker-tag')
     options = parser.parse_args()
-    asyncio.run(Host(options.data, options.claude, options.native).serve())
+    asyncio.run(Host(options.data, options.claude, options.native, options.worker_prefix, options.worker_tag).serve())
 
 
 if __name__ == '__main__':

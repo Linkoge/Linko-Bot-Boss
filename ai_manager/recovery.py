@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 
+from . import isolation
 from .codex import CodexError, process_start
 from .db import new_id
 
@@ -212,13 +213,17 @@ def reap_orphan(row, force=False):
     if not owned_alive(row):
         return False
     pid = row["pid"]
+    sig = signal.SIGKILL if force or (row["recovery_reason"] == "interrupted" and row["retry_count"]) else signal.SIGTERM
     try:
         args = Path(f"/proc/{pid}/cmdline").read_bytes().split(b"\0")
+        # An isolated worker (ai_manager/isolation.py) is tagged with its execution id; its processes belong to the
+        # worker user, so only the fixed launcher can signal them.
+        found = isolation.detect() if row["id"].encode() in args else None
+        if found:
+            found.signal(row["id"], sig, wait=False)
         if os.getpgid(pid) != pid or b"app-server" not in args or Path(f"/proc/{pid}").stat().st_uid != os.getuid():
             return True  # Cannot prove ownership of the whole group; keep exclusivity.
-        os.killpg(
-            pid, signal.SIGKILL if force or (row["recovery_reason"] == "interrupted" and row["retry_count"]) else signal.SIGTERM
-        )
+        os.killpg(pid, sig)
     except ProcessLookupError:
         return False
     except (OSError, PermissionError):

@@ -6,6 +6,7 @@ import fcntl
 import hashlib
 import json
 import os
+import pwd
 import shutil
 import signal
 import sqlite3
@@ -80,14 +81,51 @@ def identity(pid):
         return None
 
 
+def drop_privileges():
+    """Started as root through the sudoers rule of scripts/install_worker_user.py: keep working with the service user's
+    effective ids, so the spool, logs and database stay its files. Returns (uid, gid), or None when not root."""
+    uid, gid = os.environ.get('SUDO_UID', ''), os.environ.get('SUDO_GID', '')
+    if os.geteuid() != 0 or not (uid.isdigit() and gid.isdigit()) or uid == '0':
+        return None
+    os.setgroups(os.getgrouplist(pwd.getpwuid(int(uid)).pw_name, int(gid)))
+    os.setegid(int(gid))
+    os.seteuid(int(uid))
+    return int(uid), int(gid)
+
+
+@contextlib.contextmanager
+def elevated(invoker):
+    """Become root again only around starting the host agent (the real uid stayed root)."""
+    if not invoker:
+        yield
+        return
+    os.seteuid(0)
+    os.setegid(0)
+    try:
+        yield
+    finally:
+        os.setegid(invoker[1])
+        os.seteuid(invoker[0])
+
+
 LIMIT_WORDS = ('usage limit', 'rate limit', 'usage_limit', 'rate_limit', 'usagelimit', 'ratelimit', 'quota', '429')
 
 
 class Repair:
-    def __init__(self, data, config=None):
+    def __init__(self, data, config=None, invoker=None):
         self.data = Path(data)
         self.root = self.data / 'repair'
         self.config = config if config is not None else read(self.root / 'installed.json', {})
+        self.invoker = invoker  # (uid, gid) of the service user when this launcher runs as root
+
+    def agent(self):
+        """Popen options for the host agent: root (with root's own provider login) when started through sudo."""
+        if not self.invoker:
+            return {}
+        home = pwd.getpwuid(0).pw_dir
+        env = {**os.environ, 'HOME': home, 'USER': 'root', 'LOGNAME': 'root',
+               'PATH': self.config.get('path') or os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}
+        return {'user': 0, 'group': 0, 'extra_groups': [], 'env': env}
 
     def records(self):
         return [read(p) for p in sorted((self.root / 'requests').glob('*.json'))]
@@ -216,6 +254,11 @@ class Repair:
         log = directory / f"{row['attempts']}.jsonl"
         prompt = INSTRUCTIONS + '\nHost repository: ' + self.config['repo'] + '\nRequest: ' + row['instructions'] + '\nDurable receipt: ' + str(
             self.root / 'requests' / (row['id'] + '.json')) + '\nRetained logs: ' + str(directory)
+        if self.invoker:
+            name = pwd.getpwuid(self.invoker[0]).pw_name
+            prompt += (f'\nYou run as root. The application belongs to user {name}: run its commands, Git, deploy script '
+                       f'and provider CLIs as that user (runuser -u {name} -- ...), manage its user services with '
+                       f'systemctl --user -M {name}@ ..., and leave files under its home owned by it.')
         if row['attempts'] > 1:
             prompt += '\nRECOVERY: prior attempt interrupted/failed; reconcile its effects before proceeding.'
         if row.get('switched_from'):
@@ -225,9 +268,10 @@ class Repair:
             stdin.write(prompt.encode())
             stdin.seek(0)
             cwd = self.config['repo'] if Path(self.config['repo']).is_dir() else self.data
-            process = subprocess.Popen(self.command(row, output), cwd=cwd, stdin=stdin,
-                                       stdout=stream, stderr=subprocess.STDOUT, start_new_session=True,
-                                       pass_fds=(lock.fileno(),))
+            with elevated(self.invoker):
+                process = subprocess.Popen(self.command(row, output), cwd=cwd, stdin=stdin,
+                                           stdout=stream, stderr=subprocess.STDOUT, start_new_session=True,
+                                           pass_fds=(lock.fileno(),), **self.agent())
             row['pid'], row['process_start'] = process.pid, identity(process.pid)
             row['deadline'] = time.time() + self.config.get('turn_seconds', DEFAULT_TURN_SECONDS)
             self.save(row)
@@ -375,7 +419,7 @@ def main(argv=None):
     commands.add_parser('status')
     commands.add_parser('retry-delivery')
     args = parser.parse_args(argv)
-    repair = Repair(args.data)
+    repair = Repair(args.data, invoker=drop_privileges())
     if args.command == 'request':
         print(json.dumps(repair.submit(args.key, args.instructions_file.read_text(), args.conversation,
                                        args.provider, args.model), indent=2))

@@ -896,8 +896,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():
         from .model_settings import active
+        from .isolation import status as worker_isolation
         return {"global_instructions": db.setting("global_instructions", ""),
-                "model_provider": active(db)}
+                "model_provider": active(db), "worker_isolation": worker_isolation()}
 
     static = Path(__file__).parent / "static"
     # Pin content and URLs to this process/release; never cache mutable aliases.

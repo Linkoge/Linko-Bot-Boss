@@ -100,7 +100,12 @@ class AppServer:
         args = [self.settings.codex_bin, "app-server", "--listen", "stdio://"]
         for key, value in self.config.items():
             args += ["-c", f"{key}={json.dumps(value)}"]
-        return args
+        # Isolated worker: the whole App Server (and every command it runs) belongs to the worker user.
+        return self.isolation.wrap("codex", args[1:], self.worker_tag) if self.isolation else args
+
+    def isolate(self, isolation, tag):
+        """Run this worker's provider processes as the unprivileged worker user (ai_manager/isolation.py)."""
+        self.isolation, self.worker_tag = isolation, tag
 
     def __init__(self, settings: Settings, native=False):
         self.settings = settings
@@ -124,6 +129,7 @@ class AppServer:
         self.tool_handlers = {}
         self.tool_jobs = set()
         self.rate_limits = {}
+        self.isolation, self.worker_tag = None, None
 
     async def start(self):
         async with self.start_lock:
@@ -336,10 +342,23 @@ class AppServer:
         current = process_start(self.process.pid)
         if current and current != self.process_identity:
             return
+        self._signal(signal.SIGKILL, wait=False)
+
+    def _signal(self, sig, wait=True):
+        """Signal the dedicated process group; an isolated worker's processes belong to another user, so they are
+        signalled by run tag through the fixed launcher."""
         try:
-            os.killpg(self.process.pid, signal.SIGKILL)
-        except ProcessLookupError:
+            os.killpg(self.process.pid, sig)
+        except (ProcessLookupError, PermissionError):
             pass
+        if self.isolation:
+            self.isolation.signal(self.worker_tag, sig, wait)
+
+    async def _signal_async(self, sig):
+        if self.isolation:
+            await asyncio.to_thread(self._signal, sig)  # waits for the launcher's kill helper
+        else:
+            self._signal(sig)
 
     async def close(self):
         for job in list(self.tool_jobs):
@@ -351,22 +370,16 @@ class AppServer:
                 return  # Never signal a recycled PID's unrelated group.
         if self.process and self.process.returncode is None:
             # Terminate only the dedicated process group this instance created.
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            await self._signal_async(signal.SIGTERM)
             try:
                 await asyncio.wait_for(self.process.wait(), 5)
             except TimeoutError:
-                os.killpg(self.process.pid, signal.SIGKILL)
+                await self._signal_async(signal.SIGKILL)
                 await self.process.wait()
         if self.process and self.process.returncode is not None:
             # The parent can exit before its command children. Clear the dedicated
             # group before the caller releases the project claim, even after EOF.
-            try:
-                os.killpg(self.process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
+            await self._signal_async(signal.SIGKILL)
         if self.reader and self.reader is not asyncio.current_task():
             await asyncio.gather(self.reader, return_exceptions=True)
         if self.stderr_reader:

@@ -186,13 +186,40 @@ and tries enabling linger. Confirm installed/enabled/active and the conversation
 in `status`. Re-run `install` after updates to refresh the snapshot; subsequent
 runs can omit `--conversation`. Use `--provider claude` for Claude repair.
 
-This host agent runs as the user and **has no root privileges**. Passwordless sudo
-is intentionally off; do not enable it as an installation workaround. Administrator
-operations need an administrator. In particular, VM access should use the libvirt
-and kvm groups, not unrestricted sudo. It cannot repair a dead host, broken storage,
-systemd itself or unavailable provider authorization. See
+Until the worker user below is installed, this host agent runs as the service user
+and **has no root privileges**. Never add blanket passwordless sudo
+(`NOPASSWD: ALL`) as a workaround: every worker would get root too. It cannot repair
+a dead host, broken storage, systemd itself or unavailable provider authorization. See
 [Emergency host repair](../README.md#emergency-host-repair) for runtime behavior and
 manual recovery commands. Restricted instances must not install their own repair agent.
+
+### Separate worker user and root for the host agent
+
+Run this once per machine, with root, from the checkout. It is idempotent: re-run it
+after updating `scripts/worker_launcher.py` or `scripts/emergency_repair.py`.
+
+```bash
+sudo python3 scripts/install_worker_user.py install --dry-run   # print the plan only
+sudo python3 scripts/install_worker_user.py install
+python3 scripts/install_repair.py install                     # as the service user: timer now uses sudo
+sudo -u linko-worker -H codex login --device-auth              # worker's own logins
+sudo -u linko-worker -H claude                                 # then /login
+sudo -H codex login --device-auth                              # root host agent's own login (or claude)
+sudo python3 scripts/install_worker_user.py status
+uv run python -m ai_manager.cli doctor
+```
+
+Queue workers then run as `linko-worker` with no sudo and no privileged groups. They
+cannot read the service env file, `~/.ssh`, the database or other projects, and cannot
+write the repair spool. Only the root-owned repair launcher runs as root, through one
+sudoers rule. `--worker-user NAME` picks another name at the first install. If the provider
+executables are not found, pass `--codex PATH` / `--claude PATH`. Pass `--toolchain DIR`
+for any other directory under your home that workers must read. After that, remove any
+temporary blanket `NOPASSWD` rule
+([how](../README.md#emergency-host-repair)). `uninstall` (with `--remove-user` to delete
+the account), then `python3 scripts/install_repair.py install`, restores same-user mode.
+Without the installation the app keeps working and shows "Workers run with your user's
+rights". Details: [How work runs](../README.md#how-work-runs).
 
 ## 6. Optional extra instances
 
@@ -276,6 +303,7 @@ systemctl --user restart linko-bot-manager.service
 # Repeat for EVERY extra instance of this checkout:
 systemctl --user restart linko-bot-manager@NAME.service
 python3 scripts/install_repair.py install
+sudo python3 scripts/install_worker_user.py install   # only if the worker user is installed
 uv run python -m ai_manager.cli doctor
 ```
 
@@ -297,6 +325,9 @@ checks/backups/rollback; a manual pull and restart does not provide those safegu
 | Login doesn't stick over local HTTP | Secure cookies require HTTPS | Use HTTPS, or `AI_MANAGER_SECURE_COOKIE=0` for local development only |
 | Changes after pull do not appear | Running process still has old imported code | Sync dependencies and restart; use doctor to compare startup release with HEAD |
 | Another instance (e.g. kaxa) stays old | Instance omitted from restart/deploy registry | Register it with `install_deploy.py --instance NAME`, deploy or restart it; rerun doctor |
+| Tasks view says "Workers run with your user's rights" | Worker user not installed (or `AI_MANAGER_WORKER_ISOLATION=off`) | `sudo python3 scripts/install_worker_user.py install`; see the worker user section above |
+| Isolated worker fails with a login/authorization error | The worker user has no provider login of its own | `sudo -u linko-worker -H codex login --device-auth` / `sudo -u linko-worker -H claude` |
+| Isolated worker cannot find codex/claude/node or a toolchain file | That directory was not opened to the worker | Re-run the installer with `--codex`, `--claude` or `--toolchain DIR`; check `status` |
 | Service/repair stops after logout or reboot | Linger not enabled, or unit/timer not enabled | `loginctl enable-linger "$USER"`; enable main service and repair timer |
 | Repair missing / inactive | Independent launcher/timer not installed | Load main env and run `install_repair.py install --conversation CHAT_ID`; confirm status |
 | Repair cannot sudo / VM access denied | Agent has no root; user's groups not refreshed | Use administrator for privileged setup; grant libvirt,kvm membership for VMs and reboot; keep passwordless sudo off |
