@@ -64,7 +64,7 @@ def audio_auth(audio_server):
 def audio_page(audio_server, audio_auth):
     url, root = audio_server
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
+        browser = playwright.chromium.launch(executable_path=os.environ.get('CHROME_PATH'), args=['--use-fake-device-for-media-stream', '--use-fake-ui-for-media-stream'])
         context = browser.new_context(viewport={'width': 393, 'height': 851})
         context.add_cookies(audio_auth)
         page = context.new_page()
@@ -211,7 +211,7 @@ def test_interruption_retains_whole_audio_truthful_ui(audio_page, interruption):
     assert page.evaluate('audioState.session.blob.size===audioState.session.bytes')
     assert page.locator('#audio-stop').count() == 0
     assert page.locator('#audio-download').is_visible()
-    assert page.locator('#audio-status').inner_text() == ''
+    assert page.locator('#audio-status').inner_text() == page.evaluate('audioState.session.message') != ''
     assert page.locator('#audio-retry').is_visible()
     assert page.evaluate("stream.getTracks().every(t=>t.readyState==='ended') && !audioState.session.wakeLock")
     page.locator('#audio-retry').click()
@@ -235,7 +235,7 @@ def test_late_wake_lock_is_released_and_start_is_single(audio_page):
 
 
 @pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640)])
-def test_starting_microphone_shows_no_status_text(audio_page, width, height):
+def test_starting_microphone_shows_starting_text(audio_page, width, height):
     page = audio_page
     page.set_viewport_size({'width': width, 'height': height})
     page.evaluate('''()=>{
@@ -246,7 +246,7 @@ def test_starting_microphone_shows_no_status_text(audio_page, width, height):
     }''')
     page.locator('#microphone').click()
     assert page.evaluate("audioState.session.phase") == 'starting'
-    assert page.locator('#audio-status').text_content() == ''
+    assert page.locator('#audio-status').text_content() == 'Starting microphone…'
     assert page.locator('#microphone').is_disabled()
     page.evaluate('allowCapture()')
     page.wait_for_function("()=>audioState.session?.phase==='recording'")
@@ -256,7 +256,7 @@ def test_starting_microphone_shows_no_status_text(audio_page, width, height):
 
 @pytest.mark.parametrize('width,height', [(1200, 900), (393, 851), (320, 640)])
 @pytest.mark.parametrize('failure', ['no-audio', 'no-speech', 'provider-error'])
-def test_failure_hides_text_keeps_retry_and_microphone_starts_fresh(audio_page, width, height, failure):
+def test_failure_shows_text_keeps_retry_and_microphone_starts_fresh(audio_page, width, height, failure):
     page = audio_page
     page.set_viewport_size({'width': width, 'height': height})
     microphone = page.locator('#microphone')
@@ -279,7 +279,7 @@ def test_failure_hides_text_keeps_retry_and_microphone_starts_fresh(audio_page, 
         }''')
     microphone.click()
     page.wait_for_function("()=>audioState.session?.phase==='error'")
-    assert page.locator('#audio-status').text_content() == ''
+    assert page.locator('#audio-status').text_content() == page.evaluate('audioState.session.message') != ''
     retry = page.locator('#audio-retry')
     assert retry.is_visible() and retry.is_enabled() and retry.inner_text() == 'Retry'
     assert microphone.inner_html() == idle_icon
@@ -318,7 +318,7 @@ def test_separate_retry_still_transcribes_the_retained_recording(audio_page, wid
     start(page)
     page.locator('#microphone').click()
     page.wait_for_function("()=>audioState.session?.phase==='error'")
-    assert page.locator('#audio-status').text_content() == ''
+    assert page.locator('#audio-status').text_content() == page.evaluate('audioState.session.message') != ''
     page.locator('#audio-retry').click()
     page.wait_for_function('()=>!audioState.session')
     assert len(uploads) == 2 and uploads[0] == uploads[1]
@@ -372,3 +372,21 @@ def test_recording_bottom_row_timer_and_toggle(audio_page, width, height, draft)
     page.wait_for_function('()=>!audioState.session')
     assert len(uploads) == 1
     assert page.locator('#message-input').input_value() == (draft + '\n\n' if draft else '') + 'spoken transcript'
+
+
+def test_startup_failures_show_reason_and_release_microphone(audio_page):
+    page = audio_page
+    status = page.locator('#audio-status')
+    reason = 'Audio needs XAI_API_KEY in the server environment.'
+    page.route('**/api/audio', lambda route: route.fulfill(json={'available': False, 'reason': reason}))
+    page.locator('#microphone').click()
+    page.wait_for_function("()=>audioState.session?.phase==='error'")
+    assert status.inner_text() == reason
+    assert reason in page.locator('#audio-panel').get_attribute('title')
+    page.wait_for_function("()=>!audioState.session.stream")
+    page.locator('#audio-cancel').click()
+    page.unroute('**/api/audio')
+    page.evaluate("()=>{navigator.mediaDevices.getUserMedia=async()=>{throw new DOMException('denied','NotAllowedError')}}")
+    page.locator('#microphone').click()
+    page.wait_for_function("()=>audioState.session?.phase==='error'")
+    assert 'permission denied' in status.inner_text()

@@ -613,6 +613,14 @@ python3 scripts/install_repair.py status                                        
 python3 scripts/install_repair.py uninstall                                                     # remove timer + launcher
 ```
 
+`--conversation` is the ID of an existing manager chat where repair results are posted. It is required on the first
+install; later re-runs reuse the stored ID. The chat ID is not shown in the UI or its URL. To find it, while signed in
+to the manager open `/api/chat-history` on the app's origin (add `?project_id=PROJECT_ID` for a project chat, omit it
+for a chat outside any project). The JSON `conversations` list gives each chat's `title` and `id`; copy the `id` of the
+chosen chat exactly. Then run
+`python3 scripts/install_repair.py status` to confirm the repair tool is installed, enabled and active, and shows the
+expected conversation.
+
 Omit `--auto-detect` for explicit requests only. Re-running `install` is idempotent: it rewrites the units, refreshes
 the launcher snapshot and reuses the stored chat ID if `--conversation` is omitted. An optional `--model` passes the
 exact model directly to the CLI; Claude uses `--provider claude`. `status` reports installed/enabled/active state and
@@ -820,13 +828,19 @@ Record, Attach file and Send retain their right-hand stack, size and visibility 
 capture on desktop and mobile. The existing Record button toggles capture off; there
 is no second Stop button. `tests/test_audio_continuity.py` checks unchanged button
 bounds and the bottom recording row in real Chromium at desktop and mobile widths.
-The destination remains available in the controls’ tooltip. Startup and failure status text are hidden;
-after failure, the separate Retry button still transcribes the retained audio, while the normal
+The destination remains available in the controls’ tooltip. Startup shows "Starting microphone…"; a failure shows its
+reason (for example a missing ffprobe or `XAI_API_KEY`) in the status line and the panel tooltip. After failure, the separate Retry button still transcribes the retained audio, while the normal
 microphone icon starts a new recording from zero. Download and Discard remain in the same bottom row. Other
 views hide the composer while the same capture continues. Toggling Record off transcribes the whole
 recording once into the original draft; explicit composer Send retains the existing
 whole-recording send flow. Navigation suppresses automatic Send. Before insertion,
 the original conversation is checked; a replacement chat never receives its transcript.
+
+**Troubleshooting audio.** If the microphone does nothing or reports that audio is unavailable, sign in and open
+`/api/audio` on the manager's origin. `available: true` means the server is ready. When it is `false`, the `reason`
+field names the missing piece: install ffmpeg (`ffprobe`), set `XAI_API_KEY` in the service environment, or
+reconfigure the audio provider/model. Restart the service after changing its environment. If `available` is true but
+the microphone is still refused, check that the page is served over HTTPS or localhost.
 
 Changing browser tabs/apps or document visibility does not stop capture. Delayed timers
 are not evidence that the microphone stopped. Where available, a screen wake lock is
@@ -902,6 +916,17 @@ uv run ruff check ai_manager scripts tests
 node --check ai_manager/static/app.js
 PYTHONPATH=. uv run python scripts/browser_smoke.py   # also browser_tasks.py and the other browser_*.py checks
 ```
+
+Audio recording and transcription (see [Whole-session audio recording](#whole-session-audio-recording)) needs three
+things besides the Python dependencies:
+
+1. **ffmpeg on the host**, which provides `ffprobe`: `sudo apt install -y ffmpeg`. Without it the microphone panel
+   reports "Audio needs ffprobe installed on the server."
+2. **`XAI_API_KEY` in the service environment** (the systemd unit or the shell that starts the server, not the
+   checkout). Without it the panel reports "Audio needs XAI_API_KEY in the server environment." Never put the key in
+   the repository or in these docs.
+3. **HTTPS, or localhost for development.** Mobile browsers only grant microphone access in a secure context, so a
+   phone must reach the manager over HTTPS (for example through the tunnel or Tailscale setup below).
 
 Configuration: `AI_MANAGER_DATA` (default `~/.local/share/linko-bot-manager`), `AI_MANAGER_PORT` (8787),
 `AI_MANAGER_PROJECT_ROOTS`, `AI_MANAGER_RESTRICTED` and `AI_MANAGER_PROJECT` (restricted work instance, see Multiple instances), `AI_MANAGER_ALLOWED_HOSTS`, `AI_MANAGER_PUBLIC_HOSTS`, `AI_MANAGER_TRUSTED_PROXIES`, `AI_MANAGER_SECURE_COOKIE`, `AI_MANAGER_CODEX`,

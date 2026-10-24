@@ -8,8 +8,8 @@ function renderAudio(){
   const session=audioState.session,phase=session?.phase;
   const recording=phase==='recording',busy=['starting','stopping','transcribing','sending'].includes(phase);
   $('audio-panel').hidden=!session;
-  $('audio-status').textContent=recording?(session.message||'00:00'):session&&!['starting','error'].includes(phase)?`${session.label} · ${session.message||({stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
-  $('audio-panel').title=session?`Recording for ${session.label}${session.interruptionReason?' · '+session.interruptionReason:''}`:'';
+  $('audio-status').textContent=recording?(session.message||'00:00'):phase==='starting'?'Starting microphone…':phase==='error'?(session.message||'Recording failed'):session?`${session.label} · ${session.message||({stopping:'Finishing recording…',transcribing:'Transcribing…',sending:'Sending…'}[phase]||'Recording saved')}`:'';
+  $('audio-panel').title=session?`Recording for ${session.label}${phase==='error'&&session.message?' · '+session.message:session.interruptionReason?' · '+session.interruptionReason:''}`:'';
   $('audio-retry').hidden=phase!=='error'||!session?.blob;
   $('audio-cancel').disabled=phase==='sending';
   $('audio-download').hidden=!session?.blob;
