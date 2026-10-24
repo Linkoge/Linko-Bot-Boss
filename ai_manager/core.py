@@ -30,6 +30,7 @@ from .fence import Busy, main_branch
 from .listing import CARD_WINDOW, bounded_listing
 from .model_settings import RouteBlocked, assignment_route
 from .pipeline import IDENTITY, git, merge_tree
+from .push_diagnosis import precheck
 from .recovery import turn_error
 from .runner import Runner, plain
 
@@ -61,6 +62,24 @@ def changed_tests(root, base):
     paths = set(git(root, "diff", "--name-only", base).splitlines())
     paths |= set(git(root, "ls-files", "--others", "--exclude-standard").splitlines())
     return sorted(p for p in paths if TEST_FILE.search(p) and (Path(root) / p).is_file())
+
+
+def secret_check(root, base):
+    """Key-shaped literals in the task's commits (base..HEAD) fail like a test, so GitHub push protection never sees them."""
+    try:
+        diff = subprocess.run(["git", "-C", str(root), "log", "-p", "-U0", "--no-color", "--no-ext-diff",
+                               "--format=@@commit %H", f"{base}..HEAD"], capture_output=True, timeout=60, check=True).stdout
+    except (subprocess.SubprocessError, OSError):
+        return None
+    hits = precheck(diff[:5_000_000])
+    if not hits:
+        return None
+    failures = [f"secrets: {h['path']}:{h['line']} looks like a {h['type']} (commit {h['commit']}); "
+                "build key-shaped test values at runtime (rule 10)" for h in hits]
+    return {"check": "secrets", "failures": failures,
+            "output": "\n".join(failures) + "\nNever commit key-shaped literals, even fake ones in tests: "
+                      "write e.g. 'ghp_' + 'x' * 36 so no literal matches. Amend or add a commit that removes them; "
+                      "the check scans every commit in base..HEAD, so rewrite the branch history (e.g. squash) if needed."}
 
 
 def suite(name, argv, root, env, timeout):
@@ -98,7 +117,7 @@ def run_gate(root, base):
     """Fixed smoke suite plus the branch's own test files. Returns {ok, checks, failures, count, output}."""
     root = Path(root)
     env = {**os.environ, "PYTHONPATH": str(root), "AI_MANAGER_SECURE_COOKIE": "0"}
-    failed = []
+    failed = [secret_check(root, base)]
     with tempfile.TemporaryDirectory(prefix="linko-gate-") as data:
         env["AI_MANAGER_DATA"] = data  # disposable runtime data; the real database is never reachable
         base_argv = [interpreter(root), "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider"]

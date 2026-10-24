@@ -321,6 +321,14 @@ event and the project API carry `reason`, a readable `message`, `detail` and at 
 the project menu and tab tooltip show the message. Before pushing, a cheap local scan of the commits being pushed
 adds `warnings` (secret type, `path:line`, commit; never the value) when it sees literal key-shaped strings. It is
 advisory: it never blocks the push and GitHub's verdict wins.
+Push-protection recovery (`GitHubBackup.recover_push_protection`): when the push result is `github-push-protection`
+and every flagged location is under a test path (`tests/`, `fixtures/`, `test_*`, `*_test.*`, `*.spec.*`), the app
+calls GitHub's `POST /repos/{owner}/{repo}/secret-scanning/push-protection-bypasses` with reason `used_in_tests` and the
+`placeholder_id` from each unblock URL, using the project's tier token, then retries the push once. The receipt and
+`github_backup.result` event carry `bypass` (file, line, type, commit; never values). If any hit is outside test paths,
+the project has no tier token or the API call fails, nothing is bypassed: the receipt stays needs-attention with the
+exact message and one short chat notice is posted in the project's chat. At most one bypass attempt and one notice per
+blocked commit set (`github_bypass:<project-id>` setting stores only hashed keys), so there are no loops.
 **Push to GitHub now** (project menu, next to **Pull updates now**; GitHub-origin projects only, never offline ones, and
 the server refuses offline projects) is the owner's manual override of the deploy gate: after a one-line confirmation
 ("This pushes main without waiting for the full tests. Continue?") `POST /api/projects/<id>/push` (owner session and
@@ -340,20 +348,22 @@ still require attention when the local main branch is missing.
 Before the first push, and every subsequent attempt, the application queries the actual remote branch and verifies
 that it is an ancestor of the local branch. Shallow history, unavailable history or a diverged remote refuses only the
 backup. The verified commit ID is pushed explicitly, so changes arriving during a push stay pending for another attempt.
-Local and remote commits remain intact on rejection. The application does not scan project content for passwords,
-keys or sensitive filenames during backup, creation, delivery or worker self-checks. Existing backup receipts with a
+Local and remote commits remain intact on rejection. The application does not scan project content for passwords
+or sensitive filenames during backup, creation or delivery. The one exception is the worker check below. Existing backup receipts with a
 `secret-check` reason retry through the normal push path; successful attempts replace the old reason and findings.
 
 Never commit real credentials (RULES.md rule 10): use environment variables or ignored files. Tests needing
-key-shaped values build them at runtime. This is authoring guidance; application checks do not enforce it by scanning
-users' projects.
+key-shaped values build them at runtime. The worker check (`scripts/worker_check.py` / `run_gate` in
+`ai_manager/core.py`, run after every worker turn) scans the task's commits (`base..HEAD`) with
+`push_diagnosis.precheck` and fails with `file:line` and "build key-shaped test values at runtime (rule 10)", so the
+literal goes back to the same worker as a repair round instead of reaching main and GitHub.
 
 Enable GitHub's server-side protection as well: repository **Settings → Advanced Security** (under Security and quality)
 → enable **Secret Protection**, then enable **Push protection** in that section. Availability depends on repository and
 plan; an organization may manage this setting. Follow the current
 [GitHub setup instructions](https://docs.github.com/en/code-security/how-tos/secure-your-secrets/prevent-future-leaks/enable-push-protection).
 Provision the service user's normal write access to each origin separately. A protected push rejection stays
-needs-attention and retries; no bypass URL or secret value is exposed or acted on automatically.
+needs-attention and retries, except the test-path-only automatic bypass described above; no secret value is ever stored.
 
 Permanent synthetic regression coverage is in `tests/test_github_backup.py`: key-shaped project content passes delivery
 and backup, legacy scan failures retry, first-push backlog is retained, rejected pushes later catch up, diverged history

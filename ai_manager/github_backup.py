@@ -1,5 +1,6 @@
 """Application-owned, non-forcing backup: deploy receipts pin targets for deployable projects."""
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -8,11 +9,17 @@ import time
 from contextlib import contextmanager, nullcontext
 from urllib.parse import urlsplit
 
+from .db import new_id
 from .git_commands import GitError, git_bytes
 from .push_diagnosis import diagnose, precheck
 
 RETRY_SECONDS = 300
 PREFIX = 'github_backup:'
+BYPASS_PREFIX = 'github_bypass:'  # per project: blocked-commit keys already bypassed or reported (never secret values)
+TEST_PATH = re.compile(r'(?:^|/)(?:tests?|__tests__|spec|specs|fixtures?|testdata)/|(?:^|/)test_[^/]*$|'
+                       r'_test\.[A-Za-z]+$|\.(?:test|spec)\.[A-Za-z]+$')
+UNBLOCK_ID = re.compile(r'https://github\.com/([\w.-]+/[\w.-]+)/security/secret-scanning/unblock-secret/(\w+)')
+BYPASS_KEEP = 50
 
 
 @contextmanager
@@ -127,11 +134,84 @@ class GitHubBackup:
                     token = self.credentials(project)
                 except ValueError:
                     return {'state': 'needs-attention', 'reason': 'open-github-settings-for-tier-token'}
-                return await asyncio.to_thread(self.push_with_token, project['path'], token, **extra)
-            return await asyncio.to_thread(self.push, project['path'], **extra)
+                result = await asyncio.to_thread(self.push_with_token, project['path'], token, **extra)
+                if result.get('reason') == 'github-push-protection':
+                    result = await self.recover_push_protection(project, token, result, extra)
+                return result
+            result = await asyncio.to_thread(self.push, project['path'], **extra)
+            if result.get('reason') == 'github-push-protection':
+                result = await self.recover_push_protection(project, None, result, extra)
+            return result
         except Exception:
             # Unexpected failure: Git/SSH and hooks can echo credentials, so store no error text at all.
             return {'state': 'needs-attention', 'reason': 'backup-operation-failed'}
+
+    @staticmethod
+    def blocked(result):
+        """(hits, urls, key) of a push-protection result; key identifies the blocked commit set, never a value."""
+        detail = result.get('detail') or {}
+        hits = [{'type': item['type'], 'path': loc['path'], 'line': loc['line'], 'commit': loc['commit']}
+                for item in detail.get('secrets', []) for loc in item['locations']]
+        commits = sorted({str(h['commit']) for h in hits}) or sorted(detail.get('unblock_urls', []))
+        return hits, detail.get('unblock_urls', []), hashlib.sha256('|'.join(commits).encode()).hexdigest()[:16]
+
+    def bypass_api(self, token, repo, placeholder):
+        from .github_projects import API, urllib_fetch
+        headers = {'Authorization': 'Bearer ' + token, 'Accept': 'application/vnd.github+json',
+                   'X-GitHub-Api-Version': '2022-11-28', 'User-Agent': 'linko-bot-boss',
+                   'Content-Type': 'application/json'}
+        body = json.dumps({'reason': 'used_in_tests', 'placeholder_id': placeholder}).encode()
+        fetch = getattr(self, 'fetch', None) or urllib_fetch
+        return fetch('POST', f'{API}/repos/{repo}/secret-scanning/push-protection-bypasses', headers, body, 30)[0]
+
+    async def recover_push_protection(self, project, token, result, extra):
+        """Bypass push protection once per blocked commit set when every hit is in test paths; else tell the owner."""
+        hits, urls, key = self.blocked(result)
+        project_id = project['id']
+        state = self.db.setting(BYPASS_PREFIX + project_id, {})
+        done, noticed = state.get('attempted', []), state.get('noticed', [])
+        if key in done:
+            return self.notify_blocked(project_id, key, hits, result, noticed)
+        found = [UNBLOCK_ID.fullmatch(url) for url in urls]
+        eligible = bool(token and hits and urls and all(found) and all(TEST_PATH.search(h['path']) for h in hits))
+        if not eligible:
+            return self.notify_blocked(project_id, key, hits, result, noticed)
+        self.db.set_setting(BYPASS_PREFIX + project_id, {**state, 'attempted': (done + [key])[-BYPASS_KEEP:]})
+        try:
+            statuses = [await asyncio.to_thread(self.bypass_api, token, m[1], m[2]) for m in found]
+        except Exception:
+            statuses = [0]
+        if not all(code in (200, 201) for code in statuses):
+            result = {**result, 'bypass': {'attempted': True, 'ok': False, 'reason': 'used_in_tests', 'status': max(statuses)}}
+            return self.notify_blocked(project_id, key, hits, result, noticed, failed=True)
+        record = {'attempted': True, 'ok': True, 'reason': 'used_in_tests', 'hits': hits[:20], 'at': time.time()}
+        retried = await asyncio.to_thread(self.push_with_token, project['path'], token, **extra)
+        return {**retried, 'bypass': record}
+
+    def notify_blocked(self, project_id, key, hits, result, noticed, failed=False):
+        """One short owner-visible chat notice per blocked commit set; the needs-attention receipt is unchanged."""
+        if key not in noticed:
+            places = ', '.join(f"{h['path']}:{h['line']}" if h['line'] else h['path'] for h in hits[:5]) or 'unknown files'
+            text = ('GitHub push protection blocked the backup push (' + places + (f' and {len(hits) - 5} more' if len(hits) > 5 else '')
+                    + '). ' + ('The automatic test-fixture bypass failed or was not permitted. ' if failed else
+                               'Not every hit is in a test path, so nothing was bypassed. ')
+                    + 'Replace the key-shaped literals with values built at runtime.')
+            with self.db.transaction() as conn:
+                conversation = conn.execute('SELECT id FROM conversations WHERE context=?', (project_id,)).fetchone()
+                conversation_id = conversation['id'] if conversation else new_id()
+                if not conversation:
+                    conn.execute('INSERT INTO conversations(id,context,project_id,created_at) VALUES(?,?,?,?)',
+                                 (conversation_id, project_id, project_id, time.time()))
+                conn.execute("INSERT OR IGNORE INTO messages(id,conversation_id,role,content,status,created_at) "
+                             "VALUES(?,?,'assistant',?,'completed',?)",
+                             ('pushblock-' + hashlib.sha256((project_id + key).encode()).hexdigest()[:24],
+                              conversation_id, text[:600], time.time()))
+                current = conn.execute('SELECT value FROM settings WHERE key=?', (BYPASS_PREFIX + project_id,)).fetchone()
+                current = json.loads(current['value']) if current else {}
+                current['noticed'] = (current.get('noticed', []) + [key])[-BYPASS_KEEP:]
+                conn.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                             (BYPASS_PREFIX + project_id, json.dumps(current)))
+        return result
 
     @staticmethod
     def contains(root, ancestor, descendant):
