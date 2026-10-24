@@ -291,7 +291,7 @@ async function selectProject(id){
   state.execution=null;state.history=null;$('messages').replaceChildren();state.olderLoaded=false;state.olderHasMore=false;updateChatActions();
   $('message-input').value=state.drafts.get(id)||submissions.get(id)?.content||'';state.draftContextReady=true;
   $('stop-chat').hidden=true;$('send').disabled=state.pending.has(id);renderAttachments();renderAudio();
-  state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],progress:null,active_agents:0,task_cursor:null,execution_cursor:null,has_older_tasks:false,has_older_executions:false};
+  state.portfolio={...state.portfolio,tasks:[],executions:[],questions:[],progress:null,host_repair:[],active_agents:0,task_cursor:null,execution_cursor:null,has_older_tasks:false,has_older_executions:false};
   renderProjects();renderTasks();renderAgents();renderQuestions();renderProgress();
   restoreCachedChat(selection);
   // Chat sync starts immediately; portfolio and secondary tabs cannot delay it.
@@ -309,12 +309,25 @@ function renderMemory(){$('memory-list').replaceChildren();if(!state.detail){$('
 // One chip over the composer (no layout space), driven by the backend phase after the agent's turn: checks, repair, merge, deploy.
 // The manager's own streaming reply keeps its message badge and Stop button; a polling outage clears the chip after PROGRESS_STALE_MS.
 const PROGRESS_STALE_MS=90000;
+function hostRepairLabel(r){
+  const minutes=Math.max(0,Math.round((r.elapsed||0)/60)),step=r.last_step?' · '+r.last_step:'',attempt=` · attempt ${r.attempt}/${r.max_attempts}`;
+  if(r.stale)return `Host agent possibly stuck · ${minutes} min · no activity for ${Math.round((r.idle||0)/60)} min${attempt}${step}`;
+  const head={queued:'Host agent queued',running:'Host agent working',retrying:'Host agent working (retry)',waiting:'Host agent waiting to retry',done:'Host agent finished',failed:'Host agent failed'}[r.state]||'Host agent';
+  return head+(r.state==='queued'?'':` · ${minutes} min${attempt}`)+step;
+}
+// Host repair requests run outside the queue; the portfolio carries them. Shown in the submitting chat (or everywhere when unknown).
+function hostRepairLabels(){
+  if(state.restricted)return [];
+  const current=state.history?.conversation?.id;
+  return (state.portfolio?.host_repair||[]).filter(r=>!r.conversation_known||r.conversation_id===current).map(hostRepairLabel);
+}
 function renderProgress(stale=false){
-  const chip=$('progress-chip'),progress=stale?null:state.portfolio?.progress,show=!!progress?.active&&!state.execution;
+  const chip=$('progress-chip'),progress=stale?null:state.portfolio?.progress,queue=!!progress?.active,host=stale?[]:hostRepairLabels();
+  const labels=[...(queue?[progress.label]:[]),...host],show=labels.length>0&&!state.execution,label=labels.join('  |  ');
   clearTimeout(state.progressTimer);
   if(!show&&!chip.hidden&&!state.execution)$('status-label').textContent='Ready to help';
-  chip.hidden=!show;chip.textContent=show?progress.label:'';chip.dataset.phase=show?progress.phase:'';
-  if(show){$('status-label').textContent=progress.label;state.progressTimer=setTimeout(()=>renderProgress(true),PROGRESS_STALE_MS);}
+  chip.hidden=!show;chip.textContent=show?label:'';chip.dataset.phase=show?(queue?progress.phase:'host'):'';
+  if(show){$('status-label').textContent=label;state.progressTimer=setTimeout(()=>renderProgress(true),PROGRESS_STALE_MS);}
 }
 function recoveryLabel(record){const reasons={connection:'Waiting for connection',interrupted:'Recovering interrupted execution'};return (reasons[record.recovery_reason]||'Waiting')+(record.retry_at?' · Next attempt '+new Date(record.retry_at*1000).toLocaleString():'');}
 function taskControlButton(task,label,command){

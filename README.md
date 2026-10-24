@@ -686,6 +686,19 @@ After the steps above, the service user needs no other sudo right. Find the rule
 touch `/etc/sudoers.d/linko-worker`. Verify with `sudo -l` as that user: only the two `linko` rules may say NOPASSWD.
 Then confirm the agent still works with a small owner request. `doctor` reports any remaining `NOPASSWD: ALL`.
 
+**Progress in the UI.** The host agent runs outside the queue, so the portfolio response (`host_repair`, polled like
+everything else; no extra connection) reports each active request from its durable receipt
+(`DATA/repair/requests/*.json`) and current run log (`DATA/repair/runs/<id>/<attempt>.jsonl`), read-only and tolerant of
+missing or half-written files (`ai_manager/repair_progress.py`): state (queued, running, retrying, waiting, done,
+failed), start time, attempt and limit, turn deadline, provider, and a last step (latest tool/command and assistant
+text line, whitespace-collapsed, trimmed to 120 characters, with `KEY=value` strings, bearer tokens and key-shaped
+tokens redacted; never full logs). The composer chip (the same one queue phases use) shows
+`Host agent working · 12 min · attempt 1/5 · <last step>` in the chat that submitted the request, or in every chat if
+that conversation is unknown. A running request with no log activity for longer than the turn limit shows
+`Host agent possibly stuck`. A finished request shows its final state for 10 minutes. Restricted instances report and
+show nothing. `started_at` is written by the launcher, so re-run `install` to get exact start times (older receipts fall
+back to the deadline).
+
 **Provider fallback.** A request starts on its provider (`--provider`, config `provider`, default Codex). When a turn
 fails with a usage, rate-limit or quota error and the other CLI (Codex <-> Claude, config `<provider>_bin` or `PATH`) is
 available, the next attempt switches to it and retries promptly instead of waiting out the exponential backoff. The

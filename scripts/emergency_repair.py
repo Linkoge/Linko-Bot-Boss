@@ -273,7 +273,8 @@ class Repair:
                                            stdout=stream, stderr=subprocess.STDOUT, start_new_session=True,
                                            pass_fds=(lock.fileno(),), **self.agent())
             row['pid'], row['process_start'] = process.pid, identity(process.pid)
-            row['deadline'] = time.time() + self.config.get('turn_seconds', DEFAULT_TURN_SECONDS)
+            row['started_at'] = time.time()
+            row['deadline'] = row['started_at'] + self.config.get('turn_seconds', DEFAULT_TURN_SECONDS)
             self.save(row)
             try:
                 process.wait(timeout=self.config.get('turn_seconds', DEFAULT_TURN_SECONDS))

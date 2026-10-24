@@ -32,6 +32,7 @@ from .github_projects import GitHubError, GitHubProjects
 from .orchestration import Scheduler
 from .pipeline import RESTRICTED, Pipeline
 from .progress import progress
+from .repair_progress import host_requests
 from .project_ideas import ProjectIdeas
 from .project_memory import MemoryReviews, ProjectMemory
 from .proxy import client_ip, is_https, parse_trusted
@@ -687,6 +688,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "has_older_tasks": task_page['has_more'],
             **execution_summary(db, project_id, through=execution_through, older=older == 'executions'),
             "progress": progress(db, scheduler.pipeline, project_id),
+            "host_repair": [] if restricted else [
+                {**r, "conversation_known": bool(r.get("conversation_id") and db.one(
+                    "SELECT 1 FROM conversations WHERE id=?", (r["conversation_id"],)))}
+                for r in host_requests(settings.data_dir)],
             "questions": db.all(
                 "SELECT q.*,e.project_id,e.task_id FROM questions q JOIN executions e ON e.id=q.execution_id WHERE q.status='pending'"
                 + (" AND e.project_id=?" if project_id else ""),
