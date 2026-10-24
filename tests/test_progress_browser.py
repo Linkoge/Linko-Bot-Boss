@@ -4,6 +4,7 @@ import json
 import time
 
 import pytest
+from browser_sync import refreshed
 from test_model_picker_browser import browser_context, page, server  # noqa: F401
 
 PHASES = [('agent', 'Working'), ('checks', 'Running checks'), ('repair', 'Repair round 2 of 5'), ('merge', 'Merging'),
@@ -20,14 +21,6 @@ def inject(page, holder):
         body['progress'] = holder['progress']
         route.fulfill(response=response, body=json.dumps(body))
     page.route('**/api/portfolio*', handle)
-
-
-def refreshed(page):
-    """Refresh until one call renders: the app's own poll can supersede a refresh, which then returns false unrendered."""
-    for _ in range(20):
-        if page.evaluate('()=>refresh()'):
-            return
-    raise AssertionError('every refresh was superseded')
 
 
 def boxes(page):
