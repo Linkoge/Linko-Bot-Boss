@@ -3,7 +3,7 @@ import time
 
 import pytest
 
-SMOKE_BUDGET_SECONDS = 20  # The full backend suite takes about a minute; smoke must stay well below it.
+SMOKE_BUDGET_SECONDS = 30  # Smoke takes ~17s idle; the margin absorbs load (e.g. the deploy flow test) without flaking.
 
 
 def pytest_configure(config):
