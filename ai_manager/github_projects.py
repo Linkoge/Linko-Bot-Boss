@@ -458,7 +458,7 @@ class GitHubProjects:
         if self.db.one("SELECT 1 FROM tasks WHERE project_id=? AND state='running'", (project_id,)) or self.db.one(
                 'SELECT 1 FROM executions WHERE project_id=? AND finished_at IS NULL', (project_id,)):
             raise GitHubError('This project has a running task. Rename after it finishes; nothing was changed')
-        if self.pipeline.setup(project_id) or self.pipeline.pending():
+        if self.pipeline.deployable(project_id) or self.pipeline.pending():
             raise GitHubError('This project has a saved deploy setup or a pending deployment tied to its folder path; '
                               'nothing was changed')
 

@@ -509,6 +509,10 @@ Additional instances of the same code are restarted and health-checked by the sa
 Each project has one setup in SQLite (`deploy_setup:<project-id>`), read through `deployment_status` and replaced with
 `manager_action` action `save_deploy_setup`, `project_id` and `setup`. The owner API has the same contract:
 `GET /api/projects/{id}/deploy-setup` and `PUT /api/projects/{id}/deploy-setup` with `{"setup": {...}}` (or `null` to remove).
+The installed runtime's own project is the exception: its row is only the marker `{"runtime": true}`, and the setup
+is always the current `DATA/deploy/installed.json`, read at use time by status, the deploy request, `scripts/deploy.py`
+(health checks and rollback). Edit that file to move a port or service; a missing or unreadable file is reported as an
+error, never replaced by an old copy. Rows from older versions that hold a frozen copy are reduced to the marker.
 Replacement/removal is rejected while any deployment is pending. A request freezes that setup and project path;
 another project's request cannot be mistaken for it. A project without a setup creates no request until one is saved.
 

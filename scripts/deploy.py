@@ -126,7 +126,11 @@ class Deploy:
             else:
                 return  # Initial operator bootstrap before this runtime has a registered project.
         if 'runtime' in setup:
-            runtime = setup['runtime']
+            # The runtime setup is always the live installed.json, never a copy frozen in the DB or the request.
+            # (This process was itself started from that file or an explicit --config; re-read it for changes since.)
+            runtime = read(self.root / 'installed.json') or self.config
+            if not isinstance(runtime, dict) or not runtime.get('repo'):
+                raise ValueError('Runtime deploy setup: ' + str(self.root / 'installed.json') + ' is missing or unreadable')
             if Path(runtime['repo']).resolve() != Path(request['repo']).resolve():
                 raise ValueError('Deploy setup repository mismatch')
             # Keep host timing overrides; all runtime operations use the saved installation.

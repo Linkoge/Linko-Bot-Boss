@@ -163,7 +163,7 @@ class Pipeline:
     def __init__(self, db, registry, restricted=False):
         self.db, self.registry, self.job, self.restricted = db, registry, None, restricted
         self.root = db.path.parent / 'deploy'
-        self.backups = GitHubBackup(db, registry, lambda project_id: self.setup(project_id) is not None)
+        self.backups = GitHubBackup(db, registry, self.deployable)
         self.sync = GitHubSync(self)
 
     def setup(self, project_id):
@@ -173,14 +173,26 @@ class Pipeline:
         key = 'deploy_setup:' + project_id
         saved = self.db.setting(key, 'unmigrated')
         if saved != 'unmigrated':
-            return saved
+            return self.live_runtime(key, saved)
         # Migrate the existing installation once, without inventing a setup for other repositories.
         installed = read(self.root / 'installed.json') or {}
         if installed.get('repo') and Path(installed['repo']).resolve() == Path(project['path']).resolve():
-            saved = {'runtime': installed}
-            self.db.run('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)', (key, json.dumps(saved)))
-            return self.db.setting(key)
+            self.db.run('INSERT OR IGNORE INTO settings(key,value) VALUES(?,?)', (key, json.dumps({'runtime': True})))
+            return self.live_runtime(key, self.db.setting(key))
         return None
+
+    def live_runtime(self, key, saved):
+        """The one reader of the runtime setup: a {'runtime': ...} row is only a marker; the installation itself is
+        always the current <data>/deploy/installed.json, so a moved port or service is never read from a stale copy."""
+        if not isinstance(saved, dict) or 'runtime' not in saved:
+            return saved
+        live = read(self.root / 'installed.json')
+        if not isinstance(live, dict) or not live.get('repo'):
+            raise ValueError('The runtime deploy setup needs a readable ' + str(self.root / 'installed.json')
+                             + '; repair or reinstall it (no stale copy is used)')
+        if saved['runtime'] is not True:  # legacy frozen copy: keep only the marker
+            self.db.set_setting(key, {'runtime': True})
+        return {'runtime': live}
 
     def save_setup(self, project_id, setup):
         self.registry.get(project_id)
@@ -208,7 +220,7 @@ class Pipeline:
         'missing' means the application should queue a Create deploy setup task. The file seeds once: a setup the owner
         removed later is not recreated from the same file.
         """
-        if self.restricted or self.setup(project_id) is not None:
+        if self.restricted or self.deployable(project_id):
             return None
         state, value, digest = read_proposal(root)
         none = self.db.setting('deploy_none:' + project_id)
@@ -235,7 +247,10 @@ class Pipeline:
         return {'state': 'missing', 'reason': NO_SETUP}
 
     def deployable(self, project_id):
-        return self.setup(project_id) is not None
+        try:
+            return self.setup(project_id) is not None
+        except ValueError:
+            return True  # the runtime marker exists; an unreadable installed.json is reported by status/request
 
     # ---- deploy protocol (files shared with scripts/deploy.py) ---------------------------------------------
     def installed(self):
@@ -250,16 +265,24 @@ class Pipeline:
             key = hashlib.sha256(project_id.encode()).hexdigest()
             last = read(self.root / 'project-results' / (key + '.json')) or (
                 last if last and last.get('project_id') == project_id else None)
-        setup = self.setup(project_id) if project_id else None
+        setup, error = None, None
+        if project_id:
+            try:
+                setup = self.setup(project_id)
+            except ValueError as exc:
+                error = str(exc)
         return {'installed': self.installed(), 'request': read(self.root / 'request.json'),
                 'state': read(self.root / 'state.json') if self.pending() else None,
                 'last_result': last,
                 **({'setup': setup, 'deployment': 'deploy setup saved' if setup is not None
-                    else self.no_setup(project_id)} if project_id else {})}
+                    else self.no_setup(project_id)} if project_id else {}),
+                **({'setup_error': error, 'deployment': 'deploy setup unusable: ' + error} if error else {})}
 
     def summary(self, project_id=None):
         """Short fact for the manager prompt."""
         value = self.status(project_id)
+        if value.get('setup_error'):
+            return value['deployment'][:200]
         if project_id and not value['setup']:
             return self.no_setup(project_id)
         if value['request']:
