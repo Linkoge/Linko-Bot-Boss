@@ -796,22 +796,34 @@ async def test_usage_limit_waits_five_minutes_in_order_and_never_fails_the_task(
 
 @pytest.mark.smoke
 @pytest.mark.asyncio
-async def test_connection_loss_retries_every_five_minutes_forever_and_resumes_the_same_thread(world):
-    dropped = limited_by({"codexErrorInfo": "transportLost"})
+async def test_connection_loss_backs_off_from_2s_to_30s_forever_and_resumes_the_same_thread(world):
+    dropped = limited_by({"codexErrorInfo": "httpConnectionFailed"})
     task = world.tasks.add(world.project["id"], "flaky network")
     world.lab.actions = [dropped]
     waiting = await run_next(world)
-    assert waiting["state"] == "queued" and "connection" in waiting["blocker"] and 290 < waiting["retry_at"] - time.time() <= 300
+    assert waiting["state"] == "queued" and "connection" in waiting["blocker"] and 1 < waiting["retry_at"] - time.time() <= 2
     assert waiting["rounds"] == 0 and waiting["requeues"] == 0
     assert world.tasks.claim() is None  # not eligible before its retry time
-    for _ in range(25):  # far past any former wait cap
+    seen = []
+    for _ in range(8):  # far past the cap
         world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, task["id"]))
         world.lab.actions = [dropped]
         row = await run_next(world)
-        assert row["state"] == "queued" and 290 < row["retry_at"] - time.time() <= 300
+        assert row["state"] == "queued"
+        seen.append(round(row["retry_at"] - time.time()))
+    assert seen == [4, 8, 16, 30, 30, 30, 30, 30]
     world.db.run("UPDATE tasks SET retry_at=? WHERE id=?", (time.time() - 1, task["id"]))
     done = await run_next(world)
     assert done["state"] == "done" and done["rounds"] == 0 and done["native_thread"] == waiting["native_thread"]
+
+
+@pytest.mark.asyncio
+async def test_a_crashed_cli_fails_the_task_instead_of_waiting_for_the_connection(world):
+    task = world.tasks.add(world.project["id"], "cli crash")
+    world.lab.actions = [limited_by({"codexErrorInfo": "transportLost", "message": "The Codex process stopped unexpectedly"})]
+    failed = await run_next(world)
+    assert failed["id"] == task["id"] and failed["state"] == "failed" and failed["retry_at"] is None
+    assert "connection" not in failed["blocker"].lower()
 
 
 @pytest.mark.asyncio

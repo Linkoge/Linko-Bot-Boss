@@ -170,7 +170,7 @@ class Database:
             "state": "TEXT NOT NULL DEFAULT 'queued'", "held": "INTEGER NOT NULL DEFAULT 0",
             "queued_at": "REAL NOT NULL DEFAULT 0", "rounds": "INTEGER NOT NULL DEFAULT 0",
             "stage": "TEXT NOT NULL DEFAULT 'work'",
-            "requeues": "INTEGER NOT NULL DEFAULT 0", "retry_at": "REAL",
+            "requeues": "INTEGER NOT NULL DEFAULT 0", "retry_at": "REAL", "connection_waits": "INTEGER NOT NULL DEFAULT 0",
             "gate_history": "TEXT NOT NULL DEFAULT '[]'", "merge": "TEXT",
         }
         have = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}

@@ -367,7 +367,7 @@ class Host:
         elif result:
             status, error = 'failed', failure(result)
         else:
-            status, error = 'failed', {'message': f'Claude exited ({process.returncode}) without a result',
+            status, error = 'failed', {'message': f'The Claude process exited ({process.returncode}) without a result',
                                        'codexErrorInfo': 'transportLost'}
         thread = self.load(thread_id)
         turn = next(t for t in thread['turns'] if t['id'] == turn_id)

@@ -76,11 +76,17 @@ rules 8–9; worker-only: rule 11).
    without penalty (same branch, same worker thread, repair counters untouched) and retry times are forgotten, so a restart or reboot always retries at
    once; every task that was running (in any project) is resumed this way. A provider usage limit or a lost connection
    never fails a task: it goes back in the queue with a visible retry
-   time and is tried again every 5 minutes, indefinitely (no backoff, no wait counter, the provider's reset time is not
-   consulted, so a limit that resets early is picked up by the next try). Only real errors fail a task. Manager chat turns behave the
-   same way for a usage or rate limit (Codex or Claude): the reply is not failed but shows `waiting` with "Waiting for the
-   provider usage limit; retrying at HH:MM UTC", is retried every 5 minutes indefinitely (also without backoff), retries
-   at once after a service restart or deploy, and Stop cancels it. Messages sent meanwhile queue behind it in order.
+   time, indefinitely. A lost connection (network or provider unreachable, HTTP 408/5xx) retries fast: after 2 seconds,
+   doubling up to a 30-second cap (per-task wait counter, reset when the run ends). A usage limit keeps the fixed 5-minute
+   interval (no backoff, the provider's reset time is not consulted, so a limit that resets early is picked up by the next try),
+   because retrying faster only burns requests. Only real errors fail a task. Manager chat turns behave the
+   same way: a connection loss waits 2s, 4s, ... up to 30s ("Waiting for connection · Next attempt"); a usage or rate limit (Codex or Claude)
+   shows `waiting` with "Waiting for the
+   provider usage limit; retrying at HH:MM UTC" and is retried every 5 minutes. Both retry indefinitely,
+   at once after a service restart or deploy, and Stop cancels them. Messages sent meanwhile queue behind them in order.
+   Local failures are not a connection loss and fail the reply (or task) at once with a short reason: the CLI crashing or
+   exiting without a result (`transportLost`, broken pipe), a missing binary, permission errors, a full disk or quota
+   (ENOSPC/EDQUOT), (a tool call without an enabled capability is returned to the model as a tool error, never retried as a connection loss).
    Other permanent errors still fail the reply. The watchdog (every
    minute) requeues a dead or hung worker (30 min without activity) once, then fails it; fails queued tasks of a removed
    project; withdraws a deploy request that is still waiting after 30 min; and reports an idle-queue stall: eligible work

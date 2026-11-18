@@ -7,8 +7,8 @@ It needs no chat and no owner message. A tick (once a second, from the scheduler
      work of a removed project, and reports an idle queue that has eligible work but does not start it;
   3. starts, for every project with nothing running, its oldest eligible queued task (not held, not waiting for its
      retry time, project active): one task at a time per project, different projects in parallel.
-A provider usage limit or a lost connection never fails a task: it goes back in the queue and is tried again every
-5 minutes, indefinitely (a limit that resets early is picked up by the next try). Repair-round counters live on the task
+A provider usage limit or a lost connection never fails a task: it goes back in the queue and is tried again indefinitely
+(a connection loss after 2s, backing off to 30s; a usage limit every 5 minutes; a limit that resets early is picked up by the next try). Repair-round counters live on the task
 row and are never touched here.
 """
 import asyncio
@@ -18,9 +18,9 @@ from datetime import datetime, timezone
 
 from . import fence
 from .codex import CodexError
-from .recovery import classify, owned_alive, reap_orphan, usage_limit
+from .recovery import RETRY_SECONDS, classify, connection_delay, owned_alive, reap_orphan, usage_limit
 
-WATCHDOG_SECONDS, STALL_SECONDS, RETRY_SECONDS, IDLE_STALL_SECONDS = 60, 1800, 300, 300
+WATCHDOG_SECONDS, STALL_SECONDS, IDLE_STALL_SECONDS = 60, 1800, 300
 log = logging.getLogger(__name__)
 
 
@@ -94,10 +94,13 @@ class Runner:
         if not (limit or classify(error)):
             log.warning("task %s failed: %s", task["id"], error)
             return self.core.end(eid, "failed", plain(error))
-        retry_at = time.time() + RETRY_SECONDS
-        when = datetime.fromtimestamp(retry_at, timezone.utc).strftime("%H:%M UTC")
+        row = self.core.db.one("SELECT connection_waits FROM tasks WHERE id=?", (task["id"],))
+        waits = (row["connection_waits"] if row else 0) + 1
+        seconds = RETRY_SECONDS if limit else connection_delay(waits)
+        retry_at = time.time() + seconds
+        when = datetime.fromtimestamp(retry_at, timezone.utc).strftime("%H:%M:%S UTC" if seconds < 60 else "%H:%M UTC")
         label = "provider usage limit" if limit else "connection"
-        self.core.requeue(eid, f"Waiting for the {label}; retrying at {when}", retry_at)
+        self.core.requeue(eid, f"Waiting for the {label}; retrying at {when}", retry_at, connection_waits=0 if limit else waits)
 
     def activity(self, eid):
         db = self.core.db

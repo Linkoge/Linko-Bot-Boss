@@ -4,7 +4,6 @@ import asyncio
 import errno
 import json
 import os
-import random
 import signal
 import socket
 import time
@@ -18,7 +17,13 @@ from .codex import CodexError, process_start
 from .db import new_id
 
 
-RETRY_SECONDS = 300
+RETRY_SECONDS = 300  # usage and rate limits: retrying faster only burns requests
+CONNECTION_FIRST, CONNECTION_CAP = 2, 30  # a real connection loss: 2s, doubling, never more than 30s, indefinitely
+
+
+def connection_delay(attempt):
+    """Seconds to wait after the Nth consecutive connection loss (1 = first): 2, 4, 8, 16, 30, 30, ..."""
+    return min(CONNECTION_CAP, CONNECTION_FIRST * 2 ** min(max(attempt, 1) - 1, 16))
 
 
 @dataclass
@@ -60,6 +65,9 @@ def waiting_text(failure):
 
 def classify(error):
     """Prefer native enums, HTTP status and OS codes. Unknown errors are permanent."""
+    # A broken pipe is the local pipe to the CLI (it died); only network-level errors are a lost connection.
+    if isinstance(error, BrokenPipeError):
+        return None
     if isinstance(error, (TimeoutError, ConnectionError, socket.gaierror)):
         return Failure("connection")
     if isinstance(error, OSError) and error.errno in {
@@ -68,7 +76,6 @@ def classify(error):
         errno.ECONNRESET,
         errno.ECONNREFUSED,
         errno.ETIMEDOUT,
-        errno.EPIPE,
         errno.ENETDOWN,
     }:
         return Failure("connection")
@@ -110,7 +117,6 @@ def classify(error):
     ):
         return None
     if info in {
-        "transportLost",
         "httpConnectionFailed",
         "responseStreamConnectionFailed",
         "responseStreamDisconnected",
@@ -174,7 +180,7 @@ def reset_time(details):
 
 
 def delay(count, kind):
-    return min(300, 5 * 2 ** min(count - 1, 16)) * random.uniform(0.8, 1.0)
+    return RETRY_SECONDS if kind == "usage_limit" else connection_delay(count)
 
 
 def defer(db, execution_id, failure, error="", output=None):

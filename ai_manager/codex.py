@@ -201,7 +201,7 @@ class AppServer:
     async def send(self, message):
         async with self.write_lock:
             if not self.process or self.process.returncode is not None:
-                raise CodexError("Codex App Server is unavailable", {"codexErrorInfo": "transportLost"})
+                raise CodexError("The Codex process is not running", {"codexErrorInfo": "transportLost"})
             self.process.stdin.write((json.dumps(message) + "\n").encode())
             await self.process.stdin.drain()
 
@@ -265,7 +265,7 @@ class AppServer:
             if not future.done():
                 future.set_exception(
                     CodexError(
-                        f"App Server transport lost ({reason}); outcome must be reconciled",
+                        f"The Codex process stopped unexpectedly ({reason})",
                         {"codexErrorInfo": "transportLost"},
                     )
                 )

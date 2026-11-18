@@ -1,6 +1,8 @@
 """Fault injection uses local native-history fixtures and a disposable stdio process."""
 
 import asyncio
+import errno
+import socket
 import json
 import os
 import signal
@@ -18,7 +20,7 @@ from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.orchestration import Scheduler
 from ai_manager.pipeline import Pipeline
-from ai_manager.recovery import classify, delay
+from ai_manager.recovery import classify, delay, limit_failure
 from ai_manager.runner import usage_limit
 
 system = system_fixture
@@ -308,8 +310,8 @@ def test_structured_classification(error, kind):
 
 
 def test_chat_backoff_bounds_authoritative_retry_after_and_usage_limit_detection():
-    assert 4 <= delay(1, "connection") <= 5
-    assert 240 <= delay(99, "connection") <= 300
+    assert delay(1, "connection") == 2
+    assert delay(99, "connection") == 30
     before = time.time()
     failure = classify({"codexErrorInfo": "httpConnectionFailed", "retryAfter": 30})
     assert before + 30 <= failure.retry_at <= time.time() + 30
@@ -674,3 +676,41 @@ async def test_manager_non_limit_error_still_fails(system):
     request = await chat.submit(registry.list()[0]["id"], "Answer me")
     await settle(chat)
     assert db.one("SELECT status FROM executions WHERE id=?", (request["execution_id"],))["status"] == "failed"
+
+
+def test_connection_backoff_is_2s_doubling_to_a_30s_cap_and_usage_limits_stay_at_5_minutes():
+    from ai_manager.recovery import connection_delay
+
+    assert [connection_delay(n) for n in range(1, 9)] == [2, 4, 8, 16, 30, 30, 30, 30]
+    assert connection_delay(10**6) == 30
+    assert [delay(n, "connection") for n in (1, 2, 3)] == [2, 4, 8]
+    assert delay(1, "usage_limit") == delay(50, "usage_limit") == 300
+    before = time.time()
+    assert before + 299 <= limit_failure({"status": 429}).retry_at <= time.time() + 300
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        OSError(errno.ENOSPC, "No space left on device"),
+        OSError(errno.EDQUOT, "Disk quota exceeded"),
+        FileNotFoundError(errno.ENOENT, "codex"),
+        PermissionError(errno.EACCES, "denied"),
+        BrokenPipeError(errno.EPIPE, "Broken pipe"),
+        OSError(errno.EPIPE, "Broken pipe"),
+        ValueError("No enabled capabilities for this thread"),
+        CodexError("The Codex process stopped unexpectedly (EOFError)", {"codexErrorInfo": "transportLost"}),
+        {"message": "The Claude process exited (1) without a result", "codexErrorInfo": "transportLost"},
+    ],
+)
+def test_local_startup_and_cli_failures_are_not_a_connection_loss(error):
+    assert classify(error) is None
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ConnectionResetError(), socket.gaierror(), OSError(errno.ENETUNREACH, "unreachable"),
+     {"codexErrorInfo": "httpConnectionFailed"}, {"httpStatusCode": 503}],
+)
+def test_real_connection_loss_is_still_retried(error):
+    assert classify(error).kind == "connection"

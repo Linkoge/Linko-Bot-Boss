@@ -593,7 +593,7 @@ class Chat:
         job.add_done_callback(lambda _: self.jobs.pop(execution_id, None))
 
     async def _run(self, execution_id, response_id, conversation, content, route):
-        thread_id, output = None, ""
+        thread_id, output, queue, handler = None, "", None, None
         output = self.db.one("SELECT output FROM executions WHERE id=?", (execution_id,))["output"]
         new_output = False
         usage = TurnUsage()
@@ -620,7 +620,7 @@ class Chat:
             )
             queue = asyncio.Queue()
             self.server.queues[thread_id] = queue
-            self.server.tool_handlers[thread_id] = lambda params: self.action_handler(
+            self.server.tool_handlers[thread_id] = handler = lambda params: self.action_handler(
                 conversation["project_id"],
                 {**params, "manager_execution_id": execution_id, "conversation_id": conversation["id"],
                  "internal": not owner_authored(self.db, execution_id)},
@@ -672,7 +672,7 @@ class Chat:
                 method, params = event["method"], event.get("params", {})
                 if method == "transport/lost":
                     raise CodexError(
-                        "Manager connection lost; inspect saved thread before retry",
+                        "The manager's Codex process stopped unexpectedly",
                         {"codexErrorInfo": "transportLost"},
                     )
                 event_turn = params.get("turnId") or (params.get("turn") or {}).get("id")
@@ -748,8 +748,12 @@ class Chat:
                 self._finish(execution_id, response_id, "failed", str(error)[:2000], output)
         finally:
             if thread_id:
-                self.server.queues.pop(thread_id, None)
-                self.server.tool_handlers.pop(thread_id, None)
+                # Only drop our own entries: a newer runner on the same thread must keep its handler, or its tool
+                # calls fail with "No enabled capabilities for this thread".
+                if self.server.queues.get(thread_id) is queue:
+                    self.server.queues.pop(thread_id, None)
+                    if self.server.tool_handlers.get(thread_id) is handler:
+                        self.server.tool_handlers.pop(thread_id, None)
 
     def _finish(self, execution_id, response_id, status, error, output):
         with self.db.transaction() as conn:

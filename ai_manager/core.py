@@ -744,7 +744,7 @@ class Core:
             now = time.time()
             conn.execute("""UPDATE executions SET status=?,output=COALESCE(?,output),error=?,finished_at=?,delivery='pending'
                 WHERE id=?""", ("completed" if state == "done" else "failed", output, reason, now, eid))
-            conn.execute("""UPDATE tasks SET state=?,blocker=?,lease_owner=NULL,retry_at=NULL,merge=COALESCE(?,merge),
+            conn.execute("""UPDATE tasks SET state=?,blocker=?,lease_owner=NULL,retry_at=NULL,connection_waits=0,merge=COALESCE(?,merge),
                 revision=revision+1,updated_at=? WHERE id=?""",
                          (state, reason, json.dumps(merge) if merge else None, now, task["id"]))
             conn.execute("UPDATE questions SET status='expired' WHERE execution_id=? AND status='pending'", (eid,))
