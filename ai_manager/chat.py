@@ -615,16 +615,26 @@ class Chat:
                 prior = None
             cwd = (self.registry.allowed_path(self.registry.get(conversation["project_id"])["path"])
                    if conversation["project_id"] else self.workspace)
-            thread_id = await self.server.thread(
-                cwd, instructions, prior, route["model"], dynamic_tools=[tool]
-            )
             queue = asyncio.Queue()
-            self.server.queues[thread_id] = queue
-            self.server.tool_handlers[thread_id] = handler = lambda params: self.action_handler(
+            handler = lambda params: self.action_handler(
                 conversation["project_id"],
                 {**params, "manager_execution_id": execution_id, "conversation_id": conversation["id"],
                  "internal": not owner_authored(self.db, execution_id)},
             )
+            if prior:
+                # A resumed (recovered) thread may call tools as soon as it is loaded: register first.
+                thread_id = prior
+                self.server.queues[prior], self.server.tool_handlers[prior] = queue, handler
+            new_thread = await self.server.thread(
+                cwd, instructions, prior, route["model"], dynamic_tools=[tool]
+            )
+            if new_thread != thread_id:
+                if thread_id and self.server.queues.get(thread_id) is queue:
+                    self.server.queues.pop(thread_id, None)
+                    self.server.tool_handlers.pop(thread_id, None)
+                thread_id = new_thread
+            self.server.queues[thread_id] = queue
+            self.server.tool_handlers[thread_id] = handler
             with self.db.transaction() as conn:
                 conn.execute("UPDATE conversations SET thread_id=? WHERE id=?", (thread_id, conversation["id"]))
                 conn.execute(
@@ -842,10 +852,11 @@ class Chat:
 
     async def recover(self):
         if not self.resumed:
-            # A restart or deploy retries waiting usage-limit messages at once.
+            # A restart or deploy resumes every waiting reply at once (interrupted by the stop itself, usage limit):
+            # the stored retry time belongs to the previous process. Connection-loss waits keep their backoff.
             self.resumed = True
             self.db.run("UPDATE executions SET retry_at=NULL WHERE agent_id='manager' AND finished_at IS NULL "
-                        "AND status='recovering' AND recovery_reason='usage_limit'")
+                        "AND status='recovering' AND recovery_reason IN ('usage_limit','interrupted')")
         for row in self.db.all(
             "SELECT * FROM executions WHERE agent_id='manager' AND finished_at IS NULL ORDER BY rowid"
         ):

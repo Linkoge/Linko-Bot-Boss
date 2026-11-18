@@ -83,7 +83,10 @@ rules 8–9; worker-only: rule 11).
    same way: a connection loss waits 2s, 4s, ... up to 30s ("Waiting for connection · Next attempt"); a usage or rate limit (Codex or Claude)
    shows `waiting` with "Waiting for the
    provider usage limit; retrying at HH:MM UTC" and is retried every 5 minutes. Both retry indefinitely,
-   at once after a service restart or deploy, and Stop cancels them. Messages sent meanwhile queue behind them in order.
+   at once after a service restart or deploy, and Stop cancels them. A reply cut off by the service stopping itself
+   ("Recovering interrupted execution") is likewise resumed immediately after the restart, not at its backoff time, from
+   retained history without repeating done actions; the tool handler of a resumed thread is registered before the thread
+   is loaded, and a tool call arriving earlier waits briefly, so manager actions work in recovered turns. Messages sent meanwhile queue behind them in order.
    Local failures are not a connection loss and fail the reply (or task) at once with a short reason: the CLI crashing or
    exiting without a result (`transportLost`, broken pipe), a missing binary, permission errors, a full disk or quota
    (ENOSPC/EDQUOT), (a tool call without an enabled capability is returned to the model as a tool error, never retried as a connection loss).

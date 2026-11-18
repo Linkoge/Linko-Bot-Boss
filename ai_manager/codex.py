@@ -27,6 +27,9 @@ ARCHITECTURE_GUIDE = (_GUIDE_HEADING + (
 )).strip()
 
 
+TOOL_HANDLER_WAIT = 5  # seconds a tool call waits for its thread's handler
+
+
 class CodexError(RuntimeError):
     def __init__(self, message, details=None):
         super().__init__(message)
@@ -307,6 +310,12 @@ class AppServer:
     async def _tool_call(self, message):
         params = message.get("params", {})
         handler = self.tool_handlers.get(params.get("threadId"))
+        # During startup/recovery the runner registers its handler just after the thread is loaded: wait briefly.
+        for _ in range(0 if handler else TOOL_HANDLER_WAIT * 10):
+            await asyncio.sleep(0.1)
+            handler = self.tool_handlers.get(params.get("threadId"))
+            if handler:
+                break
         try:
             if not handler:
                 raise ValueError("No enabled capabilities for this thread")

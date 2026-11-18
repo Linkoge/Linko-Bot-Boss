@@ -714,3 +714,49 @@ def test_local_startup_and_cli_failures_are_not_a_connection_loss(error):
 )
 def test_real_connection_loss_is_still_retried(error):
     assert classify(error).kind == "connection"
+
+
+@pytest.mark.asyncio
+async def test_reply_interrupted_by_a_service_stop_resumes_at_once_after_restart(system):
+    db, registry, chat, settings = system
+    request = await chat.submit(registry.list()[0]["id"], "Answer me")
+    await settle(chat)
+    # The stop path (CancelledError in _run) defers with a backoff; simulate the stored state.
+    from ai_manager.recovery import Failure, defer
+
+    with db.transaction() as conn:
+        conn.execute("UPDATE executions SET finished_at=NULL,status='running' WHERE id=?", (request["execution_id"],))
+    defer(db, request["execution_id"], Failure("interrupted"), "Service stopped")
+    row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
+    assert row["status"] == "recovering" and row["retry_at"] > time.time()
+    restored = Chat(Database(db.path), registry, chat.server)
+    await restored.recover()
+    row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
+    assert row["retry_at"] is None and row["status"] != "recovering"
+    await settle(restored)
+
+
+@pytest.mark.asyncio
+async def test_tool_call_waits_for_a_handler_registered_during_startup():
+    from ai_manager.codex import AppServer
+
+    server = AppServer.__new__(AppServer)
+    server.tool_handlers = {}
+    replies = []
+
+    async def send(message):
+        replies.append(message)
+
+    server.send = send
+
+    async def handler(params):
+        return {"ok": True}
+
+    async def register():
+        await asyncio.sleep(0.3)
+        server.tool_handlers["t"] = handler
+
+    task = asyncio.create_task(register())
+    await server._tool_call({"id": 1, "params": {"threadId": "t"}})
+    await task
+    assert replies[0]["result"]["success"] is True
