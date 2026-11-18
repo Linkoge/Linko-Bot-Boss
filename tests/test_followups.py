@@ -284,6 +284,6 @@ def test_prompt_rules_and_tool_describe_the_bounded_exception():
     assert "At most 3 automatic follow-ups" in MANAGER_INSTRUCTIONS and "do not start new work from them" not in MANAGER_INSTRUCTIONS
     for tool in (MANAGER_TOOL, RESTRICTED_TOOL):
         assert tool["inputSchema"]["properties"]["followup_trigger"]["enum"] == [
-            "repair_exhausted", "incomplete", "deploy_failed"]
+            "repair_exhausted", "incomplete", "deploy_failed", "auto"]
     rules = (__import__("pathlib").Path(__file__).parents[1] / "RULES.md").read_text()
     assert "never start work from a result notice yourself" not in rules and "At most 3 per owner-typed" in rules

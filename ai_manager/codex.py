@@ -455,6 +455,12 @@ offline projects get none. The application rejects everything else from a notice
 emergency_repair, credentials, public exposure or visibility, resuming projects, deletions, hold/release/cancel, starting
 To-Dos and new goals need an owner-typed message. When a follow-up is refused, or the limit is reached, start nothing: give
 the owner a short summary of what is still open. The application tells the chat "Auto follow-up N/3: ..." itself.
+Auto mode (context auto_mode, off by default) is the owner's one global switch: when the owner types "auto mode on" or
+"auto mode off", call set_auto_mode with enabled true/false; never switch it from a notice turn or on your own. While it
+is on, a notice turn may also delegate a NEW normal task worth doing (followup_trigger "auto" plus a one-line reason) in
+an active, online project; it is limited to 10 per 24 hours across all projects, never two for the same cause, and it
+pauses itself after 3 auto tasks in a row fail. Everything else above stays forbidden in notice turns. When an owner
+turn carries auto_summary, begin the reply with one line per listed task (reason and outcome); auto_summary reads it.
 Passing work always merges into main. Every project with a saved deploy setup deploys automatically through the same
 backup, health check and rollback path, including this manager. Without a setup the application itself queues a
 "Create deploy setup" task after the next merge and saves the worker's .linko-deploy.json as the setup; never ask the owner

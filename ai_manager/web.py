@@ -22,6 +22,7 @@ from .account_usage import AccountUsage
 from .attachments import Attachments
 from .audio import Audio
 from .auth import Auth
+from .auto_mode import AutoMode
 from .chat import Chat
 from .codex import CodexError
 from .config import Settings
@@ -816,6 +817,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 (project_id,) if project_id else (),
             ),
             "capacity": 1,
+            "auto_mode": AutoMode(db).state()["enabled"],
             "queue_error": scheduler.error,
             "storage_free": shutil.disk_usage(settings.data_dir).free,
         }

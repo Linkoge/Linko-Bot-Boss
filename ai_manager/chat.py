@@ -409,9 +409,14 @@ class Chat:
             self.fit_context(context)
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         source = self.db.one("SELECT e.*,t.state AS task_status,t.blocker,t.rounds,t.merge FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery_execution=?", (execution_id,))
+        from .auto_mode import AutoMode
+        auto = AutoMode(self.db)
+        context['auto_mode'] = {k: v for k, v in auto.state().items() if k != 'used_24h'}
         prompt = {"message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
         if source:
             prompt["worker_result"] = self.result_notice(source)
+        elif owner_authored(self.db, execution_id) and (morning := auto.morning(execution_id)):
+            prompt["auto_summary"] = morning
         if prior and saved.get("thread_id") == thread_id:
             updates = {k: v for k, v in context.items() if saved.get("context", {}).get(k) != v}
             if updates:

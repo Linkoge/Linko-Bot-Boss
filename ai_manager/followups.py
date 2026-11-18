@@ -3,7 +3,8 @@
 A result notice is application transport, never owner authorization. The one exception is finishing or fixing the
 owner's ORIGINAL request with `delegate` or `continue` (a normal queued task), at most LIMIT times per owner-typed
 request (the chain root), never twice for the same failure cause in a row, never for paused or offline projects.
-Every other action is rejected here, by the application, whatever the manager model says.
+Every other action is rejected here, by the application, whatever the manager model says. With the owner's auto
+mode on (auto_mode.py), a notice turn may also `delegate` a NEW task with followup_trigger 'auto', within its limits.
 """
 
 import hashlib
@@ -18,7 +19,7 @@ TRIGGERS = ("repair_exhausted", "incomplete", "deploy_failed")
 # Read-only actions are harmless in a notice turn; save_todo is allowed only as an 'idea' (see authorize).
 NOTICE_READS = {"deployment_status", "repair_status", "list_todos", "read_document", "list_files", "search_code",
                 "screenshot", "read_memory", "read_project", "list_memory", "list_history", "read_task", "read_result",
-                "list_tasks", "read_history"}
+                "list_tasks", "read_history", "auto_summary"}
 REFUSED = "; a worker result notice is not explicit owner authorization, so the owner decides what happens next"
 KIND = "task.auto_followup"
 
@@ -36,7 +37,9 @@ def cause_key(trigger, text):
 
 class Followups:
     def __init__(self, db, registry, pipeline):
+        from .auto_mode import AutoMode
         self.db, self.registry, self.pipeline = db, registry, pipeline
+        self.auto = AutoMode(db, registry)
 
     def source(self, execution_id):
         """The worker result a notice turn reports (the application's own delivery link), or None."""
@@ -67,6 +70,8 @@ class Followups:
         if args.get("todos"):
             raise refuse("starting To-Dos needs an owner-typed message")
         source = self.source(params.get("manager_execution_id"))
+        if args.get("followup_trigger") == "auto":
+            return self.auto.authorize(action, args, selected_project, source)
         if not source:
             raise refuse("there is no worker result to follow up")
         if not source["chain_root"]:
@@ -110,6 +115,8 @@ class Followups:
     def reserve(self, conn, plan, task_id, params, summary):
         """Count this follow-up against its chain (limit, loop guard), record it and tell the originating chat.
         Runs inside the caller's transaction, so a refusal leaves no task behind. Returns the follow-up number."""
+        if plan.get("auto"):
+            return self.auto.reserve(conn, plan, task_id, params, summary)
         previous = self.used(plan["root"])
         if len(previous) >= LIMIT:
             raise refuse(f"the limit of {LIMIT} automatic follow-ups for this request is reached; tell the owner what is still open")

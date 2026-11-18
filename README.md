@@ -112,6 +112,19 @@ rules 8–9; worker-only: rule 11).
    pause/resume project, To-Do Start, `ready` To-Dos); owner-typed messages are unaffected. A follow-up is a normal queued
    task (visible, cancellable, normal checks, 5 repair rounds, merge, deploy with rollback) and the originating chat gets one
    line, `Auto follow-up N/3: ...`. When refused or at the limit the manager starts nothing and summarizes what is open.
+   **Auto mode** (`ai_manager/auto_mode.py`) widens this, under the owner's control. It is one global switch stored once
+   (setting `auto_mode`; the header shows a small "Auto" label while it is on, read from `/api/portfolio`), off by
+   default. The owner types "auto mode on/off" and the manager calls `set_auto_mode` (`enabled`), which the application
+   accepts only in owner-typed turns. While on, a notice turn may `delegate` a NEW normal task with `followup_trigger`
+   `auto` and a `reason`, in any active, online project the turn's context allows (a project chat stays in its project).
+   Hardcoded limits: at most 10 auto tasks per rolling 24 hours across all projects; never two for the same normalized
+   cause (the `reason`, normalized like follow-up causes); after 3 auto tasks in a row (since it was last turned on) end
+   failed, the scheduler switches auto mode off (`paused`) and posts one plain message to the owner. `continue`, To-Do
+   Start and every action listed above stay rejected in notice turns. Auto tasks are ordinary queued tasks without an
+   owner-typed root, so their own notices get no bounded follow-ups (only further auto tasks). Each one is a
+   `task.auto_started` event and a chat line `Auto task started: ...`. Morning summary: the first owner-typed turn after
+   auto activity carries `auto_summary` (each auto task, its reason and outcome; finished ones are then marked reported,
+   running ones are listed again next time) and the manager opens its reply with it; `auto_summary` reads it any time.
 
 **Workers run as a separate unprivileged Linux user** (`ai_manager/isolation.py`), so "workers have no system rights"
 is enforced by Linux, not only by the rules. Workers read untrusted text (dependencies, install scripts, web pages,

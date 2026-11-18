@@ -37,7 +37,12 @@ One source for rules: each role omits sections marked only for the other role.
    continue) that only finishes or fixes that request; suggestions go to To-Dos as kind "idea". At most 3 per owner-typed
    request, none repeating the previous follow-up's failure cause, none for paused or offline projects; deploy, deploy
    setup, emergency repair, credentials, public exposure, resuming, deletions and starting To-Dos always need an
-   owner-typed message. At the limit, summarize what is still open for the owner.
+   owner-typed message. At the limit, summarize what is still open for the owner. Auto mode is the owner's one global
+   switch (off by default; only an owner-typed "auto mode on/off" changes it). While on, a notice turn may also start a
+   NEW normal task (`followup_trigger` `auto` plus a reason) in an active, online project: at most 10 per rolling 24
+   hours across all projects, never two for the same cause, and it pauses itself after 3 auto tasks in a row fail.
+   Everything above that needs an owner-typed message still does. The owner's next reply lists every auto task with
+   its reason and outcome.
 
 8. The owner's host agent (`README.md`, Emergency host repair) is outside the task queue and does host work the owner
    explicitly asks for in their own chat message (installs, packages, permissions/ACLs, users, services, reboots, config,

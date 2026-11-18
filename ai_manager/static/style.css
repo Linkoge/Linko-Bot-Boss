@@ -308,3 +308,4 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #github-panel form[data-github-tier]{border-top:1px solid var(--border);padding-top:12px;margin-top:16px}
 
 .project-idea summary{cursor:pointer;font-weight:600;overflow-wrap:anywhere;min-height:44px;padding:8px 0}.project-idea .task-controls{margin-top:8px}.restricted #view-ideas{display:none}
+.auto-mode-label{align-self:center;flex:none;margin:0 4px;padding:1px 7px;border:1px solid currentColor;border-radius:999px;font-size:11px;font-weight:600;letter-spacing:.04em;color:#e0b341}

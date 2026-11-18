@@ -8,6 +8,7 @@ import logging
 
 from .chat import internal_result
 from .core import Tasks
+from .auto_mode import TRIGGER as AUTO_TRIGGER
 from .followups import TRIGGERS, Followups
 from .history import Maintenance
 from .pipeline import RESTRICTED
@@ -53,6 +54,8 @@ MANAGER_TOOL = {
                     "read_history",
                     "pause_project",
                     "resume_project",
+                    "set_auto_mode",
+                    "auto_summary",
                 ],
             },
             "url": {"type": "string", "description": "HTTP(S) page reachable by the server, including Tailscale; no login."},
@@ -77,8 +80,9 @@ MANAGER_TOOL = {
             "title": {"type": "string"},
             "details": {"type": "string", "description": "To-Do details, or additional instructions for continue; appended alongside objective."},
             "path": {"type": "string"},
-            "reason": {"type": "string", "description": "Why; for an automatic follow-up with followup_trigger 'incomplete', exactly what part of the original request is not done."},
-            "followup_trigger": {"type": "string", "enum": list(TRIGGERS), "description": "Only in a turn started by a worker result notice, for delegate/continue that finishes or fixes the owner's ORIGINAL request: repair_exhausted (task failed after all repair rounds), incomplete (worker reported part not done), deploy_failed (deploy failed or rolled back for a code reason). Omit in owner-typed turns."},
+            "reason": {"type": "string", "description": "Why; for an automatic follow-up with followup_trigger 'incomplete', exactly what part of the original request is not done; for 'auto', one line on why this new task is worth doing."},
+            "followup_trigger": {"type": "string", "enum": [*TRIGGERS, AUTO_TRIGGER], "description": "Only in a turn started by a worker result notice, for delegate/continue that finishes or fixes the owner's ORIGINAL request: repair_exhausted (task failed after all repair rounds), incomplete (worker reported part not done), deploy_failed (deploy failed or rolled back for a code reason). 'auto': only while the owner's auto mode is on, delegate a NEW normal task (with reason). Omit in owner-typed turns."},
+            "enabled": {"type": "boolean", "description": "set_auto_mode: true = on, false = off. Only when the owner typed it."},
             "query": {"type": "string"},
             "status": {"type": "string", "enum": ["queued", "held", "running", "done", "failed"]},
             "message_id": {"type": "string"},
@@ -137,6 +141,10 @@ class Scheduler:
         # A result notice is not the owner: only reads, idea To-Dos and a bounded delegate/continue get through.
         followup = self.followups.authorize(action, args, selected_project, params) if internal else None
         chain_root = followup["root"] if followup else params.get("manager_execution_id")
+        if action == "set_auto_mode":  # owner-typed only: followups.authorize rejects it in a notice turn
+            return self.followups.auto.set(args.get("enabled"))
+        if action == "auto_summary":
+            return self.followups.auto.summary()
         if args.get("todos") and action not in {"delegate", "continue"}:
             raise ValueError("To-Do ids go only with delegate or continue, when the owner asks to start them")
         for entry_id in args.get("todos", []):
@@ -281,7 +289,9 @@ class Scheduler:
                 project_id, args["objective"], params["conversation_id"],
                 f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",
                 acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
-                chain_root=chain_root, chain_parent=followup and followup["parent"],
+                # An auto task has no owner-typed root, so its own notices get no bounded follow-ups (only auto mode).
+                chain_root=None if followup and followup.get("auto") else chain_root,
+                chain_parent=followup and followup["parent"],
                 on_create=followup and (lambda conn, task_id: self.followups.reserve(
                     conn, followup, task_id, params, args["objective"])),
             )
@@ -376,6 +386,7 @@ class Scheduler:
             if receipt := self.pipeline.report():
                 await asyncio.to_thread(self.core.repair_deploy, receipt)
             await self.core.runner.tick()  # first: no chat state can keep queued work from starting
+            self.followups.auto.check_pause()
             await self.observer.observe({key: self.chat.server for key in self.chat.jobs})
             await self.chat.recover()
             await self.chat.deliver_results()

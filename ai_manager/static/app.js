@@ -133,6 +133,7 @@ async function refresh(loadChat=true,older=null){
   if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return false;
   if(older==='tasks')state.taskPaging=true;
   if(older==='executions')state.executionPaging=true;
+  $('auto-mode-label').hidden=!portfolio.auto_mode;
   preserveChatPosition(()=>{state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();renderProgress();});
   if(state.project&&portfolio.projects.find(p=>p.id===state.project)?.visible===false){await selectProject(null);return false;}
   if(portfolio.queue_error)notice(portfolio.queue_error);
