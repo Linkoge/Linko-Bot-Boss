@@ -10,7 +10,6 @@ from .github_backup import github_remote, token_auth
 from .push_diagnosis import OPERATIONS, diagnose_incoming, redact
 
 PREFIX = 'github_sync:'
-IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
 SAVE_MESSAGE = 'Save local changes in project folder before merging task'
 FETCH_ATTEMPTS = 2
 
@@ -151,6 +150,7 @@ class GitHubSync:
                     # Tracked edits, deletions and renames are committed on main (the task-merge path); untracked
                     # and ignored files are never touched.
                     step = 'save'
+                    from .pipeline import IDENTITY  # imported late: pipeline imports this module
                     git('add', '-u')
                     git(*IDENTITY, 'commit', '-m', SAVE_MESSAGE)
                     saved, step = True, 'refs'
