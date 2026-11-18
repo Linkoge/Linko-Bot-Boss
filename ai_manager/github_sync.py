@@ -10,29 +10,9 @@ from .github_backup import github_remote, token_auth
 from .push_diagnosis import OPERATIONS, diagnose_incoming, redact
 
 PREFIX = 'github_sync:'
+IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
+SAVE_MESSAGE = 'Save local changes in project folder before merging task'
 FETCH_ATTEMPTS = 2
-MAX_PATHS = 5
-
-
-def dirty_paths(root):
-    """Bounded, redacted names of changed paths (never contents), for the dirty-checkout warning."""
-    entries = git_bytes(root, 'status', '--porcelain', '-z').decode('utf-8', 'replace').split('\0')
-    paths, skip = [], False
-    for entry in entries:
-        if skip:
-            skip = False
-        elif entry:
-            skip = entry[0] in 'RC'  # the next entry is the rename/copy source
-            paths.append(redact(re.sub(r'[\x00-\x1f\x7f]', '?', entry[3:]), generic=False)[:80])
-    return paths
-
-
-def dirty_warning(paths):
-    shown = ', '.join(paths[:MAX_PATHS])
-    more = f' and {len(paths) - MAX_PATHS} more' if len(paths) > MAX_PATHS else ''
-    return {'state': 'warning', 'cause': 'uncommitted-changes', 'paths': paths[:MAX_PATHS], 'path_count': len(paths),
-            'reason': f'Uncommitted changes in {shown}{more}; update skipped, local files left untouched.'
-                      if paths else 'Uncommitted changes; update skipped.'}
 
 
 def failure(operation, error, secrets=(), attempts=1):
@@ -134,8 +114,6 @@ class GitHubSync:
             if self.pipeline.pending() or self.db.one(
                     "SELECT 1 FROM tasks WHERE project_id=? AND state='running'", (project_id,)):
                 return {'state': 'busy', 'reason': 'Work or deploy is active; update deferred.'}
-            if git('status', '--porcelain'):
-                return dirty_warning(dirty_paths(root))
             token = self.pipeline.backups.credentials(project) if project.get('github_tier') else None
             # Fetch off the checkout fence: an unreachable host cannot hold other projects' queues.
             destination = remote
@@ -152,7 +130,9 @@ class GitHubSync:
                         git('fetch', '--quiet', '--no-tags', '--recurse-submodules=no', destination,
                             'refs/heads/main:refs/remotes/origin/main', env=env)
                         break
-                    except GitError:
+                    except GitError as error:
+                        if diagnose_incoming('fetch', error.output, [token], attempts)['cause'] == 'missing-main':
+                            return self.without_main(root, destination, env)
                         if attempts == FETCH_ATTEMPTS:
                             raise
                 step, attempts = 'refs', 1
@@ -160,24 +140,47 @@ class GitHubSync:
                 if self.pipeline.pending() or self.db.one(
                         "SELECT 1 FROM tasks WHERE project_id=? AND state='running'", (project_id,)):
                     return {'state': 'busy', 'reason': 'Work or deploy is active; update deferred.'}
-                if git('status', '--porcelain'):
-                    return dirty_warning(dirty_paths(root))
                 branch = git_bytes(root, 'symbolic-ref', '--short', 'HEAD', check=False)
                 if branch.stdout.decode().strip() != 'main':
                     current = redact(branch.stdout.decode().strip(), generic=False)[:80]
                     return {'state': 'warning', 'cause': 'not-on-main',
                             'reason': (f"Checkout is on '{current}', not main; update skipped." if current
                                        else 'Checkout has a detached HEAD, not main; update skipped.')}
+                saved = False
+                if git('status', '--porcelain', '--untracked-files=no'):
+                    # Tracked edits, deletions and renames are committed on main (the task-merge path); untracked
+                    # and ignored files are never touched.
+                    step = 'save'
+                    git('add', '-u')
+                    git(*IDENTITY, 'commit', '-m', SAVE_MESSAGE)
+                    saved, step = True, 'refs'
                 local, target = git('rev-parse', 'main'), git('rev-parse', 'refs/remotes/origin/main')
                 if local == target:
                     return {'state': 'synced', 'reason': 'Up to date with GitHub.'}
                 if git_bytes(root, 'merge-base', '--is-ancestor', target, local, check=False).returncode == 0:
                     return {'state': 'ahead', 'reason': 'Local main is ahead; waiting for verified GitHub push.'}
+                if git_bytes(root, 'merge-base', '--is-ancestor', local, target, check=False).returncode and saved:
+                    step = 'merge'
+                    from .pipeline import merge_into_main  # imported late: pipeline imports this module
+                    _, _, copies = merge_into_main(root, target)
+                    step = 'deploy'
+                    deployment = self.pipeline._request(project_id, 'github-sync', None, None, 'Pulled GitHub updates')
+                    note = f' {len(copies)} conflicting file(s) kept, incoming saved as "(AI version)" copies.' if copies else ''
+                    return {'state': 'updated', 'commit': git('rev-parse', 'HEAD'), 'copies': copies,
+                            'reason': 'Saved local changes and pulled GitHub updates.' + note + (
+                                ' Deploy queued.' if deployment.get('id') else ' No deploy setup.')}
                 if git_bytes(root, 'merge-base', '--is-ancestor', local, target, check=False).returncode:
                     return {'state': 'diverged', 'local': local, 'remote': target,
                             'reason': 'Out of sync with GitHub, needs attention: both main branches have moved.'}
                 step = 'merge'
-                git('merge', '--ff-only', '--no-overwrite-ignore', target)
+                try:
+                    git('merge', '--ff-only', '--no-overwrite-ignore', target)
+                except GitError as error:
+                    if not re.search(r'(?i)untracked working tree files|ignored', error.output):
+                        raise
+                    # An untracked/ignored file is in the way: keep it, save the incoming file as an AI version.
+                    from .pipeline import merge_into_main
+                    merge_into_main(root, target)
                 step = 'deploy'
                 deployment = self.pipeline._request(project_id, 'github-sync', None, None, 'Pulled GitHub updates')
                 return {'state': 'updated', 'commit': target, 'reason': 'Pulled GitHub updates; ' +
@@ -186,6 +189,18 @@ class GitHubSync:
             return {'state': 'busy', 'reason': 'Checkout is busy; update deferred.'}
         except Exception as error:
             return failure(step, error, [token], attempts)
+
+    def without_main(self, root, destination, env):
+        """The remote has no main: an empty remote needs nothing (the backup push creates main); another default
+        branch gets one plain line. Never renames or deletes remote branches."""
+        listing = git_bytes(root, 'ls-remote', '--symref', destination, env=env).decode()
+        heads = [line.split('\t', 1)[1] for line in listing.splitlines() if line.split('\t', 1)[-1].startswith('refs/heads/')]
+        if not heads:
+            return {'state': 'synced', 'reason': 'GitHub repository is empty; the first backup push creates main.'}
+        default = re.search(r'^ref: refs/heads/(\S+)\tHEAD$', listing, re.M)
+        name = redact(default[1] if default else heads[0].removeprefix('refs/heads/'), generic=False)[:80]
+        return {'state': 'warning', 'cause': 'remote-default-branch',
+                'reason': f"GitHub's default branch is '{name}', not main; nothing to pull."}
 
     async def close(self):
         await asyncio.gather(*self.jobs.values(), return_exceptions=True)

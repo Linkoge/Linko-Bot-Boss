@@ -18,13 +18,12 @@ from .deploy_auto import SETUP_FILE, read_proposal
 from .deploy_setup import validate_setup
 from .fence import Busy, main_branch
 from .github_backup import GitHubBackup
-from .github_sync import GitHubSync
+from .github_sync import IDENTITY, SAVE_MESSAGE, GitHubSync
 
 RESTRICTED = 'Not available on a restricted instance'
 NO_SETUP = 'no deploy setup; a Create deploy setup task is queued automatically'
 MERGE_WAIT = 30  # seconds a merge waits for another project's merge to leave the checkout fence
 DEPLOY_WAIT = 1800  # a pending deploy request holds the queue at most this long, then it is withdrawn
-IDENTITY = ['-c', 'user.name=Linko Bot Boss', '-c', 'user.email=bot-boss@linko.invalid']
 
 
 def atomic(path, value):
@@ -100,7 +99,7 @@ def merge_into_main(root, commit):
         git(root, 'checkout', '--quiet', branch)
     if git(root, 'status', '--porcelain', '--untracked-files=no'):
         git(root, 'add', '-u')
-        git(root, *IDENTITY, 'commit', '-m', 'Save local changes in project folder before merging task')
+        git(root, *IDENTITY, 'commit', '-m', SAVE_MESSAGE)
     head = git(root, 'rev-parse', 'HEAD')
     if git(root, 'merge-base', '--is-ancestor', commit, head, check=False).returncode == 0:
         return head, False, saved_copies(root, head, commit)

@@ -69,16 +69,66 @@ async def test_divergence_stays_flagged_without_mutation(origin):
     assert not origin.pipeline.pending()
 
 
-@pytest.mark.parametrize('dirty', ['tracked', 'untracked'])
-async def test_uncommitted_changes_are_preserved(origin, dirty):
-    before = git(origin.app, 'rev-parse', 'HEAD')
-    behind(origin)
-    path = origin.app / ('shared.txt' if dirty == 'tracked' else 'new-file')
-    path.write_text('keep me')
+async def test_untracked_files_never_block_sync(origin):
+    target = behind(origin)
+    (origin.app / 'new-file').write_text('keep me')
     result = await origin.pipeline.sync.attempt(origin.project['id'])
-    assert result['state'] == 'warning' and 'Uncommitted' in result['reason']
-    assert path.read_text() == 'keep me'
-    assert git(origin.app, 'rev-parse', 'HEAD') == before
+    assert result['state'] == 'updated'
+    assert (origin.app / 'new-file').read_text() == 'keep me'
+    assert git(origin.app, 'rev-parse', 'HEAD') == target
+
+
+async def test_dirty_tracked_checkout_is_saved_and_synced(origin):
+    (origin.app / 'doomed.txt').write_text('x')
+    git(origin.app, 'add', 'doomed.txt')
+    git(origin.app, 'commit', '-qm', 'doomed')
+    git(origin.app, 'push', '-q', 'origin', 'main')
+    git(origin.peer, 'pull', '-q', 'origin', 'main')
+    behind(origin)
+    (origin.app / 'shared.txt').write_text('local edit')
+    (origin.app / 'doomed.txt').unlink()
+    (origin.app / 'untracked.txt').write_text('mine')
+    result = await origin.pipeline.sync.attempt(origin.project['id'])
+    assert result['state'] == 'updated' and result['copies'] == []
+    assert git(origin.app, 'status', '--porcelain') == '?? untracked.txt'
+    assert (origin.app / 'shared.txt').read_text() == 'local edit' and (origin.app / 'remote-change').exists()
+    assert not (origin.app / 'doomed.txt').exists() and (origin.app / 'untracked.txt').read_text() == 'mine'
+    subjects = git(origin.app, 'log', '--format=%an|%s', '-3').splitlines()
+    assert any(x == 'Linko Bot Boss|Save local changes in project folder before merging task' for x in subjects)
+    assert origin.pipeline.status()['request']['source'] == 'github-sync'
+
+
+async def test_dirty_checkout_conflict_keeps_folder_version_and_saves_ai_copy(origin):
+    (origin.peer / 'shared.txt').write_text('incoming')
+    git(origin.peer, 'commit', '-qam', 'incoming edit')
+    git(origin.peer, 'push', '-q', 'origin', 'main')
+    (origin.app / 'shared.txt').write_text('folder version')
+    result = await origin.pipeline.sync.attempt(origin.project['id'])
+    assert result['state'] == 'updated' and result['copies'] == [{'path': 'shared.txt', 'copy': 'shared (AI version).txt'}]
+    assert (origin.app / 'shared.txt').read_text() == 'folder version'
+    assert (origin.app / 'shared (AI version).txt').read_text() == 'incoming'
+    assert git(origin.app, 'status', '--porcelain') == ''
+    assert git(origin.app, 'merge-base', '--is-ancestor', git(origin.peer, 'rev-parse', 'HEAD'), 'HEAD') == ''
+
+
+async def test_empty_remote_is_not_a_warning(origin, tmp_path):
+    empty = tmp_path / 'empty.git'
+    git(tmp_path, 'init', '--bare', '-q', str(empty))
+    git(origin.app, 'remote', 'set-url', 'origin', str(empty))
+    github_sync.github_remote = lambda url: url == str(empty)
+    result = await origin.pipeline.sync.attempt(origin.project['id'])
+    assert result['state'] == 'synced' and 'cause' not in result and 'empty' in result['reason']
+
+
+async def test_other_default_branch_gets_one_plain_line(origin, tmp_path):
+    other = tmp_path / 'other.git'
+    git(tmp_path, 'init', '--bare', '-q', '-b', 'trunk', str(other))
+    git(origin.app, 'push', '-q', str(other), 'main:trunk')
+    git(origin.app, 'remote', 'set-url', 'origin', str(other))
+    github_sync.github_remote = lambda url: url == str(other)
+    result = await origin.pipeline.sync.attempt(origin.project['id'])
+    assert result['state'] == 'warning' and result['reason'] == "GitHub's default branch is 'trunk', not main; nothing to pull."
+    assert git(other, 'for-each-ref', '--format=%(refname)') == 'refs/heads/trunk'
 
 
 async def test_offline_is_never_fetched(origin, monkeypatch):

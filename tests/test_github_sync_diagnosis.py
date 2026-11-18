@@ -43,7 +43,6 @@ CASES = [
     ('fetch', "fatal: unable to access 'https://github.com/o/r.git/': Could not resolve host: github.com", 'network'),
     ('fetch', 'git operation timed out', 'network'),
     ('fetch', 'remote: Repository not found.\nfatal: repository not found', 'repository-not-found'),
-    ('fetch', "fatal: couldn't find remote ref refs/heads/main", 'missing-main'),
     ('fetch', 'something unrecognised happened', 'unknown'),
     ('merge', 'error: Your local changes to the following files would be overwritten by merge:\n\tshared.txt', 'local-changes'),
     ('merge', 'fatal: Not possible to fast-forward, aborting.', 'not-fast-forward'),
@@ -79,7 +78,7 @@ async def test_missing_repository_and_missing_main_against_real_origins(origin, 
     git(origin.app, 'push', '-q', str(other), 'main:dev')
     git(origin.app, 'remote', 'set-url', 'origin', str(other))
     result = await origin.pipeline.sync.attempt(origin.project['id'])
-    assert (result['operation'], result['cause']) == ('fetch', 'missing-main')
+    assert result['cause'] == 'remote-default-branch' and "'dev'" in result['reason']
     # The next successful sync clears every trace of the failure.
     git(origin.app, 'remote', 'set-url', 'origin', str(origin.bare))
     monkeypatch.setattr(github_sync, 'github_remote', lambda url: url == str(origin.bare))
@@ -143,30 +142,6 @@ async def test_busy_is_informational_and_accurate(origin):
     result = await origin.pipeline.sync.attempt(origin.project['id'])
     assert result == {'state': 'busy', 'reason': 'Work or deploy is active; update deferred.'}
     assert 'cause' not in stored(origin) and 'operation' not in stored(origin)
-
-
-@pytest.mark.parametrize('count', [2, 8])
-async def test_dirty_checkout_names_bounded_paths_and_keeps_files(origin, count):
-    before = git(origin.app, 'rev-parse', 'HEAD')
-    behind(origin)
-    secret = token()
-    names = [f'note{i}.txt' for i in range(count - 1)] + [secret + '.txt']
-    for name in names:
-        (origin.app / name).write_text('private contents ' + secret)
-    result = await origin.pipeline.sync.attempt(origin.project['id'])
-    assert result['state'] == 'warning' and result['cause'] == 'uncommitted-changes'
-    assert result['path_count'] == count and len(result['paths']) == min(count, 5)
-    assert 'private contents' not in json.dumps(result) and secret not in json.dumps(result)
-    assert ('and 3 more' in result['reason']) == (count == 8)
-    assert all((origin.app / name).read_text().startswith('private contents') for name in names)
-    assert git(origin.app, 'rev-parse', 'HEAD') == before
-    # A tracked modification is named too.
-    (origin.app / 'shared.txt').write_text('edited')
-    assert 'shared.txt' in dirty(origin.app)
-
-
-def dirty(root):
-    return ', '.join(github_sync.dirty_paths(root))
 
 
 def test_failure_is_visible_through_the_portfolio_api(client, tmp_path, monkeypatch):

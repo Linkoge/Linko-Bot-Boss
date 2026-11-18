@@ -9,6 +9,7 @@ and a project without one gets a Create deploy setup task (deploy_auto.py).
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import os
@@ -55,6 +56,10 @@ def execute(argv, cwd, env, timeout):
         os.killpg(process.pid, signal.SIGKILL)
         output, _ = process.communicate()
         return -1, output or "", True
+    except BaseException:  # cancelled or interrupted: never leave the group running
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGKILL)
+        raise
 
 
 def changed_tests(root, base):

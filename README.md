@@ -610,16 +610,20 @@ work for that project. Set `AI_MANAGER_GITHUB_SYNC_SECONDS` to change this inter
 Offline projects and projects without a GitHub origin never fetch. Restricted instances do not sync their checkout.
 The top-corner project menu includes **Pull updates now** and reports the result; project rows show sync warnings.
 
-Only a clean checkout on `main` can fast-forward to a strictly newer `origin/main`. Active project tasks defer the
-update. A saved deploy setup uses the existing bounded deploy request queue, backup, full tests, restart, mandatory
+Only a checkout on `main` syncs. Tracked local edits, deletions and renames are first committed on `main` as the bot
+identity (`Save local changes in project folder before merging task`, the same step task merges use), then `origin/main`
+comes in; on a conflict the folder's file stays at its path and the incoming one is saved as `<name> (AI version).<ext>`.
+Untracked and ignored files are never touched or counted as dirty, and nothing is discarded or forced. The sync runs
+under the checkout fence. Active project tasks or deploys defer the update. An empty GitHub repository is not a warning
+(the backup push creates `main`); a remote whose default branch has another name shows one plain line, and remote
+branches are never renamed or deleted. A saved deploy setup uses the existing bounded deploy request queue, backup, full tests, restart, mandatory
 health check and rollback; self-updates use the same installed self-deploy adapter and restart all instances together.
 Task dispatch waits for this check and any requested deploy. A failed fetch retries once (each Git command has a
 60-second timeout), warns, and allows work to proceed. Other projects continue while the fetch runs.
 
 Diverged branches show “Out of sync with GitHub, needs attention” and stop automatic fetch/update attempts until the
 owner reconciles local main and its origin tracking ref. Tasks can still run with the warning. No automatic merge,
-rebase, reset or force operation resolves divergence. Dirty checkouts are preserved and skipped with a warning that
-names up to five changed paths (never contents). A failed incoming step records its **operation** (`fetch`, `refs`,
+rebase, reset or force operation resolves divergence. A failed incoming step records its **operation** (`fetch`, `refs`,
 `merge`, `deploy`, or `update` for an unexpected error) and a **cause** (`auth-denied`, `repository-not-found`,
 `missing-main`, `network`, `missing-ref`, `local-changes`, `local-lock`, `not-fast-forward`, or `unknown` with up to
 three redacted excerpt lines) in the same `github_sync:<project-id>` status, reusing `ai_manager/push_diagnosis.py`
@@ -633,6 +637,7 @@ simultaneous editing.
 Permanent coverage: `tests/test_github_sync.py` uses disposable bare origins for incoming sync and dispatch gating;
 `tests/test_github_sync_diagnosis.py` covers incoming failure diagnosis/redaction and
 `tests/test_project_menu_layout_browser.py` the mobile/desktop Projects menu geometry in Chromium;
+`tests/test_tempsweep.py` covers the browser-folder sweep and the check runner's process-group kill;
 `tests/test_deploy_instances.py` covers recovery when the main service is current but another instance is stale.
 
 ## Multiple instances and the restricted work instance
@@ -1111,7 +1116,7 @@ uv run python scripts/full_suite.py              # full suite as the deploy runs
 uv run pytest -q                                # the same full suite in one process, for debugging (also -p no:xdist)
 uv run ruff check ai_manager scripts tests
 node --check ai_manager/static/app.js
-PYTHONPATH=. uv run python scripts/browser_smoke.py   # also browser_tasks.py and the other browser_*.py checks
+PYTHONPATH=. uv run python scripts/browser_smoke.py   # sweeps stale /tmp/linko-browser-* (>1 h, own user) first, always closes Chromium; also browser_tasks.py and the other browser_*.py checks
 ```
 
 `scripts/full_suite.py` runs every test not marked `serial` under pytest-xdist (`-n` = 1.5 workers per core, capped at
