@@ -851,8 +851,15 @@ conversation ID is retained, including archived chats; missing chats are never s
 
 Requests, instructions, attempts, status, errors, final result and pending chat notices live in fsynced atomic JSON
 receipts under `DATA/repair/requests`; native JSONL/output logs live under `DATA/repair/runs`. The request key is
-idempotent forever. A different request while a repair is active is rejected with its receipt ID; its instructions
-are not silently discarded. A host-wide flock permits one repair at a time; the CLI inherits it across launcher
+idempotent forever. A different request while a repair is unfinished is accepted and put in a FIFO line (ordered by
+creation time) behind it: the `emergency_repair` response and the receipt notice give `position` (1 = active/next),
+`queued` and the IDs `ahead`, and `repair_status` / `GET /api/repair` list every receipt with its `position` (null once
+finished). Only the head of the line runs, even while it waits for a bounded retry; when it finishes (succeeded or
+failed) the next starts in the same tick, and each request keeps its own receipt and result notice in its originating
+chat. A stuck head cannot block the line forever: a request that has held the line longer than `max_active_seconds`
+(installed config, default 6 hours, retries and waits included; each turn is still bounded by `turn_seconds`) is marked
+failed with a "timed out ... released" notice and the next request starts. The watchdog queues nothing while a repair
+is unfinished. A host-wide flock permits one repair at a time; the CLI inherits it across launcher
 failure. Verified orphan process groups are killed only after their recorded turn deadline. The systemd unit allows
 five additional minutes before killing its own cgroup. Interrupted attempts consume the same durable five-attempt budget; completed
 native results are reconciled from logs before another turn. Otherwise the retained native session is resumed with

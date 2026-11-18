@@ -394,7 +394,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.get('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def repair_status():
         from scripts.emergency_repair import Repair
-        return Repair(settings.data_dir).records()
+        return Repair(settings.data_dir).status()
 
     @app.post('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def request_repair(body: dict):

@@ -148,7 +148,7 @@ class Scheduler:
 
             repair = Repair(self.settings.data_dir)
             if action == 'repair_status':
-                return repair.records()
+                return repair.status()
             from .model_settings import repair_route
             try:
                 await self.chat.server.start()

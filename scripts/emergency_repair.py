@@ -18,6 +18,7 @@ from pathlib import Path
 
 FINAL = {'succeeded', 'failed'}
 DEFAULT_TURN_SECONDS = 7200
+DEFAULT_ACTIVE_SECONDS = 6 * 3600  # bound on one request holding the line, retries and waits included
 INSTRUCTIONS = """You are the owner's host agent, outside the normal task queue. You carry out whatever host work the
 owner's request describes: installs and packages, permissions/ACLs, users, services, Syncthing-style setup, reboots,
 config, and repairing the application. Normal queue worker rules do not apply to you.
@@ -128,7 +129,24 @@ class Repair:
         return {'user': 0, 'group': 0, 'extra_groups': [], 'env': env}
 
     def records(self):
-        return [read(p) for p in sorted((self.root / 'requests').glob('*.json'))]
+        rows = [read(p) for p in sorted((self.root / 'requests').glob('*.json'))]
+        return sorted(rows, key=lambda row: (row.get('created_at', 0), row['id']))  # FIFO line
+
+    def line(self, rows=None):
+        """Unfinished requests in the order they will run; the first one is active or next."""
+        return [row for row in (self.records() if rows is None else rows) if row['status'] not in FINAL]
+
+    def status(self):
+        """All receipts, each with its 1-based `position` in the line (None once finished)."""
+        rows = self.records()
+        waiting = {row['id']: n for n, row in enumerate(self.line(rows), 1)}
+        return [{**row, 'position': waiting.get(row['id'])} for row in rows]
+
+    def describe(self, row):
+        ids = [r['id'] for r in self.line()]
+        position = ids.index(row['id']) + 1 if row['id'] in ids else None
+        return {**row, 'position': position, 'queued': bool(position and position > 1),
+                'ahead': ids[:position - 1] if position else []}
 
     def save(self, row):
         row['updated_at'] = time.time()
@@ -148,11 +166,8 @@ class Repair:
             rows = self.records()
             for row in rows:
                 if row['key'] == key:
-                    return row
-            for row in rows:
-                if row['status'] not in FINAL:
-                    # Do not silently lose another chat's request or its instructions.
-                    raise ValueError('Repair already active: ' + row['id'])
+                    return self.describe(row)
+            ahead = self.line(rows)  # Host repairs run one at a time: a new request waits in FIFO order.
             # The app records its saved worker selection; the installed provider is only the fallback without one.
             fallback = not provider
             row = {'id': hashlib.sha256(key.encode()).hexdigest()[:32], 'key': key,
@@ -163,8 +178,12 @@ class Repair:
                    'retry_at': 0, 'created_at': time.time(), 'delivered': 0, 'delivery_attempts': 0}
             if row['provider'] not in {'codex', 'claude'}:
                 raise ValueError('provider must be codex or claude')
-            self.notice(row, 'Emergency repair accepted: ' + row['id'] + ' on ' + self.runs_on(row))
-            return row
+            text = 'Emergency repair accepted: ' + row['id'] + ' on ' + self.runs_on(row)
+            if ahead:
+                text += (f" - queued at position {len(ahead) + 1}, behind {ahead[0]['id']}; it starts automatically "
+                         'when the earlier request finishes')
+            self.notice(row, text)
+            return self.describe(row)
 
     @staticmethod
     def runs_on(row):
@@ -194,6 +213,8 @@ class Repair:
             monitor.setdefault('down_since', now)
         atomic(self.root / 'monitor.json', monitor)
         incident = None
+        if self.line():
+            return  # An unfinished repair owns the incident; never queue a watchdog backlog behind it.
         if now - monitor.get('down_since', now) >= self.config.get('stuck_seconds', 1800):
             incident = ('outage:' + str(monitor['down_since']), 'Application health unavailable for 30 minutes.')
         try:
@@ -337,13 +358,31 @@ class Repair:
             raise ProviderFailure(text, False)
         return text
 
+    def expire(self, row):
+        """Release the line when the head request has held it past its bound (stuck, or retrying forever)."""
+        started = row.get('activated_at')
+        limit = self.config.get('max_active_seconds', DEFAULT_ACTIVE_SECONDS)
+        if not started or time.time() - started <= limit:
+            return False
+        row['status'] = 'failed'
+        row['result'] = row['error'] = f"Repair timed out after {int(limit)}s holding the line; released for the next request"
+        self.notice(row, 'Emergency repair failed: ' + row['result'])
+        self.deliver(row)
+        return True
+
     def run(self, provider=None):
         try:
             with locked(self.root / 'run.lock', False) as lock:
                 self.detect()
+                blocked = False  # only the head of the line may run; later requests wait for it to finish
                 for row in self.records():
                     self.deliver(row)
-                    if row['status'] in FINAL or row.get('retry_at', 0) > time.time():
+                    if row['status'] in FINAL or blocked:
+                        continue
+                    if self.expire(row):
+                        continue
+                    blocked = True
+                    if row.get('retry_at', 0) > time.time():
                         continue
                     # Reconcile a CLI that finished before its parent could save the result.
                     directory = self.root / 'runs' / row['id']
@@ -358,15 +397,18 @@ class Repair:
                             row['status'], row['result'] = 'succeeded', result
                             self.notice(row, 'Emergency repair succeeded (recovered):\n' + result)
                             self.deliver(row)
-                            return
+                            blocked = False
+                            continue
                     if row['attempts'] >= self.config.get('max_attempts', 5):
                         row['status'] = 'failed'
                         row['result'] = 'Retry budget exhausted: ' + row.get('error', 'interrupted')
                         self.notice(row, 'Emergency repair failed: retry budget exhausted. ' + row.get('error', ''))
                         self.deliver(row)
+                        blocked = False
                         continue
                     row['attempts'] += 1
                     row['status'] = 'running'
+                    row.setdefault('activated_at', time.time())
                     self.notice(row, f"Emergency repair {row['id']} running on {self.runs_on(row)}, attempt {row['attempts']}.")
                     self.deliver(row)
                     try:
@@ -400,7 +442,9 @@ class Repair:
                             row['result'] = row['error']
                             self.notice(row, 'Emergency repair failed:\n' + row['error'])
                     self.deliver(row)
-                    return
+                    if row['status'] not in FINAL:
+                        return  # waiting for a bounded retry: it keeps the line
+                    blocked = False  # finished: the next request in line starts right away
         except BlockingIOError:
             # An orphan CLI retains the inherited lock. Only kill our verified group after its deadline.
             for row in self.records():

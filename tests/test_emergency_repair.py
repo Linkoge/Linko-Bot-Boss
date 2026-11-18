@@ -46,8 +46,6 @@ def test_launch_without_queue_or_database_and_deliver_after_recovery(repair, mon
     # No app process, database, queue imports, model catalog or normal scheduler.
     assert not (repair.data / 'manager.sqlite3').exists()
     assert request(repair)['id'] == saved['id']
-    with pytest.raises(ValueError, match='already active'):
-        request(repair, key='other-chat')
     repair.run(lambda row, lock: 'Host repaired')
     row = current(repair)
     assert row['status'] == 'succeeded' and row['result'] == 'Host repaired'
@@ -602,3 +600,53 @@ def test_restart_after_switch_does_not_restore_old_session(repair, tmp_path):
     fresh.healthy = lambda: False
     fresh.run(lambda row, lock: 'saw session ' + str(row.get('session')))
     assert current(repair)['result'] == 'saw session None'
+
+
+def test_second_request_queues_runs_after_first_in_order_one_at_a_time(repair):
+    first = request(repair, key='a')
+    second = request(repair, key='b')
+    third = request(repair, key='c')
+    assert (first['position'], first['queued']) == (1, False)
+    assert (second['position'], second['queued'], second['ahead']) == (2, True, [first['id']])
+    assert third['position'] == 3 and 'queued at position 2' in second['notices'][0]
+    assert request(repair, key='b')['position'] == 2  # resubmitting is idempotent
+    assert [row['position'] for row in repair.status()] == [1, 2, 3]
+    running, order = [], []
+
+    def provider(row, lock):
+        running.append(row['id'])
+        assert len(running) == 1 and [r['id'] for r in repair.records() if r['status'] == 'running'] == [row['id']]
+        order.append(row['id'])
+        running.clear()
+        return 'done ' + row['key']
+
+    repair.run(provider)  # one tick drains the line as each request finishes
+    assert order == [first['id'], second['id'], third['id']]
+    rows = {row['key']: row for row in repair.records()}
+    assert all(row['status'] == 'succeeded' for row in rows.values())
+    assert rows['b']['result'] == 'done b' and rows['b']['conversation_id'] == 'origin'
+    assert all(row['position'] is None for row in repair.status())
+
+
+def test_waiting_head_keeps_the_line_and_timeout_releases_it(repair):
+    repair.config['max_active_seconds'] = 100
+    first, second = request(repair, key='a'), request(repair, key='b')
+    started = []
+
+    def flaky(row, lock):
+        started.append(row['id'])
+        raise TimeoutError('stuck')
+
+    repair.run(flaky)
+    head = {row['key']: row for row in repair.records()}['a']
+    assert head['status'] == 'waiting' and started == [first['id']]
+    repair.run(flaky)  # retry delay not over: the second request must not jump the line
+    assert started == [first['id']]
+    head['activated_at'] -= 101
+    head['retry_at'] = 0
+    repair.save(head)
+    repair.run(lambda row, lock: 'ok ' + row['key'])
+    rows = {row['key']: row for row in repair.records()}
+    assert rows['a']['status'] == 'failed' and 'timed out' in rows['a']['result']
+    assert 'timed out' in rows['a']['notices'][-1]
+    assert rows['b']['status'] == 'succeeded' and rows['b']['result'] == 'ok b'
