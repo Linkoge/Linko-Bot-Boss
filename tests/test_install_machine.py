@@ -19,7 +19,7 @@ def stubs(directory):
 exit 0
 """,
     }
-    for name in ("git", "python3", "uv", "codex", "tailscale"):
+    for name in ("git", "python3", "uv", "claude", "tailscale"):
         path = directory / name
         path.write_text(body.get(name, "#!/bin/sh\nexit 0\n"))
         path.chmod(path.stat().st_mode | stat.S_IXUSR)
@@ -78,3 +78,23 @@ def test_guide_commands_and_paths_match_real_scripts():
     assert "linko-bot-manager.service" in quick and (ROOT / "deploy/linko-bot-manager.service.in").is_file()
     cli = (ROOT / "ai_manager/cli.py").read_text()
     assert "--generate-password" in cli and "/api/auth-status" in (ROOT / "ai_manager/web.py").read_text()
+
+
+def test_claude_only_passes_and_no_provider_stops(tmp_path):
+    result, _ = run(tmp_path, "--dry-run")  # stubs hold claude and no codex
+    assert result.returncode == 0 and "provider CLI" in result.stdout
+    only = tmp_path / "only"
+    stubs(only)
+    (only / "claude").unlink()
+    result, _ = run(tmp_path, "--dry-run", path=str(only))
+    assert result.returncode == 2 and "at least one provider CLI" in result.stdout
+
+
+def test_serve_prints_sudo_command_and_guide_agrees(tmp_path):
+    result, _ = run(tmp_path, "--dry-run")
+    assert "sudo tailscale serve --bg --https=8787 http://127.0.0.1:8787" in result.stdout
+    quick = GUIDE[GUIDE.index("## Quick path for agents"): GUIDE.index("## 1. Install prerequisites")]
+    assert "Claude Code or Codex" in quick and "Acquire::Retries" in quick
+    assert "sudo tailscale serve" in quick and "install_worker_user.py install" in quick
+    assert quick.index("install_worker_user.py") < quick.index("install_repair.py install") < quick.index("Verify the service")
+    assert "change it after first login" in quick

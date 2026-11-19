@@ -58,7 +58,7 @@ class Installer:
         if missing:
             human(f"install {', '.join(missing)} first (docs/INSTALL.md step 1; apt needs the sudo password)")
         if not (shutil.which("codex") or shutil.which("claude")):
-            human("install the Codex or Claude Code CLI and log in to it (docs/INSTALL.md step 3)")
+            human("install at least one provider CLI (Claude Code or Codex) and log in to it (docs/INSTALL.md step 3)")
         self.say("prerequisites present: git python3 uv tailscale and a provider CLI")
 
     def tailscale_host(self):
@@ -122,6 +122,7 @@ class Installer:
         if not self.dry:
             subprocess.run(command, cwd=REPO, env=self.env, check=True)
             print("Tell the owner this INITIAL_PASSWORD in chat once; do not write it to a file or the repository.")
+            print("The owner should change it after first login if it was ever pasted anywhere (chat, logs, terminal history).")
 
     def service(self):
         self.run(["python3", "scripts/install_service.py", "--hostname", self.hostname, "--start"])
@@ -151,7 +152,16 @@ class Installer:
             funnel = {}
         if any(funnel.values()):
             raise SystemExit(f"Funnel is enabled; turn it off: tailscale funnel --https={self.port} off")
-        self.run(["tailscale", "serve", "--bg", f"--https={self.port}", f"http://127.0.0.1:{self.port}"])
+        command = ["tailscale", "serve", "--bg", f"--https={self.port}", f"http://127.0.0.1:{self.port}"]
+        text = " ".join(command)
+        if self.dry:
+            self.say(f"HUMAN STEP if sudo needs a password: run `sudo {text}` (tailscale serve needs root)")
+            self.say("run: " + text)
+            return
+        result = self.probe(command)
+        if result is None or result.returncode:
+            human(f"tailscale serve needs root. Run this exact command, then re-run the helper: sudo {text}")
+        self.say("run: " + text)
 
     def finish(self):
         print(f"\nBot Boss is tailnet-only at: https://{self.hostname}:{self.port}/")

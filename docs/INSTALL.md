@@ -20,12 +20,17 @@ spaces. Replace uppercase placeholders (`HOSTNAME`, `USER`, ...) before running 
    export PATH="$HOME/.local/bin:$PATH"
    ```
    Verify: `command -v git python3 uv ffmpeg ffprobe` prints four-plus paths.
+   If `apt update` cannot reach Ubuntu's archive, use a working mirror for this one install only, without editing
+   the system's sources: `sudo apt -o Acquire::Retries=3 -o Dir::Etc::sourcelist=/tmp/mirror.list -o Dir::Etc::sourceparts=/dev/null update`
+   (put one `deb http://MIRROR/ubuntu CODENAME main universe` line per suite - release, `-updates`, `-security` - in `/tmp/mirror.list`),
+   then run the same `-o` options on `apt install`. Delete `/tmp/mirror.list` afterwards.
 2. **HUMAN STEP (Tailscale login/approval)** - install Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`,
    needs sudo), then ask the human to run `sudo tailscale up` and approve the machine. Verify:
    `tailscale status --json | grep -c '"BackendState": "Running"'` prints `1`.
-3. **HUMAN STEP (AI provider CLI login)** - install the Codex CLI and/or Claude Code from the provider's
-   instructions (npm/nvm Codex needs node; keep that node version installed), then ask the human to run
-   `codex login` and/or `claude auth login` as this user. Verify: `codex --version` and/or `claude --version`.
+3. **HUMAN STEP (AI provider CLI login)** - at least one provider CLI is required, Claude Code or Codex (both
+   optional individually). Install it from the provider's instructions (npm/nvm Codex needs node; keep that node
+   version installed), then ask the human to run `claude auth login` and/or `codex login` as this user.
+   Verify: `claude --version` and/or `codex --version`.
 4. Clone (location `~/projects/Linko-Bot-Boss`; the default project root is `~/projects`):
    ```bash
    mkdir -p ~/projects && cd ~/projects
@@ -43,26 +48,48 @@ spaces. Replace uppercase placeholders (`HOSTNAME`, `USER`, ...) before running 
    overwritten), creates the owner `owner` with a **generated password printed once as `INITIAL_PASSWORD=...`**,
    installs and starts the systemd user service (`scripts/install_service.py`, linger), waits for the health
    check, publishes it with `tailscale serve --bg --https=8787 http://127.0.0.1:8787` (tailnet only), and prints
-   the final address. If it prints `HUMAN STEP:` it exits 2: do that step with the human, then re-run.
-   **Report the username and `INITIAL_PASSWORD` to the human in chat, once; do not save it to a file or the repo.**
+   the final address. `tailscale serve` needs root: **HUMAN STEP (sudo)** - when it cannot run, the helper prints the
+   exact `sudo tailscale serve ...` command; have the human run it (or run it yourself if sudo is passwordless),
+   then re-run the helper. If it prints `HUMAN STEP:` it exits 2: do that step with the human, then re-run.
+   **Report the username and `INITIAL_PASSWORD` to the human in chat, once; do not save it to a file or the repo,**
+   and tell them to change it after first login if it was ever pasted anywhere (chat, logs, shell history).
    Options: `--hostname`, `--port`, `--username`. Playwright missing OS libraries: install the packages it lists
    (sudo, HUMAN STEP).
-6. Verify the service and health check:
+6. **HUMAN STEP (first sign-in)** - the owner opens the printed address, signs in as `owner` with
+   `INITIAL_PASSWORD` and creates/selects a chat for repair results; note its `CHAT_ID` (Chat menu). Verify: the app shows that chat.
+7. **Worker user (recommended whenever the service user has passwordless sudo, i.e. `sudo -n true` succeeds;
+   otherwise HUMAN STEP, sudo password)** - without it, queue workers run as your own user with your files,
+   logins and SSH keys; a separate `linko-worker` account keeps them away from those, with no sudo. Do this
+   now, before any work runs, and do it before step 8 so the repair timer uses it:
+   ```bash
+   sudo python3 scripts/install_worker_user.py install --dry-run   # plan only
+   sudo python3 scripts/install_worker_user.py install
+   sudo -u linko-worker -H claude          # then /login  (and/or: codex login --device-auth) - human login
+   sudo python3 scripts/install_worker_user.py status
+   ```
+   Verify: `status` reports the worker user installed. Details: section 5 below.
+8. **Repair agent** (needs `CHAT_ID` from step 6; not optional - it restores the app after an outage):
+   ```bash
+   python3 scripts/install_repair.py install --conversation CHAT_ID --auto-detect
+   python3 scripts/install_repair.py status
+   ```
+   Verify: `status` shows the timer active. If step 7 ran, also log the root host agent in once: `sudo -H claude` (then /login) or `sudo -H codex login --device-auth` (human).
+9. Verify the service and health check:
    ```bash
    systemctl --user is-active linko-bot-manager.service        # active
    curl -fsS -H 'Host: localhost' http://127.0.0.1:8787/api/auth-status   # JSON with "release_commit"
    uv run python -m ai_manager.cli doctor                       # no FAIL
    ```
-7. Verify tailnet-only exposure and print the address:
+10. Verify tailnet-only exposure and print the address:
    ```bash
    tailscale serve status            # lists https://HOSTNAME:8787 -> http://127.0.0.1:8787, no "Funnel on"
    echo "https://$(tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'):8787/"
    ```
    Give that address to the owner. If Funnel is on: `tailscale funnel --https=8787 off`.
-8. Tell the human: **"In each Bot Boss, open the menu > Machines > Add machine and add the others' addresses."**
+11. Tell the human: **"In each Bot Boss, open the menu > Machines > Add machine and add the others' addresses."**
 
 The sections below are the manual equivalents of what the helper does, plus optional extras
-(repair agent, worker user, extra instances) and troubleshooting.
+(extra instances) and troubleshooting; the repair agent and worker user are steps 7-8 above, detailed in section 5.
 
 ## 1. Install prerequisites and clone (manual)
 

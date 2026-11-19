@@ -39,8 +39,11 @@ def main():
     repo = Path(__file__).resolve().parents[1]
     home = Path.home()
     codex = shutil.which(os.getenv("AI_MANAGER_CODEX", "codex"))
-    if not codex or any(ch in codex for ch in '\n\r"% '):
-        raise SystemExit("Install Codex or set AI_MANAGER_CODEX to its absolute executable path")
+    if not codex and not shutil.which(os.getenv("AI_MANAGER_CLAUDE", "claude")):
+        raise SystemExit("Install at least one provider CLI (Claude Code or Codex), or set AI_MANAGER_CLAUDE / AI_MANAGER_CODEX")
+    codex = codex or "codex"  # Claude-only host: the unit keeps a placeholder; Codex simply stays unavailable
+    if any(ch in codex for ch in '\n\r"% '):
+        raise SystemExit("Provider path contains unsafe characters")
     # This known repository has no spaces. Refuse ambiguous systemd path interpolation.
     if any(ch in str(repo) + str(home) for ch in '\n\r"%') or " " in str(repo) + str(home):
         raise SystemExit("Use a repository/home path without spaces or systemd escape characters")
