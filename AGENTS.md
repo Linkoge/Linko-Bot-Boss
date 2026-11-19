@@ -13,7 +13,7 @@ Cause: a literal matching SECRET_PATTERNS (`ai_manager/push_diagnosis.py`) was c
 Do: build it at runtime, e.g. `'ghp_' + 'Q' * 36`; if it is already committed, squash or amend so no commit contains it.
 
 ### New dependency fails the gate until the shared venv is synced (2026-11-19, task 3054e8)
-When: a change adds a package to `pyproject.toml` / `uv.lock` (e.g. `cryptography` for `scripts/secrets_backup.py`).
+When: a change adds a package to `pyproject.toml` / `uv.lock`. (`scripts/secrets_backup.py` avoids this by calling the system `openssl` CLI and using only the standard library.)
 Symptom: the self-check and the application's gate fail at collection with `ModuleNotFoundError` for the new package, even though `uv run pytest` passes in the worktree.
 Cause: `ai_manager/core.py:interpreter()` runs the gate with the shared checkout's `.venv`, which is only synced (`uv sync --locked`) by deploy after merge, so it cannot have a dependency added on this branch.
 Do: lock it (`uv lock`, a minimal diff), verify with `uv run python -m pytest` in the worktree, and report that the shared venv needs `uv sync --locked` before the gate can pass. Do not run that sync from the worker.

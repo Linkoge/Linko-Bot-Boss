@@ -7,9 +7,12 @@ TARGET is a directory (the file is written as secrets-backup.age inside it) or a
 The result is one encrypted file. Nothing is written to disk unencrypted except inside a
 temporary directory that is removed before the command returns.
 
-Format (all binary): MAGIC | salt (16) | nonce (12) | AES-256-GCM ciphertext of a tar archive.
-The key comes from scrypt(passphrase, salt). The header is authenticated as associated data,
-so a wrong passphrase or a damaged file fails cleanly with no files touched.
+Encryption is the system `openssl` CLI (AES-256-CBC, PBKDF2-SHA256, salted). The passphrase reaches
+openssl only through an environment variable of the child process, never argv, a file or a log.
+Format (binary): MAGIC | mac_salt (16) | HMAC-SHA256 tag (32) | openssl output (a tar archive).
+The tag covers MAGIC, mac_salt and the openssl output; its key is pbkdf2_hmac(passphrase, mac_salt).
+It is verified before openssl decrypts anything, so a wrong passphrase or a damaged file fails
+cleanly with no files touched.
 
 The passphrase comes from LINKO_SECRETS_PASSPHRASE or an interactive prompt. It is never
 written to disk, logged or echoed.
@@ -17,6 +20,8 @@ written to disk, logged or echoed.
 import argparse
 import getpass
 import grp
+import hashlib
+import hmac
 import io
 import json
 import os
@@ -24,19 +29,18 @@ import pwd
 import secrets
 import shutil
 import stat
+import subprocess
 import sys
 import tarfile
 import tempfile
 from pathlib import Path
 
-from cryptography.exceptions import InvalidTag
-from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
-
-MAGIC = b"LINKO-SECRETS-1\n"
-SALT_BYTES = 16
-NONCE_BYTES = 12
-SCRYPT_N, SCRYPT_R, SCRYPT_P = 2**17, 8, 1
+MAGIC = b"LINKO-SECRETS-2\n"
+MAC_SALT_BYTES = 16
+TAG_BYTES = 32
+PBKDF2_ITERATIONS = 600000
+OPENSSL_CIPHER = ["-aes-256-cbc", "-pbkdf2", "-iter", str(PBKDF2_ITERATIONS), "-salt", "-md", "sha256"]
+OPENSSL_PASS_CHILD_ENV = "LINKO_SECRETS_OPENSSL_PASS"  # set only in the openssl child's environment
 DEFAULT_BACKUP_NAME = "secrets-backup.age"
 PASSPHRASE_ENV = "LINKO_SECRETS_PASSPHRASE"
 MIN_PASSPHRASE = 12
@@ -87,31 +91,61 @@ def read_passphrase(confirm):
         raise BackupError(f"passphrase must be at least {MIN_PASSPHRASE} characters")
     if not value:
         raise BackupError("passphrase is empty")
-    return value.encode()
+    return value
 
 
-def derive_key(passphrase, salt):
-    return Scrypt(salt=salt, length=32, n=SCRYPT_N, r=SCRYPT_R, p=SCRYPT_P).derive(passphrase)
+def openssl_binary():
+    path = shutil.which("openssl")
+    if path is None:
+        raise BackupError("openssl not found: install the openssl command-line tool (e.g. `sudo apt install openssl`)")
+    return path
 
 
-def encrypt(plaintext, passphrase):
-    salt = secrets.token_bytes(SALT_BYTES)
-    nonce = secrets.token_bytes(NONCE_BYTES)
-    header = MAGIC + salt + nonce
-    return header + AESGCM(derive_key(passphrase, salt)).encrypt(nonce, plaintext, header)
-
-
-def decrypt(blob, passphrase):
-    if not blob.startswith(MAGIC):
-        raise BackupError("not a Linko secrets backup (unknown header)")
-    start = len(MAGIC)
-    salt = blob[start:start + SALT_BYTES]
-    nonce = blob[start + SALT_BYTES:start + SALT_BYTES + NONCE_BYTES]
-    header = blob[:start + SALT_BYTES + NONCE_BYTES]
+def run_openssl(decrypt, passphrase, src, dst):
+    """Run `openssl enc`. The passphrase travels only in the child's environment (-pass env:NAME)."""
+    args = [openssl_binary(), "enc", *(["-d"] if decrypt else []), *OPENSSL_CIPHER,
+            "-pass", f"env:{OPENSSL_PASS_CHILD_ENV}", "-in", str(src), "-out", str(dst)]
+    env = {"PATH": os.environ.get("PATH", ""), OPENSSL_PASS_CHILD_ENV: passphrase}
     try:
-        return AESGCM(derive_key(passphrase, salt)).decrypt(nonce, blob[len(header):], header)
-    except InvalidTag:
-        raise BackupError("wrong passphrase, or the backup file is damaged; nothing was restored") from None
+        result = subprocess.run(args, env=env, stdin=subprocess.DEVNULL, capture_output=True, timeout=300)
+    except subprocess.TimeoutExpired:
+        raise BackupError("openssl timed out; nothing was written") from None
+    if result.returncode != 0:
+        raise BackupError("openssl could not decrypt the backup; nothing was restored" if decrypt
+                          else "openssl failed to encrypt; no backup was written")
+
+
+def mac_key(passphrase, mac_salt):
+    return hashlib.pbkdf2_hmac("sha256", passphrase.encode(), mac_salt, PBKDF2_ITERATIONS, 32)
+
+
+def compute_tag(passphrase, header, ciphertext):
+    return hmac.new(mac_key(passphrase, header[len(MAGIC):]), header + ciphertext, hashlib.sha256).digest()
+
+
+def seal(plain_path, passphrase, scratch):
+    """Encrypt plain_path and return the complete backup blob."""
+    cipher_path = Path(scratch) / "cipher.bin"
+    run_openssl(False, passphrase, plain_path, cipher_path)
+    ciphertext = cipher_path.read_bytes()
+    header = MAGIC + secrets.token_bytes(MAC_SALT_BYTES)
+    return header + compute_tag(passphrase, header, ciphertext) + ciphertext
+
+
+def unseal(blob, passphrase, scratch):
+    """Verify the tag, then decrypt into scratch and return the plaintext archive path."""
+    if not blob.startswith(MAGIC) or len(blob) < len(MAGIC) + MAC_SALT_BYTES + TAG_BYTES:
+        raise BackupError("not a Linko secrets backup (unknown header)")
+    header_end = len(MAGIC) + MAC_SALT_BYTES
+    header, tag, ciphertext = blob[:header_end], blob[header_end:header_end + TAG_BYTES], blob[header_end + TAG_BYTES:]
+    if not hmac.compare_digest(tag, compute_tag(passphrase, header, ciphertext)):
+        raise BackupError("wrong passphrase, or the backup file is damaged; nothing was restored")
+    cipher_path = Path(scratch) / "cipher.bin"
+    with open_private(cipher_path) as stream:
+        stream.write(ciphertext)
+    plain_path = Path(scratch) / "plain.tar"
+    run_openssl(True, passphrase, cipher_path, plain_path)
+    return plain_path
 
 
 def read_list_file(path):
@@ -198,7 +232,7 @@ def backup(target, extra=None, config=None):
         plain = Path(scratch) / "plain.tar"
         with open_private(plain) as stream:
             count = build_archive(sources, stream)
-        blob = encrypt(plain.read_bytes(), passphrase)
+        blob = seal(plain, passphrase, scratch)
     partial = target.with_name(target.name + ".partial")
     with open_private(partial) as stream:
         stream.write(blob)
@@ -221,9 +255,7 @@ def restore(source, dry_run=False):
     passphrase = read_passphrase(confirm=False)
     blob = source.read_bytes()
     with tempfile.TemporaryDirectory(prefix="linko-secrets-") as scratch:
-        plain = Path(scratch) / "plain.tar"
-        with open_private(plain) as stream:
-            stream.write(decrypt(blob, passphrase))
+        plain = unseal(blob, passphrase, scratch)
         with tarfile.open(plain, mode="r") as archive:
             manifest = load_manifest(archive)
             restored = []

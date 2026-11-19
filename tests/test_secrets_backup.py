@@ -211,3 +211,44 @@ def test_short_passphrase_is_refused_on_backup(layout, monkeypatch, capsys):
 
     assert secrets_backup.main(["backup", str(layout["target"])]) == 1
     assert "at least" in capsys.readouterr().err
+
+
+def test_passphrase_reaches_openssl_only_through_its_environment(layout, monkeypatch):
+    calls = []
+    real_run = secrets_backup.subprocess.run
+
+    def spy(args, **kwargs):
+        calls.append((list(args), kwargs))
+        return real_run(args, **kwargs)
+
+    monkeypatch.setattr(secrets_backup.subprocess, "run", spy)
+    target, _ = secrets_backup.backup(layout["target"])
+    secrets_backup.restore(target)
+
+    assert calls, "openssl was never invoked"
+    for args, kwargs in calls:
+        assert all(PASSPHRASE not in arg for arg in args)
+        assert "-pass" in args and f"env:{secrets_backup.OPENSSL_PASS_CHILD_ENV}" in args
+        assert kwargs["env"][secrets_backup.OPENSSL_PASS_CHILD_ENV] == PASSPHRASE
+
+
+def test_tampered_backup_is_rejected_before_decryption(layout, monkeypatch, capsys):
+    target, _ = secrets_backup.backup(layout["target"])
+    blob = bytearray(target.read_bytes())
+    blob[-5] ^= 0x01
+    target.write_bytes(bytes(blob))
+    layout["onboarding"].write_text("LOCAL=keep\n")
+    monkeypatch.setattr(secrets_backup.subprocess, "run",
+                        lambda *a, **k: pytest.fail("openssl must not run on a failed tag check"))
+
+    assert secrets_backup.main(["restore", str(target)]) == 1
+    assert "wrong passphrase, or the backup file is damaged" in capsys.readouterr().err
+    assert layout["onboarding"].read_text() == "LOCAL=keep\n"
+
+
+def test_missing_openssl_fails_clearly(layout, monkeypatch, capsys):
+    monkeypatch.setenv("PATH", str(layout["scratch"]))
+
+    assert secrets_backup.main(["backup", str(layout["target"])]) == 1
+    assert "openssl not found" in capsys.readouterr().err
+    assert not (layout["target"] / "secrets-backup.age").exists()

@@ -402,8 +402,11 @@ checks/backups/rollback; a manual pull and restart does not provide those safegu
 ## 9. Encrypted secrets backup and restore
 
 `scripts/secrets_backup.py` keeps an encrypted copy of the server's credential files so a lost VM can be rebuilt.
-It bundles the secret files into one archive, encrypts it with a passphrase (scrypt + AES-256-GCM, from the
-`cryptography` package in `uv sync`; no separate install) and writes a single file, `secrets-backup.age`.
+It bundles the secret files into one archive, encrypts it with the system `openssl` command
+(AES-256-CBC, PBKDF2-SHA256, 600000 iterations) and writes a single file, `secrets-backup.age`.
+Prerequisite: the `openssl` command-line tool (`command -v openssl`; on Debian/Ubuntu `sudo apt install openssl`).
+The script fails with a clear message if it is missing. An HMAC-SHA256 tag over the file is checked before
+decryption, so a wrong passphrase is reported as such and nothing is restored.
 Plain keys never go to git. Only the encrypted file is committed.
 
 By default it backs up `~/.config/linko-onboarding.env` and `~/.config/linko-bot-manager.env`. Add more paths
