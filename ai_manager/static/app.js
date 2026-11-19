@@ -181,6 +181,7 @@ function renderProjects(){
       b.append(element('span',' · GitHub needs attention','muted'));
       b.title+=`\nGitHub backup: ${backupSummary(p.github_backup)}. Local commits retained; retrying automatically.`;
     }
+    if(p?.github_sync?.busy_note&&!['warning','diverged'].includes(p.github_sync.state))b.title+='\nGitHub sync deferred: '+p.github_sync.busy_note;
     if(['warning','diverged','busy'].includes(p?.github_sync?.state)){const sync=p.github_sync;
       b.append(element('span',sync.state==='diverged'?' · Out of sync with GitHub, needs attention':sync.state==='busy'?' · GitHub sync deferred':' · GitHub sync warning',sync.state==='busy'?'muted':'warning'));b.title+='\n'+sync.reason;}
     b.dataset.project=id||'';b.setAttribute('aria-pressed',String(state.project===id));
@@ -236,6 +237,7 @@ function renderProjectMenu(){
     if(badge)row.append(badge);
     // Status text wraps beneath the name row so a long message can never squeeze the project name.
     const status=element('div',undefined,'project-menu-status');
+    if(p.github_sync?.busy_note&&!['warning','diverged'].includes(p.github_sync.state))status.append(element('span',p.github_sync.busy_note,'muted sync-deferred'));
     if(['warning','diverged','busy'].includes(p.github_sync?.state))status.append(element('span',p.github_sync.reason,`${p.github_sync.state==='busy'?'muted sync-deferred':'warning sync-reason'}`));
     if(p.github_backup?.state==='needs-attention'){const g=p.github_backup;status.append(element('span',backupSummary(g),'warning backup-reason'));if(backupWarning(g))status.append(element('span',backupWarning(g),'warning backup-warn'));}
     if(unverifiedNote(p.github_backup))status.append(element('span',unverifiedNote(p.github_backup),'muted backup-unverified'));

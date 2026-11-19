@@ -291,3 +291,23 @@ async def test_slow_fetch_does_not_hold_another_projects_dispatch(origin, monkey
         await asyncio.gather(*origin.pipeline.sync.jobs.values())
     await origin.core.runner.tick()
     assert dispatched == [project['id'], origin.project['id']]
+
+
+async def test_busy_keeps_last_real_status_until_30_minutes(origin, monkeypatch):
+    pid, sync = origin.project['id'], origin.pipeline.sync
+    sync.db.set_setting(github_sync.PREFIX + pid, {'state': 'synced', 'attempted_at': 1})
+    busy = {'state': 'busy', 'reason': 'Checkout is busy; update deferred.'}
+    monkeypatch.setattr(sync, 'pull', lambda project_id: busy)
+    await sync.attempt(pid)
+    status = sync.status(pid)
+    assert status['state'] == 'synced' and status['busy_since'] and 'busy_note' not in status
+    assert sync.due[pid] > 0
+    saved = sync.db.setting(github_sync.PREFIX + pid, {})
+    sync.db.set_setting(github_sync.PREFIX + pid, {**saved, 'busy_since': saved['busy_since'] - 1801})
+    await sync.attempt(pid)
+    status = sync.status(pid)
+    assert status['state'] == 'synced' and 'deferred' in status['busy_note']
+    monkeypatch.setattr(sync, 'pull', lambda project_id: {'state': 'synced'})
+    await sync.attempt(pid)
+    status = sync.status(pid)
+    assert status['state'] == 'synced' and 'busy_since' not in status and 'busy_note' not in status

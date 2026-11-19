@@ -646,7 +646,10 @@ rebase, reset or force operation resolves divergence. A failed incoming step rec
 three redacted excerpt lines) in the same `github_sync:<project-id>` status, reusing `ai_manager/push_diagnosis.py`
 redaction (`diagnose_incoming`). Only the fetch is retried (two attempts), and only fetch messages say so. The next
 successful sync replaces the status, clearing the warning. Busy/deferred results are informational (muted text, not a
-sync warning); the project menu shows every reason as wrapped text beneath the project name row.
+sync warning) and never replace the last real status (synced, ahead, updated, warning, diverged, excluded): the busy
+attempt is recorded as `busy_since`/`busy_reason`/`attempted_at`, retry timing is unchanged, a later real result clears
+`busy_since`, and the UI shows a `busy_note` only after more than 30 minutes of continuous busy (with no prior status the
+busy result itself is stored); the project menu shows every reason as wrapped text beneath the project name row.
 GitHub receives verified changes about **15 minutes after merge**, once deployment succeeds; the other machine then
 receives them on its next idle check or before its next task. This is intended for machines used in turns, not
 simultaneous editing.

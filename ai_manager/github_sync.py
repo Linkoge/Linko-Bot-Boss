@@ -12,6 +12,7 @@ from .push_diagnosis import OPERATIONS, diagnose_incoming, redact
 PREFIX = 'github_sync:'
 SAVE_MESSAGE = 'Save local changes in project folder before merging task'
 FETCH_ATTEMPTS = 2
+BUSY_NOTE_SECONDS = 1800  # a transient busy skip is only surfaced after this long
 
 
 def failure(operation, error, secrets=(), attempts=1):
@@ -34,7 +35,11 @@ class GitHubSync:
         self.jobs, self.prepared, self.due = {}, {}, {}
 
     def status(self, project_id):
-        return self.db.setting(PREFIX + project_id, {})
+        saved = self.db.setting(PREFIX + project_id, {})
+        since = saved.get('busy_since')
+        if since and saved.get('state') != 'busy' and time.time() - since > BUSY_NOTE_SECONDS:
+            return {**saved, 'busy_note': saved.get('busy_reason') or 'Update deferred.'}
+        return saved
 
     def ready(self, project_id, ticket):
         """Called before claiming work; the fetch runs off the scheduler thread."""
@@ -81,7 +86,18 @@ class GitHubSync:
             result = await asyncio.to_thread(self.pull, project_id)
         except Exception as error:
             result = failure('update', error)
-        self.db.set_setting(PREFIX + project_id, {**result, 'attempted_at': time.time()})
+        now = time.time()
+        previous = self.db.setting(PREFIX + project_id, {})
+        if result.get('state') == 'busy':
+            if previous.get('state') and previous['state'] != 'busy':
+                # Keep the last real status; record the busy attempt separately.
+                saved = {**previous, 'busy_since': previous.get('busy_since') or now, 'busy_reason': result.get('reason'),
+                         'attempted_at': now}
+            else:
+                saved = {**result, 'busy_since': previous.get('busy_since') or now, 'attempted_at': now}
+        else:
+            saved = {**result, 'attempted_at': now}
+        self.db.set_setting(PREFIX + project_id, saved)
         self.due[project_id] = time.time() + self.interval
         if preparing is not None and result.get('state') != 'busy':
             self.prepared[project_id] = preparing
