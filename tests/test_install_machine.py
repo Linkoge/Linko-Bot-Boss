@@ -72,7 +72,7 @@ def test_guide_commands_and_paths_match_real_scripts():
     for token in ("install_service.py", "setup-owner", "--generate-password", "linko-bot-manager.env"):
         assert token in helper, token
     assert "tailscale serve --bg --https=8787 http://127.0.0.1:8787" in quick
-    assert "funnel" in quick.lower() and "never `tailscale funnel`" in GUIDE
+    assert "funnel" in quick.lower() and "never use `tailscale funnel`" in GUIDE
     assert quick.count("HUMAN STEP") >= 4 and quick.count("Verify") >= 6
     assert "menu > Machines > Add machine" in quick
     assert "linko-bot-manager.service" in quick and (ROOT / "deploy/linko-bot-manager.service.in").is_file()
