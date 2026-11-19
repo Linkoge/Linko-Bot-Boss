@@ -173,3 +173,25 @@ def test_menu_remains_scrollable_and_actions_work_on_mobile(browser_app):
         assert page.locator('#project-menu').is_hidden()
     finally:
         page.close()
+
+
+def test_machine_form_survives_background_refresh(browser_app):
+    page = open_menu(browser_app, 1200, 900)
+    try:
+        page.locator('#project-menu [data-project="add-machine"]').click()
+        name = page.locator('#project-menu .project-menu-machine-form input').first
+        url = page.locator('#project-menu .project-menu-machine-form input').nth(1)
+        name.fill('Laptop')
+        url.fill('https://laptop.example')
+        page.evaluate('()=>{renderProjectMenu();renderProjectMenu();}')
+        name = page.locator('#project-menu .project-menu-machine-form input').first
+        url = page.locator('#project-menu .project-menu-machine-form input').nth(1)
+        assert name.input_value() == 'Laptop'
+        assert url.input_value() == 'https://laptop.example'
+        assert page.evaluate("()=>document.activeElement===document.querySelectorAll('.project-menu-machine-form input')[1]")
+        page.locator('#project-menu .project-menu-machine-form button[type=button]').click()
+        assert page.locator('#project-menu .project-menu-machine-form').count() == 0
+        page.locator('#project-menu [data-project="add-machine"]').click()
+        assert page.locator('#project-menu .project-menu-machine-form input').first.input_value() == ''
+    finally:
+        page.close()

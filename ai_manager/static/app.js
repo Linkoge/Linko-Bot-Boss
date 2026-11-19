@@ -217,7 +217,7 @@ async function setProjectVisibility(p,visible){
 }
 let machinesLoaded=false;
 function sameOrigin(url){try{const u=new URL(url);return u.origin===location.origin;}catch{return false;}}
-async function saveMachines(list){const r=await api('/api/machines',{method:'PUT',body:JSON.stringify({machines:list})});state.machines=r.machines;state.machineForm=false;renderProjectMenu();}
+async function saveMachines(list){const r=await api('/api/machines',{method:'PUT',body:JSON.stringify({machines:list})});state.machines=r.machines;state.machineForm=false;state.machineDraft=null;renderProjectMenu();}
 function renderMachines(section){
   const list=state.machines||[];
   if(!machinesLoaded){machinesLoaded=true;api('/api/machines').then(r=>{state.machines=r.machines;if(!$('project-menu').hidden)renderProjectMenu();}).catch(()=>{machinesLoaded=false;});}
@@ -230,16 +230,20 @@ function renderMachines(section){
     const del=element('button','×');del.type='button';del.setAttribute('aria-label','Remove '+m.name);del.onclick=action(()=>saveMachines(list.filter(x=>x.id!==m.id)));
     row.append(edit,del);section.append(row);
   }
-  if(!state.machineForm){const open=element('button','Add machine');open.type='button';open.dataset.project='add-machine';open.onclick=()=>{state.machineForm=true;renderProjectMenu();menu_focus_machine();};section.append(open);return;}
+  if(!state.machineForm){const open=element('button','Add machine');open.type='button';open.dataset.project='add-machine';open.onclick=()=>{state.machineForm=true;state.machineDraft=null;renderProjectMenu();menu_focus_machine();};section.append(open);return;}
   const form=element('form',undefined,'project-menu-machine-form'),name=element('input'),url=element('input'),add=element('button','Save'),cancel=element('button','Cancel');
   name.placeholder='Name';name.maxLength=60;name.setAttribute('aria-label','Machine name');url.placeholder='https://…';url.type='url';url.setAttribute('aria-label','Machine URL');add.type='submit';cancel.type='button';
-  cancel.onclick=()=>{state.machineForm=false;renderProjectMenu();};
+  cancel.onclick=()=>{state.machineForm=false;state.machineDraft=null;renderProjectMenu();};
   form.onsubmit=event=>{event.preventDefault();action(async()=>{await saveMachines([...list,{name:name.value,url:url.value}]);})();};
+  // Periodic refreshes rebuild this form: keep typed values in state and restore them.
+  const draft=state.machineDraft||(state.machineDraft={name:'',url:''});name.value=draft.name;url.value=draft.url;
+  name.oninput=()=>{draft.name=name.value;};url.oninput=()=>{draft.url=url.value;};
   form.append(name,url,add,cancel);section.append(form);
 }
 function menu_focus_machine(){$('project-menu').querySelector('.project-menu-machine-form input')?.focus({preventScroll:true});}
 function renderProjectMenu(){
   const menu=$('project-menu'),active=menu.contains(document.activeElement)?document.activeElement:null;
+  const machineInputs=[...menu.querySelectorAll('.project-menu-machine-form input')],machineIndex=active?machineInputs.indexOf(active):-1,machineSel=machineIndex>=0?[active.selectionStart,active.selectionEnd]:null;
   const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;
   const content=$('project-menu-content');content.replaceChildren();
   const group=label=>{const section=element('div',undefined,'project-menu-group');section.setAttribute('role','group');section.setAttribute('aria-label',label);content.append(section);return section;};
@@ -295,6 +299,7 @@ function renderProjectMenu(){
   if(focusKey!==undefined){const target=menu.querySelector(`[data-visibility="${focusKey}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target)?.focus({preventScroll:true});}
   else if(focused!==undefined)menu.querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
   else if(summaryFocused)menu.querySelector('summary')?.focus({preventScroll:true});
+  if(machineIndex>=0){const input=menu.querySelectorAll('.project-menu-machine-form input')[machineIndex];if(input){input.focus({preventScroll:true});try{input.setSelectionRange(...machineSel);}catch{}}}
   menu.scrollTop=scroll;renderingProjectMenu=false;
 }
 $('project-menu-close').onclick=()=>closeProjectMenu(true);
