@@ -79,7 +79,7 @@ class Options:
 
 @dataclass
 class Step:
-    kind: str  # run | write | sudoers | remove
+    kind: str  # run | write | sudoers | remove | dir
     detail: dict
 
     def describe(self):
@@ -291,6 +291,12 @@ def install_plan(options, layout=Layout()):
                        f'{options.worker}:{options.worker}'))
     steps.append(Step('sudoers', {'path': layout.sudoers, 'content': sudoers_text(options, layout), 'mode': 0o440,
                                   'owner': 'root:root'}))
+    # A fresh data directory lacks these until the app first runs; the ACL steps below need them. Same owner and
+    # mode the application uses (owner-only).
+    entry = user(options.service)
+    owner = f'{options.service}:{grp.getgrgid(entry.pw_gid).gr_name}' if entry else options.service
+    for name in ('assignment-workspaces', 'repair'):
+        steps.append(Step('dir', {'path': options.data / name, 'mode': 0o700, 'owner': owner}))
     steps += acl_steps(options)
     return steps
 
@@ -373,6 +379,13 @@ def apply(steps, run=subprocess.run, output=print):
                 raise RuntimeError(f"{' '.join(d['argv'])} failed: {(result.stderr or '').strip()[:400]}")
         elif step.kind == 'remove':
             Path(d['path']).unlink(missing_ok=True)
+        elif step.kind == 'dir':
+            path = Path(d['path'])
+            path.mkdir(parents=True, exist_ok=True, mode=0o700)
+            if not path.is_symlink():
+                chown(path, d['owner'])
+                if (path.stat().st_mode & 0o7777) != d['mode'] and not any(path.iterdir()):
+                    os.chmod(path, d['mode'])
         elif step.kind == 'write':
             path = Path(d['path'])
             if path.is_file() and path.read_text() == d['content'] and (path.stat().st_mode & 0o7777) == d['mode']:

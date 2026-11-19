@@ -293,6 +293,8 @@ sudo python3 scripts/install_worker_user.py status
 uv run python -m ai_manager.cli doctor
 ```
 
+The installer creates `assignment-workspaces/` and `repair/` in the data directory itself if they do not exist yet (owner-only, `0700`, owned by the service user), so it works on a fresh install before the app has run. Re-running it is safe.
+
 Queue workers then run as `linko-worker` with no sudo and no privileged groups. They
 cannot read the service env file, `~/.ssh`, the database or other projects, and cannot
 write the repair spool. Only the root-owned repair launcher runs as root, through one

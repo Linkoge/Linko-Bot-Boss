@@ -480,3 +480,21 @@ def test_installed_worker_user_cannot_reach_secrets_database_or_spool():
     result = json.loads(subprocess.run(argv, capture_output=True, text=True, timeout=60, check=True).stdout)
     assert result['user'] == found.user
     assert not any(result['read'].values()) and not any(result['write'].values()), result
+
+
+def test_installer_creates_missing_data_folders_owner_only_and_is_idempotent(host):
+    installer = host.installer
+    shutil.rmtree(host.data / 'assignment-workspaces')
+    shutil.rmtree(host.data / 'repair')
+    plan = installer.install_plan(host.options, host.layout)
+    dirs = [s for s in plan if s.kind == 'dir']
+    assert {s.detail['path'] for s in dirs} == {host.data / 'assignment-workspaces', host.data / 'repair'}
+    assert all(s.detail['mode'] == 0o700 and s.detail['owner'].startswith(ME) for s in dirs)
+    seen = []
+    installer.apply(plan, fake_run(seen), output=lambda line: None)
+    for name in ('assignment-workspaces', 'repair'):
+        assert ((host.data / name).stat().st_mode & 0o777) == 0o700
+    assert any(a[:4] == ['setfacl', '-P', '-m', 'u:linko-test-no-such-user:---'] and a[-1] == str(host.data / 'repair')
+               for a in seen)
+    installer.apply(installer.install_plan(host.options, host.layout), fake_run([]), output=lambda line: None)
+    assert ((host.data / 'repair').stat().st_mode & 0o777) == 0o700
