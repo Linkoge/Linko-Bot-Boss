@@ -51,6 +51,10 @@ def hidden_message(alias="messages"):
             f"WHERE hidden.key='chat_deleted_message:' || {alias}.id))")
 
 
+PROCESS_RETRIES = 3
+PROCESS_LOST_NOTE = "\n\n(The manager's process stopped before the turn finished; later steps may be missing.)"
+
+
 class Chat:
     def __init__(self, db: Database, registry: Registry, server: AppServer):
         self.db, self.registry, self.server = db, registry, server
@@ -706,6 +710,13 @@ class Chat:
             while True:
                 event = await queue.get()
                 method, params = event["method"], event.get("params", {})
+                if method == "item/completed" and not new_output and not output:
+                    item = params.get("item") or {}
+                    if item.get("type") == "agentMessage" and item.get("text"):
+                        output = item["text"][-1000000:]
+                        with self.db.transaction() as conn:
+                            conn.execute("UPDATE messages SET content=? WHERE id=?", (output, response_id))
+                            conn.execute("UPDATE executions SET output=? WHERE id=?", (output, execution_id))
                 if method == "transport/lost":
                     raise CodexError(
                         "The manager's Codex process stopped unexpectedly",
@@ -772,6 +783,16 @@ class Chat:
             raise
         except Exception as error:
             failure = limit_failure(error)
+            lost = isinstance(error, CodexError) and error.details.get("codexErrorInfo") == "transportLost"
+            if lost and not failure:
+                # The manager's process died mid-turn: retry (the next attempt restarts it and resumes the thread)
+                # a few times; after that keep whatever reply text exists instead of a bare "failed".
+                count = self.db.one("SELECT retry_count FROM executions WHERE id=?", (execution_id,))["retry_count"]
+                if count < PROCESS_RETRIES:
+                    failure = Failure("process")
+                elif output.strip():
+                    self._finish(execution_id, response_id, "completed", "", output + PROCESS_LOST_NOTE)
+                    return
             if failure:
                 if isinstance(error, CodexError) and error.details.get("code") in {-32600, -32601, -32602, -32000}:
                     with self.db.transaction() as conn:

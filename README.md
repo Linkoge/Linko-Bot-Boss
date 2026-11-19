@@ -90,6 +90,10 @@ rules 8–9; worker-only: rule 11).
    Local failures are not a connection loss and fail the reply (or task) at once with a short reason: the CLI crashing or
    exiting without a result (`transportLost`, broken pipe), a missing binary, permission errors, a full disk or quota
    (ENOSPC/EDQUOT), (a tool call without an enabled capability is returned to the model as a tool error, never retried as a connection loss).
+   Exception for the manager chat: when its Codex process dies mid-turn the reply is retried up to 3 times (resuming
+   the thread); if it keeps dying, any reply text already produced is kept and shown as the reply (with a short note)
+   instead of "failed". The App Server reader also drops an oversized or non-JSON output line instead of ending, which
+   previously made a live process look dead ("stopped unexpectedly") to every in-flight turn.
    Other permanent errors still fail the reply. The watchdog (every
    minute) requeues a dead or hung worker (30 min without activity) once, then fails it; fails queued tasks of a removed
    project; withdraws a deploy request that is still waiting after 30 min; and reports an idle-queue stall: eligible work

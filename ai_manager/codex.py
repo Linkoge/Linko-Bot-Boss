@@ -221,8 +221,23 @@ class AppServer:
 
     async def _read(self, process):
         try:
-            while line := await process.stdout.readline():
-                message = json.loads(line)
+            while True:
+                try:
+                    line = await process.stdout.readline()
+                except ValueError:
+                    # A line over the stream limit (e.g. a huge thread/read) is dropped, not fatal: the process is
+                    # alive and every in-flight turn would otherwise be reported as "stopped unexpectedly".
+                    self.dropped_lines = getattr(self, "dropped_lines", 0) + 1
+                    continue
+                if not line:
+                    break
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    self.dropped_lines = getattr(self, "dropped_lines", 0) + 1
+                    continue
+                if not isinstance(message, dict):
+                    continue
                 if "method" in message and "id" in message:
                     params = message.get("params", {})
                     queue = self.queues.get(params.get("threadId"))

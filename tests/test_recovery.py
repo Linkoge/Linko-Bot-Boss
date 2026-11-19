@@ -760,3 +760,61 @@ async def test_tool_call_waits_for_a_handler_registered_during_startup():
     await server._tool_call({"id": 1, "params": {"threadId": "t"}})
     await task
     assert replies[0]["result"]["success"] is True
+
+
+@pytest.mark.asyncio
+async def test_manager_process_death_mid_turn_is_retried_not_failed(system):
+    db, registry, chat, settings = system
+    faults = Faults(["transport", "success"])
+    chat.server = faults.factory(settings)
+    request = await chat.submit(registry.list()[0]["id"], "Answer me")
+    await settle(chat)
+    row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
+    assert row["status"] == "recovering" and row["recovery_reason"] == "process" and row["finished_at"] is None
+    eligible(db)
+    await chat.recover()
+    await settle(chat)
+    row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
+    assert row["status"] == "completed" and row["output"] == "Result 2"
+
+
+@pytest.mark.asyncio
+async def test_manager_repeated_process_death_keeps_reply_text(system):
+    from ai_manager.chat import PROCESS_RETRIES
+
+    db, registry, chat, settings = system
+    faults = Faults(["transport"] * (PROCESS_RETRIES + 1))
+    chat.server = faults.factory(settings)
+    request = await chat.submit(registry.list()[0]["id"], "Answer me")
+    await settle(chat)
+    for _ in range(PROCESS_RETRIES):
+        eligible(db)
+        await chat.recover()
+        await settle(chat)
+    row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
+    assert row["status"] == "failed" and row["finished_at"]  # no reply text at all: still a plain failure
+    # With reply text already streamed the owner sees it.
+    db.run("UPDATE executions SET finished_at=NULL,status='recovering',output='The answer.',retry_at=0 WHERE id=?",
+           (request["execution_id"],))
+    faults.outcomes[:] = ["transport"]
+    await chat.recover()
+    await settle(chat)
+    row = db.one("SELECT * FROM executions WHERE id=?", (request["execution_id"],))
+    message = db.one("SELECT * FROM messages WHERE execution_id=? AND role='assistant'", (request["execution_id"],))
+    assert row["status"] == "completed" and message["content"].startswith("The answer.")
+    assert message["status"] == "completed"
+
+
+@pytest.mark.asyncio
+async def test_reader_survives_oversized_and_garbage_lines(system):
+    _, _, _, settings = system
+    server = AppServer(settings)
+    server.queues["t"] = asyncio.Queue()
+    stream = asyncio.StreamReader(limit=64)
+    stream.feed_data(b"x" * 200 + b"\n")
+    stream.feed_data(b"not json\n")
+    stream.feed_data((json.dumps({"method": "a", "params": {"threadId": "t"}}) + "\n").encode())
+    stream.feed_eof()
+    await server._read(SimpleNamespace(stdout=stream))
+    assert (await server.queues["t"].get())["method"] == "a"
+    assert (await server.queues["t"].get())["method"] == "transport/lost"
