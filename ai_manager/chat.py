@@ -597,6 +597,29 @@ class Chat:
         self.jobs[execution_id] = job
         job.add_done_callback(lambda _: self.jobs.pop(execution_id, None))
 
+    def _register(self, thread_id, queue, handler):
+        """Make (queue, handler) the live entry for a thread, remembering runners it overlaps."""
+        runs = self.__dict__.setdefault("_thread_runs", {}).setdefault(thread_id, [])
+        if not any(r[0] is queue for r in runs):
+            runs.append((queue, handler))
+        self.server.queues[thread_id], self.server.tool_handlers[thread_id] = queue, handler
+
+    def _unregister(self, thread_id, queue, handler):
+        """Drop only our own entry; an overlapping runner on the same thread keeps (or regains) its handler,
+        or its tool calls fail with "No enabled capabilities for this thread"."""
+        all_runs = self.__dict__.setdefault("_thread_runs", {})
+        runs = [r for r in all_runs.get(thread_id, []) if r[0] is not queue]
+        if runs:
+            all_runs[thread_id] = runs
+            if self.server.queues.get(thread_id) is queue:
+                self.server.queues[thread_id], self.server.tool_handlers[thread_id] = runs[-1]
+        else:
+            all_runs.pop(thread_id, None)
+            if self.server.queues.get(thread_id) is queue:
+                self.server.queues.pop(thread_id, None)
+            if self.server.tool_handlers.get(thread_id) is handler:
+                self.server.tool_handlers.pop(thread_id, None)
+
     async def _run(self, execution_id, response_id, conversation, content, route):
         thread_id, output, queue, handler = None, "", None, None
         output = self.db.one("SELECT output FROM executions WHERE id=?", (execution_id,))["output"]
@@ -629,17 +652,15 @@ class Chat:
             if prior:
                 # A resumed (recovered) thread may call tools as soon as it is loaded: register first.
                 thread_id = prior
-                self.server.queues[prior], self.server.tool_handlers[prior] = queue, handler
+                self._register(prior, queue, handler)
             new_thread = await self.server.thread(
                 cwd, instructions, prior, route["model"], dynamic_tools=[tool]
             )
             if new_thread != thread_id:
-                if thread_id and self.server.queues.get(thread_id) is queue:
-                    self.server.queues.pop(thread_id, None)
-                    self.server.tool_handlers.pop(thread_id, None)
+                if thread_id:
+                    self._unregister(thread_id, queue, handler)
                 thread_id = new_thread
-            self.server.queues[thread_id] = queue
-            self.server.tool_handlers[thread_id] = handler
+            self._register(thread_id, queue, handler)
             with self.db.transaction() as conn:
                 conn.execute("UPDATE conversations SET thread_id=? WHERE id=?", (thread_id, conversation["id"]))
                 conn.execute(
@@ -763,12 +784,7 @@ class Chat:
                 self._finish(execution_id, response_id, "failed", str(error)[:2000], output)
         finally:
             if thread_id:
-                # Only drop our own entries: a newer runner on the same thread must keep its handler, or its tool
-                # calls fail with "No enabled capabilities for this thread".
-                if self.server.queues.get(thread_id) is queue:
-                    self.server.queues.pop(thread_id, None)
-                    if self.server.tool_handlers.get(thread_id) is handler:
-                        self.server.tool_handlers.pop(thread_id, None)
+                self._unregister(thread_id, queue, handler)
 
     def _finish(self, execution_id, response_id, status, error, output):
         with self.db.transaction() as conn:

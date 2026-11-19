@@ -332,7 +332,17 @@ class Scheduler:
             )
             return {k: updated[k] for k in ("id", "status")}
         if action == "read_result":
-            result = self.db.one("SELECT id,task_id,project_id,status,output,error,input,delivery FROM executions WHERE id=? AND task_id IS NOT NULL", (args["execution_id"],))
+            columns = "id,task_id,project_id,status,output,error,input,delivery"
+            if args.get("execution_id"):
+                result = self.db.one(f"SELECT {columns} FROM executions WHERE id=? AND task_id IS NOT NULL", (args["execution_id"],))
+            elif args.get("task_id"):
+                result = self.db.one(f"SELECT {columns} FROM executions WHERE task_id=? ORDER BY started_at DESC, rowid DESC LIMIT 1", (args["task_id"],))
+                if not result:
+                    task = self.db.one("SELECT project_id FROM tasks WHERE id=?", (args["task_id"],))
+                    if task and task["project_id"] == project_id:
+                        raise ValueError("This task has no execution yet, so there is no result to read")
+            else:
+                raise ValueError("read_result needs task_id or execution_id")
             if not result or result["project_id"] != project_id:
                 raise ValueError("Result belongs to another project or does not exist")
             output = result.pop("output")

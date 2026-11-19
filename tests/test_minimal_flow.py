@@ -574,3 +574,48 @@ def test_manager_and_worker_instructions_describe_only_the_current_behaviour():
         assert gone not in text, gone
     assert "at most 5 rounds" in RULES and "checkpoint" not in RULES and "hard cap" not in RULES.lower()
     assert "automatically" in MANAGER_INSTRUCTIONS and "automatic" in MANAGER_INSTRUCTIONS
+
+
+@pytest.mark.asyncio
+async def test_read_result_with_task_id_only_resolves_latest_execution(system):
+    db, registry, chat, settings = system
+    project = registry.list()[0]
+    origin = chat.conversation(project["id"])["id"]
+    tasks = Tasks(db)
+    tasks.add(project["id"], "Read me", origin)
+    task = tasks.claim()
+    workers = Core(db, registry, settings, Pipeline(db, registry), NativeFixture)
+    workers.end(task["lease_owner"], "done", "", "Worker report text")
+    scheduler = Scheduler(db, registry, settings, workers, chat)
+
+    async def call(**arguments):
+        return await scheduler.manager_action(project["id"], {"tool": "manager_action", "arguments": {"action": "read_result", **arguments}})
+
+    by_task = await call(task_id=task["id"])
+    assert by_task["output"] == "Worker report text"
+    assert by_task["id"] == task["lease_owner"]
+    assert (await call(execution_id=task["lease_owner"]))["output"] == "Worker report text"
+    with pytest.raises(ValueError, match="task_id or execution_id"):
+        await call()
+    tasks.add(project["id"], "No run yet", origin)
+    fresh = db.one("SELECT id FROM tasks ORDER BY rowid DESC LIMIT 1")
+    with pytest.raises(ValueError, match="no execution"):
+        await call(task_id=fresh["id"])
+
+
+@pytest.mark.asyncio
+async def test_overlapping_runner_finishing_keeps_other_runners_handler(system):
+    db, registry, chat, settings = system
+    server = chat.server
+    server.queues, server.tool_handlers = {}, {}
+    q1, h1, q2, h2 = object(), object(), object(), object()
+    chat._register("t", q1, h1)
+    chat._register("t", q2, h2)
+    chat._unregister("t", q2, h2)
+    assert server.tool_handlers["t"] is h1 and server.queues["t"] is q1
+    chat._unregister("t", q1, h1)
+    assert "t" not in server.tool_handlers and "t" not in server.queues
+    chat._register("t", q1, h1)
+    chat._register("t", q2, h2)
+    chat._unregister("t", q1, h1)
+    assert server.tool_handlers["t"] is h2
