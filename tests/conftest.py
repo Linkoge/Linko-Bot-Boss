@@ -1,11 +1,15 @@
 """Smoke suite: python -m pytest -q -m smoke. Contract: README.md."""
+import os
 import time
 
 import pytest
 
 # Smoke takes ~21s idle (105 tests). The ~2x margin absorbs a host shared with other projects' parallel suites and gates
-# (30s flaked the nested smoke of the serial deploy-flow test at load 10); a smoke that really slows down still fails.
+# a smoke that really slows down still fails. The deploy-flow test lifts it for its nested gate (LINKO_SMOKE_BUDGET_SECONDS=0).
 SMOKE_BUDGET_SECONDS = 45
+# The wall-clock budget guards the real smoke gate. A test that runs the gate as a nested step of something else (the
+# deploy-flow test) sets this to 0: what it verifies is the pipeline, and the nested run's 180s timeout still applies.
+BUDGET_ENV = 'LINKO_SMOKE_BUDGET_SECONDS'
 
 
 def pytest_configure(config):
@@ -22,8 +26,9 @@ def pytest_sessionfinish(session, exitstatus):
     if config.getoption('markexpr') != 'smoke' or exitstatus:
         return
     elapsed = time.monotonic() - config.smoke_started
-    if elapsed > SMOKE_BUDGET_SECONDS:
-        print(f'\nSmoke suite exceeded its {SMOKE_BUDGET_SECONDS}s budget ({elapsed:.1f}s); keep it fast.')
+    budget = float(os.environ.get(BUDGET_ENV, SMOKE_BUDGET_SECONDS))
+    if budget and elapsed > budget:
+        print(f'\nSmoke suite exceeded its {budget:g}s budget ({elapsed:.1f}s); keep it fast.')
         session.exitstatus = 1
 
 
