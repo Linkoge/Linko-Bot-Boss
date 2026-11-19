@@ -117,7 +117,7 @@ rules 8–9; worker-only: rule 11).
    task (visible, cancellable, normal checks, 5 repair rounds, merge, deploy with rollback) and the originating chat gets one
    line, `Auto follow-up N/3: ...`. When refused or at the limit the manager starts nothing and summarizes what is open.
    **Auto mode** (`ai_manager/auto_mode.py`) widens this, under the owner's control. It is one global switch stored once
-   (setting `auto_mode`; the header shows a small "Auto" label while it is on, read from `/api/portfolio`), off by
+   (setting `auto_mode`; the top-right project menu shows one read-only line, "Auto mode: on (N/10 today)" or "Auto mode: off", from `/api/portfolio` `auto_mode`; nothing is added to the header), off by
    default. The owner types "auto mode on/off" and the manager calls `set_auto_mode` (`enabled`), which the application
    accepts only in owner-typed turns. While on, a notice turn may `delegate` a NEW normal task with `followup_trigger`
    `auto` and a `reason`, in any active, online project the turn's context allows (a project chat stays in its project).

@@ -830,7 +830,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                 (project_id,) if project_id else (),
             ),
             "capacity": 1,
-            "auto_mode": AutoMode(db).state()["enabled"],
+            "auto_mode": AutoMode(db).state(),
             "queue_error": scheduler.error,
             "storage_free": shutil.disk_usage(settings.data_dir).free,
         }

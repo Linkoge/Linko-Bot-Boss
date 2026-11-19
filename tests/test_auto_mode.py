@@ -219,5 +219,7 @@ def test_prompt_rules_readme_and_header_describe_auto_mode():
     assert "set_auto_mode" in MANAGER_INSTRUCTIONS and "10 per 24 hours" in MANAGER_INSTRUCTIONS
     assert "Auto mode is the owner's one global" in (root / "RULES.md").read_text()
     assert "**Auto mode**" in (root / "README.md").read_text()
-    assert 'id="auto-mode-label"' in (root / "ai_manager/static/index.html").read_text()
-    assert "portfolio.auto_mode" in (root / "ai_manager/static/app.js").read_text()
+    assert "auto-mode-label" not in (root / "ai_manager/static/index.html").read_text()  # nothing in the header
+    assert "auto-mode-label" not in (root / "ai_manager/static/style.css").read_text()
+    js = (root / "ai_manager/static/app.js").read_text()
+    assert "portfolio.auto_mode" in js and "Auto mode: on (" in js and "'Auto mode: off'" in js

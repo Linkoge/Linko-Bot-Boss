@@ -133,7 +133,6 @@ async function refresh(loadChat=true,older=null){
   if(version!==refreshVersion||selection!==state.selection||project!==state.project||$('app').hidden)return false;
   if(older==='tasks')state.taskPaging=true;
   if(older==='executions')state.executionPaging=true;
-  $('auto-mode-label').hidden=!portfolio.auto_mode;
   preserveChatPosition(()=>{state.portfolio=portfolio;renderProjects();renderTasks();renderAgents();renderQuestions();renderProgress();});
   if(state.project&&portfolio.projects.find(p=>p.id===state.project)?.visible===false){await selectProject(null);return false;}
   if(portfolio.queue_error)notice(portfolio.queue_error);
@@ -291,6 +290,7 @@ function renderProjectMenu(){
     const local=element('button','Create offline project');local.dataset.project='offline-create';local.title='Local-only: git repository on main, never uploaded anywhere';local.onclick=action(async()=>{closeProjectMenu();createOfflineProject();});actions.append(local);
     const settings=element('button','Settings');settings.dataset.project='github-settings';settings.onclick=openGithubSettings;group('Settings').append(settings);
   }
+  if(!state.restricted){const auto=state.portfolio.auto_mode||{};content.append(element('p',auto.enabled?`Auto mode: on (${auto.used_24h||0}/${auto.daily_limit||10} today)`:'Auto mode: off','muted project-menu-auto-mode'));}
   renderProjectAvailability();
   if(focusKey!==undefined){const target=menu.querySelector(`[data-visibility="${focusKey}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target)?.focus({preventScroll:true});}
   else if(focused!==undefined)menu.querySelector(`[data-project="${focused}"]`)?.focus({preventScroll:true});
