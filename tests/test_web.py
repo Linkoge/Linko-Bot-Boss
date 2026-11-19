@@ -213,3 +213,32 @@ def test_history_endpoint_latest_older_and_since_cursor(client):
     assert delta['incremental'] and not delta['sync_has_more']
     empty = browser.get('/api/history', params={'since': last}).json()
     assert empty['messages'] == [] and empty['cursor'] == last
+
+
+def test_machines_api_validates_persists_and_is_owner_only(client):
+    browser, app, settings = client
+    assert browser.get('/api/machines').status_code == 401
+    sign_in(browser, app, settings)
+    assert browser.get('/api/machines').json() == {'machines': []}
+    good = [{'name': ' Main  PC ', 'url': 'https://main.tail.ts.net/'}, {'name': 'VM', 'url': 'http://100.1.2.3:8787'}]
+    saved = browser.put('/api/machines', json={'machines': good}).json()['machines']
+    assert [(m['name'], m['url']) for m in saved] == [('Main PC', 'https://main.tail.ts.net'), ('VM', 'http://100.1.2.3:8787')]
+    assert browser.get('/api/machines').json()['machines'] == saved
+    assert app.state.registry is not None
+    renamed = [{**saved[0], 'name': 'Home'}]
+    again = browser.put('/api/machines', json={'machines': renamed}).json()['machines']
+    assert again[0]['id'] == saved[0]['id'] and again[0]['name'] == 'Home'
+    for bad in ('javascript:alert(1)', 'ftp://x.y', 'https://', 'not a url', 'https://u:p@h.example', 'data:text/html,x',
+                'https://h.example/?q=1', 'https://h.example/a b', 42):
+        assert browser.put('/api/machines', json={'machines': [{'name': 'X', 'url': bad}]}).status_code == 422, bad
+    assert browser.put('/api/machines', json={'machines': [{'name': '', 'url': 'https://a.example'}]}).status_code == 422
+    dup = [{'name': 'A', 'url': 'https://a.example'}, {'name': 'a', 'url': 'https://b.example'}]
+    assert browser.put('/api/machines', json={'machines': dup}).status_code == 422
+    assert browser.get('/api/machines').json()['machines'] == again
+    assert browser.put('/api/machines', json={'machines': []}).json() == {'machines': []}
+
+
+def test_machines_menu_markup_is_wired():
+    from pathlib import Path
+    js = (Path(__file__).resolve().parents[1] / 'ai_manager/static/app.js').read_text()
+    assert "renderMachines(group('Machines'))" in js and "/api/machines" in js and 'location.assign(m.url)' in js

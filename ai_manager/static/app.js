@@ -216,12 +216,32 @@ async function setProjectVisibility(p,visible){
     if(restoreFocus&&!$('project-menu').hidden&&document.activeElement===document.body){const target=$('project-menu').querySelector(`[data-visibility="${p.id}"]`);(target?.closest('details:not([open])')?.querySelector('summary')||target||$('project-menu-button')).focus({preventScroll:true});}
   }
 }
+let machinesLoaded=false;
+function sameOrigin(url){try{const u=new URL(url);return u.origin===location.origin;}catch{return false;}}
+async function saveMachines(list){const r=await api('/api/machines',{method:'PUT',body:JSON.stringify({machines:list})});state.machines=r.machines;renderProjectMenu();}
+function renderMachines(section){
+  const list=state.machines||[];
+  if(!machinesLoaded){machinesLoaded=true;api('/api/machines').then(r=>{state.machines=r.machines;if(!$('project-menu').hidden)renderProjectMenu();}).catch(()=>{machinesLoaded=false;});}
+  const here=element('div','This machine · '+location.host,'project-menu-machine-here');section.append(here);
+  for(const m of list){
+    const row=element('div',undefined,'project-menu-machine');
+    if(sameOrigin(m.url)){row.append(element('span',m.name+' · This machine',undefined));row.classList.add('current');}
+    else{const go=element('button',m.name);go.title=m.url;go.dataset.machine=m.id;go.onclick=()=>{location.assign(m.url);};row.append(go);}
+    const edit=element('button','✎');edit.type='button';edit.setAttribute('aria-label','Edit '+m.name);edit.onclick=()=>{const name=prompt('Machine name',m.name);if(name===null)return;const url=prompt('Machine URL',m.url);if(url===null)return;action(()=>saveMachines(list.map(x=>x.id===m.id?{...x,name,url}:x)))();};
+    const del=element('button','×');del.type='button';del.setAttribute('aria-label','Remove '+m.name);del.onclick=action(()=>saveMachines(list.filter(x=>x.id!==m.id)));
+    row.append(edit,del);section.append(row);
+  }
+  const form=element('form',undefined,'project-menu-machine-form'),name=element('input'),url=element('input'),add=element('button','Add machine');
+  name.placeholder='Name';name.maxLength=60;name.setAttribute('aria-label','Machine name');url.placeholder='https://…';url.type='url';url.setAttribute('aria-label','Machine URL');add.type='submit';
+  form.onsubmit=event=>{event.preventDefault();action(async()=>{await saveMachines([...list,{name:name.value,url:url.value}]);})();};
+  form.append(name,url,add);section.append(form);
+}
 function renderProjectMenu(){
   const menu=$('project-menu'),active=menu.contains(document.activeElement)?document.activeElement:null;
   const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;
   const content=$('project-menu-content');content.replaceChildren();
   const group=label=>{const section=element('div',undefined,'project-menu-group');section.setAttribute('role','group');section.setAttribute('aria-label',label);content.append(section);return section;};
-  if(!state.restricted){const ideas=element('button','Project ideas');ideas.dataset.project='ideas';ideas.onclick=()=>{closeProjectMenu(true);showView('ideas');};group('Future projects').append(ideas);const addUser=element('button','Add user');addUser.dataset.project='add-user';addUser.onclick=action(openOnboarding);group('Users').append(addUser);}
+  if(!state.restricted){const ideas=element('button','Project ideas');ideas.dataset.project='ideas';ideas.onclick=()=>{closeProjectMenu(true);showView('ideas');};group('Future projects').append(ideas);const addUser=element('button','Add user');addUser.dataset.project='add-user';addUser.onclick=action(openOnboarding);group('Users').append(addUser);renderMachines(group('Machines'));}
   const projects=group('Projects and stashed projects');
   const global=element('button','◈ All Projects · global context',!state.project?'selected':'');
   global.dataset.project='';global.setAttribute('aria-pressed',String(!state.project));

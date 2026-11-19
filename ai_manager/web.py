@@ -686,6 +686,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         invalidate_usage()
         return result
 
+    @app.get('/api/machines', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def read_machines():
+        from .machines import read
+        return {'machines': read(db)}
+
+    @app.put('/api/machines', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def save_machines(body: dict):
+        from .machines import save
+        try:
+            return {'machines': save(db, body.get('machines'))}
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
     @app.get('/api/instance-model-settings', dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def read_instance_models(name: str):
         from .instance_models import read

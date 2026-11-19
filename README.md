@@ -670,6 +670,15 @@ instance has one owner login (`python -m ai_manager.cli setup-owner` with that i
 other hard-coded port, path or hostname: the Tailscale name above is documentation, and `scripts/install_service.py`
 only asks Tailscale for a hostname when `--hostname` is not given.
 
+### Machines switcher
+
+Project menu → **Machines** (owner only, main-style instances; hidden on a restricted instance) lists saved machines (name + URL) of
+your other Bot Boss instances. Clicking one navigates the same window/PWA to that URL; the entry matching the current origin is
+marked "This machine" and is not a link. **Add machine** takes a name and an http/https URL; ✎ edits and × removes. The list is
+stored in this instance's settings (`machines`) through the owner-only `GET`/`PUT /api/machines` (`ai_manager/machines.py`
+validates: http/https only, no credentials, query or fragment, unique names/URLs, at most 20). Each instance keeps its own
+login and its own list.
+
 ### Onboarding
 
 Project menu → **Add user** (owner only, main instance only) onboards a restricted user: fill name, email and Windows folder,
