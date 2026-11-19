@@ -290,6 +290,22 @@ def test_powershell_script_static():
     assert 'PRIVATE KEY' not in text and not re.search(r'ssh-(ed25519|rsa) AAAA', text)
 
 
+def test_powershell_script_winget_fallback_static():
+    text = (ROOT / 'deploy/windows/Linko-Setup.ps1').read_text()
+    # winget only when Get-Command finds it; the direct-download fallback exists and is what runs otherwise
+    assert re.search(r'if \(Get-Command winget -ErrorAction SilentlyContinue\) \{\s*winget install', text)
+    assert len(re.findall(r'^\s*winget install', text, re.M)) == 1
+    assert 'Install-TailscaleDirect' in text and 'Install-SyncthingDirect' in text and 'msiexec' in text
+    assert 'Tls12' in text and text.index('Tls12') < text.index('Invoke-WebRequest')
+    assert re.search(r'PSVersion\S* -lt \[version\]\$MinPowerShell', text) and "$MinPowerShell = '5.1'" in text
+    assert 'Windows PowerShell $MinPowerShell or newer' in text
+    urls = set(re.findall(r"https://[^/'\"\s]+", text))
+    assert urls == {'https://pkgs.tailscale.com', 'https://api.github.com'}, urls
+    assert 'repos/syncthing/syncthing/releases/latest' in text and 'tailscale-setup-latest-$pkgArch.msi' in text
+    assert 'syncthing-windows-$pkgArch-v*.zip' in text and "'arm64'" in text and "'amd64'" in text
+    assert 'Expand-Archive' not in text and 'Add-WindowsCapability' in text
+
+
 def test_onboarding_doc_linked():
     assert (ROOT / 'docs/ONBOARDING.md').is_file()
     assert 'ONBOARDING.md' in (ROOT / 'README.md').read_text() and 'ONBOARDING.md' in (ROOT / 'docs/INSTALL.md').read_text()

@@ -304,6 +304,10 @@ manager user (after copying the env file as in INSTALL section 6) and set `servi
   `fd7a:…` address, not the IPv4 it reported. Append it: `AI_MANAGER_ALLOWED_CLIENTS=100.x.y.z,fd7a:115c:a1e0::abcd`
   in the instance's env file, then restart the unit. A step `refused: … already has AI_MANAGER_ALLOWED_CLIENTS=` means the value
   was set by hand; the app never overwrites it.
+- **"The name 'winget' is not recognized" on the PC** — older Windows and LTSC have no winget. Re-run the command with the
+  current script: it uses winget only when present and otherwise downloads Tailscale (pkgs.tailscale.com MSI) and Syncthing
+  (official GitHub release zip) directly over TLS 1.2. It needs Windows PowerShell 5.1 or newer and stops with a clear
+  message otherwise; the SSH server comes from `Add-WindowsCapability`, not winget.
 - **The PC cannot report in** — it must reach `LINKO_MANAGER_URL` over Tailscale (policy `grants`, Tailscale Serve running).
   A `403` means the request did not arrive from a tailnet address (Tailscale Serve running, loopback trusted: section 3.1;
   the manager's `AI_MANAGER_PORT` must be the port Serve forwards to), the token was used already or it expired. Generate a new command; the PC script is safe to re-run. Meanwhile you can type the PC's

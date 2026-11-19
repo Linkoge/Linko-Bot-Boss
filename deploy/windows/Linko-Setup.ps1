@@ -2,13 +2,15 @@
 .SYNOPSIS
   Enrolls this Windows PC for Linko onboarding. Run in an elevated PowerShell; safe to re-run.
 .DESCRIPTION
-  Installs Tailscale (joins with an auth key), OpenSSH Server (authorizes the management server key, SSH reachable only
+  Needs Windows PowerShell 5.1 or newer (checked first). Installs Tailscale (joins with an auth key), OpenSSH Server (authorizes the management server key, SSH reachable only
   from the Tailscale range), and Syncthing (starts at logon). With -ManagerDeviceId/-FolderId/-WindowsFolder it also trusts
   the management Syncthing device and pre-creates the share, so no Syncthing GUI click is needed. With -ManagerUrl and
   -EnrollmentToken it then reports hostname, Tailscale IP and Syncthing device ID to the manager over the tailnet (one
   time); otherwise it prints them for `python -m ai_manager.provision add-user`. The owner UI's Add User screen embeds
   this very file in a one-line command; nothing else is downloaded. Only a single-use Tailscale auth key and a one-time
-  enrollment token are passed in - never an API key. See docs/ONBOARDING.md.
+  enrollment token are passed in - never an API key. Packages come from winget when `winget` exists; otherwise from the
+  official direct downloads (Tailscale MSI from pkgs.tailscale.com, Syncthing zip from its GitHub release) over TLS 1.2.
+  See docs/ONBOARDING.md.
 .EXAMPLE
   .\Linko-Setup.ps1 -TailscaleAuthKey $env:TAILSCALE_AUTHKEY -ManagementPublicKey (Get-Content .\manager.pub -Raw)
 #>
@@ -23,6 +25,15 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
+# Minimum: Windows PowerShell 5.1 (the version in Windows 10/Server 2016 and newer; Windows 7/8.1 need WMF 5.1).
+$MinPowerShell = '5.1'
+if ($PSVersionTable.PSVersion -lt [version]$MinPowerShell) {
+    throw "This script needs Windows PowerShell $MinPowerShell or newer; this is $($PSVersionTable.PSVersion). Update Windows or install WMF 5.1, then run it again."
+}
+# Old PowerShell/.NET defaults to TLS 1.0, which the download hosts refuse.
+[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+$ProgressPreference = 'SilentlyContinue'
+
 $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
 if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run this script as Administrator.' }
 if (-not $TailscaleAuthKey) { throw 'Pass -TailscaleAuthKey (or set TAILSCALE_AUTHKEY).' }
@@ -31,14 +42,61 @@ if (-not $ManagementPublicKey -or $ManagementPublicKey -notmatch '^(ssh-ed25519|
 }
 $ManagementPublicKey = $ManagementPublicKey.Trim()
 
-function Install-IfMissing([string]$Command, [string]$WingetId) {
+$TailscaleMsiHost = 'https://pkgs.tailscale.com/stable'
+$SyncthingReleaseApi = 'https://api.github.com/repos/syncthing/syncthing/releases/latest'
+$arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+$pkgArch = if ($arch -eq 'ARM64') { 'arm64' } else { 'amd64' }
+
+function Get-Download([string]$Url, [string]$OutFile) {
+    Invoke-WebRequest -UseBasicParsing -Uri $Url -OutFile $OutFile
+    if (-not (Test-Path $OutFile)) { throw "download failed: $Url" }
+}
+
+function Install-TailscaleDirect {
+    $msi = Join-Path $env:TEMP "tailscale-setup-$pkgArch.msi"
+    Get-Download "$TailscaleMsiHost/tailscale-setup-latest-$pkgArch.msi" $msi
+    $p = Start-Process -FilePath msiexec.exe -ArgumentList @('/i', "`"$msi`"", '/qn', '/norestart') -Wait -PassThru
+    Remove-Item $msi -ErrorAction SilentlyContinue
+    if ($p.ExitCode -ne 0 -and $p.ExitCode -ne 3010) { throw "Tailscale MSI install failed (msiexec exit code $($p.ExitCode))" }
+}
+
+function Install-SyncthingDirect {
+    $release = Invoke-RestMethod -UseBasicParsing -Uri $SyncthingReleaseApi
+    $asset = $release.assets | Where-Object { $_.name -like "syncthing-windows-$pkgArch-v*.zip" } | Select-Object -First 1
+    if (-not $asset) { throw "no Syncthing windows-$pkgArch zip in the latest GitHub release" }
+    $work = Join-Path $env:TEMP ('linko-syncthing-' + [guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Path $work | Out-Null
+    try {
+        $zip = Join-Path $work 'syncthing.zip'
+        Get-Download $asset.browser_download_url $zip
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        [IO.Compression.ZipFile]::ExtractToDirectory($zip, (Join-Path $work 'x'))
+        $exe = Get-ChildItem -Path (Join-Path $work 'x') -Recurse -Filter syncthing.exe | Select-Object -First 1
+        if (-not $exe) { throw 'syncthing.exe not found in the downloaded zip' }
+        $target = Join-Path $env:ProgramFiles 'Syncthing'
+        New-Item -ItemType Directory -Force -Path $target | Out-Null
+        Get-Process syncthing -ErrorAction SilentlyContinue | Stop-Process -Force
+        Copy-Item -Path $exe.FullName -Destination (Join-Path $target 'syncthing.exe') -Force
+    } finally {
+        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-IfMissing([string]$Command, [string]$WingetId, [string]$Fallback) {
     if (Get-Command $Command -ErrorAction SilentlyContinue) { Write-Host "ok: $Command already installed"; return }
-    winget install --id $WingetId --exact --silent --accept-package-agreements --accept-source-agreements
-    if ($LASTEXITCODE -ne 0) { throw "winget could not install $WingetId" }
+    # winget is only used when it exists (it is absent on older Windows and LTSC); otherwise download directly.
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        winget install --id $WingetId --exact --silent --accept-package-agreements --accept-source-agreements
+        if ($LASTEXITCODE -eq 0) { return }
+        Write-Host "winget could not install $WingetId (exit $LASTEXITCODE); trying the direct download"
+    } else {
+        Write-Host "winget not found; downloading $Command directly"
+    }
+    & $Fallback
 }
 
 # Tailscale
-Install-IfMissing 'tailscale' 'Tailscale.Tailscale'
+Install-IfMissing 'tailscale' 'Tailscale.Tailscale' 'Install-TailscaleDirect'
 $tailscale = (Get-Command tailscale -ErrorAction SilentlyContinue).Source
 if (-not $tailscale) { $tailscale = "$env:ProgramFiles\Tailscale\tailscale.exe" }
 $tsIp = (& $tailscale ip -4 2>$null | Select-Object -First 1)
@@ -70,9 +128,10 @@ if (-not (Get-NetFirewallRule -Name 'Linko-SSH-Tailscale' -ErrorAction SilentlyC
 }
 
 # Syncthing, started at logon of the installing user.
-Install-IfMissing 'syncthing' 'Syncthing.Syncthing'
+Install-IfMissing 'syncthing' 'Syncthing.Syncthing' 'Install-SyncthingDirect'
 $syncthing = (Get-Command syncthing -ErrorAction SilentlyContinue).Source
-if (-not $syncthing) { throw 'syncthing not found on PATH after install; open a new shell and re-run.' }
+if (-not $syncthing -and (Test-Path "$env:ProgramFiles\Syncthing\syncthing.exe")) { $syncthing = "$env:ProgramFiles\Syncthing\syncthing.exe" }
+if (-not $syncthing) { throw 'syncthing not found after install; open a new shell and re-run.' }
 if (-not (Get-ScheduledTask -TaskName 'Linko Syncthing' -ErrorAction SilentlyContinue)) {
     $action = New-ScheduledTaskAction -Execute $syncthing -Argument '--no-browser --no-console'
     $trigger = New-ScheduledTaskTrigger -AtLogOn
