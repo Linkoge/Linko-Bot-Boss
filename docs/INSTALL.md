@@ -1,13 +1,70 @@
 # Fresh-machine installation and recovery
 
-Run these steps in a terminal **as the Linux user that will run the service**, not
-as root. Each user has separate provider logins, systemd units and application data.
-Commands below use placeholder paths and hostnames: replace `/home/USER`,
-`NODE_VERSION`, `HOSTNAME` and other uppercase placeholders before running them.
-Never put API keys or login files in the checkout. Keep repository and home paths
-free of spaces (the unit installers require this).
+This is the one authoritative install guide. An AI agent given only the repository URL
+should follow **Quick path for agents** top to bottom. Every step has a `Verify:` command.
+Steps marked **HUMAN STEP** need the human owner (Tailscale login/approval, AI provider
+CLI login, sudo password): **stop there, tell the human exactly what to do, and wait.**
+Never guess, bypass or fake those steps, never use `tailscale funnel`, never expose the
+app publicly, never put secrets in the checkout.
 
-## 1. Install prerequisites and clone
+Run everything as the Linux user that will run the service, **not root** (each user has
+its own provider logins, systemd units and data). Keep repository and home paths free of
+spaces. Replace uppercase placeholders (`HOSTNAME`, `USER`, ...) before running commands.
+
+## Quick path for agents
+
+1. **HUMAN STEP (sudo password)** - OS packages (Debian/Ubuntu/Mint):
+   ```bash
+   sudo apt update && sudo apt install -y git python3 python3-venv ffmpeg curl
+   curl -LsSf https://astral.sh/uv/install.sh | sh        # uv, into ~/.local/bin
+   export PATH="$HOME/.local/bin:$PATH"
+   ```
+   Verify: `command -v git python3 uv ffmpeg ffprobe` prints four-plus paths.
+2. **HUMAN STEP (Tailscale login/approval)** - install Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`,
+   needs sudo), then ask the human to run `sudo tailscale up` and approve the machine. Verify:
+   `tailscale status --json | grep -c '"BackendState": "Running"'` prints `1`.
+3. **HUMAN STEP (AI provider CLI login)** - install the Codex CLI and/or Claude Code from the provider's
+   instructions (npm/nvm Codex needs node; keep that node version installed), then ask the human to run
+   `codex login` and/or `claude auth login` as this user. Verify: `codex --version` and/or `claude --version`.
+4. Clone (location `~/projects/Linko-Bot-Boss`; the default project root is `~/projects`):
+   ```bash
+   mkdir -p ~/projects && cd ~/projects
+   git clone https://github.com/Linkoge/Linko-Bot-Boss.git
+   cd Linko-Bot-Boss
+   ```
+   Verify: `git -C ~/projects/Linko-Bot-Boss rev-parse --short HEAD`.
+5. Preview, then run the helper (idempotent, re-run after any stop):
+   ```bash
+   python3 scripts/install_machine.py --dry-run     # prints the plan, changes nothing
+   python3 scripts/install_machine.py
+   ```
+   It runs `uv sync --locked` and `uv run playwright install chromium`, creates the data dir
+   (`~/.local/share/linko-bot-manager`, mode 700) and `~/.config/linko-bot-manager.env` (mode 600, never
+   overwritten), creates the owner `owner` with a **generated password printed once as `INITIAL_PASSWORD=...`**,
+   installs and starts the systemd user service (`scripts/install_service.py`, linger), waits for the health
+   check, publishes it with `tailscale serve --bg --https=8787 http://127.0.0.1:8787` (tailnet only), and prints
+   the final address. If it prints `HUMAN STEP:` it exits 2: do that step with the human, then re-run.
+   **Report the username and `INITIAL_PASSWORD` to the human in chat, once; do not save it to a file or the repo.**
+   Options: `--hostname`, `--port`, `--username`. Playwright missing OS libraries: install the packages it lists
+   (sudo, HUMAN STEP).
+6. Verify the service and health check:
+   ```bash
+   systemctl --user is-active linko-bot-manager.service        # active
+   curl -fsS -H 'Host: localhost' http://127.0.0.1:8787/api/auth-status   # JSON with "release_commit"
+   uv run python -m ai_manager.cli doctor                       # no FAIL
+   ```
+7. Verify tailnet-only exposure and print the address:
+   ```bash
+   tailscale serve status            # lists https://HOSTNAME:8787 -> http://127.0.0.1:8787, no "Funnel on"
+   echo "https://$(tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'):8787/"
+   ```
+   Give that address to the owner. If Funnel is on: `tailscale funnel --https=8787 off`.
+8. Tell the human: **"In each Bot Boss, open the menu > Machines > Add machine and add the others' addresses."**
+
+The sections below are the manual equivalents of what the helper does, plus optional extras
+(repair agent, worker user, extra instances) and troubleshooting.
+
+## 1. Install prerequisites and clone (manual)
 
 On Linux Mint / Ubuntu / Debian, install Git, host Python and audio tools:
 

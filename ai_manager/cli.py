@@ -23,7 +23,11 @@ def main():
     restore = commands.add_parser("restore")
     restore.add_argument("source", type=Path)
     restore.add_argument("destination", type=Path)
-    commands.add_parser("setup-owner")
+    owner = commands.add_parser("setup-owner")
+    owner.add_argument("--username", help="Owner username (non-interactive)")
+    owner.add_argument(
+        "--generate-password", action="store_true", help="Generate a random password and print it once (needs --username)"
+    )
     commands.add_parser("revoke-sessions")
     commands.add_parser("serve")
     args = parser.parse_args()
@@ -55,12 +59,24 @@ def main():
     elif args.command == "setup-owner":
         from .auth import Auth
 
-        username = input("Owner username: ").strip()
-        password = getpass.getpass("Password (at least 12 characters): ")
-        if password != getpass.getpass("Repeat password: "):
-            raise SystemExit("Passwords differ")
-        Auth(db, settings).setup(username, password)
+        if args.generate_password:
+            import secrets
+
+            if not args.username:
+                raise SystemExit("--generate-password needs --username")
+            username, password = args.username.strip(), secrets.token_urlsafe(18)
+        else:
+            username = (args.username or input("Owner username: ")).strip()
+            password = getpass.getpass("Password (at least 12 characters): ")
+            if password != getpass.getpass("Repeat password: "):
+                raise SystemExit("Passwords differ")
+        try:
+            Auth(db, settings).setup(username, password)
+        except ValueError as error:
+            raise SystemExit(str(error))
         print("Owner account created; web signup is disabled")
+        if args.generate_password:
+            print(f"INITIAL_PASSWORD={password}")
     elif args.command == "revoke-sessions":
         with db.transaction() as conn:
             conn.execute("DELETE FROM sessions")

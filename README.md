@@ -5,6 +5,16 @@ FastAPI + SQLite + plain JavaScript; Codex or Claude does the thinking and codin
 (`ai_manager`, `AI_MANAGER_*`, the service, the data directory and the private URL
 `https://codex-server.tail5ebb9d.ts.net:8787/`). Repository: `Linkoge/Linko-Bot-Boss`.
 
+
+## Install on a new machine (for AI agents)
+
+Told only "read the README and install it"? Follow **[docs/INSTALL.md](docs/INSTALL.md)** (the single authoritative
+guide), section *Quick path for agents*: clone this repository to `~/projects/Linko-Bot-Boss`, then run
+`python3 scripts/install_machine.py --dry-run` and `python3 scripts/install_machine.py`. The result is a systemd user
+service reachable **only on the tailnet** (`tailscale serve`, never Funnel); the helper prints the address. Stop and ask
+the human for the steps the guide marks **HUMAN STEP** (Tailscale login/approval, AI provider CLI login, sudo password),
+and report the generated initial owner password to them once, in chat.
+
 ## How work runs
 
 One queue per project: at most one running task per project, in strict queue order, while tasks of different
