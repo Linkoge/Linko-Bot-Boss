@@ -52,6 +52,17 @@ def hidden_message(alias="messages"):
 
 
 PROCESS_RETRIES = 3
+HELD = "chat_held:"  # settings key prefix of owner messages waiting for a deploy restart
+RECOVERY_QUIET_SECONDS = 30  # a resume within this long shows no recovery status, only the reply
+
+
+def quiet_recovery(row, now):
+    """True while an interrupted reply is being resumed quickly: no usage-limit wait, the current recovery streak
+    is younger than RECOVERY_QUIET_SECONDS and the next attempt is due within that long."""
+    since = row.get('recovering_since')
+    return (row.get('recovery_reason') != 'usage_limit' and since is not None
+            and now - since < RECOVERY_QUIET_SECONDS
+            and (not row.get('retry_at') or row['retry_at'] - now <= RECOVERY_QUIET_SECONDS))
 PROCESS_LOST_NOTE = "\n\n(The manager's process stopped before the turn finished; later steps may be missing.)"
 
 
@@ -106,7 +117,10 @@ class Chat:
             WHEN e.finished_at IS NOT NULL THEN e.status WHEN e.status='recovering' THEN 'waiting'
             WHEN e.status='running' THEN 'streaming' ELSE 'queued' END AS authoritative_status,e.status AS execution_status,
             e.finished_at,e.retry_at,e.recovery_reason,history_preview(e.error) AS execution_error,
-            (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor
+            (SELECT COALESCE(max(seq),0) FROM events ev WHERE ev.execution_id=m.execution_id) AS stream_cursor,
+            CASE WHEN e.status='recovering' AND e.finished_at IS NULL THEN (SELECT min(r.created_at) FROM events r
+                WHERE r.execution_id=e.id AND r.kind='recovery.scheduled' AND r.seq>COALESCE((SELECT max(s.seq)
+                FROM events s WHERE s.execution_id=e.id AND s.kind='chat.started'),0)) END AS recovering_since
             FROM messages m LEFT JOIN executions e ON e.id=m.execution_id WHERE """
         rows = self.db.all(select + ' AND '.join(conditions) + ' ORDER BY m.rowid '
                            + ('ASC' if incremental else 'DESC') + ' LIMIT ?', (*params, CHAT_PAGE_SIZE + 1))
@@ -124,8 +138,17 @@ class Chat:
             updates = self.db.all(select + 'm.conversation_id=? AND NOT ' + hidden_message('m')
                                   + ' AND m.id IN (' + ','.join('?' for _ in watched) + ') ORDER BY m.rowid',
                                   (conversation['id'], *watched))
+        now = time.time()
+        held = {r['key'][len(HELD):] for r in self.db.all("SELECT key FROM settings WHERE key LIKE ?", (HELD + '%',))}
         for row in rows + updates:
             row['status'] = row.pop('authoritative_status')
+            if row['status'] == 'held' or (held and row['execution_id'] in held):
+                row['status'] = 'queued'  # Held for a deploy restart: it runs normally right after.
+            if row['status'] == 'waiting' and quiet_recovery(row, now):
+                # A quick, automatic resume is not news: keep showing the reply as in progress.
+                row['status'] = 'streaming' if row['role'] == 'assistant' else 'processing'
+                row['retry_at'] = row['recovery_reason'] = None
+            row.pop('recovering_since', None)
             row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
         first = self.db.one('SELECT rowid AS position FROM messages WHERE conversation_id=? AND NOT '
                             + hidden_message() + ' ORDER BY rowid LIMIT 1', (conversation['id'],))
@@ -464,13 +487,18 @@ class Chat:
             return json.loads(row["receipt"])
 
     @contextmanager
-    def deploy_fence(self):
+    def deploy_fence(self, hold_owner_message=False):
+        """Shared checkout fence: yields True when held. A deploy restart (or merge) holds it exclusively; an owner
+        message then yields False and is held (see submit), anything else is refused."""
         from .fence import Busy, hold
         try:
             with hold(self.db.path.parent, exclusive=False):
-                yield
+                yield True
+            return
         except Busy:
-            raise ValueError('A deploy is restarting the service; retry in a minute') from None
+            if not hold_owner_message:
+                raise ValueError('A deploy is restarting the service; retry in a minute') from None
+        yield False
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None, request_id=None,
                      attachment_ids=None, todos=None):
@@ -483,6 +511,8 @@ class Chat:
                 raise ValueError("To-Do Start requires an owner message in its project")
             payload.append(todos)
         payload_hash = hashlib.sha256(json.dumps(payload, ensure_ascii=False).encode()).hexdigest()
+        if not delivery:
+            self.release_held()  # Messages held for a deploy restart keep their place ahead of this one.
         if request_id:
             if delivery or not 16 <= len(request_id) <= 100 or not all(c.isalnum() or c in "-_" for c in request_id):
                 raise ValueError("Invalid owner request ID")
@@ -508,7 +538,7 @@ class Chat:
         route = manager_route(self.db, source['project_id'] if source else project_id)
         execution_id, response_id, now = new_id(), new_id(), time.time()
         receipt = {"result": "accepted", "status": "queued", "execution_id": execution_id, "message_id": response_id}
-        with self.deploy_fence(), self.db.transaction() as conn:
+        with self.deploy_fence(hold_owner_message=not delivery) as fenced, self.db.transaction() as conn:
             if request_id and (original := self.request_receipt(conn, request_id, payload_hash)):
                 return original
             if not conn.execute(
@@ -545,24 +575,21 @@ class Chat:
             )
             conn.execute(
                 "INSERT INTO messages VALUES(?,?,?,?,?,?,?)",
-                (response_id, conversation["id"], "assistant", "", "queued", execution_id, now + 0.0001),
+                (response_id, conversation["id"], "assistant", "", "queued" if fenced else "held", execution_id,
+                 now + 0.0001),
             )
             if items:
                 conn.execute('INSERT INTO settings VALUES(?,?)',
                              ('execution_attachments:' + execution_id, json.dumps(references)))
-            conn.execute(
-                """INSERT INTO executions(id,project_id,agent_id,model,effort,status,started_at,conversation_id,input,launch_key)
-                         VALUES(?,?,'manager',?,?,'queued',?,?,?,'not-started')""",
-                (
-                    execution_id,
-                    project_id,
-                    route.get("model"),
-                    route.get("effort"),
-                    now,
-                    conversation["id"],
-                    content,
-                ),
-            )
+            if fenced:
+                self._queue(conn, execution_id, project_id, route, now, conversation["id"], content)
+            else:
+                # A deploy is about to restart the service (or a merge briefly holds the checkout): no turn may
+                # start now, and the deploy's idle check must not see one. Keep the message; release_held() starts
+                # it as soon as the fence is free, normally on the restarted service.
+                conn.execute("INSERT INTO settings VALUES(?,?)", (HELD + execution_id, json.dumps(
+                    {"message_id": response_id, "conversation_id": conversation["id"], "project_id": project_id,
+                     "content": content, "at": now})))
             if delivery:
                 cursor = conn.execute(
                     """UPDATE executions SET delivery='running',delivery_execution=? WHERE id=? AND delivery='pending'
@@ -577,9 +604,47 @@ class Chat:
                 conn.execute(
                     "INSERT INTO chat_requests VALUES(1,?,?,?,?)", (request_id, payload_hash, json.dumps(receipt), now)
                 )
-            self.db.event(conn, "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
-        self.launch(execution_id, response_id, conversation, content, route)
+            if fenced:
+                self.db.event(conn, "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
+        if fenced:
+            self.launch(execution_id, response_id, conversation, content, route)
         return receipt
+
+    def _queue(self, conn, execution_id, project_id, route, now, conversation_id, content):
+        conn.execute(
+            """INSERT INTO executions(id,project_id,agent_id,model,effort,status,started_at,conversation_id,input,launch_key)
+                     VALUES(?,?,'manager',?,?,'queued',?,?,?,'not-started')""",
+            (execution_id, project_id, route.get("model"), route.get("effort"), now, conversation_id, content),
+        )
+
+    def release_held(self):
+        """Start owner messages held during a deploy restart, oldest first, once the checkout fence is free."""
+        from .fence import Busy, hold
+        for key in [r["key"] for r in self.db.all(
+                "SELECT key FROM settings WHERE key LIKE ? ORDER BY json_extract(value,'$.at')", (HELD + "%",))]:
+            try:
+                with hold(self.db.path.parent, exclusive=False), self.db.transaction() as conn:
+                    row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+                    if not row:
+                        continue
+                    held = json.loads(row["value"])
+                    conn.execute("DELETE FROM settings WHERE key=?", (key,))
+                    execution_id = key[len(HELD):]
+                    message = conn.execute("SELECT 1 FROM messages WHERE id=? AND status='held'",
+                                           (held["message_id"],)).fetchone()
+                    conversation = conn.execute("SELECT * FROM conversations WHERE id=?",
+                                                (held["conversation_id"],)).fetchone()
+                    if not message or not conversation:
+                        continue  # Deleted or cleared while held.
+                    route = manager_route(self.db, held["project_id"])
+                    self._queue(conn, execution_id, held["project_id"], route, time.time(), conversation["id"],
+                                held["content"])
+                    conn.execute("UPDATE messages SET status='queued' WHERE id=?", (held["message_id"],))
+                    self.db.event(conn, "chat.queued", {"message_id": held["message_id"], "held": True},
+                                  held["project_id"], execution_id=execution_id)
+            except Busy:
+                return
+            self.launch(execution_id, held["message_id"], dict(conversation), held["content"], route)
 
     def is_head(self, execution_id):
         return bool(self.db.one(
@@ -893,6 +958,7 @@ class Chat:
             self._finish(execution_id, message["id"] if message else "", "interrupted", "Stopped by user", row["output"])
 
     async def recover(self):
+        self.release_held()
         if not self.resumed:
             # A restart or deploy resumes every waiting reply at once (interrupted by the stop itself, usage limit):
             # the stored retry time belongs to the previous process. Connection-loss waits keep their backoff.

@@ -130,6 +130,8 @@ class AppServer:
         self.catalog_error = ""
         self.account_type = None
         self.tool_handlers = {}
+        # Set by ProviderServer: queues are shared across providers, so a dying process may only signal its own threads.
+        self.owns_thread = None
         self.tool_jobs = set()
         self.rate_limits = {}
         self.isolation, self.worker_tag = None, None
@@ -287,8 +289,11 @@ class AppServer:
                         {"codexErrorInfo": "transportLost"},
                     )
                 )
-        for queue in list(self.queues.values()):
-            queue.put_nowait({"method": "transport/lost", "params": {"reason": reason}})
+        for thread_id, queue in list(self.queues.items()):
+            # Another provider's turn is unaffected (an idle Codex that fails its login check on every start
+            # used to break each running Claude manager turn here).
+            if self.owns_thread is None or self.owns_thread(thread_id):
+                queue.put_nowait({"method": "transport/lost", "params": {"reason": reason}})
 
     def route(self, model=None, effort=None):
         candidate = (

@@ -93,7 +93,13 @@ rules 8–9; worker-only: rule 11).
    Exception for the manager chat: when its Codex process dies mid-turn the reply is retried up to 3 times (resuming
    the thread); if it keeps dying, any reply text already produced is kept and shown as the reply (with a short note)
    instead of "failed". The App Server reader also drops an oversized or non-JSON output line instead of ending, which
-   previously made a live process look dead ("stopped unexpectedly") to every in-flight turn.
+   previously made a live process look dead ("stopped unexpectedly") to every in-flight turn. Codex and Claude share
+   one queue map, so a provider's ending process signals "transport lost" only to its own threads: an unused Codex that
+   fails its login check used to be spawned and killed on every provider start (each delegate/repair tool call) and so
+   broke the running Claude manager turn; a failing unused provider is now also retried at most once a minute.
+   A recovery that resumes quickly is not shown: while the current recovery is under 30 seconds old and its next attempt
+   is due within 30 seconds (and it is not a usage limit), the reply keeps showing as in progress and the owner just
+   sees the answer; "Waiting for connection" / "Recovering interrupted execution" appears only after that, or on failure.
    Other permanent errors still fail the reply. The watchdog (every
    minute) requeues a dead or hung worker (30 min without activity) once, then fails it; fails queued tasks of a removed
    project; withdraws a deploy request that is still waiting after 30 min; and reports an idle-queue stall: eligible work
@@ -525,6 +531,11 @@ receipt carries `repairable` for it. No repository-name or manager-only deployme
 result is `DATA/deploy/last-deploy.txt`. While a request is pending no new work starts and nothing merges, in any project (the
 checkout fence, `ai_manager/fence.py`; running tasks of other projects finish or wait to merge, and the deploy waits for idle across all of them), but never for more than 30 minutes: the watchdog withdraws a request that has not
 reached its backup by then (the wait for idle is bounded the same way), tells the originating chat, and the queue runs on.
+An active manager chat turn is running work too (an unfinished execution), so the restart waits for it to finish; it is
+never cut off by a deploy. An owner message sent while the fence is held (the restart itself, or a brief merge) is
+accepted and shown as `queued` rather than refused: it is kept as a `chat_held:` setting with no execution, so the
+deploy's idle check does not see it, and the first scheduler tick with the fence free (normally the restarted service's)
+starts it, oldest first, as an ordinary turn. Worker-result deliveries are still refused then and retried later.
 A request past its backup finishes or rolls back by itself. One-time operator bootstrap, no sudo:
 `python3 scripts/install_deploy.py`. Manual deploy: `python3 scripts/deploy.py --now`.
 The existing installed runtime is migrated once to its registered project's saved setup; explicit removal stays removed.

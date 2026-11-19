@@ -6,9 +6,13 @@ their exact model, so a pinned Codex assignment still runs on Codex after switch
 
 import json
 import sys
+import time
 from pathlib import Path
 
 from .codex import AppServer
+
+
+INACTIVE_RETRY_SECONDS = 60
 
 
 def provider_of(model):
@@ -42,9 +46,12 @@ class ProviderServer:
         for backend in self.backends.values():
             backend.queues, backend.question_handlers = self.queues, self.question_handlers
             backend.tool_handlers = self.tool_handlers
+        for key, backend in self.backends.items():
+            backend.owns_thread = lambda thread_id, key=key: self.thread_provider(thread_id) == key
         self.threads = {}
         self.current = None
         self.isolation = None
+        self.inactive_retry = {}  # provider -> monotonic time before which an unused, failing one is not restarted
 
     def isolate(self, isolation, tag):
         self.isolation = isolation
@@ -95,12 +102,17 @@ class ProviderServer:
         return any(b.process and b.process.pid == pid for b in self.backends.values())
 
     async def start(self):
-        failures = {}
+        failures, now = {}, time.monotonic()
+        retry = self.inactive_retry
         for name, backend in self.backends.items():
+            if name != self.active() and retry.get(name, 0) > now:
+                continue  # A failing unused provider is retried at most once a minute, not on every tool call.
             try:
                 await backend.start()
+                retry.pop(name, None)
             except Exception as error:
                 failures[name] = error  # An unused provider must not block the active one.
+                retry[name] = now + INACTIVE_RETRY_SECONDS
         if self.active() in failures:
             raise failures[self.active()]
 
