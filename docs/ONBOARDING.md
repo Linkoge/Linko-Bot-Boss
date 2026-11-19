@@ -89,6 +89,8 @@ The API key itself never leaves the server.
 
 **Syncthing API key.** Syncthing GUI → *Actions → Settings → GUI → API Key*.
 
+To keep an encrypted copy of this file and the manager env files in a private repo (and restore them on a new VM), see [INSTALL.md section 9](INSTALL.md#9-encrypted-secrets-backup-and-restore).
+
 ### 2.3 Install the root helper (once)
 
 The web service runs as the normal manager user with `NoNewPrivileges`, so it can never run `sudo`. Like the emergency

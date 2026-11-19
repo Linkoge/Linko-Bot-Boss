@@ -399,6 +399,78 @@ Pulling code alone does not update a running Python process. A second instance
 path checks when nvm versions change. The deploy path is preferred for coordinated
 checks/backups/rollback; a manual pull and restart does not provide those safeguards.
 
+## 9. Encrypted secrets backup and restore
+
+`scripts/secrets_backup.py` keeps an encrypted copy of the server's credential files so a lost VM can be rebuilt.
+It bundles the secret files into one archive, encrypts it with a passphrase (scrypt + AES-256-GCM, from the
+`cryptography` package in `uv sync`; no separate install) and writes a single file, `secrets-backup.age`.
+Plain keys never go to git. Only the encrypted file is committed.
+
+By default it backs up `~/.config/linko-onboarding.env` and `~/.config/linko-bot-manager.env`. Add more paths
+with `--file PATH` (repeatable) or a list file at `~/.config/linko-secrets-backup.txt` (one path per line, `#` comments).
+Per-instance env files such as `~/.config/linko-bot-manager-NAME.env` belong in that list. Requested paths
+that do not exist are an error; default paths that are absent are skipped with a note.
+
+**Passphrase.** Keep it in your password manager; the script never writes it to disk, logs it or echoes it. Interactive
+runs prompt for it (twice on backup, minimum 12 characters). For unattended use, set `LINKO_SECRETS_PASSPHRASE` in
+the environment of that one command only.
+
+### 9.1 Make a backup
+
+1. Create a **private** GitHub repository that will hold only the backup (for example `linko-secrets`), and clone it
+   outside the checkout, e.g. `~/linko-secrets`. Add a `.gitignore` so that only the encrypted file is tracked:
+
+   ```bash
+   cd ~/linko-secrets
+   printf '*\n!.gitignore\n!secrets-backup.age\n' > .gitignore
+   ```
+
+2. From the checkout, write the encrypted file into the clone:
+
+   ```bash
+   cd ~/projects/Linko-Bot-Manager          # your checkout
+   uv run python scripts/secrets_backup.py backup ~/linko-secrets
+   ```
+
+3. Commit and push **only** the encrypted file (the target repo must contain nothing else secret):
+
+   ```bash
+   cd ~/linko-secrets
+   git add .gitignore secrets-backup.age
+   git commit -m "Encrypted secrets backup"
+   git push
+   ```
+
+Run it again after any key changes (new Syncthing or Tailscale key, a new instance). The backup is only as current
+as its last run. Check `git status` before pushing: a plaintext file in that repo would be a leak, so stop and fix it.
+
+### 9.2 Restore on a fresh VM
+
+1. Install the checkout and its dependencies as in sections 1 and 2 (stop before "Create the service environment";
+   the restore supplies the env files). `uv sync --locked` must have run, since the restore uses its dependencies.
+2. Clone the private backup repo (you need GitHub access to it) and check what would be written:
+
+   ```bash
+   git clone git@github.com:YOUR-USER/linko-secrets.git ~/linko-secrets
+   cd ~/projects/Linko-Bot-Manager
+   uv run python scripts/secrets_backup.py restore ~/linko-secrets/secrets-backup.age --dry-run
+   ```
+
+3. Restore for real. Enter the passphrase when prompted:
+
+   ```bash
+   uv run python scripts/secrets_backup.py restore ~/linko-secrets/secrets-backup.age
+   ```
+
+   Each file returns to its original path under this user's home (`~/.config/...`), mode 600, owned by this user.
+   An existing file is never overwritten silently: it is first copied to `NAME.bak` (or `NAME.bak.1`, ...).
+   A wrong passphrase stops with "wrong passphrase" and changes nothing.
+4. Continue at section 2 for the rest of setup, skipping the env-file creation step because the restored files are
+   in place. Then run `uv run python -m ai_manager.cli doctor`.
+
+Once restored, delete the clone of the backup repo if you do not need it on this machine. Keeping it adds nothing secret,
+but the passphrase is still required to read the backup.
+
 ## Troubleshooting
 
 | Symptom | Cause | Fix |

@@ -11,3 +11,9 @@ When: a test or fixture needs a key-, token- or PEM-shaped value.
 Symptom: `scripts/worker_check.py` fails with `secrets: file:line ... (rule 10)`, or GitHub push protection (GH013) blocks the backup push.
 Cause: a literal matching SECRET_PATTERNS (`ai_manager/push_diagnosis.py`) was committed; the check scans every commit from base to HEAD, so a later fix commit does not clear it.
 Do: build it at runtime, e.g. `'ghp_' + 'Q' * 36`; if it is already committed, squash or amend so no commit contains it.
+
+### New dependency fails the gate until the shared venv is synced (2026-11-19, task 3054e8)
+When: a change adds a package to `pyproject.toml` / `uv.lock` (e.g. `cryptography` for `scripts/secrets_backup.py`).
+Symptom: the self-check and the application's gate fail at collection with `ModuleNotFoundError` for the new package, even though `uv run pytest` passes in the worktree.
+Cause: `ai_manager/core.py:interpreter()` runs the gate with the shared checkout's `.venv`, which is only synced (`uv sync --locked`) by deploy after merge, so it cannot have a dependency added on this branch.
+Do: lock it (`uv lock`, a minimal diff), verify with `uv run python -m pytest` in the worktree, and report that the shared venv needs `uv sync --locked` before the gate can pass. Do not run that sync from the worker.
