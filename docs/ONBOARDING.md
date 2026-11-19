@@ -15,6 +15,22 @@ owner UI "Add user"  ──plan/apply──▶  spool  ──▶  user path unit
         └──── receipt, initial login (shown once)                      PC (one pasted line, over the tailnet)
 ```
 
+## Quick checklist: add a user
+
+Details for each step are in section 3; the one-time setup is in section 2.
+
+1. **Before you start:** `~/.config/linko-onboarding.env` is in place (section 2.2) and the root helper is current:
+   `python3 scripts/install_onboarding.py status` shows `launcher_current: true` (otherwise re-run `install`, section 2.3).
+2. In Linko, open the project menu → **Add user**. Fill **Name**, **Email** and **Windows folder**, then click **Preview plan**.
+3. Click **Generate PC command** and copy the line. It is valid for 2 hours.
+4. On the new Windows PC, open PowerShell as Administrator, paste the line, press Enter, and wait until it reports.
+5. Back in Linko, click **Apply** (or tick *Apply automatically* before the PC reports) and watch the steps.
+6. When the record is `done`, click **Show initial login (once)** and hand over the email, the generated password and
+   the instance URL `https://<manager tailnet name>:<port>` from the receipt.
+7. The new user signs in to Linko with that email and password, then completes their own AI provider (Codex/Claude)
+   login on the instance. Nothing is copied from the owner (see step 6 of section 3).
+8. If a step fails, the receipt names it: fix the cause and click **Retry**.
+
 ## 1. Where everything lives
 
 | What | Where | Owner / mode |
