@@ -312,6 +312,6 @@ input,textarea,select{accent-color:var(--accent-solid)}
 
 .project-menu-machine{display:grid;grid-template-columns:minmax(0,1fr) auto auto;align-items:center;min-height:40px}
 .project-menu-machine>span,.project-menu-machine-here{padding:6px 10px;color:var(--muted,inherit);font-size:13px}
-.project-menu-machine-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto;gap:6px;padding:6px 4px}
+.project-menu-machine-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto;gap:6px;padding:6px 4px}
 .project-menu-machine-form input{min-width:0}
 @media(max-width:600px){.project-menu-machine-form{grid-template-columns:1fr}}

@@ -218,7 +218,7 @@ async function setProjectVisibility(p,visible){
 }
 let machinesLoaded=false;
 function sameOrigin(url){try{const u=new URL(url);return u.origin===location.origin;}catch{return false;}}
-async function saveMachines(list){const r=await api('/api/machines',{method:'PUT',body:JSON.stringify({machines:list})});state.machines=r.machines;renderProjectMenu();}
+async function saveMachines(list){const r=await api('/api/machines',{method:'PUT',body:JSON.stringify({machines:list})});state.machines=r.machines;state.machineForm=false;renderProjectMenu();}
 function renderMachines(section){
   const list=state.machines||[];
   if(!machinesLoaded){machinesLoaded=true;api('/api/machines').then(r=>{state.machines=r.machines;if(!$('project-menu').hidden)renderProjectMenu();}).catch(()=>{machinesLoaded=false;});}
@@ -231,11 +231,14 @@ function renderMachines(section){
     const del=element('button','×');del.type='button';del.setAttribute('aria-label','Remove '+m.name);del.onclick=action(()=>saveMachines(list.filter(x=>x.id!==m.id)));
     row.append(edit,del);section.append(row);
   }
-  const form=element('form',undefined,'project-menu-machine-form'),name=element('input'),url=element('input'),add=element('button','Add machine');
-  name.placeholder='Name';name.maxLength=60;name.setAttribute('aria-label','Machine name');url.placeholder='https://…';url.type='url';url.setAttribute('aria-label','Machine URL');add.type='submit';
+  if(!state.machineForm){const open=element('button','Add machine');open.type='button';open.dataset.project='add-machine';open.onclick=()=>{state.machineForm=true;renderProjectMenu();menu_focus_machine();};section.append(open);return;}
+  const form=element('form',undefined,'project-menu-machine-form'),name=element('input'),url=element('input'),add=element('button','Save'),cancel=element('button','Cancel');
+  name.placeholder='Name';name.maxLength=60;name.setAttribute('aria-label','Machine name');url.placeholder='https://…';url.type='url';url.setAttribute('aria-label','Machine URL');add.type='submit';cancel.type='button';
+  cancel.onclick=()=>{state.machineForm=false;renderProjectMenu();};
   form.onsubmit=event=>{event.preventDefault();action(async()=>{await saveMachines([...list,{name:name.value,url:url.value}]);})();};
-  form.append(name,url,add);section.append(form);
+  form.append(name,url,add,cancel);section.append(form);
 }
+function menu_focus_machine(){$('project-menu').querySelector('.project-menu-machine-form input')?.focus({preventScroll:true});}
 function renderProjectMenu(){
   const menu=$('project-menu'),active=menu.contains(document.activeElement)?document.activeElement:null;
   const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;
