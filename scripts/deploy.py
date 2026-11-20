@@ -23,7 +23,7 @@ from contextlib import ExitStack
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ai_manager import fence  # noqa: E402
+from ai_manager import code_view, fence  # noqa: E402
 from ai_manager.deploy_setup import validate_setup  # noqa: E402
 
 IDLE = {
@@ -99,7 +99,8 @@ class Deploy:
                          **config.get('service_cmds', {})}
         # Other instances of this one code copy (README "Multiple instances"): restarted and health-checked with it,
         # each with its own data directory, database snapshot, checkout fence and port.
-        self.instances = [{'name': i['name'], 'data': Path(i['data']), 'url': i['url'], 'cmds': i.get('service_cmds') or {
+        self.instances = [{'name': i['name'], 'data': Path(i['data']), 'url': i['url'], 'adapter': i.get('adapter'),
+                           'cmds': i.get('service_cmds') or {
             action: [*systemctl, action, i['service']] for action in ('stop', 'start')}}
             for i in config.get('instances', [])]
         self.id = None
@@ -286,6 +287,17 @@ class Deploy:
         except (OSError, ValueError):
             return None
 
+    def code_views(self):
+        """Before anything stops: every instance that sees the checkout through a host adapter's bind list must see
+        every runtime path of this commit (ai_manager/code_view.py), or its restart fails and the deploy rolls back."""
+        for instance in self.instances:
+            gaps, adapter, readable = code_view.check(self.repo, instance['name'], instance.get('adapter'))
+            if gaps:
+                raise Stop('failed', f"instance {instance['name']} cannot see {', '.join(gaps)}: "
+                           + code_view.fix(instance['name'], gaps, adapter))
+            if Path(adapter).exists() and not readable:
+                self.log(f"instance {instance['name']}: cannot read the mounts list in {adapter}; code view unchecked")
+
     def instances_current(self, commit):
         for instance in self.instances:
             try:
@@ -462,6 +474,7 @@ class Deploy:
                 result = run(tests, cwd=self.repo, timeout=self.config.get('test_seconds', 3600), check=False)
                 if result.returncode:
                     raise Stop('failed', 'full backend suite failed: ' + (result.stdout + result.stderr).strip()[-300:], repairable=True)
+            self.code_views()
             if request.get('emergency'):
                 emergency_stop()
             self.state('waiting_idle', commit=target)

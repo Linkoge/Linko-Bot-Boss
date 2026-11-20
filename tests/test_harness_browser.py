@@ -2,6 +2,7 @@
 # ruff: noqa: F811 -- pytest fixtures imported by name
 import json
 
+from browser_sync import refreshed
 from test_model_picker_browser import browser_context, page, server  # noqa: F401
 
 from ai_manager.core import Tasks
@@ -80,12 +81,14 @@ def test_harness_picker_keyboard_persistence_task_card_and_mobile(page, browser_
     page.keyboard.press('Escape')
     assert page.locator('#harness-menu').is_hidden()
     assert page.evaluate('document.activeElement.id') == 'harness-button'
+    page.evaluate('()=>loadHistory(state.selection)')  # explicit, so a slow poll under load cannot time this out
     page.wait_for_function("()=>state.history.messages.some(m=>m.content.startsWith('Manager harness: Zero'))")
 
     # The task records its harness at creation and the card shows it.
     task = Tasks(db).add(project, 'Write the user guide')
     assert task['harness'] == {'id': 'docs-writer', 'name': 'Docs writer'}
     page.locator('[data-view=tasks]').click()
+    refreshed(page, 'refresh(false)')  # renders the new task now, not at the next poll
     page.wait_for_function(f"()=>document.querySelector('[data-task-id=\"{task['id']}\"] .task-harness')")
     assert page.locator(f'[data-task-id="{task["id"]}"] .task-harness').inner_text() == 'Harness: Docs writer'
 

@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 from urllib.request import ProxyHandler, Request, build_opener
 
-from . import isolation
+from . import code_view, isolation
 
 TIMEOUT = 3
 SERVICE = 'linko-bot-manager.service'
@@ -58,7 +58,9 @@ def health(url, host='localhost'):
 
 
 class Doctor:
-    def __init__(self, home=None, repo=None, output=print, isolation_config=isolation.CONFIG):
+    def __init__(self, home=None, repo=None, output=print, isolation_config=isolation.CONFIG,
+                 adapter_template=code_view.ADAPTER):
+        self.adapter_template = adapter_template  # where each instance's root host adapter lives
         self.home = home or Path.home()
         self.repo = repo or Path(__file__).resolve().parents[1]
         self.output = output
@@ -212,6 +214,7 @@ class Doctor:
             self.instance(f'linko-bot-manager@{name}.service',
                           self.home / f'.config/linko-bot-manager-{name}.env', expected,
                           url=item.get('url'), remote=bool(item.get('service_cmds')))
+            self.code_view(name, item.get('adapter'))
         repair = data / 'repair'
         self.report(all((repair / p).is_file() for p in ('installed.json', 'launcher.py')),
                     'repair agent installed', 'run python3 scripts/install_repair.py install --conversation CHAT_ID')
@@ -221,6 +224,17 @@ class Doctor:
                     'run python3 scripts/install_repair.py install; check systemctl --user status linko-bot-manager-repair.timer')
         self.worker_isolation(data)
         return int(self.failed)
+
+    def code_view(self, name, adapter=None):
+        """An instance behind a host adapter's bind list sees every runtime path of this checkout (ai_manager/code_view.py)."""
+        gaps, adapter, readable = code_view.check(self.repo, name, adapter or self.adapter_template.format(name=name))
+        if not Path(adapter).exists():
+            return
+        if not readable:
+            self.report(False, f'instance {name} code view readable', f'make {adapter} readable (root 755)', warning=True)
+            return
+        self.report(not gaps, f'instance {name} code view has {", ".join(code_view.RUNTIME_PATHS)}',
+                    code_view.fix(name, gaps, adapter))
 
     def worker_isolation(self, data):
         """Worker user present and actually isolated; only the repair launcher reaches root; no blanket NOPASSWD."""

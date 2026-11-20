@@ -360,6 +360,21 @@ require explicit host setup; doctor never executes those command arrays. It chec
 registered HTTP releases and warns to run doctor as the other service user for
 that user's unit/environment checks.
 
+**Instances as other users (code view).** An instance running as another Linux user
+(for example `kaxa`) may not read this checkout directly. A root-owned host adapter,
+`/usr/local/libexec/linko-NAME-instance`, bind-mounts a fixed `mounts` list of
+checkout paths read-only into that instance's code directory. That list must contain
+every path in `RUNTIME_PATHS` (`ai_manager/code_view.py`): `ai_manager/`, `harnesses/`,
+`README.md` and `RULES.md`. Before anything stops, the deploy compares each registered
+instance's adapter list with it. It fails with “instance NAME cannot see …” instead of
+restarting into a broken instance and rolling back. Doctor reports the same check. The
+adapter is host configuration outside the repository: add a missing path as root
+(Emergency host repair). An optional `adapter` key in an instance's entry in
+`DATA/deploy/installed.json` overrides the path. When code starts reading a new
+top-level path at runtime, add it to `RUNTIME_PATHS` and to every adapter before the
+deploy. `tests/test_code_view.py` fails until it is in `RUNTIME_PATHS` (it starts the app from
+a copy holding only those paths).
+
 ## 7. Optional KVM/libvirt access
 
 If this machine will host VMs, install your distribution's QEMU/KVM/libvirt tools.

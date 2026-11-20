@@ -17,3 +17,9 @@ When: a change adds a package to `pyproject.toml` / `uv.lock`. (`scripts/secrets
 Symptom: the self-check and the application's gate fail at collection with `ModuleNotFoundError` for the new package, even though `uv run pytest` passes in the worktree.
 Cause: `ai_manager/core.py:interpreter()` runs the gate with the shared checkout's `.venv`, which is only synced (`uv sync --locked`) by deploy after merge, so it cannot have a dependency added on this branch.
 Do: lock it (`uv lock`, a minimal diff), verify with `uv run python -m pytest` in the worktree, and report that the shared venv needs `uv sync --locked` before the gate can pass. Do not run that sync from the worker.
+
+### New top-level runtime dir breaks other-user instances (2026-11-21, task 8cd3c2)
+When: the app starts reading a new top-level checkout path at runtime (like `harnesses/`).
+Symptom: every test passes, but the deploy rolls back: `linko-bot-manager@kaxa.service` fails to start because the path is missing in its namespace.
+Cause: an instance running as another user only sees the checkout paths in its root host adapter's `mounts` bind list (`/usr/local/libexec/linko-NAME-instance`, outside the repo). ACLs cannot fix a path that is not mounted.
+Do: add the path to `RUNTIME_PATHS` in `ai_manager/code_view.py` (`tests/test_code_view.py` fails until you do), and report that the host adapter list needs it too. The deploy now stops before restarting when an adapter lacks a runtime path.

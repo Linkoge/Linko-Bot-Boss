@@ -289,8 +289,9 @@ list are rejected. Restricted-instance rejections still apply. Notice turns cann
 owner-typed message. Follow-up and auto-mode limits stay in place. The host agent keeps its own confirmation rules for
 irreversible or security-weakening work (`scripts/emergency_repair.py`). Workers keep the fixed flow: the application
 runs the checks, merges and deploys, and workers never push or deploy (RULES.md rule 3). Code:
-`ai_manager/harness.py`, `ai_manager/static/harness.js`. Permanent coverage: `tests/test_harness.py`,
-`tests/test_harness_browser.py`.
+`ai_manager/harness.py`, `ai_manager/static/harness.js`. `harnesses/` is a runtime path, so an instance behind a
+host adapter's bind list must have it mounted (see [Multiple instances](#multiple-instances-and-the-restricted-work-instance)).
+Permanent coverage: `tests/test_harness.py`, `tests/test_harness_browser.py`.
 
 ## Manager screenshots
 
@@ -741,6 +742,11 @@ instance has one owner login (`python -m ai_manager.cli setup-owner` with that i
 `~/.local/share/linko-bot-manager`, `AI_MANAGER_PORT` 8787, `AI_MANAGER_PROJECT_ROOTS` `~/projects`. The audit found no
 other hard-coded port, path or hostname: the Tailscale name above is documentation, and `scripts/install_service.py`
 only asks Tailscale for a hostname when `--hostname` is not given.
+
+An instance that runs as another Linux user sees the code through a root host adapter's bind list. That list must
+contain every top-level path the app reads at runtime (`RUNTIME_PATHS` in `ai_manager/code_view.py`). The deploy and
+doctor check it before a restart. See [INSTALL.md](docs/INSTALL.md#6-optional-extra-instances), “Instances as other
+users”. Permanent coverage: `tests/test_code_view.py`.
 
 ### Machines switcher
 

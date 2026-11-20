@@ -50,7 +50,8 @@ def installation(tmp_path, monkeypatch):
     monkeypatch.setattr(doctor, 'command', command)
     monkeypatch.setattr(doctor, 'health', lambda *a: {'release_commit': head, 'scheduler_running': True})
     output = []
-    check = doctor.Doctor(home=home, repo=tmp_path, output=output.append)
+    check = doctor.Doctor(home=home, repo=tmp_path, output=output.append,
+                          adapter_template=str(tmp_path / 'adapters/linko-{name}-instance'))
     return check, env, binaries, secret, calls
 
 
