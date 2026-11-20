@@ -20,6 +20,10 @@ REPO = Path(__file__).resolve().parents[1]
 HUMAN = 2
 
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import secrets_backup  # noqa: E402  (stdlib-only helper next to this script)
+
+
 class Stop(SystemExit):
     pass
 
@@ -33,6 +37,8 @@ class Installer:
     def __init__(self, args, home, env):
         self.dry, self.home, self.env, self.port = args.dry_run, home, env, args.port
         self.username, self.hostname = args.username, args.hostname
+        self.secrets = args.secrets
+        env.pop(secrets_backup.PASSPHRASE_ENV, None)  # children (service install, uv) never inherit it
         self.data = Path(env.get("AI_MANAGER_DATA") or home / ".local/share/linko-bot-manager")
         self.env_file = home / ".config/linko-bot-manager.env"
         self.python = REPO / ".venv/bin/python"
@@ -61,6 +67,42 @@ class Installer:
             human("install at least one provider CLI (Claude Code or Codex) and log in to it (docs/INSTALL.md step 3)")
         self.say("prerequisites present: git python3 uv tailscale and a provider CLI")
 
+    def secrets_file(self):
+        path = Path(self.secrets).expanduser()
+        return path / secrets_backup.DEFAULT_BACKUP_NAME if path.is_dir() else path
+
+    def restore_secrets(self):
+        """Restore the encrypted env files and logins before anything starts. The passphrase comes from
+        LINKO_SECRETS_PASSPHRASE or a prompt, never from argv. A wrong one stops cleanly (exit 1)."""
+        source = self.secrets_file()
+        self.say(f"restore secrets from {source} (passphrase from {secrets_backup.PASSPHRASE_ENV} or a prompt)")
+        try:
+            done = secrets_backup.restore(source, dry_run=self.dry)
+        except secrets_backup.BackupError as error:
+            print(f"error: {error}", file=sys.stderr)
+            raise Stop(1) from None
+        finally:
+            os.environ.pop(secrets_backup.PASSPHRASE_ENV, None)
+        for target, bak in done:
+            self.say(f"{'would restore' if self.dry else 'restored'} {target}" + (f" (previous copy: {bak})" if bak else ""))
+
+    def allow_new_host(self):
+        """A restored env file names the old machine: add this machine's address to the allowed hosts."""
+        if self.dry or not self.secrets or not self.env_file.is_file():
+            return
+        lines = self.env_file.read_text().splitlines()
+        for number, line in enumerate(lines):
+            if line.startswith("AI_MANAGER_ALLOWED_HOSTS="):
+                hosts = line.split("=", 1)[1].split(",")
+                if self.hostname not in hosts:
+                    lines[number] = line + "," + self.hostname
+                    fd = os.open(self.env_file, os.O_WRONLY | os.O_TRUNC, 0o600)
+                    with os.fdopen(fd, "w") as handle:
+                        handle.write("\n".join(lines) + "\n")
+                return
+        with open(self.env_file, "a") as handle:
+            handle.write(f"AI_MANAGER_ALLOWED_HOSTS=localhost,127.0.0.1,{self.hostname}\n")
+
     def tailscale_host(self):
         result = self.probe(["tailscale", "status", "--json"])
         try:
@@ -69,7 +111,9 @@ class Installer:
             status = {}
         host = (status.get("Self") or {}).get("DNSName", "").rstrip(".")
         if status.get("BackendState") != "Running" or not host:
-            human("log in to Tailscale (`sudo tailscale up`, approve the machine in the admin console), then re-run")
+            key = self.home / ".config/linko-tailscale-authkey"
+            hint = f" (restored auth key: `sudo tailscale up --auth-key=file:{key}`)" if key.is_file() else ""
+            human("log in to Tailscale (`sudo tailscale up`, approve the machine in the admin console)" + hint + ", then re-run")
         return host
 
     def dependencies(self):
@@ -173,13 +217,18 @@ def main(argv=None):
     parser.add_argument("--dry-run", action="store_true", help="print the plan; change nothing")
     parser.add_argument("--hostname", help="Tailscale DNS name (default: asked from tailscale)")
     parser.add_argument("--port", type=int, default=8787)
+    parser.add_argument("--secrets", help="encrypted backup file, or a directory holding secrets-backup.age "
+                        "(scripts/secrets_backup.py); passphrase from LINKO_SECRETS_PASSPHRASE or a prompt")
     parser.add_argument("--username", default="owner")
     args = parser.parse_args(argv)
     home, env = Path.home(), dict(os.environ)
     installer = Installer(args, home, env)
     try:
         installer.prerequisites()
+        if installer.secrets:
+            installer.restore_secrets()
         installer.hostname = installer.hostname or installer.tailscale_host()
+        installer.allow_new_host()
         installer.dependencies()
         installer.configuration()
         installer.owner()

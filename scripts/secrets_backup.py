@@ -46,6 +46,20 @@ PASSPHRASE_ENV = "LINKO_SECRETS_PASSPHRASE"
 MIN_PASSPHRASE = 12
 DEFAULT_CONFIG = Path("~/.config/linko-secrets-backup.txt")
 DEFAULT_FILES = ("~/.config/linko-onboarding.env", "~/.config/linko-bot-manager.env")
+# Everything else a new machine needs, backed up when present (absent ones are skipped with a note):
+# file-based provider logins, the Tailscale auth key, the GitHub token and the SSH deploy key for backup pushes.
+OPTIONAL_FILES = (
+    "~/.claude/.credentials.json",
+    "~/.codex/auth.json",
+    "~/.config/linko-tailscale-authkey",
+    "~/.config/linko-github-token",
+    "~/.ssh/linko-deploy-key",
+    "~/.ssh/linko-deploy-key.pub",
+)
+# Provider logins are also put into these accounts' homes on restore (when the account exists).
+REPLICATE_PATHS = ("~/.claude/.credentials.json", "~/.codex/auth.json")
+REPLICATE_USERS = ("linko-worker", "root")
+ENV_TOKEN_FILE_KEYS = ("AI_MANAGER_GITHUB_TOKEN_FILE", "AI_MANAGER_GITHUB_COMPANY_TOKEN_FILE")
 MANIFEST = "manifest.json"
 
 
@@ -158,10 +172,27 @@ def read_list_file(path):
     return entries
 
 
+def env_token_files():
+    """GitHub token files named by the manager env file (AI_MANAGER_GITHUB_*TOKEN_FILE=path)."""
+    env_file = home() / ".config/linko-bot-manager.env"
+    found = []
+    try:
+        lines = env_file.read_text().splitlines()
+    except OSError:
+        return found
+    for line in lines:
+        key, _, value = line.partition("=")
+        value = value.strip().strip("\"'")
+        if key.strip() in ENV_TOKEN_FILE_KEYS and value:
+            found.append(Path(value).expanduser())
+    return found
+
+
 def collect_sources(extra, config):
     """Return [(path, required)]: the default files plus anything from the config file or --file.
     Defaults that do not exist are skipped with a warning; requested paths must exist."""
-    sources = [(Path(p).expanduser(), False) for p in DEFAULT_FILES]
+    sources = [(Path(p).expanduser(), False) for p in DEFAULT_FILES + OPTIONAL_FILES]
+    sources += [(p, False) for p in env_token_files()]
     if config is not None:
         if not Path(config).expanduser().is_file():
             raise BackupError(f"config file not found: {config}")
@@ -186,7 +217,11 @@ def build_archive(sources, out):
     """Write the tar (manifest + file bodies) to `out`, a binary file object. Returns entry count."""
     entries = []
     archived = []
+    seen = set()
     for path, required in sources:
+        if path in seen:
+            continue
+        seen.add(path)
         if not path.is_file():
             if required:
                 raise BackupError(f"secret file not found: {path}")
@@ -202,6 +237,8 @@ def build_archive(sources, out):
             "owner": user,
             "group": group,
         })
+        if any(path == Path(p).expanduser() for p in REPLICATE_PATHS):
+            entries[-1]["replicate"] = list(REPLICATE_USERS)
         archived.append((path, name))
     if not entries:
         raise BackupError("no secret files found to back up")
@@ -286,7 +323,9 @@ def apply_restore(restored, dry_run):
         return [(str(t), str(b) if b else None) for t, _, _, b in actions]
     done = []
     for target, entry, body, backup_path in actions:
-        target.parent.mkdir(parents=True, exist_ok=True)
+        target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if target.parent.name == ".ssh":
+            os.chmod(target.parent, 0o700)
         if backup_path is not None:
             shutil.copy2(target, backup_path)
             os.chmod(backup_path, 0o600)
@@ -296,7 +335,34 @@ def apply_restore(restored, dry_run):
         chown_if_possible(temporary, entry)
         os.replace(temporary, target)
         done.append((str(target), str(backup_path) if backup_path else None))
+        for user in entry.get("replicate", []):
+            replicate_for(user, entry, body)
     return done
+
+
+def replicate_for(user, entry, body):
+    """Put a provider login into another account's home (linko-worker, root) when it exists and has no login yet.
+    The body goes to the child's stdin, never argv. Without passwordless sudo the account is skipped with a note."""
+    try:
+        account = pwd.getpwnam(user)
+    except KeyError:
+        return
+    stored = entry["path"]
+    if not stored.startswith("~/"):
+        return
+    target = Path(account.pw_dir) / stored[2:]
+    prefix = [] if account.pw_uid == os.geteuid() else ["sudo", "-n", "-u", user]
+    script = ('umask 077; [ -e "$1" ] && exit 3; mkdir -p "$(dirname "$1")" && cat > "$1.tmp" '
+              '&& chmod 600 "$1.tmp" && mv "$1.tmp" "$1"')
+    try:
+        result = subprocess.run(prefix + ["sh", "-c", script, "sh", str(target)], input=body,
+                                capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired):
+        result = None
+    if result is None or result.returncode not in (0, 3):
+        print(f"not placed for {user}: {target} (needs passwordless sudo; log in there by hand)", file=sys.stderr)
+    elif result.returncode == 3:
+        print(f"kept existing login for {user}: {target}", file=sys.stderr)
 
 
 def chown_if_possible(path, entry):

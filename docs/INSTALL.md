@@ -13,24 +13,28 @@ spaces. Replace uppercase placeholders (`HOSTNAME`, `USER`, ...) before running 
 
 ## Quick path for agents
 
+The goal: clone, get the owner's encrypted secrets file, run one helper with `--secrets`, give the owner the address.
+Everything the helper cannot do is listed under **What is NOT portable** below; stop at a `HUMAN STEP:` line, tell
+the human exactly what it says and re-run the helper afterwards (it is idempotent).
+
 1. **HUMAN STEP (sudo password)** - OS packages (Debian/Ubuntu/Mint):
    ```bash
-   sudo apt update && sudo apt install -y git python3 python3-venv ffmpeg curl
+   sudo apt update && sudo apt install -y git python3 python3-venv ffmpeg curl openssl
    curl -LsSf https://astral.sh/uv/install.sh | sh        # uv, into ~/.local/bin
    export PATH="$HOME/.local/bin:$PATH"
    ```
-   Verify: `command -v git python3 uv ffmpeg ffprobe` prints four-plus paths.
+   Verify: `command -v git python3 uv ffmpeg ffprobe openssl` prints five-plus paths.
    If `apt update` cannot reach Ubuntu's archive, use a working mirror for this one install only, without editing
    the system's sources: `sudo apt -o Acquire::Retries=3 -o Dir::Etc::sourcelist=/tmp/mirror.list -o Dir::Etc::sourceparts=/dev/null update`
    (put one `deb http://MIRROR/ubuntu CODENAME main universe` line per suite - release, `-updates`, `-security` - in `/tmp/mirror.list`),
    then run the same `-o` options on `apt install`. Delete `/tmp/mirror.list` afterwards.
-2. **HUMAN STEP (Tailscale login/approval)** - install Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`,
-   needs sudo), then ask the human to run `sudo tailscale up` and approve the machine. Verify:
-   `tailscale status --json | grep -c '"BackendState": "Running"'` prints `1`.
-3. **HUMAN STEP (AI provider CLI login)** - at least one provider CLI is required, Claude Code or Codex (both
-   optional individually). Install it from the provider's instructions (npm/nvm Codex needs node; keep that node
-   version installed), then ask the human to run `claude auth login` and/or `codex login` as this user.
-   Verify: `claude --version` and/or `codex --version`.
+2. **HUMAN STEP (Tailscale)** - install Tailscale (`curl -fsSL https://tailscale.com/install.sh | sh`, needs sudo),
+   then have the human run `sudo tailscale up` and approve the machine in the admin console. If the backup holds a
+   Tailscale auth key the helper prints the exact `--auth-key=file:...` form after restoring; the device approval is
+   still the owner's. Verify: `tailscale status --json | grep -c '"BackendState": "Running"'` prints `1`.
+3. **Provider CLI** - install at least one of Claude Code or Codex (npm/nvm Codex needs node; keep that node version
+   installed). Their file-based logins come from the backup; if `claude --version` / `codex --version` work but the
+   login was device-bound, **HUMAN STEP**: the human runs `claude auth login` and/or `codex login`.
 4. Clone (location `~/projects/Linko-Bot-Boss`; the default project root is `~/projects`):
    ```bash
    mkdir -p ~/projects && cd ~/projects
@@ -38,58 +42,78 @@ spaces. Replace uppercase placeholders (`HOSTNAME`, `USER`, ...) before running 
    cd Linko-Bot-Boss
    ```
    Verify: `git -C ~/projects/Linko-Bot-Boss rev-parse --short HEAD`.
-5. Preview, then run the helper (idempotent, re-run after any stop):
+5. **Get the encrypted secrets file** from the owner's private backup repo (section 9; the owner gives you access,
+   e.g. a deploy key or `gh auth login`) and ask the owner for the passphrase:
    ```bash
-   python3 scripts/install_machine.py --dry-run     # prints the plan, changes nothing
-   python3 scripts/install_machine.py
+   git clone git@github.com:OWNER/linko-secrets.git ~/linko-secrets      # holds only secrets-backup.age
    ```
-   It runs `uv sync --locked` and `uv run playwright install chromium`, creates the data dir
-   (`~/.local/share/linko-bot-manager`, mode 700) and `~/.config/linko-bot-manager.env` (mode 600, never
-   overwritten), creates the owner `owner` with a **generated password printed once as `INITIAL_PASSWORD=...`**,
-   installs and starts the systemd user service (`scripts/install_service.py`, linger), waits for the health
-   check, publishes it with `tailscale serve --bg --https=8787 http://127.0.0.1:8787` (tailnet only), and prints
-   the final address. `tailscale serve` needs root: **HUMAN STEP (sudo)** - when it cannot run, the helper prints the
-   exact `sudo tailscale serve ...` command; have the human run it (or run it yourself if sudo is passwordless),
-   then re-run the helper. If it prints `HUMAN STEP:` it exits 2: do that step with the human, then re-run.
+6. Preview, then run the helper (idempotent, re-run after any stop). The passphrase goes in the environment of this one
+   command, or leave it unset and type it at the prompt; it is **never an argument** and never printed or logged:
+   ```bash
+   python3 scripts/install_machine.py --dry-run --secrets ~/linko-secrets   # checks the passphrase, lists files, writes nothing
+   LINKO_SECRETS_PASSPHRASE='...' python3 scripts/install_machine.py --secrets ~/linko-secrets
+   ```
+   `--secrets` takes the `.age` file or the directory containing `secrets-backup.age`. Before anything starts the helper
+   restores the manager env files (`~/.config/linko-bot-manager.env` with `XAI_API_KEY` and the other keys, the
+   onboarding env), provider logins (`~/.claude/.credentials.json`, `~/.codex/auth.json`, also placed in `linko-worker`'s
+   and root's homes when those accounts exist and passwordless sudo works; an existing login there is kept), the Tailscale
+   auth key, the GitHub token and the SSH deploy key, all mode 600 and owned by this user. An existing file is copied to
+   `NAME.bak` first. The restored env file's `AI_MANAGER_ALLOWED_HOSTS` gets this machine's address added; check `PATH`
+   and `AI_MANAGER_CLAUDE`/`AI_MANAGER_CODEX` in it still match this machine. A wrong passphrase stops with exit 1
+   and nothing is written.
+   Without `--secrets` the helper creates a fresh env file as before (add keys by hand, section 2).
+   Then it runs `uv sync --locked` and `uv run playwright install chromium`, creates the data dir
+   (`~/.local/share/linko-bot-manager`, mode 700), creates the owner `owner` with a **generated password printed once as
+   `INITIAL_PASSWORD=...`**, installs and starts the systemd user service (`scripts/install_service.py`, linger), waits
+   for the health check, publishes it with `tailscale serve --bg --https=8787 http://127.0.0.1:8787` (tailnet only), and
+   prints the final address. `tailscale serve` needs root: **HUMAN STEP (sudo)** - the helper prints the exact
+   `sudo tailscale serve ...` command; have the human run it (or run it yourself if sudo is passwordless), then re-run.
    **Report the username and `INITIAL_PASSWORD` to the human in chat, once; do not save it to a file or the repo,**
    and tell them to change it after first login if it was ever pasted anywhere (chat, logs, shell history).
    Options: `--hostname`, `--port`, `--username`. Playwright missing OS libraries: install the packages it lists
    (sudo, HUMAN STEP).
-6. **HUMAN STEP (first sign-in)** - the owner opens the printed address, signs in as `owner` with
+7. **HUMAN STEP (first sign-in)** - the owner opens the printed address, signs in as `owner` with
    `INITIAL_PASSWORD` and creates/selects a chat for repair results; note its `CHAT_ID` (Chat menu). Verify: the app shows that chat.
-7. **Worker user (recommended whenever the service user has passwordless sudo, i.e. `sudo -n true` succeeds;
+8. **Worker user (recommended whenever the service user has passwordless sudo, i.e. `sudo -n true` succeeds;
    otherwise HUMAN STEP, sudo password)** - without it, queue workers run as your own user with your files,
    logins and SSH keys; a separate `linko-worker` account keeps them away from those, with no sudo. Do this
-   now, before any work runs, and do it before step 8 so the repair timer uses it:
+   before any work runs, then **re-run the helper's restore** (`python3 scripts/secrets_backup.py restore ~/linko-secrets/secrets-backup.age`)
+   so the Claude/Codex logins are also placed for `linko-worker` and root; existing files are `.bak`-saved:
    ```bash
    sudo python3 scripts/install_worker_user.py install --dry-run   # plan only
    sudo python3 scripts/install_worker_user.py install
-   sudo -u linko-worker -H claude          # then /login  (and/or: codex login --device-auth) - human login
    sudo python3 scripts/install_worker_user.py status
    ```
-   Verify: `status` reports the worker user installed. Details: section 5 below.
-8. **Repair agent** (needs `CHAT_ID` from step 6; not optional - it restores the app after an outage):
+   Verify: `status` reports the worker user installed. If a login could not be restored there
+   (`sudo -u linko-worker -H claude`, then /login; `sudo -H claude` for root) it is a HUMAN STEP. Details: section 5.
+9. **Repair agent** (needs `CHAT_ID` from step 7; not optional - it restores the app after an outage):
    ```bash
    python3 scripts/install_repair.py install --conversation CHAT_ID --auto-detect
    python3 scripts/install_repair.py status
    ```
-   Verify: `status` shows the timer active. If step 7 ran, also log the root host agent in once: `sudo -H claude` (then /login) or `sudo -H codex login --device-auth` (human).
-9. Verify the service and health check:
-   ```bash
-   systemctl --user is-active linko-bot-manager.service        # active
-   curl -fsS -H 'Host: localhost' http://127.0.0.1:8787/api/auth-status   # JSON with "release_commit"
-   uv run python -m ai_manager.cli doctor                       # no FAIL
-   ```
-10. Verify tailnet-only exposure and print the address:
-   ```bash
-   tailscale serve status            # lists https://HOSTNAME:8787 -> http://127.0.0.1:8787, no "Funnel on"
-   echo "https://$(tailscale status --json | python3 -c 'import json,sys;print(json.load(sys.stdin)["Self"]["DNSName"].rstrip("."))'):8787/"
-   ```
-   Give that address to the owner. If Funnel is on: `tailscale funnel --https=8787 off`.
-11. Tell the human: **"In each Bot Boss, open the menu > Machines > Add machine and add the others' addresses."**
+   Verify: `status` shows the timer active.
+10. Verify the service, health and exposure:
+    ```bash
+    systemctl --user is-active linko-bot-manager.service        # active
+    curl -fsS -H 'Host: localhost' http://127.0.0.1:8787/api/auth-status   # JSON with "release_commit"
+    uv run python -m ai_manager.cli doctor                       # no FAIL
+    tailscale serve status            # https://HOSTNAME:8787 -> http://127.0.0.1:8787, no "Funnel on"
+    ```
+    If Funnel is on: `tailscale funnel --https=8787 off`.
+11. Give the owner the address the helper printed (`https://HOSTNAME:8787/`) and tell them: **"In each Bot Boss, open the
+    menu > Machines > Add machine and add the others' addresses."**
 
-The sections below are the manual equivalents of what the helper does, plus optional extras
-(extra instances) and troubleshooting; the repair agent and worker user are steps 7-8 above, detailed in section 5.
+### What is NOT portable (still needs a human)
+
+- **Tailscale device approval**: a new device must be approved in the admin console (or use a pre-authorized auth key);
+  the helper never does it. The login itself needs `sudo tailscale up`.
+- **Provider logins bound to the device**: Claude/Codex credential files are restored, but a provider that ties the
+  login to the machine, expires or revokes it rejects it: run `claude auth login` / `codex login` (also as
+  `linko-worker` and root) by hand. Provider accounts that live in a keyring or browser session are not in the backup.
+- **sudo password steps**: apt packages, `tailscale serve`, the worker user, placing logins for other accounts without
+  passwordless sudo.
+- **Owner password and first sign-in**: a new owner password is generated per machine.
+- Per-machine paths in the env file (`PATH`, Claude/Codex/node locations) may differ; check them.
 
 ## 1. Install prerequisites and clone (manual)
 
@@ -411,7 +435,12 @@ The script fails with a clear message if it is missing. An HMAC-SHA256 tag over 
 decryption, so a wrong passphrase is reported as such and nothing is restored.
 Plain keys never go to git. Only the encrypted file is committed.
 
-By default it backs up `~/.config/linko-onboarding.env` and `~/.config/linko-bot-manager.env`. Add more paths
+By default it backs up, for each that exists: `~/.config/linko-onboarding.env`, `~/.config/linko-bot-manager.env`,
+the provider logins `~/.claude/.credentials.json` and `~/.codex/auth.json` (restore also places them for `linko-worker`
+and root), the Tailscale auth key `~/.config/linko-tailscale-authkey`, the GitHub token `~/.config/linko-github-token`
+(plus any file named by `AI_MANAGER_GITHUB_TOKEN_FILE` / `AI_MANAGER_GITHUB_COMPANY_TOKEN_FILE` in the env file) and the
+SSH deploy key for backup pushes `~/.ssh/linko-deploy-key` (+ `.pub`). Save a key under those names to have it included.
+Add more paths
 with `--file PATH` (repeatable) or a list file at `~/.config/linko-secrets-backup.txt` (one path per line, `#` comments).
 Per-instance env files such as `~/.config/linko-bot-manager-NAME.env` belong in that list. Requested paths
 that do not exist are an error; default paths that are absent are skipped with a note.
@@ -446,10 +475,19 @@ the environment of that one command only.
    git push
    ```
 
-Run it again after any key changes (new Syncthing or Tailscale key, a new instance). The backup is only as current
-as its last run. Check `git status` before pushing: a plaintext file in that repo would be a leak, so stop and fix it.
+**Refresh the backup whenever a key changes** (one command, then commit and push the one file):
+
+```bash
+cd ~/projects/Linko-Bot-Boss && uv run python scripts/secrets_backup.py backup ~/linko-secrets && git -C ~/linko-secrets commit -am "Refresh secrets backup" && git -C ~/linko-secrets push
+```
+
+The owner should re-run it after adding any new key (`XAI_API_KEY`, a provider login, a Tailscale or GitHub key, a new
+instance); a key added after the last backup is not on a rebuilt machine. The backup is only as current as its last run. Check `git status` before pushing: a plaintext file in that repo would be a leak, so stop and fix it.
 
 ### 9.2 Restore on a fresh VM
+
+The normal path is `python3 scripts/install_machine.py --secrets ~/linko-secrets` (Quick path, step 6), which does
+the restore for you. The manual restore below is for re-running it alone.
 
 1. Install the checkout and its dependencies as in sections 1 and 2 (stop before "Create the service environment";
    the restore supplies the env files). `uv sync --locked` must have run, since the restore uses its dependencies.
