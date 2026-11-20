@@ -759,6 +759,25 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         from .machines import read
         return {'machines': read(db)}
 
+    @app.get("/api/harnesses", dependencies=[Depends(require_owner)])
+    def read_harnesses(project_id: str | None = None):
+        from . import harness
+        project_id = scope(project_id) or None
+        if project_id:
+            registry.get(project_id)
+        return harness.state(db, project_id)
+
+    @app.put("/api/harnesses", dependencies=[Depends(require_owner)])
+    def save_harnesses(body: dict, project_id: str | None = None):
+        from . import harness
+        project_id = scope(project_id) or None
+        if project_id:
+            registry.get(project_id)
+        text = harness.save(db, project_id, body)
+        if text:  # applies from the next manager turn; say so in that chat
+            harness.notice(db, chat.conversation(project_id)["id"], text)
+        return {**harness.state(db, project_id), "notice": text}
+
     @app.put('/api/machines', dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def save_machines(body: dict):
         from .machines import save

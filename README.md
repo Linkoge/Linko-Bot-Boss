@@ -22,7 +22,8 @@ projects run in parallel (no global cap, no exceptions per project). States: **q
 **held** task is a queued task with the hold flag set; it is skipped until released. Order within a project is the only
 dependency. The code is `ai_manager/core.py`. [RULES.md](RULES.md) is the single source of rules: the manager
 and worker each omit sections marked only for the other role (manager-only: the manager paragraph of rule 7 and
-rules 8–9; worker-only: rule 11).
+rules 8–9; worker-only: rule 11). The manager and worker prompts themselves live in harness files (see
+[Harnesses](#harnesses)).
 
 1. **Worker.** The oldest eligible queued task gets an isolated Git worktree and branch
    (`linko/assignment-<id>`, kept on disk, never deleted). The worker implements, adds the permanent tests for its change
@@ -240,6 +241,56 @@ directories. Manager tools cannot edit files, commit, or execute project code. C
 shell and patch tools disabled; Claude exposes only Read (also used for attachments) and the application tools.
 The project brief and repository path travel together. The scratch directory is used only for All Projects and
 attachment storage. Permanent coverage: `tests/test_manager_repository.py` and `tests/test_claude_provider.py`.
+
+## Harnesses
+
+A harness decides which prompt a manager or worker runs with, which manager actions it may use and the manager's
+autonomy. Each harness is a folder with `harness.json` and a prompt file. Built-ins live in `harnesses/`:
+
+- **Linko manager** (`linko`, default): the full manager. Its prompt is `harnesses/linko-manager/prompt.md`, composed
+  exactly as before: the manager view of RULES.md, the prompt, then the README's Architecture design principles.
+- **Zero** (`zero`): a plain agent for brainstorming. Its prompt has only RULES.md rules 1, 3 and 10 and a short
+  `harnesses/zero/prompt.md`. It keeps the delegate, task-control, read/inspect and To-Do actions, but has no deploy,
+  host repair, pause/resume or auto-mode actions. Its default autonomy is Ask.
+- **Coding** (`coding`, the only worker harness so far): today's worker: worktree, permanent checks, repair rounds,
+  then merge and deploy by the application. Prompt: the worker view of RULES.md plus `harnesses/coding/prompt.md`.
+
+**Choosing.** The round ☼ button left of the chat menu (▾) opens the harness picker for the current chat. It has the
+manager harness, its autonomy and, for a project, the default worker harness, each with a short description. Every
+change saves at once (`GET`/`PUT /api/harnesses?project_id=`). All Projects has its own manager choice. A manager change
+applies from the next manager turn and posts a short notice in that chat. A new prompt or tool starts a fresh native
+thread, which still gets the recent chat history. Keyboard: ArrowDown/ArrowUp on the button opens it, Tab cycles
+inside, Escape closes it and returns focus.
+
+**Per task.** `delegate` accepts an optional `harness` (a worker harness id from the manager context
+`harness.worker_options`). Without it the project's default is used. Every new task records its harness once (`tasks.harness` column plus event
+`task.harness`). The task card shows it (“Harness: Coding”), `read_task`/`list_tasks` return it, and every turn,
+repair round and continue of that task runs it. A later default change does not move it, just like the task's model
+pair. A task from before harnesses records its project's default at its first dispatch. If a task's harness becomes
+invalid, the task fails with the reason. A broken manager choice also fails the turn with the reason. Neither ever
+switches silently.
+
+**Autonomy** (manager harnesses): `ask` means notice turns cannot start follow-ups or auto tasks; they report and wait
+for the owner. `finish_request` keeps today's bounded follow-ups (at most 3 per owner request) plus auto mode when on.
+`rounds` (worker, inspector review, fix) is shown disabled as “not yet available”. The owner can override a harness's
+default autonomy per chat scope. The existing follow-up limits and auto-mode bounds in code apply to every choice.
+
+**Extra harnesses.** Put folders in `AI_MANAGER_HARNESS_DIR` (default `<data>/harnesses`). Each folder needs
+`harness.json` with `id` (lowercase, unique, not a built-in id), `name`, `role` (`manager` or `worker`), `description`
+and `prompt` (a file name inside the folder; no symlinks or paths). Optional `rules` is `"all"` or a list of RULES.md
+rule numbers. Rules 1, 3 and 10 are always added. A manager also needs `actions` (`"all"` or a subset of the
+manager tool's actions; a harness cannot add any) and `autonomy`, and may set `architecture_guide`. Enabling `deploy`,
+`save_deploy_setup` or `emergency_repair` (or `"all"`) requires `rules: "all"`. A worker harness may not set `deploy`,
+`push`, `merge`, `actions`, `autonomy`, `tools`, `checks` or `gate`. The picker lists invalid folders with the reason,
+and they are never used.
+
+**What no harness can change.** The checks happen in code no matter what the prompt says. Actions outside a harness's
+list are rejected. Restricted-instance rejections still apply. Notice turns cannot do anything that needs an
+owner-typed message. Follow-up and auto-mode limits stay in place. The host agent keeps its own confirmation rules for
+irreversible or security-weakening work (`scripts/emergency_repair.py`). Workers keep the fixed flow: the application
+runs the checks, merges and deploys, and workers never push or deploy (RULES.md rule 3). Code:
+`ai_manager/harness.py`, `ai_manager/static/harness.js`. Permanent coverage: `tests/test_harness.py`,
+`tests/test_harness_browser.py`.
 
 ## Manager screenshots
 

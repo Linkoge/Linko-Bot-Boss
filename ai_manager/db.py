@@ -112,6 +112,7 @@ class Database:
                 ("workspace_base", "TEXT"),
                 ("chain_root", "TEXT"),  # the owner-typed request this task belongs to; set once, never reset
                 ("chain_parent", "TEXT"),  # the task whose result notice caused this automatic follow-up
+                ("harness", "TEXT"),  # {"id","name"} of the worker harness, recorded once (ai_manager/harness.py)
             ):
                 if name not in task_columns:
                     conn.execute(f"ALTER TABLE tasks ADD COLUMN {name} {definition}")

@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 
 from .attachments import native_image
 from .chat_memory import NOTICE as COMPACTION_NOTICE, Compactor, manager_view
-from .codex import MANAGER_INSTRUCTIONS, RESTRICTED_INSTRUCTIONS, AppServer, CodexError, TurnUsage, process_start
+from . import harness as harnesses
+from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
 from .history import CHAT_WINDOW
 from .model_settings import manager_route, worker_context
@@ -450,6 +451,7 @@ class Chat:
         context = self.context(conversation["project_id"])
         from .pipeline import Pipeline
         context['deployment'] = Pipeline(self.db, self.registry).summary(conversation['project_id'])
+        context['harness'] = harnesses.context(self.db, conversation['project_id'])  # counted in the context ceiling
         if conversation['project_id']:
             self.fit_context(context)
         saved = self.db.setting("manager_context:" + conversation["id"], {})
@@ -720,10 +722,11 @@ class Chat:
                     "UPDATE executions SET model=?,effort=?,status='queued',retry_at=NULL WHERE id=?",
                     (route["model"], route["effort"], execution_id),
                 )
-            from .orchestration import MANAGER_TOOL, RESTRICTED_TOOL
-
-            tool, instructions = (RESTRICTED_TOOL, RESTRICTED_INSTRUCTIONS) if self.restricted else (
-                MANAGER_TOOL, MANAGER_INSTRUCTIONS)
+            # The scope's manager harness, read at each turn start: a change applies from the next turn. A changed
+            # prompt or tool changes the schema below, so the turn starts a fresh thread with the recent history.
+            harness, autonomy = harnesses.manager_turn(self.db, conversation["project_id"])
+            tool = harnesses.manager_tool(harness, self.restricted)
+            instructions = harness.instructions(self.restricted)
             schema = hashlib.sha256((instructions + json.dumps(tool, sort_keys=True)).encode()).hexdigest()
             prior = conversation["thread_id"]
             if self.db.setting("manager_tool_schema:" + conversation["id"]) != schema:
@@ -734,7 +737,7 @@ class Chat:
             handler = lambda params: self.action_handler(
                 conversation["project_id"],
                 {**params, "manager_execution_id": execution_id, "conversation_id": conversation["id"],
-                 "internal": not owner_authored(self.db, execution_id)},
+                 "internal": not owner_authored(self.db, execution_id), "harness": harness.id, "autonomy": autonomy},
             )
             if prior:
                 # A resumed (recovered) thread may call tools as soon as it is loaded: register first.

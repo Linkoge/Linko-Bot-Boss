@@ -1,0 +1,11 @@
+{
+  "id": "linko",
+  "name": "Linko manager",
+  "role": "manager",
+  "description": "The full Linko Bot Boss manager: all of RULES.md, briefing, delegation, To-Do, deploy and host-repair rules, every manager action.",
+  "prompt": "prompt.md",
+  "rules": "all",
+  "architecture_guide": true,
+  "actions": "all",
+  "autonomy": "finish_request"
+}

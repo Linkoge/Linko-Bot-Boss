@@ -1,0 +1,8 @@
+{
+  "id": "coding",
+  "name": "Coding",
+  "role": "worker",
+  "description": "The standard worker: an isolated Git worktree, permanent checks after every turn, repair rounds, then the application merges and deploys.",
+  "prompt": "prompt.md",
+  "rules": "all"
+}

@@ -303,7 +303,7 @@ function renderProjectMenu(){
   menu.scrollTop=scroll;renderingProjectMenu=false;
 }
 $('project-menu-close').onclick=()=>closeProjectMenu(true);
-$('project-menu-button').onclick=()=>{closeChatMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu').closest('.navigation').classList.add('project-menu-open');$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-pressed="true"]')?.focus({preventScroll:true});$('project-menu').scrollTop=0;};
+$('project-menu-button').onclick=()=>{closeChatMenu();if(typeof closeHarnessMenu==='function')closeHarnessMenu();if(!$('project-menu').hidden){closeProjectMenu(true);return;}renderProjectMenu();$('project-menu').hidden=false;$('project-menu').closest('.navigation').classList.add('project-menu-open');$('project-menu-button').setAttribute('aria-expanded','true');$('project-menu').querySelector('[aria-pressed="true"]')?.focus({preventScroll:true});$('project-menu').scrollTop=0;};
 $('project-menu').onkeydown=event=>{
   const controls=[...$('project-menu').querySelectorAll('button:not(:disabled),input:not(:disabled),summary')].filter(e=>e.getClientRects().length),index=controls.indexOf(document.activeElement);
   if(event.key==='Escape'){event.preventDefault();closeProjectMenu(true);}
@@ -313,7 +313,7 @@ $('project-menu').onkeydown=event=>{
 $('project-menu').addEventListener('focusout',event=>{if(!renderingProjectMenu&&event.relatedTarget&&!$('project-menu').contains(event.relatedTarget)&&event.relatedTarget!==$('project-menu-button'))closeProjectMenu();});
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#project-menu')&&!event.target.closest('#project-menu-button'))closeProjectMenu();});
 function closeChatMenu(focus=false){$('chat-menu').closest('.navigation').classList.remove('chat-menu-open');$('chat-menu').hidden=true;$('chat-menu-button').setAttribute('aria-expanded','false');if(focus)$('chat-menu-button').focus({preventScroll:true});}
-function openChatMenu(last=false){closeProjectMenu();$('chat-menu').hidden=false;$('chat-menu').closest('.navigation').classList.add('chat-menu-open');$('chat-menu-button').setAttribute('aria-expanded','true');const buttons=chatMenuButtons();buttons[last?buttons.length-1:0]?.focus();}
+function openChatMenu(last=false){closeProjectMenu();if(typeof closeHarnessMenu==='function')closeHarnessMenu();$('chat-menu').hidden=false;$('chat-menu').closest('.navigation').classList.add('chat-menu-open');$('chat-menu-button').setAttribute('aria-expanded','true');const buttons=chatMenuButtons();buttons[last?buttons.length-1:0]?.focus();}
 function chatMenuButtons(){return [...$('chat-menu').querySelectorAll('button:not(:disabled)')];}
 $('chat-menu-button').onclick=()=>{$('chat-menu').hidden?openChatMenu():closeChatMenu(true);};
 $('chat-menu-button').onkeydown=event=>{if(['ArrowDown','ArrowUp'].includes(event.key)){event.preventDefault();openChatMenu(event.key==='ArrowUp');}};
@@ -327,7 +327,7 @@ $('chat-menu').addEventListener('focusout',event=>{if(!$('chat-menu').contains(e
 document.addEventListener('pointerdown',event=>{if(!event.target.closest('#chat-menu')&&!event.target.closest('#chat-menu-button'))closeChatMenu();});
 async function selectProject(id){
   if(id&&state.portfolio?.projects.find(p=>p.id===id)?.visible===false)id=null;
-  closeChatMenu();
+  closeChatMenu();if(typeof closeHarnessMenu==='function')closeHarnessMenu();
   if(id!==state.project)audioChanged();
   $('agent-list').replaceChildren();
   if(state.draftContextReady){state.drafts.set(state.project,$('message-input').value);saveDrafts();}
@@ -404,6 +404,7 @@ function renderTasks(){
   for(const t of tasks){
     const row=element('article',undefined,'panel');row.dataset.taskId=t.id;
     row.append(element('h3',t.title),element('small',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
+    if(t.harness)row.append(element('small',`Harness: ${t.harness}`,'task-harness'));
     if(t.rounds)row.append(element('small',`Repair rounds ${t.rounds} of ${t.repair_limit}`));
     const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));appendTaskControls(controls,t);
     if(t.result_summary)row.append(element('p',t.result_summary,'result-summary'));

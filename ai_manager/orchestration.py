@@ -7,11 +7,13 @@ import json
 import logging
 
 from . import chat_memory
+from . import harness as harnesses
 from .chat import internal_result
 from .chat_memory import NAMES as CHAT_MEMORY
 from .core import Tasks
 from .auto_mode import TRIGGER as AUTO_TRIGGER
-from .followups import TRIGGERS, Followups
+from .followups import TRIGGERS, Followups, refuse
+from .harness import MANAGER_ACTIONS
 from .history import Maintenance
 from .pipeline import RESTRICTED
 from .project_memory import ProjectMemory
@@ -29,36 +31,7 @@ MANAGER_TOOL = {
         "properties": {
             "action": {
                 "type": "string",
-                "enum": [
-                    "deploy",
-                    "deployment_status",
-                    "save_deploy_setup",
-                    "emergency_repair",
-                    "repair_status",
-                    "list_todos",
-                    "save_todo",
-                    "delegate",
-                    "continue",
-                    "hold",
-                    "release",
-                    "cancel",
-                    "read_document",
-                    "list_files",
-                    "search_code",
-                    "screenshot",
-                    "read_memory",
-                    "read_project",
-                    "list_memory",
-                    "list_history",
-                    "read_task",
-                    "read_result",
-                    "list_tasks",
-                    "read_history",
-                    "pause_project",
-                    "resume_project",
-                    "set_auto_mode",
-                    "auto_summary",
-                ],
+                "enum": list(MANAGER_ACTIONS),
             },
             "url": {"type": "string", "description": "HTTP(S) page reachable by the server, including Tailscale; no login."},
             "device": {"type": "string", "enum": ["desktop", "mobile"]},
@@ -79,6 +52,7 @@ MANAGER_TOOL = {
             "todos": {"type": "array", "minItems": 1, "maxItems": 200, "items": {"type": "string"}},
             "model": {"type": "string"},
             "effort": {"type": "string"},
+            "harness": {"type": "string", "description": "delegate only: a worker harness id from context harness.worker_options; omit for the project's default worker harness. A task keeps its first harness."},
             "title": {"type": "string"},
             "details": {"type": "string", "description": "To-Do details, or additional instructions for continue; appended alongside objective."},
             "path": {"type": "string"},
@@ -130,6 +104,13 @@ class Scheduler:
         action = args["action"]
         if self.restricted and action in RESTRICTED_ACTIONS:
             raise ValueError(RESTRICTED)
+        # The turn's manager harness may only narrow the actions; code below enforces every rule regardless.
+        if params.get("harness"):
+            harness, autonomy = harnesses.get(self.db, "manager", params["harness"]), params.get("autonomy")
+        else:
+            harness, autonomy = harnesses.manager_turn(self.db, selected_project)
+        if action in MANAGER_ACTIONS and action not in harnesses.enabled_actions(harness, self.restricted):
+            raise ValueError(f"{action} is not enabled by the {harness.name} harness")
         execution = self.db.one(
             "SELECT stop_requested,finished_at,rowid AS queue_position FROM executions WHERE id=?", (params.get("manager_execution_id"),)
         )
@@ -140,6 +121,8 @@ class Scheduler:
             sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
             if sources:
                 args = {**args, 'todos': sources}
+        if internal and action in {"delegate", "continue"} and (autonomy or harness.autonomy) == "ask":
+            raise refuse("the manager harness autonomy is 'ask': report the result to the owner and wait")
         # A result notice is not the owner: only reads, idea To-Dos and a bounded delegate/continue get through.
         followup = self.followups.authorize(action, args, selected_project, params) if internal else None
         chain_root = followup["root"] if followup else params.get("manager_execution_id")
@@ -293,6 +276,7 @@ class Scheduler:
                 project_id, args["objective"], params["conversation_id"],
                 f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",
                 acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
+                harness=args.get("harness"),
                 # An auto task has no owner-typed root, so its own notices get no bounded follow-ups (only auto mode).
                 chain_root=None if followup and followup.get("auto") else chain_root,
                 chain_parent=followup and followup["parent"],

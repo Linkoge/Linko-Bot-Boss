@@ -24,10 +24,12 @@ from pathlib import Path
 
 from . import fence, isolation
 from .attachments import native_image
-from .codex import WORKER_RULES, AppServer, CodexError, TurnUsage, process_start
+from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
 from .deploy_auto import ACCEPTANCE, OBJECTIVE, SETUP_FILE, TITLE
 from .fence import Busy, main_branch
+from . import harness as harnesses
+from .harness import builtin
 from .listing import CARD_WINDOW, bounded_listing
 from .model_settings import RouteBlocked, assignment_route
 from .pipeline import IDENTITY, git, merge_tree
@@ -39,7 +41,7 @@ REPAIR_ROUNDS = 5
 # A To-Do can contain a 200-character title, a separator and 24000 characters of details.
 MAX_OBJECTIVE_CHARS = 24202
 SMOKE_SECONDS, SUITE_SECONDS, PROBE_SECONDS = 180, 600, 60
-WORKER_INSTRUCTIONS = WORKER_RULES + "\nYou are a worker. The application runs the permanent checks and merges; you implement.\n"
+WORKER_INSTRUCTIONS = builtin("coding").instructions()  # the default worker harness: harnesses/coding/prompt.md
 TEST_FILE = re.compile(r"(^|/)(test_[^/]*|[^/]*_test)\.py$")
 log = logging.getLogger(__name__)
 
@@ -171,13 +173,14 @@ class Tasks:
         if not row:
             raise ValueError("Unknown task")
         selected = self.db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.model_selected' ORDER BY seq DESC LIMIT 1", (task_id,))
-        return {**self.record(row), "worker_route": json.loads(selected["payload"]) if selected else None}
+        return {**self.record(row), "worker_route": json.loads(selected["payload"]) if selected else None,
+                "harness": json.loads(row["harness"]) if row["harness"] else None}
 
     @staticmethod
     def context(task):
         keys = ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision", "rounds",
                 "workspace", "workspace_branch", "merge", "retry_at", "chain_root", "chain_parent")
-        return {k: task.get(k) for k in keys} | {"worker_route": task.get("worker_route")}
+        return {k: task.get(k) for k in keys} | {"worker_route": task.get("worker_route"), "harness": task.get("harness")}
 
     def page(self, project_id=None, *, limit=CARD_WINDOW, offset=0, query="", status=None, through=None, older=False):
         if status not in (None, 'queued', 'held', 'running', 'done', 'failed'):
@@ -189,7 +192,8 @@ class Tasks:
             length(description)>300 AS description_truncated,state,{status_sql} AS status,
             blocker,lease_owner,revision,rounds,created_at,updated_at,retry_at,
             (SELECT history_preview(output) FROM executions e WHERE e.task_id=tasks.id
-                ORDER BY e.rowid DESC LIMIT 1) AS result_summary"""
+                ORDER BY e.rowid DESC LIMIT 1) AS result_summary,
+            json_extract(harness,'$.name') AS harness"""
         where = "instr(lower(description),lower(?))>0"
         params = [query]
         if status:
@@ -209,11 +213,16 @@ class Tasks:
         return self.page(project_id)['tasks']
 
     def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None,
-            model_route=None, todos=None, reuse_objective=True, chain_root=None, chain_parent=None, on_create=None):
+            model_route=None, todos=None, reuse_objective=True, chain_root=None, chain_parent=None, on_create=None,
+            harness=None):
+        """harness: a worker harness id, else the project's default; recorded once and kept (shown = dispatched)."""
         if not description.strip() or len(description) > MAX_OBJECTIVE_CHARS:
             raise ValueError(f"Objective must be 1–{MAX_OBJECTIVE_CHARS} characters")
         if not isinstance(acceptance, str) or len(acceptance) > 12000:
             raise ValueError("Acceptance criteria must be at most 12000 characters")
+        if harness is not None and not isinstance(harness, str):
+            raise ValueError("harness must be a worker harness id")
+        worker_harness = harnesses.get(self.db, "worker", harness or harnesses.default_worker(self.db, project_id))
         now, task_id = time.time(), new_id()
         with self.db.transaction() as conn:
             previous = conn.execute(
@@ -242,6 +251,7 @@ class Tasks:
             self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
             if model_route:
                 self.db.event(conn, "task.model_selected", model_route, project_id, task_id)
+            harnesses.record_task(self.db, conn, project_id, task_id, worker_harness)
             if selected:
                 self.db.event(conn, "task.context", selected, project_id, task_id)
             if todos:
@@ -442,7 +452,11 @@ class Core:
         await self.open_workspace(eid, server, root, project)
         await server.start()
         route = assignment_route(self.db, server, task)
-        thread_id = await server.thread(root, WORKER_INSTRUCTIONS, task["native_thread"], route["model"])
+        try:
+            harness = harnesses.task_harness(self.db, task)  # recorded once: every round runs the same harness
+        except ValueError as error:
+            raise RouteBlocked(str(error)) from error
+        thread_id = await server.thread(root, harness.instructions(), task["native_thread"], route["model"])
         queue = server.queues[thread_id] = asyncio.Queue()
         server.question_handlers[thread_id] = lambda method, params: self.question(eid, method, params)
         self.db.run("UPDATE executions SET pid=?,process_start=?,model=?,effort=?,thread_id=? WHERE id=?",

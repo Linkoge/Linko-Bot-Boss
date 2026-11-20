@@ -122,7 +122,7 @@ async def test_manager_default_five_compact_sql_filters_offset_and_full_read(rec
     assert {r['id'] for r in rows if r['status'] != 'done'} == {f'one-active-{i}' for i in range(4)}
     compact = {'id', 'project_id', 'description', 'description_truncated', 'title', 'state', 'status',
                'blocker', 'lease_owner', 'revision', 'rounds', 'repair_limit', 'created_at', 'updated_at',
-               'retry_at', 'result_summary'}
+               'retry_at', 'result_summary', 'harness'}
     assert all(set(row) == compact for row in rows)
     assert all(len(row['description']) <= 300 for row in rows)
     collected = [r['id'] for r in rows if r['status'] == 'done']

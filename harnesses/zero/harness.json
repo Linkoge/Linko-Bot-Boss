@@ -1,0 +1,13 @@
+{
+  "id": "zero",
+  "name": "Zero",
+  "role": "manager",
+  "description": "A plain agent with a minimal prompt: only the hard safety rules plus the delegate, inspect and To-Do tools. No briefing or brevity rules; good for brainstorming.",
+  "prompt": "prompt.md",
+  "rules": [],
+  "architecture_guide": false,
+  "actions": ["delegate", "continue", "hold", "release", "cancel", "list_tasks", "read_task", "read_result",
+              "list_files", "search_code", "read_document", "screenshot", "read_project", "read_memory",
+              "list_memory", "list_history", "read_history", "list_todos", "save_todo"],
+  "autonomy": "ask"
+}
