@@ -615,6 +615,7 @@ function updateChatActions(){
   const disabled=!state.history?.messages.length||state.pending.has(state.project)||!!state.execution||state.history.messages.some(m=>['queued','streaming','waiting'].includes(m.status));
   for(const id of ['archive-chat','clear-chat'])$(id).disabled=disabled;
   $('archive-part-chat').disabled=disabled||(!state.history?.has_more&&state.history.messages.length<=10);
+  $('compact-chat').disabled=disabled;if(typeof renderCompactionNotice==='function')renderCompactionNotice();
   updateChatTrashAvailability();
   for(const id of ['copy-all','copy-five'])$(id).disabled=!state.history?.messages.length||!!state.copyingChat;
   renderAttachments();

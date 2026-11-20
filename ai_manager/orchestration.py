@@ -6,7 +6,9 @@ import hashlib
 import json
 import logging
 
+from . import chat_memory
 from .chat import internal_result
+from .chat_memory import NAMES as CHAT_MEMORY
 from .core import Tasks
 from .auto_mode import TRIGGER as AUTO_TRIGGER
 from .followups import TRIGGERS, Followups
@@ -258,6 +260,8 @@ class Scheduler:
                                    status=args.get('status'))
             return {'assignments': page['tasks'], 'next_offset': page['next_offset']}
         project_id = args.get("project_id") or selected_project
+        if action in {"read_memory", "list_memory"} and not project_id:
+            return self.global_memory(action, args, offset)  # All Projects chat memory (project_id NULL)
         if not project_id or (selected_project and selected_project != project_id):
             raise ValueError("Select the intended project; cross-project work requires All Projects context")
         project = self.registry.get(project_id)
@@ -369,6 +373,8 @@ class Scheduler:
             return {**self.tasks.context(task), "result": result, "checks": events("task.check", "task.round"),
                     "evidence": events("task.evidence")}
         if action == "read_memory":
+            if args.get("path") in CHAT_MEMORY and args.get("query", "").strip():
+                return chat_memory.search(self.db, project_id, args["path"], args["query"], offset)
             if not args.get("path"):
                 return ProjectMemory(self.db, self.registry).snapshot(project_id)
             row = self.db.one("SELECT content FROM memory WHERE project_id=? AND name=?", (project_id, args["path"]))
@@ -391,6 +397,20 @@ class Scheduler:
             return inspect_repository(root, action, args.get("path", "."), args.get("query", ""), offset)
         raise ValueError("Unsupported action")
 
+    def global_memory(self, action, args, offset):
+        if action == "list_memory":
+            rows = self.db.all("SELECT name,updated_at FROM memory WHERE project_id IS NULL AND name IN (?,?) "
+                               "AND instr(lower(name),lower(?))>0 ORDER BY name", (*CHAT_MEMORY, args.get("query", "")))
+            return {"records": rows, "next_offset": None}
+        if args.get("path") not in CHAT_MEMORY:
+            raise ValueError(f"All Projects memory has only {' and '.join(CHAT_MEMORY)}; select a project for its brief")
+        if args.get("query", "").strip():
+            return chat_memory.search(self.db, None, args["path"], args["query"], offset)
+        row = self.db.one("SELECT content FROM memory WHERE project_id IS NULL AND name=?", (args["path"],))
+        content = row["content"] if row else '{"items":[]}'
+        return {"path": args["path"], "content": content[offset:offset + 12000],
+                "next_offset": offset + 12000 if len(content) > offset + 12000 else None}
+
     async def tick(self):
         async with self.lock:
             if receipt := self.pipeline.report():
@@ -400,6 +420,7 @@ class Scheduler:
             await self.observer.observe({key: self.chat.server for key in self.chat.jobs})
             await self.chat.recover()
             await self.chat.deliver_results()
+            self.chat.compactor.check()  # between turns only; at most one automatic attempt per threshold crossing
 
     async def run(self):
         while True:

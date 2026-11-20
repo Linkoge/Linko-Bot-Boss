@@ -314,3 +314,5 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .project-menu-machine-form{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.4fr) auto auto;gap:6px;padding:6px 4px}
 .project-menu-machine-form input{min-width:0}
 @media(max-width:600px){.project-menu-machine-form{grid-template-columns:1fr}}
+#compaction-notice{display:flex;align-items:center;gap:8px;margin:0 0 10px;padding:6px 10px;border:1px solid #67553a;border-radius:8px;background:#2e281e;color:#e4c58b;font-size:12px}#compaction-notice span{flex:1;overflow-wrap:anywhere}#compaction-notice button{min-height:30px;padding:2px 9px}
+#chat-compact-proposal{max-height:55dvh;overflow:auto}.compact-section h3{font-size:13px;margin:14px 0 4px}.compact-section ul{margin:0;padding-left:20px}.compact-section li{margin:3px 0;overflow-wrap:anywhere}.compact-section p{white-space:pre-wrap;overflow-wrap:anywhere;margin-bottom:6px}

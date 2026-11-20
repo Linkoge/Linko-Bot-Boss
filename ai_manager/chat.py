@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .attachments import native_image
+from .chat_memory import NOTICE as COMPACTION_NOTICE, Compactor, manager_view
 from .codex import MANAGER_INSTRUCTIONS, RESTRICTED_INSTRUCTIONS, AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
 from .history import CHAT_WINDOW
@@ -76,6 +77,7 @@ class Chat:
         self.attachments = None
         self.workspace = db.path.parent / "chat-workspace"
         self.workspace.mkdir(exist_ok=True, mode=0o700)
+        self.compactor = Compactor(self)
 
     def conversation(self, project_id=None):
         if project_id:
@@ -159,7 +161,8 @@ class Chat:
                 'deleted_message_ids': [r['id'] for r in self.db.all(
                     "SELECT id FROM messages WHERE conversation_id=? AND EXISTS(SELECT 1 FROM settings "
                     "WHERE key='chat_deleted_message:' || messages.id)", (conversation['id'],))],
-                'trash': self.db.setting('chat_trash:' + (project_id or 'global'))}
+                'trash': self.db.setting('chat_trash:' + (project_id or 'global')),
+                'compaction_notice': self.db.setting(COMPACTION_NOTICE + (project_id or 'global'))}
 
     def delete_message(self, project_id, conversation_id, message_id, confirmed):
         """Remove a whole display message, preserving native/task/recovery evidence."""
@@ -241,22 +244,12 @@ class Chat:
                     project = self.registry.get(project_id) if project_id else None
                     label = (project["display_name"] or project["name"]) if project else "All Projects"
                     title = f"{label} · {datetime.fromtimestamp(now, timezone.utc):%Y-%m-%d %H:%M UTC}"
-                archive_id = new_id() if keep_last else conversation_id
                 if keep_last:
-                    conn.execute(
-                        "INSERT INTO conversations(id,context,project_id,thread_id,summary,created_at) VALUES(?,?,?,?,?,?)",
-                        (archive_id, "archive:" + archive_id, project_id, conversation["thread_id"],
-                         conversation["summary"], conversation["created_at"]),
-                    )
-                    count = conn.execute(
-                        "UPDATE messages SET conversation_id=? WHERE conversation_id=? AND rowid<?",
-                        (archive_id, conversation_id, cutoff),
-                    ).rowcount
-                    conn.execute("UPDATE conversations SET thread_id=NULL,summary='' WHERE id=?", (conversation_id,))
-                    conn.execute("DELETE FROM settings WHERE key=?", ("manager_context:" + conversation_id,))
+                    archive_id, count = self.archive_messages(conn, conversation, project_id, title, now, cutoff)
                 else:
+                    archive_id = conversation_id
                     conn.execute("UPDATE conversations SET context=? WHERE id=?", ("archive:" + archive_id, archive_id))
-                conn.execute("INSERT INTO chat_archives VALUES(?,?,?)", (archive_id, title, now))
+                    conn.execute("INSERT INTO chat_archives VALUES(?,?,?)", (archive_id, title, now))
             else:
                 key = "chat_trash:" + (project_id or "global")
                 previous = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
@@ -294,6 +287,25 @@ class Chat:
             else "Chat moved to trash. Only the latest cleared chat can be restored.",
             "conversation_id": fresh_id,
         }
+
+    @staticmethod
+    def archive_messages(conn, conversation, project_id, title, now, cutoff=None):
+        """Move the chat's messages (all, or those before `cutoff` rowid) into a new named archive; the current chat
+        keeps its id (pending worker results still reach it) and starts a fresh AI thread. Returns (archive_id, count)."""
+        archive_id = new_id()
+        conn.execute(
+            "INSERT INTO conversations(id,context,project_id,thread_id,summary,created_at) VALUES(?,?,?,?,?,?)",
+            (archive_id, "archive:" + archive_id, project_id, conversation["thread_id"],
+             conversation["summary"], conversation["created_at"]),
+        )
+        count = conn.execute(
+            "UPDATE messages SET conversation_id=? WHERE conversation_id=? AND (? IS NULL OR rowid<?)",
+            (archive_id, conversation["id"], cutoff, cutoff),
+        ).rowcount
+        conn.execute("UPDATE conversations SET thread_id=NULL,summary='' WHERE id=?", (conversation["id"],))
+        conn.execute("DELETE FROM settings WHERE key=?", ("manager_context:" + conversation["id"],))
+        conn.execute("INSERT INTO chat_archives VALUES(?,?,?)", (archive_id, title, now))
+        return archive_id, count
 
     def change_trash(self, project_id, conversation_id, last_message_id, trash_id, confirmed, restore=False):
         if not confirmed:
@@ -400,6 +412,7 @@ class Chat:
                     for p in sorted(self.registry.list(), key=lambda p: p["id"])
                 ],
                 "instructions": self.db.setting("global_instructions", ""),
+                **self.chat_memory(None),
             }
         from .project_memory import ProjectMemory
         p = self.registry.get(project_id)
@@ -410,13 +423,18 @@ class Chat:
             "memory_reference": memory["active"],
         }
         self.fit_context(context)
-        return {**context, "instructions": self.db.setting("global_instructions", "")}
+        return {**context, **self.chat_memory(project_id), "instructions": self.db.setting("global_instructions", "")}
+
+    def chat_memory(self, project_id):
+        """Only active chat memory goes to the manager; archived items stay retrievable with read_memory."""
+        view = manager_view(self.db, project_id)
+        return {"chat_memory": view} if view else {}
 
     @staticmethod
     def fit_context(context):
         """Keep the project context under the ceiling by truncating the brief; never blocks a message."""
         from .project_memory import CONTEXT_MAXIMUM, fit, size_of
-        body = {k: v for k, v in context.items() if k != "instructions"}
+        body = {k: v for k, v in context.items() if k not in ("instructions", "chat_memory")}
         size = size_of(body)
         if size <= CONTEXT_MAXIMUM:
             return
@@ -1035,6 +1053,7 @@ class Chat:
                     self._finish(row["id"], response_id, "failed", str(error)[:2000], row["output"])
 
     async def close(self):
+        await self.compactor.close()
         for job in list(self.jobs.values()):
             job.cancel()
         await asyncio.gather(*list(self.jobs.values()), return_exceptions=True)

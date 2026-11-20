@@ -513,6 +513,9 @@ The project_brief in context is navigation, not authority: read authoritative do
 on demand. The owner runs brief reviews. Assignments carry objective, acceptance criteria, constraints and
 selected_context only; never paste the brief or transcripts into them. Fresh chats exclude archived transcripts;
 list_history/read_history retrieve them explicitly.
+chat_memory in context holds this chat's active long-term and short-term items from earlier compactions; a message
+starting "Chat compacted:" summarises the archived previous chat. Archived memory items are not sent: search them with
+read_memory path chat_memory_archive and a query when an earlier point may matter.
 """ + "\n" + ARCHITECTURE_GUIDE
 
 RESTRICTED_NOTE = """

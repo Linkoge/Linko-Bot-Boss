@@ -23,7 +23,9 @@ from .attachments import Attachments
 from .audio import Audio
 from .auth import Auth
 from .auto_mode import AutoMode
+from . import chat_memory
 from .chat import Chat
+from .chat_memory import NOTICE as COMPACTION_NOTICE
 from .codex import CodexError
 from .config import Settings
 from .core import Core, Tasks
@@ -182,6 +184,27 @@ class TodoBody(BaseModel):
 class TodoArchive(BaseModel):
     project_id: str | None = None
     selected: list[str] = Field(min_length=1, max_length=200)
+
+
+class ChatCompactStart(BaseModel):
+    project_id: str | None = None
+
+
+class ChatCompactBody(ChatResetBody):
+    proposal_id: str = Field(min_length=1, max_length=100)
+
+
+class ChatCompactDiscard(BaseModel):
+    project_id: str | None = None
+    proposal_id: str = Field(min_length=1, max_length=100)
+
+
+class ChatMemorySettingsBody(BaseModel):
+    revision: int
+    model: str | None = Field(default=None, max_length=200)
+    effort: str | None = Field(default=None, max_length=40)
+    threshold_chars: int
+    short_term_days: int
 
 
 class MemoryStart(BaseModel):
@@ -580,6 +603,51 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return chat.reset(
             body.project_id, body.conversation_id, body.last_message_id, body.confirmed, archive=True, title=body.title, keep_last=body.keep_last
         )
+
+    @app.post("/api/chat/compact", dependencies=[Depends(require_owner)])
+    async def compact_chat(body: ChatCompactStart):
+        """Manual Compact: one model call proposes memory; nothing changes until /api/chat/compact/apply."""
+        return chat.compactor.start(scope(body.project_id))
+
+    @app.get("/api/chat/compact/{proposal_id}", dependencies=[Depends(require_owner)])
+    def compact_proposal(proposal_id: str, project_id: str | None = None):
+        return chat.compactor.get(scope(project_id), proposal_id)
+
+    @app.post("/api/chat/compact/apply", dependencies=[Depends(require_owner)])
+    def compact_apply(body: ChatCompactBody):
+        return chat.compactor.confirm(scope(body.project_id), body.proposal_id, body.conversation_id,
+                                      body.last_message_id, body.confirmed, body.title)
+
+    @app.post("/api/chat/compact/discard", dependencies=[Depends(require_owner)])
+    async def compact_discard(body: ChatCompactDiscard):
+        return chat.compactor.discard(scope(body.project_id), body.proposal_id)
+
+    @app.post("/api/chat/compact/notice/dismiss", dependencies=[Depends(require_owner)])
+    def compact_notice_dismiss(body: ChatCompactStart):
+        db.run("DELETE FROM settings WHERE key=?", (COMPACTION_NOTICE + (scope(body.project_id) or "global"),))
+        return {"result": "accepted"}
+
+    async def chat_memory_settings_view(project_id=None):
+        saved = chat_memory.load_settings(db)
+        try:
+            await chat.server.start()
+            effective, error = chat_memory.route(db, chat.server, project_id), ""
+        except Exception as failure:
+            effective, error = None, str(failure)[:300]
+        models = sorted({m["model"] for m in getattr(chat.server, "catalog", []) or [] if not m.get("hidden")})
+        return {"settings": saved, "effective": effective, "error": error, "models": models,
+                "defaults": chat_memory.DEFAULTS, "promote_after": chat_memory.PROMOTE_AFTER,
+                "timeout_seconds": chat.compactor.timeout}
+
+    @app.get("/api/chat-memory/settings", dependencies=[Depends(require_owner)])
+    async def chat_memory_settings(project_id: str | None = None):
+        return await chat_memory_settings_view(scope(project_id))
+
+    @app.put("/api/chat-memory/settings", dependencies=[Depends(require_owner)])
+    async def save_chat_memory_settings(body: ChatMemorySettingsBody, project_id: str | None = None):
+        await chat.server.start()
+        chat_memory.save_settings(db, chat.server, body.model_dump())
+        return await chat_memory_settings_view(scope(project_id))
 
     @app.get("/api/executions/{execution_id}/events", dependencies=[Depends(require_owner)])
     async def execution_events(execution_id: str, request: Request, after: int = 0):
