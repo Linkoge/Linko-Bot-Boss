@@ -545,8 +545,11 @@ function renderMessageActions(row,message,conversation){
     copy.type=remove.type='button';remove.className='message-delete';
     copy.onclick=action(async()=>{await copyText(row._wholeMessage.content);controls.open=false;});
     remove.onclick=()=>confirmMessageDelete(row._wholeMessage,conversation);
-    buttons.append(copy,remove);controls.append(toggle,buttons);row.append(controls);
+    const sent=element('span',undefined,'message-sent-time');
+    buttons.append(sent,copy,remove);controls.append(toggle,buttons);row.append(controls);
   }
+  {const sent=controls.querySelector('.message-sent-time'),ts=Number(message.created_at);
+   sent.textContent=ts>0?new Date(ts*1000).toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}):'';}
   if(row.lastElementChild!==controls)row.append(controls);
   const m=row._wholeMessage;
   controls.querySelector('.message-delete').disabled=['queued','streaming','waiting','processing'].includes(m.status)||(!!m.execution_id&&m.finished_at===null);

@@ -269,7 +269,8 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .message-actions>summary::-webkit-details-marker{display:none}
 .message-actions>summary:hover,.message-actions>summary:focus-visible,.message-actions[open]>summary{opacity:1}
 .message-actions[open]>summary{transform:rotate(180deg)}
-.message-action-buttons{display:flex;justify-content:flex-end;gap:4px}
+.message-action-buttons{display:flex;justify-content:flex-end;align-items:center;gap:4px;width:100%}
+.message-sent-time{margin-right:auto;font-size:11px;color:var(--muted)}
 .message-actions:not([open])>.message-action-buttons{display:none}
 .message-action-buttons button{font-size:11px;padding:3px 9px;min-height:32px;color:var(--muted)}
 

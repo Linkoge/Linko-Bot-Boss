@@ -127,3 +127,15 @@ def test_late_project_response_cannot_overwrite_current_chat(page, browser_conte
     page.wait_for_timeout(100)
     assert page.evaluate('state.project') == two
     assert page.evaluate('state.history.messages.length') == 3
+
+
+def test_expanded_message_shows_sent_time_left_of_actions(page, browser_context):
+    project, _ = make_project(browser_context, count=1)
+    page.evaluate('p=>selectProject(p)', project)
+    page.wait_for_selector('.message-actions')
+    page.locator('.message-actions > summary').first.click()
+    sent = page.locator('.message-sent-time').first
+    text = sent.inner_text()
+    expected = page.evaluate("""()=>{const m=state.history.messages[0];return new Date(m.created_at*1000).toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});}""")
+    assert text == expected and ':' in text and text.count(':') == 1
+    assert sent.bounding_box()['x'] < page.locator('.message-action-buttons button').first.bounding_box()['x']
