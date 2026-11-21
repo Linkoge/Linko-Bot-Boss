@@ -4,6 +4,7 @@ A private, single-owner conversational manager for software projects: **you → 
 FastAPI + SQLite + plain JavaScript; Codex or Claude does the thinking and coding. The installed names stay unchanged
 (`ai_manager`, `AI_MANAGER_*`, the service, the data directory and the private URL
 `https://codex-server.tail5ebb9d.ts.net:8787/`). Repository: `Linkoge/Linko-Bot-Boss`.
+
 New here? Start with the short overview in **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**.
 
 
