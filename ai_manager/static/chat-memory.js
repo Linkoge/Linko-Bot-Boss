@@ -1,74 +1,46 @@
 'use strict';
-// Chat menu Compact: one model call proposes memory items, the owner reviews them, Apply archives the full chat and
-// continues from a short chat with the compaction summary. Also the automatic-compaction notice and the Chat memory
-// settings panel (model shown = saved = used).
-const compaction={id:null,project:null,selection:null};
+// Chat menu Compact: starts the compaction in the background at once (no dialog); the server applies it itself, the
+// notice under the chat says it is running, then "Chat compacted" or why it failed. Also the Chat memory settings
+// panel (model shown = saved = used).
+const compaction={timers:{}};
 function compactionQuery(project){const query=new URLSearchParams();if(project)query.set('project_id',project);return query;}
-function compactionList(title,items,parent){
-  const section=element('section',undefined,'compact-section');section.append(element('h3',`${title} · ${items.length}`));
-  if(items.length){const list=element('ul');for(const text of items)list.append(element('li',text));section.append(list);}
-  else section.append(element('p','None','muted'));
-  parent.append(section);
+function showCompactionNotice(project,notice){
+  if(project!==state.project)return;
+  if(state.history)state.history.compaction_notice=notice;
+  $('compaction-notice').hidden=!notice;$('compaction-notice-text').textContent=notice?.text||'';
 }
-function renderCompactionProposal(result){
-  const box=$('chat-compact-proposal');box.replaceChildren();
-  const proposal=result.proposal,counts=['new','updated','reused','promoted','dropped','expired'].map(k=>`${proposal[k].length} ${k}`).join(' · ');
-  const summary=element('section',undefined,'compact-section');summary.append(element('h3','Summary that starts the short chat'),element('p',result.summary));box.append(summary);
-  compactionList('Long-term memory (kept)',proposal.long_term,box);
-  compactionList('Short-term memory (kept, expires when unused)',proposal.short_term,box);
-  if(proposal.dropped.length||proposal.expired.length)compactionList('Moved to the memory archive',[...proposal.dropped,...proposal.expired],box);
-  box.append(element('p',`${proposal.kept} items kept · ${counts}. The full chat (${result.message_count} messages) will be archived and stays searchable.`,'muted'));
+function watchCompaction(project,selection){
+  const key=project||'global';clearTimeout(compaction.timers[key]);
+  compaction.timers[key]=setTimeout(async()=>{
+    let status;
+    try{status=await api(`/api/chat/compact/status?${compactionQuery(project)}`);}
+    catch{watchCompaction(project,selection);return;}
+    if(status.running){watchCompaction(project,selection);return;}
+    delete compaction.timers[key];
+    if(selection===state.selection)await loadHistory(selection).catch(()=>{});
+    showCompactionNotice(project,status.notice);
+  },1500);
 }
 async function startCompaction(){
   closeChatMenu(true);
   if(!state.history?.messages.length)return;
   const project=state.project,selection=state.selection;
-  Object.assign(compaction,{id:null,project,selection});
-  $('chat-compact-proposal').replaceChildren();$('chat-compact-error').textContent='';
-  $('chat-compact-submit').disabled=true;$('chat-compact-name-label').hidden=true;
-  $('chat-compact-name').value=`${projectName(project)} · ${new Date().toLocaleString()} · before compaction`.slice(0,120);
-  $('chat-compact-status').textContent='Preparing a proposal with one model call. Nothing changes until you apply it.';
-  $('chat-compact').showModal();
   try{
-    let result=await api('/api/chat/compact',{method:'POST',body:JSON.stringify({project_id:project})});
-    compaction.id=result.id;
-    while(result.status==='running'){
-      await new Promise(resolve=>setTimeout(resolve,1500));
-      if(compaction.id!==result.id||!$('chat-compact').open)return;
-      result=await api(`/api/chat/compact/${encodeURIComponent(result.id)}?${compactionQuery(project)}`);
-    }
-    if(compaction.id!==result.id||!$('chat-compact').open)return;
-    if(result.status!=='ready'){$('chat-compact-status').textContent='No proposal; the chat is unchanged.';$('chat-compact-error').textContent=result.error||'Compaction failed';return;}
-    compaction.result=result;
-    $('chat-compact-status').textContent='Review what will be kept. Apply archives the full chat and continues from a short chat with this summary.';
-    renderCompactionProposal(result);$('chat-compact-name-label').hidden=false;$('chat-compact-submit').disabled=false;
-  }catch(error){$('chat-compact-status').textContent='No proposal; the chat is unchanged.';$('chat-compact-error').textContent=error.message;}
-}
-function discardCompaction(){
-  const id=compaction.id,project=compaction.project;compaction.id=null;
-  if(id)api('/api/chat/compact/discard',{method:'POST',body:JSON.stringify({project_id:project,proposal_id:id})}).catch(()=>{});
+    const started=await api('/api/chat/compact',{method:'POST',body:JSON.stringify({project_id:project})});
+    showCompactionNotice(project,{text:started.message,state:'running'});
+    watchCompaction(project,selection);
+  }catch(error){showCompactionNotice(project,{text:`Chat compaction did not start: ${error.message}`,state:'failed'});}
 }
 $('compact-chat').onclick=()=>startCompaction();
-$('chat-compact-cancel').onclick=()=>$('chat-compact').close();
-$('chat-compact').addEventListener('close',()=>{if(compaction.id)discardCompaction();});
-$('chat-compact-form').onsubmit=async event=>{
-  event.preventDefault();const button=$('chat-compact-submit'),result=compaction.result;
-  if(button.disabled||!compaction.id||!result)return;button.disabled=true;
-  try{
-    const receipt=await api('/api/chat/compact/apply',{method:'POST',body:JSON.stringify({project_id:compaction.project,proposal_id:compaction.id,conversation_id:result.conversation_id,last_message_id:result.last_message_id,confirmed:true,title:$('chat-compact-name').value})});
-    compaction.id=null;$('chat-compact').close();
-    $('chat-notice').textContent=receipt.message;$('chat-notice').hidden=false;clearTimeout(state.chatNoticeTimer);state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,8000);
-    if(compaction.selection===state.selection)await loadHistory(compaction.selection);
-  }catch(error){$('chat-compact-error').textContent=error.message;button.disabled=false;}
-};
 function renderCompactionNotice(){
   const notice=state.history?.compaction_notice;
   $('compaction-notice').hidden=!notice;$('compaction-notice-text').textContent=notice?.text||'';
+  if(notice?.state==='running'&&!compaction.timers[state.project||'global'])watchCompaction(state.project,state.selection);
 }
 $('compaction-notice-dismiss').onclick=action(async()=>{
   const project=state.project;$('compaction-notice').hidden=true;
-  await api('/api/chat/compact/notice/dismiss',{method:'POST',body:JSON.stringify({project_id:project})});
   if(state.history&&project===state.project)state.history.compaction_notice=null;
+  await api('/api/chat/compact/notice/dismiss',{method:'POST',body:JSON.stringify({project_id:project})});
 });
 // Settings panel: the select and the "Used:" line come from the same server record and route.
 let chatMemorySettings=null;

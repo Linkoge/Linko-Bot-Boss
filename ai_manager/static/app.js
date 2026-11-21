@@ -468,12 +468,18 @@ async function loadHistory(selection=state.selection,before=null){
   }
   const request=before?null:state.loadHistoryRequest=(state.loadHistoryRequest||0)+1;
   if(!watchGroups.length)watchGroups.push([]);
+  let moved=false;
   try{
     for(const watched of watchGroups){
       query.delete('watch');if(watched.length)query.set('watch',watched.join(','));
       do{
         const history=await api(`/api/history?${query}`);
         if(selection!==state.selection||project!==state.project||(!before&&request!==state.loadHistoryRequest))return;
+        // The chat's start moved (compaction, Archive part): an incremental page cannot show rows placed before the
+        // cursor, such as the compaction summary, so the latest page replaces what is shown.
+        if(history.incremental&&state.history&&history.first_position!==state.history.first_position){
+          query.delete('since');query.delete('watch');state.history.cursor=null;moved=true;continue;}
+        if(moved)history.reset=true;
         renderHistory(history,selection,before);
         cacheCurrentChat();updatesRecovered('history');
         if(history.reset||!state.history.cursor)return;
@@ -616,7 +622,7 @@ function updateChatActions(){
   const disabled=!state.history?.messages.length||state.pending.has(state.project)||!!state.execution||state.history.messages.some(m=>['queued','streaming','waiting'].includes(m.status));
   for(const id of ['archive-chat','clear-chat'])$(id).disabled=disabled;
   $('archive-part-chat').disabled=disabled||(!state.history?.has_more&&state.history.messages.length<=10);
-  $('compact-chat').disabled=disabled;if(typeof renderCompactionNotice==='function')renderCompactionNotice();
+  $('compact-chat').disabled=!state.history?.messages.length;if(typeof renderCompactionNotice==='function')renderCompactionNotice();
   updateChatTrashAvailability();
   for(const id of ['copy-all','copy-five'])$(id).disabled=!state.history?.messages.length||!!state.copyingChat;
   renderAttachments();

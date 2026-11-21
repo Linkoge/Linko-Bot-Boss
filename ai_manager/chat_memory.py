@@ -1,7 +1,8 @@
 """Chat compaction with two-tier chat memory, on the existing stores only.
 
 - The full previous chat is moved into a normal named chat archive (`conversations` + `chat_archives`), so it stays
-  retrievable through Search in chat, list_history and read_history. Nothing is deleted.
+  retrievable through Search in chat, list_history and read_history. Nothing is deleted. Messages sent while a
+  compaction runs stay in the chat after the summary message.
 - Memory items live in the existing `memory` table, two rows per chat scope (a project, or All Projects with
   project_id NULL): `chat_memory` holds the active items fed to the manager every turn, `chat_memory_archive` holds
   expired or dropped items, searchable on demand with read_memory (path + query).
@@ -38,7 +39,9 @@ INPUT_CHARS = 200000  # newest chat text given to the compaction call; older tex
 MESSAGE_CHARS = 6000
 TIMEOUT_SECONDS = 300
 CHECK_SECONDS = 10
-PROPOSAL_SECONDS = 1800  # an unapplied manual proposal expires after this long
+WAIT_SECONDS = 1800  # a ready summary waits this long for a running turn to end before the attempt fails
+POLL_SECONDS = 2
+RUNNING_TEXT = "Compacting chat in the background… You can keep using the chat."
 TIERS = ("short", "long")
 ACTIONS = ("new", "update", "keep", "drop")
 MASK = "[redacted]"
@@ -263,22 +266,16 @@ def merge(items, archive, result, now, days):
     return active, archived, report
 
 
-def describe(active, report):
-    long_term = [i["text"] for i in active if i["tier"] == "long"]
-    short_term = [i["text"] for i in active if i["tier"] == "short"]
-    return {"long_term": long_term, "short_term": short_term, "kept": len(active), **report}
-
-
 class Compactor:
-    """Manual (propose, then apply on confirm) and automatic (threshold, no confirm) chat compaction."""
+    """Chat compaction: a Compact click or the automatic threshold starts one background job per chat that makes one
+    model call and applies the result itself (no proposal, no confirm step)."""
 
     def __init__(self, chat):
         self.chat, self.db = chat, chat.db
-        self.proposals = {}  # proposal id -> state; one live proposal per chat context, in memory only
-        self.jobs = {}
+        self.jobs = {}  # "compact:" + chat context -> the running background job; one per chat
         self.sizes = {}  # conversation id -> (last rowid, characters)
         self.checked = 0.0
-        self.timeout = TIMEOUT_SECONDS
+        self.timeout, self.wait, self.poll = TIMEOUT_SECONDS, WAIT_SECONDS, POLL_SECONDS
         self.workspace = self.db.path.parent / "chat-compaction-workspace"
         self.workspace.mkdir(exist_ok=True, mode=0o700)
 
@@ -323,12 +320,6 @@ class Compactor:
                           (conversation_id,))
         self.sizes[conversation_id] = (last["position"], row["chars"])
         return row["chars"]
-
-    def last_message(self, conversation_id):
-        from .chat import hidden_message
-        row = self.db.one("SELECT id FROM messages WHERE conversation_id=? AND NOT " + hidden_message()
-                          + " ORDER BY rowid DESC LIMIT 1", (conversation_id,))
-        return row["id"] if row else None
 
     # Model call
 
@@ -405,80 +396,78 @@ class Compactor:
                     except Exception:
                         pass  # Best effort: the turn is abandoned either way.
 
-    # Manual compaction
+    # Starting (manual Compact click and automatic threshold share one background path)
+
+    def key(self, project_id):
+        return "compact:" + context_name(project_id)
+
+    def notice(self, project_id, text, state, conn=None):
+        value = json.dumps({"text": text, "state": state, "at": time.time()})
+        sql = "INSERT INTO settings VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value"
+        if conn is not None:
+            conn.execute(sql, (NOTICE + context_name(project_id), value))
+        else:
+            with self.db.transaction() as own:
+                own.execute(sql, (NOTICE + context_name(project_id), value))
 
     def start(self, project_id):
+        """Compact click: start the background job and return at once. The result is applied automatically."""
         conversation = self.chat.conversation(project_id)
-        context = context_name(project_id)
-        if self.busy(conversation["id"]):
-            raise ValueError("Wait for the response to finish or stop it before compacting this chat")
-        if any(p["context"] == context and p["status"] == "running" for p in self.proposals.values()):
-            raise ValueError("A compaction is already running for this chat")
-        messages = self.transcript(conversation["id"])
-        if not messages:
+        if self.key(project_id) in self.jobs:
+            return {"status": "running", "already_running": True,
+                    "message": "A compaction is already running for this chat"}
+        if not self.launch(project_id, conversation["id"], automatic=False):
             raise ValueError("This chat has nothing to compact yet")
-        for key in [k for k, p in self.proposals.items() if p["context"] == context]:
-            self.proposals.pop(key)
-        proposal_id = new_id()
-        state = {"id": proposal_id, "context": context, "project_id": project_id, "status": "running",
-                 "conversation_id": conversation["id"], "last_message_id": self.last_message(conversation["id"]),
-                 "message_count": len(messages), "created_at": time.time()}
-        self.proposals[proposal_id] = state
+        return {"status": "running", "already_running": False, "message": RUNNING_TEXT}
 
-        async def job():
-            try:
-                state["result"] = await self.generate(project_id, messages)
-                state["status"] = "ready"
-            except Exception as error:
-                state.update(status="failed", error=str(error)[:500])
+    def launch(self, project_id, conversation_id, automatic):
+        """Capture the chat now (the summary covers it up to its last message) and compact it in the background."""
+        messages = self.transcript(conversation_id)
+        if not messages:
+            return False
+        key = self.key(project_id)
+        self.notice(project_id, RUNNING_TEXT, "running")
+        task = asyncio.create_task(self.run(project_id, conversation_id, messages, automatic))
+        self.jobs[key] = task
+        task.add_done_callback(lambda _: self.jobs.pop(key, None))
+        return True
 
-        task = asyncio.create_task(job())
-        self.jobs[proposal_id] = task
-        task.add_done_callback(lambda _: self.jobs.pop(proposal_id, None))
-        return self.view(state)
+    def current_notice(self, project_id):
+        """The chat's compaction notice; a "running" one left by a restart (no live job) reads as interrupted."""
+        notice = self.db.setting(NOTICE + context_name(project_id))
+        if notice and notice.get("state") == "running" and self.key(project_id) not in self.jobs:
+            notice = {**notice, "state": "failed",
+                      "text": "Chat compaction was interrupted by a restart; the chat is unchanged. Use Compact to retry."}
+        return notice
 
-    def view(self, state):
-        out = {k: state[k] for k in ("id", "status", "conversation_id", "last_message_id", "message_count")}
-        if state.get("error"):
-            out["error"] = state["error"]
-        if state.get("result"):
+    def status(self, project_id):
+        return {"running": self.key(project_id) in self.jobs, "notice": self.current_notice(project_id)}
+
+    async def run(self, project_id, conversation_id, messages, automatic):
+        """One model call, then apply once the chat is between turns. Any failure leaves the chat unchanged."""
+        try:
+            result = await self.generate(project_id, messages)
+            deadline = time.monotonic() + self.wait
+            while self.busy(conversation_id):  # messages sent meanwhile: apply between turns, keep them
+                if time.monotonic() > deadline:
+                    raise ValueError(f"the chat stayed busy for {int(self.wait)} seconds after the summary was ready")
+                await asyncio.sleep(self.poll)
+            self.apply(project_id, conversation_id, messages[-1]["id"], result, automatic=automatic)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            label = "Automatic chat compaction" if automatic else "Chat compaction"
+            text = f"{label} failed; the chat is unchanged ({str(error)[:200]}). Use Compact to retry."
+            self.notice(project_id, text, "failed")
             with self.db.transaction() as conn:
-                active = read_row(conn, state["project_id"], ACTIVE)["items"]
-            merged, _, report = merge(active, [], state["result"], time.time(), load_settings(self.db)["short_term_days"])
-            out.update(summary=state["result"]["summary"], proposal=describe(merged, report))
-        return out
+                self.db.event(conn, "chat.compaction_failed", {"conversation_id": conversation_id,
+                              "automatic": automatic, "error": str(error)[:500]}, project_id)
 
-    def get(self, project_id, proposal_id):
-        state = self.proposals.get(proposal_id)
-        if not state or state["context"] != context_name(project_id):
-            raise ValueError("Compaction proposal not found; run Compact again")
-        return self.view(state)
-
-    def discard(self, project_id, proposal_id):
-        state = self.proposals.get(proposal_id)
-        if state and state["context"] == context_name(project_id):
-            self.proposals.pop(proposal_id)
-            if job := self.jobs.get(proposal_id):
-                job.cancel()
-        return {"result": "accepted"}
-
-    def confirm(self, project_id, proposal_id, conversation_id, last_message_id, confirmed, title=""):
-        if not confirmed:
-            raise ValueError("Confirm before applying the compaction")
-        state = self.proposals.get(proposal_id)
-        if not state or state["context"] != context_name(project_id) or state["status"] != "ready":
-            raise ValueError("Compaction proposal is not ready; run Compact again")
-        if (conversation_id, last_message_id) != (state["conversation_id"], state["last_message_id"]):
-            raise ValueError("New messages arrived. Run Compact again")
-        receipt = self.apply(project_id, conversation_id, last_message_id, state["result"], title)
-        self.proposals.pop(proposal_id, None)
-        return receipt
-
-    # Applying (manual after confirm, automatic directly)
+    # Applying
 
     def apply(self, project_id, conversation_id, last_message_id, result, title="", automatic=False):
-        """One transaction: archive the full chat, update memory, post the compaction summary. Refuses mid-turn."""
-        from .chat import hidden_message
+        """One transaction: archive the chat up to and including `last_message_id` (what the summary covers), update
+        memory, post the summary; newer messages stay in the chat after the summary. Refuses mid-turn."""
         title = " ".join(title.split())[:120]
         now = time.time()
         if self.busy(conversation_id):
@@ -487,16 +476,26 @@ class Compactor:
             conversation = conn.execute("SELECT * FROM conversations WHERE context=?",
                                         (context_name(project_id),)).fetchone()
             if not conversation or conversation["id"] != conversation_id:
-                raise ValueError("Chat changed. Run Compact again")
-            last = conn.execute("SELECT id FROM messages WHERE conversation_id=? AND NOT " + hidden_message()
-                                + " ORDER BY rowid DESC LIMIT 1", (conversation_id,)).fetchone()
-            if not last or last["id"] != last_message_id:
-                raise ValueError("New messages arrived. Run Compact again")
+                raise ValueError("the chat was cleared or archived meanwhile")
+            cut = conn.execute("SELECT rowid AS position FROM messages WHERE id=? AND conversation_id=?",
+                               (last_message_id, conversation_id)).fetchone()
+            if not cut:
+                raise ValueError("the chat was cleared or archived meanwhile")
             if not title:
                 project = self.chat.registry.get(project_id) if project_id else None
                 label = (project["display_name"] or project["name"]) if project else "All Projects"
                 title = f"{label} · {datetime.fromtimestamp(now, timezone.utc):%Y-%m-%d %H:%M UTC} · before compaction"
-            archive_id, count = self.chat.archive_messages(conn, conversation, project_id, title, now)
+            archive_id, count = self.chat.archive_messages(conn, conversation, project_id, title, now,
+                                                           cut["position"] + 1)
+            kept = conn.execute("SELECT count(*) AS n FROM messages WHERE conversation_id=?",
+                                (conversation_id,)).fetchone()["n"]
+            if kept:
+                # Chat order is rowid order. The newer messages keep their rows (ids, positions, cursors); the archived
+                # rows are re-appended in order, unchanged, so the summary can take the freed position before them.
+                moved = conn.execute("SELECT id,conversation_id,role,content,status,execution_id,created_at FROM "
+                                     "messages WHERE conversation_id=? ORDER BY rowid", (archive_id,)).fetchall()
+                conn.execute("DELETE FROM messages WHERE conversation_id=?", (archive_id,))
+                conn.executemany("INSERT INTO messages VALUES(?,?,?,?,?,?,?)", [tuple(r) for r in moved])
             active, archive = read_row(conn, project_id, ACTIVE), read_row(conn, project_id, ARCHIVE)
             items, archived, report = merge(active["items"], archive["items"], result, now,
                                             load_settings(self.db)["short_term_days"])
@@ -505,15 +504,22 @@ class Compactor:
             long_count = sum(1 for i in items if i["tier"] == "long")
             notice = (f"Chat compacted: {len(items)} items kept ({long_count} long-term, {len(items) - long_count} "
                       f"short-term). The full previous chat ({count} messages) is archived as “{title}”.")
+            if kept:
+                notice += f" {kept} newer messages sent during compaction stay in the chat."
             summary = notice + "\n\n**Summary:** " + result["summary"]
             message_id = new_id()
-            conn.execute("INSERT INTO messages VALUES(?,?,?,?,?,?,?)",
-                         (message_id, conversation_id, "assistant", summary, "completed", None, now))
-            conn.execute("DELETE FROM settings WHERE key IN (?,?)", (AUTO_STATE + conversation_id,
-                                                                     NOTICE + context_name(project_id)))
+            # Readers order by rowid or by (created_at, rowid): the summary sorts before the newer messages in both.
+            first = conn.execute("SELECT min(created_at) AS at FROM messages WHERE conversation_id=?",
+                                 (conversation_id,)).fetchone()["at"]
+            conn.execute("INSERT INTO messages(rowid,id,conversation_id,role,content,status,execution_id,created_at) "
+                         "VALUES(?,?,?,?,?,?,?,?)", (cut["position"] if kept else None, message_id, conversation_id,
+                                                     "assistant", summary, "completed", None, min(now, first or now)))
+            conn.execute("DELETE FROM settings WHERE key=?", (AUTO_STATE + conversation_id,))
+            self.notice(project_id, notice, "done", conn)
             self.db.event(conn, "chat.compacted", {"conversation_id": conversation_id, "automatic": automatic,
                           "archive_conversation_id": archive_id, "title": title, "message_count": count,
-                          "kept": len(items), "report": {k: len(v) for k, v in report.items()}}, project_id)
+                          "kept_messages": kept, "kept": len(items),
+                          "report": {k: len(v) for k, v in report.items()}}, project_id)
         self.sizes.pop(conversation_id, None)
         return {"result": "accepted", "message": notice, "conversation_id": conversation_id,
                 "archive_conversation_id": archive_id, "summary_message_id": message_id, "kept": len(items)}
@@ -521,16 +527,12 @@ class Compactor:
     # Automatic compaction
 
     def due(self):
-        """Current chats past their threshold, idle, not yet attempted at this crossing."""
+        """Current chats past their threshold, idle, not yet attempted at this crossing, not already compacting."""
         threshold = load_settings(self.db)["threshold_chars"]
-        for key in [k for k, p in self.proposals.items() if p["created_at"] < time.time() - PROPOSAL_SECONDS]:
-            self.proposals.pop(key)  # An abandoned manual proposal must not hold off automatic compaction.
-        running = {p["context"] for p in self.proposals.values() if p["status"] in ("running", "ready")}
         for conversation in self.db.all(
                 "SELECT * FROM conversations WHERE context=COALESCE(project_id,'global') AND (project_id IS NULL "
                 "OR project_id IN (SELECT id FROM projects WHERE status!='removed'))"):
-            context = conversation["context"]
-            if context in running or ("auto:" + context) in self.jobs:
+            if ("compact:" + conversation["context"]) in self.jobs:
                 continue
             chars = self.size(conversation["id"])
             state = self.db.setting(AUTO_STATE + conversation["id"]) or {}
@@ -545,24 +547,9 @@ class Compactor:
             return
         self.checked = now
         for conversation, chars, threshold in list(self.due()):
-            key = "auto:" + conversation["context"]
             # Recorded before the model call: one attempt per threshold crossing, even across a crash.
             self.db.set_setting(AUTO_STATE + conversation["id"], {"next_at": chars + threshold, "at": time.time()})
-            task = asyncio.create_task(self.auto(conversation["project_id"], conversation["id"]))
-            self.jobs[key] = task
-            task.add_done_callback(lambda _, key=key: self.jobs.pop(key, None))
-
-    async def auto(self, project_id, conversation_id):
-        try:
-            last = self.last_message(conversation_id)
-            result = await self.generate(project_id, self.transcript(conversation_id))
-            self.apply(project_id, conversation_id, last, result, automatic=True)
-        except Exception as error:
-            text = f"Automatic chat compaction failed; the chat is unchanged ({str(error)[:200]}). Use Compact to retry."
-            self.db.set_setting(NOTICE + context_name(project_id), {"text": text, "at": time.time()})
-            with self.db.transaction() as conn:
-                self.db.event(conn, "chat.compaction_failed", {"conversation_id": conversation_id,
-                              "error": str(error)[:500]}, project_id)
+            self.launch(conversation["project_id"], conversation["id"], automatic=True)
 
     async def close(self):
         for job in list(self.jobs.values()):

@@ -190,15 +190,6 @@ class ChatCompactStart(BaseModel):
     project_id: str | None = None
 
 
-class ChatCompactBody(ChatResetBody):
-    proposal_id: str = Field(min_length=1, max_length=100)
-
-
-class ChatCompactDiscard(BaseModel):
-    project_id: str | None = None
-    proposal_id: str = Field(min_length=1, max_length=100)
-
-
 class ChatMemorySettingsBody(BaseModel):
     revision: int
     model: str | None = Field(default=None, max_length=200)
@@ -606,21 +597,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.post("/api/chat/compact", dependencies=[Depends(require_owner)])
     async def compact_chat(body: ChatCompactStart):
-        """Manual Compact: one model call proposes memory; nothing changes until /api/chat/compact/apply."""
+        """Compact click: starts the background compaction and returns at once; it applies itself when ready."""
         return chat.compactor.start(scope(body.project_id))
 
-    @app.get("/api/chat/compact/{proposal_id}", dependencies=[Depends(require_owner)])
-    def compact_proposal(proposal_id: str, project_id: str | None = None):
-        return chat.compactor.get(scope(project_id), proposal_id)
-
-    @app.post("/api/chat/compact/apply", dependencies=[Depends(require_owner)])
-    def compact_apply(body: ChatCompactBody):
-        return chat.compactor.confirm(scope(body.project_id), body.proposal_id, body.conversation_id,
-                                      body.last_message_id, body.confirmed, body.title)
-
-    @app.post("/api/chat/compact/discard", dependencies=[Depends(require_owner)])
-    async def compact_discard(body: ChatCompactDiscard):
-        return chat.compactor.discard(scope(body.project_id), body.proposal_id)
+    @app.get("/api/chat/compact/status", dependencies=[Depends(require_owner)])
+    def compact_status(project_id: str | None = None):
+        return chat.compactor.status(scope(project_id))
 
     @app.post("/api/chat/compact/notice/dismiss", dependencies=[Depends(require_owner)])
     def compact_notice_dismiss(body: ChatCompactStart):

@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from datetime import datetime, timezone
 
 from .attachments import native_image
-from .chat_memory import NOTICE as COMPACTION_NOTICE, Compactor, manager_view
+from .chat_memory import Compactor, manager_view
 from . import harness as harnesses
 from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
@@ -163,7 +163,7 @@ class Chat:
                     "SELECT id FROM messages WHERE conversation_id=? AND EXISTS(SELECT 1 FROM settings "
                     "WHERE key='chat_deleted_message:' || messages.id)", (conversation['id'],))],
                 'trash': self.db.setting('chat_trash:' + (project_id or 'global')),
-                'compaction_notice': self.db.setting(COMPACTION_NOTICE + (project_id or 'global'))}
+                'compaction_notice': self.compactor.current_notice(project_id)}
 
     def delete_message(self, project_id, conversation_id, message_id, confirmed):
         """Remove a whole display message, preserving native/task/recovery evidence."""

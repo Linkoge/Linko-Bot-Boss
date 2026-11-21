@@ -1070,19 +1070,27 @@ probes, live database changes, service restarts or host installation are part of
   Permanent coverage: `tests/test_chat_history.py` and `tests/test_archive_browser.py`.
 - Chat compaction and two-tier chat memory (`ai_manager/chat_memory.py`; no new store). A chat saves only the owner's
   messages and the manager's reply text (agent-message deltas); reasoning and tool events stay in the event log and
-  never enter chat history or compaction input. **Compact** (chat menu, after Archive part 10) makes one model call
-  with the existing chat memory first, then the chat (newest 200 000 characters), and shows the proposal: the summary
-  that starts the short chat, long-term and short-term items kept, and what moves to the memory archive. Apply
-  (confirmation required, no response running, no new message since the proposal) runs one transaction: the full chat
-  moves to a named, searchable chat archive (Search in chat, `list_history`/`read_history`), the current chat keeps its
-  ID (pending worker results still arrive), its AI thread resets, memory is updated and one message
-  `Chat compacted: N items kept (...)` with the summary is posted; the next turn starts a fresh thread from it.
-  **Automatic compaction**: the scheduler checks every 10 s between turns. When the characters of the owner
-  messages and replies in the current chat (what the manager's thread carries) reach `threshold_chars` (default
-  60 000), it compacts without the confirm step. Never while a turn is queued, running, held or recovering; one
-  attempt per threshold crossing (recorded before the call, so the next attempt waits for another `threshold_chars`
-  of growth); bounded by a 300 s timeout. On failure the chat is unchanged and a dismissible notice
-  (`compaction_notice` in `/api/history`) says why.
+  never enter chat history or compaction input. **Compact** (chat menu, after Archive part 10) means "compact now":
+  the click starts a background job and returns at once, with no dialog and no Apply step. A notice under the chat
+  says "Compacting chat in the background…" and the chat stays usable, including sending messages. The job captures
+  the chat up to its last message, makes one model call with the existing chat memory first, then that chat (newest
+  200 000 characters), bounded by a 300 s timeout, and applies the result itself once the chat is between turns (a
+  turn running then is waited for, up to 30 min). Applying is one transaction: the chat up to the captured message
+  moves to a named, searchable chat archive "<project> · <date time UTC> · before compaction" (Search in chat,
+  `list_history`/`read_history`; nothing is deleted), the current chat keeps its ID (pending worker results still
+  arrive), its AI thread resets, memory is updated and one message `Chat compacted: N items kept (...)` with the
+  summary is posted. Messages sent while the compaction ran stay in the chat after that summary (the archived rows
+  are re-appended so the summary takes their position; the newer rows keep their IDs and positions). The next turn
+  starts a fresh thread from the summary and those messages. The notice then reads "Chat compacted: ..." (dismissible)
+  and the chat reloads. On failure (invalid output, timeout, the chat cleared or archived meanwhile) the chat is
+  unchanged and the notice says why. One compaction per chat at a time: a second click only says it is already
+  running. A "running" notice left by a restart reads as interrupted.
+  **Automatic compaction** uses the same background job: the scheduler checks every 10 s between turns. When the
+  characters of the owner messages and replies in the current chat (what the manager's thread carries) reach
+  `threshold_chars` (default 60 000), it starts the job. Never while a turn is queued, running, held or recovering;
+  one attempt per threshold crossing (recorded before the call, so the next attempt waits for another
+  `threshold_chars` of growth). The notice is `compaction_notice` (`text`, `state` running/done/failed) in
+  `/api/history`.
   The model output is JSON (`summary`, `items` with `new`/`update`/`keep`/`drop`), validated before anything is applied
   (unknown IDs, bad tiers, empty text are rejected), and every text has key-shaped values (the
   `push_diagnosis` secret patterns, provider tokens, URL credentials, `password: ...` style assignments) replaced with
@@ -1093,9 +1101,8 @@ probes, live database changes, service restarts or host installation are part of
   as `chat_memory` in the manager's context (outside the brief's `CONTEXT_MAXIMUM`); archived ones are searched on
   demand with `read_memory` (`path: chat_memory_archive`, `query`). Settings → **Chat memory** edits the one
   `chat_compaction` record: model and effort (default: the manager's own choice), threshold and inactivity days; the
-  panel's "Used:" line comes from the same `route()` a compaction runs with. API: `POST /api/chat/compact`,
-  `GET /api/chat/compact/{id}`, `POST /api/chat/compact/apply|discard|notice/dismiss`,
-  `GET|PUT /api/chat-memory/settings`. Permanent coverage: `tests/test_chat_compaction.py` and
+  panel's "Used:" line comes from the same `route()` a compaction runs with. API: `POST /api/chat/compact` (start),
+  `GET /api/chat/compact/status`, `POST /api/chat/compact/notice/dismiss`, `GET|PUT /api/chat-memory/settings`. Permanent coverage: `tests/test_chat_compaction.py` and
   `tests/test_chat_compaction_browser.py`.
 - Installable PWA (`/` scope, no service worker), account usage display, Tailscale-only private hosting.
 - Security: Argon2 owner login, one-time setup token, revocable sessions, CSRF/origin/host checks, CSP, throttling.
