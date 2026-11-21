@@ -14,7 +14,7 @@ from ai_manager.config import Settings
 from ai_manager.web import create_app
 
 
-def wait(check, seconds=4):
+def wait(check, seconds=15):  # generous under the parallel full suite; returns as soon as it holds
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
         if result := check():

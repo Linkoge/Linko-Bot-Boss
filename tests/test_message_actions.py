@@ -97,10 +97,13 @@ def test_delete_endpoint_requires_owner_csrf_exact_context_and_boolean_confirmat
     assert browser.post('/api/chat/message/delete', json={**payload, 'confirmed': False}).status_code == 409
     project = app.state.registry.add(settings.project_roots[0] / 'one')['id']
     assert browser.post('/api/chat/message/delete', json={**payload, 'project_id': project}).status_code == 409
-    # An active execution blocks deleting its owner message too, regardless of saved message status.
+    # An active execution blocks deleting its owner message too, regardless of saved message status. It is a reply
+    # waiting for its retry (what defer() writes): the app's running scheduler would otherwise recover and finish an
+    # unowned 'running' row before the next request, a race that only shows up under parallel load.
     owner = app.state.db.one("SELECT * FROM messages WHERE role='user'")
     with app.state.db.transaction() as conn:
-        conn.execute("INSERT INTO executions(id,agent_id,model,effort,status,started_at) VALUES('active','manager','m','low','running',?)", (time.time(),))
+        conn.execute("INSERT INTO executions(id,agent_id,model,effort,status,started_at,retry_at) "
+                     "VALUES('active','manager','m','low','recovering',?,?)", (time.time(), time.time() + 3600))
         conn.execute("UPDATE messages SET execution_id='active' WHERE id=?", (owner['id'],))
     assert browser.post('/api/chat/message/delete', json={**payload, 'message_id': owner['id']}).status_code == 409
     assert browser.post('/api/chat/message/delete', json=payload).status_code == 200
