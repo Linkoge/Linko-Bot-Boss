@@ -11,7 +11,7 @@ from test_restricted import sign_in
 from ai_manager.config import Settings
 from ai_manager.core import Tasks
 from ai_manager.db import Database
-from ai_manager.instance_models import ExistingDatabase, listing
+from ai_manager.instance_models import ExistingDatabase, read
 from ai_manager.model_settings import assignment_route, current, delegation, initial_pool, manager_route
 from ai_manager.providers import ProviderServer
 from ai_manager.web import create_app
@@ -46,10 +46,13 @@ def test_listing_defaults_hidden_restricted_and_authentication(pair, tmp_path):
     untouched = current(user_app.state.db)
     registry(main, [entry, {**entry, 'name': 'Unavailable', 'data': str(tmp_path / 'missing')}])
     panel = owner.get('/api/model-settings').json()
-    assert [u['name'] for u in panel['users']] == ['Writer', 'Unavailable']
-    assert panel['users'][0]['settings']['manager'] == {'model': SOL, 'effort': 'low'}
-    assert panel['users'][0]['providers'] == panel['providers']
-    assert 'cannot access' in panel['users'][1]['error']
+    assert 'users' not in panel and 'users_error' not in panel  # the picker's Environment selector replaces Users
+    assert [e['name'] for e in owner.get('/api/environments').json()['environments']] == ['Main', 'Writer', 'Unavailable']
+    writer = owner.get('/api/instance-model-settings?name=Writer').json()
+    assert writer['settings']['manager'] == {'model': SOL, 'effort': 'low'}
+    assert writer['providers'] == panel['providers']
+    missing = owner.get('/api/instance-model-settings?name=Unavailable')
+    assert missing.status_code == 409 and 'cannot access' in missing.json()['detail']
     assert not (tmp_path / 'missing').exists()  # never create an uninitialized instance
     assert user_app.state.db.setting('model_choice') is None
     assert current(user_app.state.db) == untouched  # listing never adopts defaults or legacy records
@@ -63,7 +66,7 @@ def test_listing_defaults_hidden_restricted_and_authentication(pair, tmp_path):
     anonymous = TestClient(app, base_url='http://localhost')
     assert anonymous.get('/api/instance-model-settings?name=Writer').status_code == 401
     assert anonymous.put('/api/instance-model-settings?name=Writer', json={}).status_code == 401
-    settings = panel['users'][0]['settings']
+    settings = writer['settings']
     assert owner.put('/api/instance-model-settings?name=Writer', json=settings,
                      headers={'X-CSRF-Token': 'bad'}).status_code == 403
 
@@ -72,7 +75,7 @@ def test_listing_defaults_hidden_restricted_and_authentication(pair, tmp_path):
 def test_saved_pairs_are_used_by_next_live_chat_and_worker_and_survive_restart(pair):
     owner, client, app, user_app, main, user, _ = pair
     before = current(app.state.db)
-    shown = owner.get('/api/model-settings').json()['users'][0]
+    shown = owner.get('/api/instance-model-settings?name=Writer').json()
     choice = {**shown['settings'], 'manager': {'model': MODELS['Luna'], 'effort': 'high'},
               'worker': {'model': SOL, 'effort': 'high'}}
     response = owner.put('/api/instance-model-settings?name=Writer', json=choice)
@@ -80,7 +83,7 @@ def test_saved_pairs_are_used_by_next_live_chat_and_worker_and_survive_restart(p
     confirmed = response.json()['settings']
     assert current(app.state.db) == before
     assert user_app.state.db.setting('model_choice') == confirmed
-    assert owner.get('/api/model-settings').json()['users'][0]['settings'] == confirmed
+    assert owner.get('/api/instance-model-settings?name=Writer').json()['settings'] == confirmed
     assert client.get('/api/model-settings').json()['settings'] == confirmed
     assert owner.put('/api/instance-model-settings?name=Writer', json=choice).status_code == 409
     invalid = {**confirmed, 'worker': {'model': SOL, 'effort': 'unknown'}}
@@ -124,7 +127,7 @@ def test_saved_pairs_are_used_by_next_live_chat_and_worker_and_survive_restart(p
 
 def test_permission_and_lock_errors_are_visible_and_do_not_change_the_record(pair):
     owner, _, _, user_app, _, user, _ = pair
-    shown = owner.get('/api/model-settings').json()['users'][0]['settings']
+    shown = owner.get('/api/instance-model-settings?name=Writer').json()['settings']
     requested = {**shown, 'worker': {'model': MODELS['Astra'], 'effort': 'high'}}
     before = current(user_app.state.db)
     user.db_path.chmod(0o400)
@@ -140,8 +143,8 @@ def test_permission_and_lock_errors_are_visible_and_do_not_change_the_record(pai
     # An inaccessible directory must leave the instance name in the list with an actionable error.
     user.data_dir.chmod(0)
     try:
-        row = owner.get('/api/model-settings').json()['users'][0]
-        assert row['name'] == 'Writer' and 'permissions' in row['error'] and 'settings' not in row
+        row = owner.get('/api/instance-model-settings?name=Writer')
+        assert row.status_code == 409 and 'Writer' in row.json()['detail'] and 'permissions' in row.json()['detail']
     finally:
         user.data_dir.chmod(0o700)
     with sqlite3.connect(user.db_path) as locked:
@@ -154,14 +157,15 @@ def test_permission_and_lock_errors_are_visible_and_do_not_change_the_record(pai
 def test_missing_bad_registry_and_unknown_instance_fail_clearly(pair, tmp_path):
     owner, _, _, _, main, _, entry = pair
     assert owner.get('/api/instance-model-settings?name=unknown').status_code == 409
-    choice = owner.get('/api/model-settings').json()['users'][0]['settings']
+    choice = owner.get('/api/instance-model-settings?name=Writer').json()['settings']
     registry(main, [{**entry, 'data': str(tmp_path / 'unreachable')}])
     result = owner.put('/api/instance-model-settings?name=Writer', json=choice)
     assert result.status_code == 409 and 'cannot access' in result.json()['detail']
     path = main.data_dir / 'deploy' / 'installed.json'
     path.write_text('{broken')
-    panel = owner.get('/api/model-settings').json()
-    assert 'invalid instance registry' in panel['users_error'] and 'settings' in panel
+    assert 'settings' in owner.get('/api/model-settings').json()
+    envs = owner.get('/api/environments').json()
+    assert 'invalid instance registry' in envs['error'] and envs['environments'] == [{'name': 'Main', 'main': True}]
     assert not (tmp_path / 'unreachable').exists()
 
 
@@ -175,7 +179,7 @@ def test_stopped_instance_migrates_legacy_automatic_and_dispatches_the_same_pool
     path = main / 'deploy'
     path.mkdir()
     (path / 'installed.json').write_text(json.dumps({'instances': [{'name': 'Offline', 'data': str(user)}]}))
-    shown = listing(main, server)[0]['settings']
+    shown = read(main, server, 'Offline')['settings']
     assert shown['manager'] == {'model': MODELS['Astra'], 'effort': 'high'} and shown['worker'] == initial_pool(server, 'codex')
     assert db.setting('model_choice')['worker'] == shown['worker']
     from ai_manager.instance_models import save

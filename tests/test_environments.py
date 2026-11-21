@@ -1,5 +1,6 @@
-"""Main's harness panel environment picker: Main plus every registered instance, per-instance harness/autonomy/model
-written to that instance's own database and used from its next manager turn; office mode on every other instance."""
+"""Main's harness panel environment picker: Main plus every registered instance, per-instance harness/autonomy/worker
+harness written to that instance's own database and used from its next manager turn (models come from the model
+picker's environment selector); office mode on every other instance."""
 # ruff: noqa: F811 -- pytest fixtures imported by name
 import hashlib
 import json
@@ -38,8 +39,8 @@ def test_instance_harness_autonomy_and_model_apply_to_that_instance_only(pair):
     shown = owner.get('/api/instance-harness?name=Writer').json()
     assert shown['name'] == 'Writer'
     assert shown['harness']['manager']['id'] == 'linko' and shown['harness']['autonomy'] == 'finish_request'
-    assert 'worker' not in shown['harness']
-    assert shown['models']['settings']['manager']['model']
+    assert shown['harness']['worker']['id'] == 'coding' and shown['harness']['has_projects']
+    assert 'models' not in shown  # models are chosen only in the model picker
 
     saved = owner.put('/api/instance-harness?name=Writer', json={'manager': 'zero'}).json()
     assert saved['harness']['manager']['id'] == 'zero' and saved['harness']['autonomy'] == 'ask'
@@ -50,10 +51,14 @@ def test_instance_harness_autonomy_and_model_apply_to_that_instance_only(pair):
         assert (found.id, autonomy) == ('zero', 'finish_request')
     assert client.get('/api/harnesses').json()['manager']['id'] == 'zero'
     assert harness.manager_turn(app.state.db, None)[0].id == 'linko'  # Main is untouched
+    saved = owner.put('/api/instance-harness?name=Writer', json={'worker': 'coding'}).json()
+    assert saved['harness']['worker']['id'] == 'coding' and harness.saved(user_app.state.db, project)['worker'] == 'coding'
+    assert 'worker' not in harness.saved(user_app.state.db, None)  # All Projects has no worker harness
 
-    model = {**saved['models']['settings'], 'manager': {'model': MODELS['Luna'], 'effort': 'high'}}
+    current = owner.get('/api/instance-model-settings?name=Writer').json()['settings']
+    model = {**current, 'manager': {'model': MODELS['Luna'], 'effort': 'high'}}
     assert owner.put('/api/instance-model-settings?name=Writer', json=model).status_code == 200
-    assert owner.get('/api/instance-harness?name=Writer').json()['models']['settings']['manager'] == \
+    assert owner.get('/api/instance-model-settings?name=Writer').json()['settings']['manager'] == \
         {'model': MODELS['Luna'], 'effort': 'high'}
     assert manager_route(user_app.state.db, project) == {'model': MODELS['Luna'], 'effort': 'high'}
 
@@ -78,7 +83,7 @@ def test_instance_harness_autonomy_and_model_apply_to_that_instance_only(pair):
 
 def test_instance_harness_rejects_bad_input_and_reports_unreachable(pair, tmp_path):
     owner, client, app, user_app, main, user, entry = pair
-    for body in ({'worker': 'coding'}, {}, {'manager': 'nope'}, {'autonomy': 'rounds'}):
+    for body in ({'worker': 'nope'}, {}, {'manager': 'nope'}, {'autonomy': 'rounds'}, {'model': 'x'}):
         assert owner.put('/api/instance-harness?name=Writer', json=body).status_code == 409, body
     assert harness.saved(user_app.state.db, None) == {}
     assert owner.get('/api/instance-harness?name=Ghost').status_code == 409

@@ -157,6 +157,10 @@ class Database:
                 from .todos import migrate_kind
                 migrate_kind(conn)
                 conn.execute("INSERT INTO schema_version VALUES(17)")
+            if not conn.execute("SELECT 1 FROM schema_version WHERE version=18").fetchone():
+                from .model_settings import migrate_stray_models
+                migrate_stray_models(conn)
+                conn.execute("INSERT INTO schema_version VALUES(18)")
             conn.commit()
         self.path.chmod(0o600)
 

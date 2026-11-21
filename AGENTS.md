@@ -23,3 +23,9 @@ When: the app starts reading a new top-level checkout path at runtime (like `har
 Symptom: every test passes, but the deploy rolls back: `linko-bot-manager@kaxa.service` fails to start because the path is missing in its namespace.
 Cause: an instance running as another user only sees the checkout paths in its root host adapter's `mounts` bind list (`/usr/local/libexec/linko-NAME-instance`, outside the repo). ACLs cannot fix a path that is not mounted.
 Do: add the path to `RUNTIME_PATHS` in `ai_manager/code_view.py` (`tests/test_code_view.py` fails until you do), and report that the host adapter list needs it too. The deploy now stops before restarting when an adapter lacks a runtime path.
+
+### New schema version breaks two migration tests (2026-11-21, task 155c8a)
+When: you add a `schema_version` step in `ai_manager/db.py`.
+Symptom: only the full suite fails: `tests/test_core.py::test_migration_closes_old_nonfinal_tasks...` and `tests/test_chat_reliability.py::test_schema10_additive_migration...` (`assert 18 == 17`).
+Cause: both assert the exact highest schema version after migrating.
+Do: raise the expected version in both tests in the same commit.

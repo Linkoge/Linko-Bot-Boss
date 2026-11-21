@@ -69,16 +69,6 @@ def panel(entry, server):
             'providers': model_settings.picker_providers(server, keep)}
 
 
-def listing(data, server):
-    result = []
-    for entry in instances(data):
-        try:
-            result.append(panel(entry, server))
-        except (OSError, sqlite3.Error, ValueError, KeyError, TypeError) as error:
-            result.append({'name': entry['name'], 'error': access_error(entry['name'], error)})
-    return result
-
-
 def registered(data, name):
     entry = next((e for e in instances(data) if e['name'] == name), None)
     if not entry:
@@ -105,7 +95,8 @@ def save(data, server, name, value):
 
 
 def environments(data):
-    """The harness panel's environment picker: Main, then every registered instance (deploy/doctor registry)."""
+    """The harness panel's and model picker's environment selector: Main, then every registered instance
+    (deploy/doctor registry)."""
     return [{'name': 'Main', 'main': True}] + [{'name': e['name']} for e in instances(data)]
 
 
@@ -115,17 +106,16 @@ def harness_scopes(db):
     return [None] + [row['id'] for row in db.all("SELECT id FROM projects WHERE status!='removed' ORDER BY id")]
 
 
-def harness_panel(entry, server):
+def harness_panel(entry, server=None):
+    """The same harness controls as Main: manager harness, autonomy and (when the instance has a project) the default
+    worker harness. Models are chosen in the model picker, never here."""
     from . import harness
     db = ExistingDatabase(entry['data'])
     scopes = harness_scopes(db)
     state = harness.state(db, scopes[1] if len(scopes) == 2 else None)
-    state.pop('worker', None)  # the environment picker sets the manager only; workers keep their project defaults
-    try:
-        models = panel(entry, server)
-    except (ValueError, KeyError, TypeError) as error:
-        models = {'name': entry['name'], 'error': f'{entry["name"]}: cannot read model settings: {error}'}
-    return {'name': entry['name'], 'harness': {**state, 'project_id': None}, 'models': models}
+    if len(scopes) > 1 and 'worker' not in state:
+        state['worker'] = harness.state(db, scopes[1])['worker']
+    return {'name': entry['name'], 'harness': {**state, 'project_id': None, 'has_projects': len(scopes) > 1}}
 
 
 def read_harness(data, server, name):
@@ -137,15 +127,23 @@ def read_harness(data, server, name):
 
 
 def save_harness(data, server, name, body):
-    """Set the instance's manager harness and/or autonomy with the instance's own validation."""
+    """Set the instance's manager harness, autonomy and/or default worker harness with the instance's own validation.
+    Manager and autonomy go to every chat scope; the worker harness to every project (All Projects has none)."""
     from . import harness
     entry = registered(data, name)
-    if not isinstance(body, dict) or not body or body.keys() - {'manager', 'autonomy'}:
-        raise ValueError('Send manager and/or autonomy')
+    if not isinstance(body, dict) or not body or body.keys() - {'manager', 'autonomy', 'worker'}:
+        raise ValueError('Send manager, autonomy and/or worker')
     try:
         db = ExistingDatabase(entry['data'])
-        for scope in harness_scopes(db):
-            harness.save(db, scope, body)
+        scopes = harness_scopes(db)
+        if 'worker' in body:
+            if len(scopes) == 1:
+                raise ValueError(f'{name} has no project; the default worker harness is chosen per project')
+            harness.get(db, 'worker', body['worker'])  # validate before writing any scope
+        for scope in scopes:
+            part = body if scope else {k: v for k, v in body.items() if k != 'worker'}
+            if part:
+                harness.save(db, scope, part)
         return harness_panel(entry, server)
     except (OSError, sqlite3.Error) as error:
         raise ValueError(access_error(name, error, 'its settings (unreachable)')) from error

@@ -751,25 +751,32 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings(project_id: str | None = None):
-        from .model_settings import active, current, favorites, locked, picker_providers, selection_models
+        from .model_settings import (
+            active,
+            current,
+            favorites,
+            locked,
+            picker_providers,
+            provider_visibility,
+            selection_models,
+        )
         try:
             await chat.server.start()
         except Exception:
             pass  # Show the saved choices; unavailable models render disabled.
         saved, marked = current(db, chat.server, project_id), favorites(db, chat.server)
         keep = selection_models(saved) | {f['pair']['model'] for f in marked if f}
-        users = {}
-        if not restricted and (settings.data_dir / 'deploy' / 'installed.json').exists():
-            from .instance_models import listing
-            try:
-                users['users'] = await asyncio.to_thread(listing, settings.data_dir, chat.server)
-            except (OSError, ValueError) as error:
-                users['users_error'] = f'Cannot load Users: {error}'
-        return {**users, "provider": active(db, project_id), "settings": saved, "favorites": marked,
+        providers = picker_providers(chat.server, keep)
+        return {"provider": active(db, project_id), "settings": saved, "favorites": marked,
                 "project_id": project_id, "locked": locked(db, project_id),
                 "repo_name": (db.one("SELECT COALESCE(display_name,name) AS name FROM projects WHERE id=?", (project_id,))["name"]
                               if project_id else "All Projects"),
-                "providers": picker_providers(chat.server, keep)}
+                "providers": providers, "provider_visibility": provider_visibility(db, providers)}
+
+    @app.put("/api/model-picker/providers", dependencies=[Depends(require_owner)])
+    def save_picker_providers(body: dict):
+        from .model_settings import save_provider_visibility
+        return save_provider_visibility(db, body)
 
     @app.put("/api/projects/{project_id}/model-lock", dependencies=[Depends(require_owner)])
     async def save_repo_lock(project_id: str, body: dict):

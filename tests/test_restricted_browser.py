@@ -76,7 +76,7 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             assert page.locator('#messages').is_visible()
             page.evaluate("()=>showView('settings')")  # the tabs row is hidden in office mode
             for hidden in ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel',
-                           '#model-settings-button', '#models-panel', '#model-dialog', '#instance-models', '#github-panel',
+                           '#model-settings-button', '#models-panel', '#model-dialog', '#model-environment', '#github-panel',
                            '#github-token', '#github-company-token'):
                 assert not page.locator(hidden).is_visible(), hidden
             page.evaluate('()=>renderProjectMenu()')

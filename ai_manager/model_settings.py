@@ -63,6 +63,47 @@ def migrate_repo_locks(conn):
         conn.execute('DELETE FROM settings WHERE key=?', (key,))
 
 
+# Ids that were never real catalog models: the test suite's fixture Sol leaked into a live database as a favorite.
+STRAY_MODELS = frozenset({'gpt-6.1-sol'})
+
+
+def migrate_stray_models(conn, stray=STRAY_MODELS):
+    """Schema 18: drop stray non-catalog ids from saved favorites and model choices, once, at startup.
+
+    A favorite slot holding one is emptied; a saved pair falls back to its provider's default model at the same
+    effort (resolved by the next read); a pool loses the id (an emptied pool restarts from the newest families)."""
+    def load(key):
+        row = conn.execute('SELECT value FROM settings WHERE key=?', (key,)).fetchone()
+        return json.loads(row[0]) if row else None
+
+    def store(key, value):
+        conn.execute('UPDATE settings SET value=? WHERE key=?', (json.dumps(value), key))
+
+    slots = load('manager_favorites')
+    if isinstance(slots, list):
+        cleaned = [None if isinstance(s, dict) and (s.get('pair') or {}).get('model') in stray else s for s in slots]
+        if cleaned != slots:
+            store('manager_favorites', cleaned)
+    keys = [KEY] + [r[0] for r in conn.execute("SELECT key FROM settings WHERE key GLOB ?", (KEY + ':*',))]
+    for key in keys:
+        value = load(key)
+        if not isinstance(value, dict):
+            continue
+        before = json.dumps(value, sort_keys=True)
+        for role in ('manager', 'worker', 'manual'):
+            pair = value.get(role)
+            if not isinstance(pair, dict):
+                continue
+            if automatic(pair):
+                pair['allowed_models'] = [m for m in pair.get('allowed_models', []) if m not in stray]
+                if not pair['allowed_models']:
+                    value[role] = None  # current() rebuilds the pool from the catalog
+            elif pair.get('model') in stray:
+                value[role] = None if role == 'manual' else {'effort': pair.get('effort') or DEFAULT[role]['effort']}
+        if json.dumps(value, sort_keys=True) != before:
+            store(key, value)
+
+
 FAMILIES = {'codex': ('Luna', 'Sol', 'Astra'), 'claude': ('Haiku', 'Sonnet', 'Opus')}
 PICKER_LEVELS = ('low', 'medium', 'high')
 _NAME = re.compile(r'^(?:gpt-(\d+(?:\.\d+)*)-(luna|sol|astra)|claude-(haiku|sonnet|opus)-(\d+(?:-\d+)*))$')
@@ -79,8 +120,9 @@ def _levels(entry):
 
 def choices(server, provider, extra=()):
     """What the picker shows (presentation only; dispatch accepts any catalog model): the provider's three families in
-    their fixed order, each as its newest installed model with Low/Medium/High. Only models currently saved, pooled
-    or favorited in `extra` are appended, so selections outside the newest families stay visible and pressed."""
+    their fixed order, each as its newest installed model with Low/Medium/High. Only catalog models currently saved,
+    pooled or favorited in `extra` are appended, so selections outside the newest families stay visible and pressed;
+    an id missing from the catalog adds nothing (no phantom button)."""
     visible = [m for m in server.catalog if not m.get('hidden') and provider_of(m['model']) == provider]
     result = []
     for name in FAMILIES[provider]:
@@ -97,9 +139,7 @@ def choices(server, provider, extra=()):
             if name in FAMILIES[provider]:
                 name = m['model']  # An older saved version must be distinguishable from its newer family button.
             result.append({'name': name, 'model': m['model'], 'levels': _levels(m)})
-    for model in sorted(set(extra) - shown):
-        if model and provider_of(model) == provider:
-            result.append({'name': model, 'model': model, 'levels': []})
+    # A saved id the catalog does not list (a stale favorite or pair) never becomes a button of its own.
     return result
 
 
@@ -344,3 +384,28 @@ def recall_favorite(db, server, slot, project_id=None, expected_locked=None):
     if not item or not item['available']:
         raise ValueError('Favorite unavailable; insert a supported Manager selection to replace it')
     return save(db, server, {**current(db, server, project_id), 'manager': item['pair']}, project_id, expected_locked)
+
+
+VISIBILITY = 'model_picker_hidden_providers'
+
+
+def provider_visibility(db, providers):
+    """Which providers' rows the picker hides (display only; saved choices never change). The owner's saved choice
+    applies on every device; until one is saved, providers without an available model are hidden. At least one
+    provider always stays shown."""
+    value = db.setting(VISIBILITY)
+    if isinstance(value, list) and set(value) < set(FAMILIES):
+        return {'hidden': [p for p in FAMILIES if p in value], 'saved': True}
+    hidden = [p for p in FAMILIES if not any(c['levels'] for c in providers.get(p, {}).get('choices', []))]
+    return {'hidden': hidden if len(hidden) < len(FAMILIES) else [], 'saved': False}
+
+
+def save_provider_visibility(db, body):
+    hidden = body.get('hidden') if isinstance(body, dict) and set(body) == {'hidden'} else None
+    if (not isinstance(hidden, list) or any(p not in FAMILIES for p in hidden) or len(set(hidden)) != len(hidden)):
+        raise ValueError('Send hidden: a list of provider ids (codex, claude)')
+    if len(hidden) >= len(FAMILIES):
+        raise ValueError('At least one provider must stay visible')
+    value = [p for p in FAMILIES if p in hidden]
+    db.set_setting(VISIBILITY, value)
+    return {'hidden': value, 'saved': True}

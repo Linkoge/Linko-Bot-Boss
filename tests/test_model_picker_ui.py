@@ -7,9 +7,12 @@ import pytest
 
 STATIC = Path(__file__).resolve().parents[1] / 'ai_manager' / 'static'
 digest = lambda text: hashlib.sha256(text.encode()).hexdigest()  # noqa: E731
-LOCK_HEADER = '<span aria-hidden="true">·</span><div id="repo-lock-container" class="model-choice-row"></div><span aria-hidden="true">·</span>'
+LOCK_HEADER = '<span id="repo-lock-separator" aria-hidden="true">·</span><div id="repo-lock-container" class="model-choice-row"></div>'
 SWITCH = '<div id="worker-mode" class="model-choice-row" role="group" aria-label="Worker selection mode"></div>'
-USERS = '<section id="instance-models" class="model-favorites" aria-labelledby="users-heading" hidden><h2 id="users-heading">Users</h2><div id="user-model-choices"></div></section>'
+TOP = ('<div class="model-top"><select id="model-environment" aria-label="Environment" hidden></select>'
+       '<div id="provider-visibility" class="model-choice-row" role="group" aria-label="Shown providers"></div>'
+       '<button id="model-close" type="button" aria-label="Close model settings">×</button></div>'
+       '<p id="model-environment-error" role="alert" hidden></p>')
 
 
 def _js():
@@ -20,8 +23,10 @@ def _js():
 def test_dialog_markup_is_the_original_manager_worker_favorites_layout_plus_the_worker_switch():
     html = (STATIC / 'index.html').read_text()
     dialog = re.search(r'<dialog id="model-dialog".*?</dialog>', html)[0]
-    assert digest(dialog.replace(SWITCH, '').replace(LOCK_HEADER, '').replace(USERS, '')) == 'dca2607d9762556f0dc0816285b5e6d10ab0bf4b1a40b14a6ede57e1dc38fe14'
-    assert USERS in dialog and dialog.index('id="manager-favorites"') < dialog.index('id="users-heading"')
+    assert digest(dialog.replace(SWITCH, '').replace(LOCK_HEADER, '').replace(TOP, '')) == 'a404aa4d497009e79397bba3ae81fd4a20a731c698cdc58292136896a7e82b96'
+    # Environment selector and provider show/hide sit on top; there is no separate Users section any more.
+    assert dialog.startswith('<dialog id="model-dialog" aria-label="Manager and worker settings">' + TOP)
+    assert 'users-heading' not in dialog and 'instance-models' not in dialog
     assert '<h2 id="manager-heading">Manager</h2>' + LOCK_HEADER in dialog
     assert 'id="repo-lock-container" class="model-choice-row"' in dialog
     assert '<h2 id="worker-heading">Worker</h2>' + SWITCH + '</div>' in dialog  # in the heading row, as Bot's was
@@ -44,9 +49,10 @@ def test_client_uses_one_settings_write_path_and_one_repo_toggle():
     assert "card.prepend(models,levels);container.append(card)" in js
     assert "logo.innerHTML=PROVIDER_LOGOS[provider]" in js
     assert "if(!automatic)logo.removeAttribute('aria-pressed')" in js
-    assert "renderPair(pair,role,`${user.name} ${titleLevel(role)}`,user,change" in js
-    assert "section.hidden=!!state.restricted" in js
-    assert "'/api/instance-model-settings?name='+encodeURIComponent(user.name)" in js
+    assert "renderPair($('manager-choices'),'manager','Manager',panel,changeEnvironmentModels)" in js
+    assert "select.hidden=!!state.restricted" in js
+    assert "'/api/instance-model-settings?name='+encodeURIComponent(env)" in js
+    assert 'renderUserModels' not in js and 'user-model-choices' not in js
     assert "if(typeof clearUsage==='function')clearUsage()" in js
     assert 'setUsageProvider(provider,forceUsage)' in js
     assert 'setProviderIcon(modelPanel.provider,true)' in js

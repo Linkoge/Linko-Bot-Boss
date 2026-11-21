@@ -1,14 +1,38 @@
 'use strict';
 let modelPanel=null,modelSaving=false,modelOpener=null,modelPending=0,modelOpenVersion=0,modelOpening=false;
+// Environment selector (Main only): '' is Main; any other value is a registered instance edited through
+// /api/instance-model-settings. modelEnvPanel is that instance's {settings, providers}; modelEnvError says it is unreachable.
+let modelEnv='',modelEnvs=null,modelEnvPanel=null,modelEnvError='',modelEnvVersion=0;
 const modelDialog=$('model-dialog');
 function modelScope(project){return project?'?project_id='+encodeURIComponent(project):'';}
 function modelWriteScope(project=modelPanel.project_id){return modelScope(project)+(project?'&':'?')+'locked='+modelPanel.locked;}
 function modelURL(project=modelPanel?.project_id){return '/api/model-settings'+modelScope(project);}
-function clearModels(){for(const id of ['manager-choices','worker-choices','worker-mode','manager-favorites','repo-lock-container','user-model-choices'])$(id).replaceChildren();$('instance-models').hidden=true;}
+function clearModels(){for(const id of ['manager-choices','worker-choices','worker-mode','manager-favorites','repo-lock-container'])$(id).replaceChildren();}
 const PROVIDER_LOGOS={
   codex:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.0462 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.2058 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.7948.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4.504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a.79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.7866a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5.459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z"/></svg>',
   claude:'<svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" focusable="false"><path d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z"/></svg>'};
 const PROVIDER_NAMES={codex:'OpenAI',claude:'Anthropic'};
+const PROVIDER_LABELS={codex:'ChatGPT',claude:'Claude'};
+// Display only: hidden providers' manager, worker and favorite rows are not drawn; saved choices never change.
+function shownProviders(){const hidden=modelPanel?.provider_visibility?.hidden||[];return ['codex','claude'].filter(p=>!hidden.includes(p));}
+function renderProviderVisibility(){
+  const row=$('provider-visibility'),shown=shownProviders();row.replaceChildren();
+  for(const provider of ['codex','claude']){
+    const on=shown.includes(provider);
+    const b=modelButton('',`Show ${PROVIDER_LABELS[provider]}`,on,()=>toggleProviderVisibility(provider),!modelPanel||(on&&shown.length===1));
+    b.dataset.choice=`show-${provider}`;b.dataset.provider=provider;b.innerHTML=PROVIDER_LOGOS[provider];
+    b.title=on?`${PROVIDER_LABELS[provider]} shown; tap to hide`:`${PROVIDER_LABELS[provider]} hidden; tap to show`;row.append(b);
+  }
+}
+async function toggleProviderVisibility(provider){
+  const visibility=modelPanel.provider_visibility,before=visibility.hidden;
+  const hidden=before.includes(provider)?before.filter(p=>p!==provider):[...before,provider];
+  if(hidden.length>=2)return;
+  visibility.hidden=hidden;renderModels();
+  try{Object.assign(visibility,await api('/api/model-picker/providers',{method:'PUT',body:JSON.stringify({hidden})}));}
+  catch(error){visibility.hidden=before;notice('Provider display could not be saved: '+error.message);}
+  if(modelPanel?.provider_visibility===visibility)renderModels();
+}
 function setProviderIcon(provider,forceUsage=false){
   if(!PROVIDER_LOGOS[provider])return;
   if(typeof setUsageProvider==='function')setUsageProvider(provider,forceUsage);
@@ -87,7 +111,7 @@ function renderMode(mode=$('worker-mode'),settings=modelPanel.settings,change=ch
 function renderPair(container,role,label,panel=modelPanel,change=role==='worker'?changeWorker:changeModels,prefix=role){
   container.replaceChildren();
   const pair=panel.settings[role],automatic=role==='worker'&&isAutomatic(pair);
-  for(const provider of ['codex','claude']){
+  for(const provider of shownProviders()){
     const {choices,efforts}=panel.providers[provider],active=automatic&&pair.provider===provider;
     const card=element('div',undefined,'provider-card');card.dataset.provider=provider;
     card.classList.toggle('automatic-pool',active);
@@ -115,9 +139,31 @@ function renderPair(container,role,label,panel=modelPanel,change=role==='worker'
     card.prepend(models,levels);container.append(card);
   }
 }
+function renderModelEnvironments(){
+  const select=$('model-environment');select.hidden=!!state.restricted||!(modelEnvs?.length>1);
+  if(select.hidden)return;
+  select.replaceChildren();
+  for(const env of modelEnvs){const option=element('option',env.name);option.value=env.main?'':env.name;select.append(option);}
+  select.value=modelEnv;
+}
+function renderEnvironmentModels(){
+  const panel=modelEnvPanel,error=$('model-environment-error');
+  error.textContent=modelEnvError;error.hidden=!modelEnvError;
+  $('favorites-section').hidden=true;$('repo-lock-separator').hidden=true;$('repo-lock-container').replaceChildren();
+  if(!panel){for(const id of ['manager-choices','worker-choices','worker-mode'])$(id).replaceChildren();
+    if(!modelEnvError)$('worker-choices').append(element('p',`Loading ${modelEnv} settings…`,'harness-description'));
+    else for(const id of ['manager-choices','worker-choices'])$(id).append(element('p','Unavailable: settings cannot be changed until it is reachable.','harness-description'));
+    return;}
+  renderPair($('manager-choices'),'manager','Manager',panel,changeEnvironmentModels);
+  renderPair($('worker-choices'),'worker','Worker',panel,changeEnvironmentModels);
+  renderMode($('worker-mode'),panel.settings,changeEnvironmentModels,'Worker','worker',panel);
+}
 function renderModels(){
-  if(modelPanel.project_id!==state.project){clearModels();return;}
   const focused=modelDialog.contains(document.activeElement)?document.activeElement.dataset.choice:null;
+  renderModelEnvironments();renderProviderVisibility();
+  if(modelEnv){renderEnvironmentModels();if(focused)modelDialog.querySelector(`[data-choice="${focused}"]`)?.focus({preventScroll:true});return;}
+  $('model-environment-error').hidden=true;$('favorites-section').hidden=false;$('repo-lock-separator').hidden=false;
+  if(!modelPanel||modelPanel.project_id!==state.project){clearModels();return;}
   renderPair($('manager-choices'),'manager','Manager');
   renderPair($('worker-choices'),'worker','Worker');
   const repo=$('repo-lock-container');repo.replaceChildren();
@@ -129,6 +175,7 @@ function renderModels(){
   const managerPair=modelPanel.settings.manager,canInsert=Object.values(modelPanel.providers).some(v=>v.choices.some(m=>m.model===managerPair.model&&m.levels.includes(managerPair.effort)));
   for(let slot=0;slot<2;slot++){
     const item=modelPanel.favorites[slot],row=element('div',undefined,'favorite-row');
+    if(item&&!shownProviders().includes(item.provider))continue;
     const insert=addChoice(row,modelButton('Insert',`Insert current Manager into favorite ${slot+1}`,false,
       ()=>modelMutation(async()=>{modelPanel.favorites=await api(`/api/manager-favorites/${slot}`+modelScope(modelPanel.project_id),{method:'PUT'});}),!canInsert),`favorite-insert-${slot}`);
     insert.removeAttribute('aria-pressed');
@@ -147,49 +194,44 @@ function renderModels(){
     }else entry.append(element('span','Empty','favorite-effort'));
     favorites.append(row);
   }
-  renderUserModels();
   if(focused)modelDialog.querySelector(`[data-choice="${focused}"]`)?.focus({preventScroll:true});
 }
-function renderUserModels(){
-  const section=$('instance-models'),container=$('user-model-choices');container.replaceChildren();
-  section.hidden=!!state.restricted||!('users' in modelPanel||modelPanel.users_error);
-  if(section.hidden)return;
-  if(modelPanel.users_error){const error=element('p',modelPanel.users_error);error.setAttribute('role','alert');container.append(error);return;}
-  if(!modelPanel.users.length)container.append(element('p','No registered user instances.'));
-  modelPanel.users.forEach((user,index)=>{
-    const item=element('div',undefined,'model-favorites');item.dataset.instance=user.name;item.append(element('h3',user.name));
-    const error=element('p',user.error||'');error.setAttribute('role','alert');item.append(error);
-    if(user.settings){
-      const change=next=>changeUserModels(user,next);
-      for(const role of ['manager','worker']){
-        item.append(element('h4',titleLevel(role)));
-        if(role==='worker'){
-          const mode=modelRow(`${user.name} Worker selection mode`);
-          renderMode(mode,user.settings,change,`${user.name} Worker`,`user-${index}-worker`,user);item.append(mode);
-        }
-        const pair=element('div');renderPair(pair,role,`${user.name} ${titleLevel(role)}`,user,change,`user-${index}-${role}`);item.append(pair);
-      }
-    }
-    container.append(item);
-  });
-}
-async function changeUserModels(user,change){
-  if(modelSaving||modelOpening)return;
-  const panel=modelPanel,next=structuredClone(user.settings);change(next);modelSaving=true;
-  $('model-save-status').textContent=`Saving ${user.name} settings`;renderModels();
+async function changeEnvironmentModels(change){
+  if(modelSaving||modelOpening||!modelEnvPanel)return;
+  const env=modelEnv,panel=modelEnvPanel,next=structuredClone(panel.settings);change(next);modelSaving=true;
+  const query='/api/instance-model-settings?name='+encodeURIComponent(env);
+  $('model-save-status').textContent=`Saving ${env} settings`;renderModels();
   return orderModelIntent(async()=>{try{
     const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),15000);
     let confirmed;
-    try{confirmed=await api('/api/instance-model-settings?name='+encodeURIComponent(user.name),{method:'PUT',body:JSON.stringify(next),signal:controller.signal});}
+    try{confirmed=await api(query,{method:'PUT',body:JSON.stringify(next),signal:controller.signal});}
     finally{clearTimeout(timeout);}
-    Object.assign(user,confirmed);delete user.error;$('model-save-status').textContent=`${user.name} settings saved`;
+    if(modelEnvPanel===panel){modelEnvPanel=confirmed;modelEnvError='';}
+    $('model-error').textContent='';$('model-save-status').textContent=`${env} settings saved`;
   }catch(error){
-    try{Object.assign(user,await api('/api/instance-model-settings?name='+encodeURIComponent(user.name)));}
-    catch{delete user.settings;}
-    user.error=`${user.name}: model settings could not be confirmed: ${error.message}`;
-    $('model-save-status').textContent='Selection not confirmed';notice(user.error);
-  }finally{modelSaving=false;if(modelPanel===panel)renderModels();}});
+    const message=`${env}: model settings could not be confirmed: ${error.message}`;
+    $('model-error').textContent=message;$('model-save-status').textContent='Selection not confirmed';notice(message);
+    try{const fresh=await api(query);if(modelEnvPanel===panel)modelEnvPanel=fresh;}
+    catch(reload){if(modelEnvPanel===panel){modelEnvPanel=null;modelEnvError=`${env} is unreachable: ${reload.message}`;}}
+  }finally{modelSaving=false;renderModels();}});
 }
+async function loadModelEnvironments(){
+  if(state.restricted)return;
+  try{modelEnvs=(await api('/api/environments')).environments;}catch{modelEnvs=[{name:'Main',main:true}];}
+  if(!modelEnvs.some(env=>(env.main?'':env.name)===modelEnv)){modelEnv='';modelEnvPanel=null;modelEnvError='';}
+}
+async function loadEnvironmentModels(){
+  const env=modelEnv,version=++modelEnvVersion;modelEnvPanel=null;modelEnvError='';$('model-error').textContent='';
+  if(!env){renderModels();return;}
+  $('model-save-status').textContent=`Loading ${env} settings`;renderModels();
+  try{
+    const panel=await api('/api/instance-model-settings?name='+encodeURIComponent(env));
+    if(version!==modelEnvVersion||env!==modelEnv)return;
+    modelEnvPanel=panel;$('model-save-status').textContent=`${env} settings loaded`;
+  }catch(error){if(version!==modelEnvVersion||env!==modelEnv)return;modelEnvError=`${env} is unreachable: ${error.message}`;$('model-save-status').textContent=`${env} is unreachable`;}
+  renderModels();
+}
+$('model-environment').onchange=()=>{modelEnv=$('model-environment').value;loadEnvironmentModels();};
 function titleLevel(value){return value[0].toUpperCase()+value.slice(1);}
 async function openModels(event){
   const project=state.project;
@@ -200,6 +242,8 @@ async function openModels(event){
   $('model-error').textContent=modelSelectionError||'';
   $('model-save-status').textContent=modelSaving?'Saving settings':'Loading settings';
   if(!modelDialog.open)modelDialog.showModal();modelDialog.scrollTop=0;$('model-close').focus({preventScroll:true});
+  // The environment list and the selected instance's settings load beside Main's own panel.
+  loadModelEnvironments().then(()=>{if(version!==modelOpenVersion||!modelDialog.open)return;if(modelEnv)loadEnvironmentModels();else renderModels();});
   try{
     await orderModelIntent(async()=>{
       const panel=await api(modelURL(project));
@@ -218,7 +262,7 @@ modelDialog.addEventListener('close',()=>{if(modelDialog.open)return;modelOpenVe
 modelDialog.addEventListener('click',event=>{if(event.target===modelDialog){const r=modelDialog.getBoundingClientRect();if(event.clientX<r.left||event.clientX>r.right||event.clientY<r.top||event.clientY>r.bottom)modelDialog.close();}});
 modelDialog.addEventListener('keydown',event=>{
   if(event.key==='Tab'){
-    const buttons=[...modelDialog.querySelectorAll('button:not(:disabled)')],first=buttons[0],last=buttons.at(-1);
+    const buttons=[...modelDialog.querySelectorAll('select:not([hidden]),button:not(:disabled)')].filter(e=>e.getClientRects().length),first=buttons[0],last=buttons.at(-1);
     if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}
     else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}
   }

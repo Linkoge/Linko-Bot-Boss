@@ -249,7 +249,7 @@ def test_picker_stays_compact_with_the_real_catalog_shape(page):
     open_panel(page)
     for section in ('#manager-choices', '#worker-choices'):
         assert page.locator(f'{section} button').count() == 14
-    assert page.locator('#model-dialog button[data-choice]').count() == 14 * 2 + 2 + 2 * 2 + 1  # repo lock
+    assert page.locator('#model-dialog button[data-choice]').count() == 14 * 2 + 2 + 2 * 2 + 1 + 2  # repo lock, show/hide
     page.locator('#model-close').click()
 
 
@@ -363,7 +363,12 @@ def test_repo_toggle_scopes_every_pick_and_discards_local_state(page, browser_co
     page.evaluate('()=>selectProject(null)')
 
 
-def test_users_reuse_controls_persist_and_show_access_errors(page, browser_context, tmp_path):
+def select_environment(page, name):
+    page.locator('#model-environment').select_option(label=name)
+    page.wait_for_function('(n)=>modelEnv===(n==="Main"?"":n)&&(n==="Main"||!!modelEnvPanel||!!modelEnvError)&&!modelSaving', arg=name)
+
+
+def test_environment_selector_edits_that_instance_and_shows_unreachable(page, browser_context, tmp_path):
     _, _, root = browser_context
     data = tmp_path / 'writer'
     user_db = Database(data / 'manager.sqlite3')
@@ -374,48 +379,100 @@ def test_users_reuse_controls_persist_and_show_access_errors(page, browser_conte
                {'name': 'Missing', 'data': str(tmp_path / 'missing'), 'url': 'http://127.0.0.1:2', 'service': 'missing.service'}]
     manifest.write_text(json.dumps({'instances': entries}))
     original = saved(page)
+    controls = '#manager-choices, #worker-mode, #worker-choices'
     try:
         open_panel(page)
-        users = page.locator('#instance-models')
-        assert users.is_visible()
-        assert users.locator('h3').all_inner_texts() == ['Writer <one>', 'Missing']
-        writer = users.locator('[data-instance="Writer <one>"]')
-        assert writer.locator('.model-family').count() == 12
-        assert 'cannot access' in users.locator('[data-instance="Missing"] [role=alert]').inner_text()
-        choose(page, 'user-0-manager-Luna')
-        choose(page, 'user-0-manager-codex-high')
-        choose(page, 'user-0-worker-Sonnet')
-        choose(page, 'user-0-worker-claude-high')
+        select = page.locator('#model-environment')
+        page.wait_for_function('()=>!document.getElementById("model-environment").hidden')
+        assert select.locator('option').all_inner_texts() == ['Main', 'Writer <one>', 'Missing']
+        assert select.bounding_box()['y'] < page.locator('#manager-heading').bounding_box()['y']  # on top
+        assert page.locator('#instance-models').count() == 0  # the separate Users section is gone
+        select_environment(page, 'Writer <one>')
+        # The same controls as Main, without Main-only favorites and the repository toggle.
+        assert page.locator('#manager-choices .model-choice-row button').all_inner_texts() == FAMILIES
+        assert page.locator('#worker-choices .model-choice-row button').all_inner_texts() == FAMILIES
+        assert page.locator('#worker-mode button').all_inner_texts() == ['Manual', 'Automatic']
+        assert page.locator('#favorites-section').is_hidden() and page.locator('#repo-lock-container button').count() == 0
+        choose(page, 'manager-Luna')
+        choose(page, 'manager-codex-high')
+        choose(page, 'worker-Sonnet')
+        choose(page, 'worker-claude-high')
         expected = user_db.setting('model_choice')
         assert expected['manager'] == {'model': LUNA, 'effort': 'high'}
         assert expected['worker'] == {'model': SONNET, 'effort': 'high'}
-        assert saved(page) == original
-        choose(page, 'user-0-worker-automatic')
+        assert saved(page) == original  # Main is untouched
+        choose(page, 'worker-automatic')
         assert user_db.setting('model_choice')['worker']['provider'] == 'claude'
         page.locator('#model-close').click()
         page.reload()
         page.wait_for_function('()=>state.ready&&!!state.history')
         open_panel(page)
-        assert writer.locator('button[aria-pressed=true]:not(.provider-logo)').all_inner_texts() == ['Luna', 'High', 'Automatic', 'Haiku', 'Sonnet', 'Opus', 'Low', 'Medium', 'High']
-        choose(page, 'user-0-worker-manual')
+        page.wait_for_function('()=>!document.getElementById("model-environment").hidden')
+        select_environment(page, 'Writer <one>')
+        lit = ', '.join(f'{c} button[aria-pressed=true]:not(.provider-logo)' for c in controls.split(', '))
+        assert page.locator(lit).all_inner_texts() == ['Luna', 'High', 'Automatic', 'Haiku', 'Sonnet', 'Opus', 'Low', 'Medium', 'High']
+        choose(page, 'worker-manual')
         assert user_db.setting('model_choice')['worker'] == expected['worker']
-        page.screenshot(path=str(tmp_path / 'users-overview.png'))
-        users.screenshot(path=str(tmp_path / 'users-controls.png'))
-        # A real filesystem denial after opening the panel produces an inline error and retains the saved pair.
+        page.screenshot(path=str(tmp_path / 'environment-writer.png'))
+        # A real filesystem denial after opening produces an inline error and retains the saved pair.
         before = user_db.setting('model_choice')
         data.joinpath('manager.sqlite3').chmod(0o400)
-        page.locator('[data-choice="user-0-manager-Sol"]').click()
+        page.locator('[data-choice="manager-Sol"]').click()
         page.wait_for_function('()=>!modelSaving')
-        assert 'read/write access' in writer.locator('[role=alert]').inner_text()
+        assert 'read/write access' in page.locator('#model-error').inner_text()
         assert user_db.setting('model_choice') == before
-        assert page.locator('#model-error').inner_text() == ''  # the main selection remains usable
+        data.joinpath('manager.sqlite3').chmod(0o600)
+        # An unreachable environment says so clearly and offers no controls.
+        select_environment(page, 'Missing')
+        error = page.locator('#model-environment-error')
+        assert error.is_visible() and 'Missing is unreachable' in error.inner_text() and 'cannot access' in error.inner_text()
+        assert page.locator(', '.join(f'{c} button' for c in controls.split(', '))).count() == 0
+        page.screenshot(path=str(tmp_path / 'environment-missing.png'))
+        # Back to Main: its own panel, favorites and repository toggle return.
+        select_environment(page, 'Main')
+        assert error.is_hidden() and page.locator('#favorites-section').is_visible()
+        assert page.locator('#manager-choices .model-choice-row button').all_inner_texts() == FAMILIES
         page.locator('#model-close').click()
-        # A restricted page never renders user choices, even if a payload unexpectedly includes them.
+        # A restricted page never shows the selector.
         page.evaluate('()=>{state.restricted=true;renderModels();}')
-        assert users.is_hidden() and users.locator('button').count() == 0
+        assert select.is_hidden()
         page.evaluate('()=>{state.restricted=false;renderModels();}')
     finally:
         data.joinpath('manager.sqlite3').chmod(0o600)
         for path in data.glob('manager.sqlite3-*'):
             path.chmod(0o600)
         manifest.unlink()
+
+
+def test_provider_show_hide_is_display_only_and_persists(page, browser_context):
+    _, _, root = browser_context
+    original, db = saved(page), Database(root / 'data' / 'manager.sqlite3')
+    before = db.setting('manager_favorites')
+    db.set_setting('manager_favorites', [{'provider': 'codex', 'pair': {'model': LUNA, 'effort': 'low'}}, None])
+    try:
+        open_panel(page)
+        assert page.locator('#provider-visibility button').count() == 2
+        assert page.locator('[data-choice="show-codex"]').get_attribute('aria-pressed') == 'true'
+        page.locator('[data-choice="show-codex"]').click()
+        page.wait_for_function("()=>modelPanel.provider_visibility.saved&&!modelSaving")
+        for section in ('#manager-choices', '#worker-choices'):
+            assert page.locator(f'{section} .provider-card').evaluate_all('ns=>ns.map(n=>n.dataset.provider)') == ['claude']
+        assert page.locator('.favorite-row').count() == 1  # the ChatGPT favorite is hidden, the empty slot stays
+        # At least one provider stays visible: the last shown one cannot be hidden.
+        assert page.locator('[data-choice="show-claude"]').is_disabled()
+        assert saved(page) == original  # hiding never changes the saved model choice
+        page.locator('#model-close').click()
+        page.reload()  # a saved setting: the same on every device and after reload
+        page.wait_for_function('()=>state.ready&&!!state.history')
+        open_panel(page)
+        assert page.locator('#manager-choices .provider-card').count() == 1
+        assert page.locator('[data-choice="show-codex"]').get_attribute('aria-pressed') == 'false'
+        page.locator('[data-choice="show-codex"]').click()
+        page.wait_for_function("()=>!modelPanel.provider_visibility.hidden.length")
+        assert page.locator('#manager-choices .provider-card').count() == 2 and page.locator('.favorite-row').count() == 2
+        page.locator('#model-close').click()
+    finally:
+        page.evaluate("()=>api('/api/model-picker/providers',{method:'PUT',body:JSON.stringify({hidden:[]})})")
+        db.set_setting('manager_favorites', before or [None, None])
+
+

@@ -10,6 +10,7 @@ from ai_manager.config import Settings
 from ai_manager.core import Core, Tasks
 from ai_manager.db import Database
 from ai_manager.model_settings import (
+    FAMILIES,
     active,
     assignment_route,
     choices,
@@ -378,3 +379,78 @@ def test_new_family_version_stays_off_and_the_old_pool_member_stays_visible(syst
     assert len({m['name'] for m in shown}) == len(shown)
     with pytest.raises(ValueError, match='not in the automatic worker pool'):
         delegation(db, server, 'gpt-9-sol')
+
+
+def test_a_non_catalog_saved_id_never_becomes_a_picker_button(system):
+    db, _, _, server, *_ = system
+    db.set_setting('manager_favorites', [{'provider': 'codex', 'pair': {'model': 'gpt-9-ghost', 'effort': 'low'}}, None])
+    extra = {'gpt-9-ghost', 'claude-ghost-1'}
+    for provider in ('codex', 'claude'):
+        assert [c['name'] for c in choices(server, provider, extra)] == list(FAMILIES[provider])
+    # The favorite itself stays, shown as unavailable.
+    assert favorites(db, server)[0]['available'] is False
+    # Even with no catalog at all (provider logged out) the families stay disabled and nothing else appears.
+    server.catalog[:] = []
+    assert [(c['name'], c['levels']) for c in choices(server, 'codex', extra)] == [(n, []) for n in FAMILIES['codex']]
+
+
+def test_startup_migration_removes_the_stray_fixture_model_from_live_settings(tmp_path):
+    import json
+    import sqlite3
+    path = tmp_path / 'data' / 'manager.sqlite3'
+    Database(path)  # an existing database before schema 18
+    stray, opus = 'gpt-6.1-sol', {'model': 'claude-opus-5-5', 'effort': 'low'}
+    real = {'provider': 'claude', 'pair': opus}
+    gone = {'provider': 'codex', 'pair': {'model': 'gpt-9-retired', 'effort': 'low'}}  # unavailable but real: kept
+    pool_ = {'mode': 'automatic', 'provider': 'codex', 'allowed_models': [stray, 'gpt-6-luna'], 'allowed_efforts': ['low']}
+    with sqlite3.connect(path) as conn:
+        conn.execute('DELETE FROM schema_version WHERE version=18')
+        rows = {'manager_favorites': [real, {'provider': 'codex', 'pair': {'model': stray, 'effort': 'low'}}],
+                'model_choice': {'revision': 3, 'manager': {'model': stray, 'effort': 'high'}, 'worker': pool_,
+                                 'manual': {'model': stray, 'effort': 'medium'}},
+                'model_choice:p1': {'revision': 1, 'manager': opus, 'worker': {'model': stray, 'effort': 'low'}},
+                'model_choice:p2': {'revision': 1, 'manager': opus,
+                                    'worker': {**pool_, 'allowed_models': [stray]}, 'manual': opus},
+                'other': [gone]}
+        for key, value in rows.items():
+            conn.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', (key, json.dumps(value)))
+    db = Database(path)
+    assert db.setting('manager_favorites') == [real, None]
+    assert db.setting('model_choice') == {'revision': 3, 'manager': {'effort': 'high'}, 'manual': None,
+                                          'worker': {**pool_, 'allowed_models': ['gpt-6-luna']}}
+    assert db.setting('model_choice:p1')['worker'] == {'effort': 'low'}
+    assert db.setting('model_choice:p2') == {'revision': 1, 'manager': opus, 'worker': None, 'manual': opus}
+    assert db.setting('other') == [gone]
+    # It runs once: a later (test) use of the id is never touched again.
+    db.set_setting('manager_favorites', [real, {'provider': 'codex', 'pair': {'model': stray, 'effort': 'low'}}])
+    assert Database(path).setting('manager_favorites')[1]['pair']['model'] == stray
+
+
+def test_provider_visibility_defaults_to_available_providers_and_persists(tmp_path):
+    settings = Settings(data_dir=tmp_path / 'data', project_roots=(tmp_path,), secure_cookie=False)
+    server = CatalogServer(settings)
+    server.catalog[:] = [m for m in server.catalog if m['model'].startswith('claude-')]  # ChatGPT logged out
+    app = create_app(settings, server, CatalogServer)
+    with TestClient(app, base_url='http://localhost') as client:
+        assert client.put('/api/model-picker/providers', json={'hidden': []}).status_code == 401
+        sign_in(client, app, settings)
+        panel = client.get('/api/model-settings').json()
+        assert panel['provider_visibility'] == {'hidden': ['codex'], 'saved': False}
+        before = panel['settings']
+        assert client.put('/api/model-picker/providers', json={'hidden': ['claude']},
+                          headers={'X-CSRF-Token': 'bad'}).status_code == 403
+        for bad in ({'hidden': ['codex', 'claude']}, {'hidden': ['nope']}, {'hidden': 'codex'}, {},
+                    {'hidden': ['claude', 'claude']}):
+            assert client.put('/api/model-picker/providers', json=bad).status_code == 409, bad
+        assert client.put('/api/model-picker/providers', json={'hidden': ['claude']}).json() == \
+            {'hidden': ['claude'], 'saved': True}
+        panel = client.get('/api/model-settings').json()
+        assert panel['provider_visibility'] == {'hidden': ['claude'], 'saved': True}
+        assert panel['settings'] == before  # display only: the saved choice is unchanged
+        assert client.put('/api/model-picker/providers', json={'hidden': []}).status_code == 200
+        assert client.get('/api/model-settings').json()['provider_visibility'] == {'hidden': [], 'saved': True}
+    # With no provider available nothing is hidden by default (at least one provider always shows).
+    server.catalog[:] = []
+    from ai_manager.model_settings import provider_visibility
+    empty = Database(tmp_path / 'empty' / 'manager.sqlite3')
+    assert provider_visibility(empty, picker_providers(server)) == {'hidden': [], 'saved': False}

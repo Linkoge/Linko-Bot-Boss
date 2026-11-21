@@ -268,14 +268,15 @@ inside, Escape closes it and returns focus.
 **Environments (Main only).** When the deploy registry (`DATA/deploy/installed.json` `instances`, the list deploy and
 doctor use) has instances, an **Environment** selector sits at the top of the picker: **Main** (the default, the panel
 as above) plus every registered instance by name (for example kaxa), so a new instance appears by itself. For another
-environment the panel sets that instance's manager harness, autonomy and manager model/effort. Main reads and writes
-the instance's own existing `manager.sqlite3`, the same local-data path and permissions as the Users model panel
-(“Owner-selected user models”). No HTTP call or restart is needed: the instance reads them at its next manager turn. The harness
-is written to its All Projects scope and to each live project's scope (a restricted instance's chat is its one fixed
-project). If the database cannot be opened, the panel shows “NAME is unreachable” with the reason and changes nothing.
-API (owner, Main only): `GET /api/environments`; `GET`/`PUT /api/instance-harness?name=` with `manager` and/or `autonomy`.
-Model/effort use `PUT /api/instance-model-settings?name=`. Code: `ai_manager/instance_models.py`. Permanent coverage:
-`tests/test_environments.py` and `tests/test_harness_browser.py`.
+environment the panel looks and works the same as for Main: manager harness, autonomy and, when the instance has a
+project, the default worker harness. It has no model controls; models are chosen only in the model picker (⚙), which
+has the same Environment selector (“Owner-selected user models”). Main reads and writes the instance's own existing
+`manager.sqlite3`. No HTTP call or restart is needed: the instance reads them at its next manager turn. Manager and
+autonomy are written to its All Projects scope and to each live project's scope (a restricted instance's chat is its one
+fixed project); the worker harness to each live project. If the database cannot be opened, the panel shows “NAME is
+unreachable” with the reason and changes nothing. API (owner, Main only): `GET /api/environments`; `GET`/`PUT
+/api/instance-harness?name=` with `manager`, `autonomy` and/or `worker`. Code: `ai_manager/instance_models.py`.
+Permanent coverage: `tests/test_environments.py` and `tests/test_harness_browser.py`.
 
 **Per task.** `delegate` accepts an optional `harness` (a worker harness id from the manager context
 `harness.worker_options`). Without it the project's default is used. Every new task records its harness once (`tasks.harness` column plus event
@@ -805,7 +806,8 @@ run in their usual branch/worktree flow on that one project (a Git repository). 
   The UI is then one clean chat screen. It hides the project row, the Conversation/Tasks/Agents/To-Do tab row, the
   harness ☼ button and panel, the usage-limits display, and the Compact and Archive chat-menu items (`body.office` CSS
   only, no server-side refusal). Chat, voice, attachments, login and automatic background compaction keep working. Its
-  harness, autonomy and manager model are set from Main's Environment picker (Switchable harnesses). It has
+  harness, autonomy and worker harness are set from Main's harness Environment picker (Switchable harnesses), its
+  models from the model picker's Environment selector. It has
   several chats in its one project: see [Office chats](#office-chats).
 
 ### Office chats
@@ -876,10 +878,14 @@ cancellation and receipts are unchanged. An instance under another Linux user ca
 give its entry `"service_cmds": {"stop": [...], "start": [...]}` (for example `sudo -n systemctl ...` with a matching
 sudoers rule) in `installed.json`. Deploys of other projects never touch instances.
 
-**Owner-selected user models.** The main instance's model picker has a **Users** section listing the `instances` entries
-from its own `DATA/deploy/installed.json`. Each name has the same Manager/Worker model and effort controls and worker
-Manual/Automatic switch. Restricted instances never show this section or accept its API; their existing picker stays
-hidden. An unrestricted instance without the main deploy registry has no Users section either.
+**Owner-selected user models.** The main instance's model picker has an **Environment** selector at the top: **Main**
+plus every `instances` entry from its own `DATA/deploy/installed.json` (the same `GET /api/environments` list as the
+harness panel). Choosing an instance shows that instance's Manager model/effort and Worker Manual/Automatic and
+models with exactly the controls Main has, and every pick saves to that instance (`GET`/`PUT
+/api/instance-model-settings?name=`). Favorites and the repository toggle belong to Main and are hidden there. If the
+instance's database cannot be opened, the picker says “NAME is unreachable” with the reason and shows no controls.
+Restricted instances never show the selector or accept its API; their existing picker stays hidden. Without the main
+deploy registry the selector is not shown.
 
 The main service opens each registered `data/manager.sqlite3` directly with SQLite `mode=rw` (no database creation or
 schema migration), and saves through the existing model validation, optimistic revision check and transaction. It writes
@@ -1104,8 +1110,17 @@ probes, live database changes, service restarts or host installation are part of
   Manager and worker can use different providers. Each provider has a subtly colored card containing its model and
   effort rows, plus the OpenAI or Anthropic logo at the right spanning both rows. Manager and Manual worker use one
   exact model/effort; their logos are labels. The picker shows only each provider's three known families, using
-  each family's newest installed model; saved, pooled or favorited models also stay visible, including older versions
-  and non-family models. Missing families are disabled. Fresh automatic pools include only the newest family models.
+  each family's newest installed model; saved, pooled or favorited catalog models also stay visible, including older
+  versions and non-family models. A saved id the catalog does not list never adds a button (a favorite with it shows
+  Unavailable). Missing families are disabled. Schema 18 removes the stray `gpt-6.1-sol` (the test suite's fixture id,
+  never a real catalog model) from saved favorites and model choices once at startup
+  (`model_settings.migrate_stray_models`).
+  **Provider show/hide.** The logo buttons at the top of the picker show or hide each provider (ChatGPT, Claude): a
+  hidden provider's manager and worker cards and favorites are not drawn. It is display only and never changes a saved
+  choice. The choice is a saved setting (`settings.model_picker_hidden_providers`, `PUT /api/model-picker/providers`
+  with `{hidden: [...]}`), so it is the same on every device; `GET /api/model-settings` returns it as
+  `provider_visibility`. Until the owner saves one, providers without an available model are hidden. At least one
+  provider always stays visible. Fresh automatic pools include only the newest family models.
   **Manual | Automatic** remains in the Worker heading. In Automatic, clicking a logo selects exactly one provider;
   model and effort buttons in that card independently toggle membership. At least one model and one effort must stay
   lit. The effective `model_choice` record stores `worker: {mode: "automatic", provider, allowed_models, allowed_efforts}`;
