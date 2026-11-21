@@ -546,14 +546,45 @@ function renderMessageActions(row,message,conversation){
     copy.type=remove.type='button';remove.className='message-delete';
     copy.onclick=action(async()=>{await copyText(row._wholeMessage.content);controls.open=false;});
     remove.onclick=()=>confirmMessageDelete(row._wholeMessage,conversation);
-    const sent=element('span',undefined,'message-sent-time');
-    buttons.append(sent,copy,remove);controls.append(toggle,buttons);row.append(controls);
+    const sent=element('span',undefined,'message-sent-time'),speak=element('button','🔊');
+    speak.type='button';speak.className='message-speak';speak.title=speak.ariaLabel='Read aloud';
+    speak.onclick=()=>toggleSpeech(row,speak);
+    buttons.append(sent,copy,remove,speak);controls.append(toggle,buttons);row.append(controls);
   }
   {const sent=controls.querySelector('.message-sent-time'),ts=Number(message.created_at);
    sent.textContent=ts>0?new Date(ts*1000).toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false}):'';}
   if(row.lastElementChild!==controls)row.append(controls);
   const m=row._wholeMessage;
   controls.querySelector('.message-delete').disabled=['queued','streaming','waiting','processing'].includes(m.status)||(!!m.execution_id&&m.finished_at===null);
+}
+const speech={audio:null,button:null,url:null,controller:null};
+function stopSpeech(){
+  speech.controller?.abort();speech.audio?.pause();if(speech.url)URL.revokeObjectURL(speech.url);
+  if(speech.button){speech.button.textContent='🔊';speech.button.title=speech.button.ariaLabel='Read aloud';speech.button.disabled=false;}
+  Object.assign(speech,{audio:null,button:null,url:null,controller:null});
+}
+async function toggleSpeech(row,button){
+  const wasThis=speech.button===button;
+  if(speech.button)stopSpeech();
+  if(wasThis)return;
+  const controller=new AbortController();
+  Object.assign(speech,{button,controller});
+  button.textContent='…';button.title=button.ariaLabel='Generating speech';
+  try{
+    const response=await fetch('/api/audio/speak',{method:'POST',signal:controller.signal,
+      headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf||''},body:JSON.stringify({text:row._wholeMessage.content})});
+    if(!response.ok){let detail;try{detail=(await response.json()).detail;}catch{}throw new Error(typeof detail==='string'?detail:`Speech failed (${response.status}).`);}
+    const url=URL.createObjectURL(await response.blob());
+    if(speech.controller!==controller){URL.revokeObjectURL(url);return;}
+    const audio=new Audio(url);Object.assign(speech,{audio,url});
+    audio.onended=audio.onerror=()=>{if(speech.audio===audio)stopSpeech();};
+    button.textContent='■';button.title=button.ariaLabel='Stop reading';
+    await audio.play();
+  }catch(error){
+    if(speech.controller!==controller)return;
+    stopSpeech();
+    notice(error.name==='NotAllowedError'?'Your browser blocked audio playback.':'Speech failed: '+error.message);
+  }
 }
 function confirmMessageDelete(message,conversation){
   const project=state.project,selection=state.selection;

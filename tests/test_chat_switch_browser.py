@@ -139,3 +139,33 @@ def test_expanded_message_shows_sent_time_left_of_actions(page, browser_context)
     expected = page.evaluate("""()=>{const m=state.history.messages[0];return new Date(m.created_at*1000).toLocaleString(undefined,{day:'numeric',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit',hour12:false});}""")
     assert text == expected and ':' in text and text.count(':') == 1
     assert sent.bounding_box()['x'] < page.locator('.message-action-buttons button').first.bounding_box()['x']
+
+
+def test_speak_button_sits_right_of_delete_and_toggles_audio(page, browser_context):
+    project, _ = make_project(browser_context, count=1)
+    page.evaluate('p=>selectProject(p)', project)
+    page.wait_for_selector('.message-actions')
+    page.evaluate("""()=>{window.speakCalls=0;window.played=0;window.paused=0;
+      const wav=new Uint8Array(44);
+      window.fetchSpeak=window.fetch;
+      window.fetch=async(url,opts)=>{if(String(url).includes('/api/audio/speak')){window.speakCalls++;await new Promise(r=>setTimeout(r,150));
+        return window.failSpeak?new Response(JSON.stringify({detail:'Audio needs XAI_API_KEY in the server environment.'}),{status:503}):new Response(wav,{status:200});}return window.fetchSpeak(url,opts);};
+      window.Audio=class{play(){window.played++;return Promise.resolve();}pause(){window.paused++;}};}""")
+    page.locator('.message-actions > summary').first.click()
+    names = page.locator('.message-actions').first.locator('.message-action-buttons > *')
+    assert names.evaluate_all('els=>els.map(e=>e.textContent.trim())')[1:3] == ['Copy', 'Delete']
+    sent, copy, delete, speak = [page.locator(f'.message-actions >> nth=0 >> {s}').bounding_box() for s in
+                                 ('.message-sent-time', 'button:text-is("Copy")', '.message-delete', '.message-speak')]
+    assert sent['x'] < copy['x'] < delete['x'] < speak['x']
+    assert sent['x'] - page.locator('.message-actions').first.bounding_box()['x'] < 5  # far left
+    button = page.locator('.message-speak').first
+    button.click()
+    page.wait_for_function("()=>document.querySelector('.message-speak').title==='Generating speech'")
+    page.wait_for_function("()=>document.querySelector('.message-speak').title==='Stop reading'&&window.played===1")
+    button.click()
+    page.wait_for_function("()=>document.querySelector('.message-speak').title==='Read aloud'&&window.paused>=1")
+    assert page.evaluate('window.speakCalls') == 1
+    page.evaluate('window.failSpeak=true')
+    button.click()
+    page.wait_for_function("()=>document.getElementById('notice-text').textContent.includes('XAI_API_KEY')")
+    assert button.get_attribute('title') == 'Read aloud'

@@ -148,11 +148,68 @@ class GrokTranscriber:
             raise HTTPException(502, 'No usable transcript returned. Recording kept; retry or record again.') from None
 
 
+MAX_SPEECH_CHARS = 4000
+TTS_TIMEOUT = 60
+MAX_SPEECH_BYTES = 24 * 1024 * 1024
+
+
+def speech_text(markdown: str) -> str:
+    """Plain text for speaking: drop code, links' URLs and markdown punctuation; cap the length."""
+    text = re.sub(r'```.*?(```|\Z)', ' ', markdown or '', flags=re.S)
+    text = re.sub(r'`([^`]*)`', r'\1', text)
+    text = re.sub(r'!\[[^\]]*\]\([^)]*\)', ' ', text)
+    text = re.sub(r'\[([^\]]*)\]\([^)]*\)', r'\1', text)
+    text = re.sub(r'https?://\S+', ' ', text)
+    text = re.sub(r'^\s{0,3}(#{1,6}|>|[-*+]|\d+[.)])\s+', '', text, flags=re.M)
+    text = re.sub(r'[*_~|#>]+', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    if len(text) > MAX_SPEECH_CHARS:
+        cut = text[:MAX_SPEECH_CHARS]
+        end = max(cut.rfind('. '), cut.rfind('? '), cut.rfind('! '))
+        text = cut[:end + 1] if end > MAX_SPEECH_CHARS // 2 else cut
+    return text
+
+
+class GrokSpeaker:
+    """xAI text-to-speech (POST /v1/tts, same bearer key as transcription); returns MP3 bytes."""
+    def __init__(self, api_key: str, voice: str):
+        self.api_key, self.voice = api_key, voice
+
+    async def speak(self, text: str) -> bytes:
+        return await asyncio.to_thread(self._request, text)
+
+    def _request(self, text: str) -> bytes:
+        body = json.dumps({'text': text, 'voice_id': self.voice, 'language': 'en',
+                           'output_format': {'codec': 'mp3', 'sample_rate': 24000, 'bit_rate': 128000}}).encode()
+        request = Request('https://api.x.ai/v1/tts', data=body, headers={
+            'Authorization': f'Bearer {self.api_key}', 'Content-Type': 'application/json'})
+        try:
+            with build_opener(NoRedirect()).open(request, timeout=TTS_TIMEOUT) as response:
+                raw = response.read(MAX_SPEECH_BYTES + 1)
+                if not raw or len(raw) > MAX_SPEECH_BYTES:
+                    raise ValueError()
+                return raw
+        except HTTPError as error:
+            error.close()
+            message = 'xAI speech failed. Retry later.'
+            if error.code in (401, 403):
+                message = 'xAI rejected the server credential or access. Check the server audio configuration.'
+            elif error.code == 429:
+                message = 'xAI audio usage limit reached. Retry later.'
+            raise HTTPException(502, message) from None
+        except (URLError, TimeoutError, OSError):
+            raise HTTPException(502, 'xAI speech connection failed. Retry later.') from None
+        except ValueError:
+            raise HTTPException(502, 'No usable speech returned. Retry later.') from None
+
+
 class Audio:
     def __init__(self, settings):
         self.settings = settings
         self.busy = False
         self.provider = GrokTranscriber(settings.xai_api_key, settings.audio_model)
+        self.speaker = GrokSpeaker(settings.xai_api_key, settings.tts_voice)
+        self.speaking = 0
 
     def status(self):
         error = None
@@ -200,3 +257,19 @@ class Audio:
             raise HTTPException(408, 'Audio upload timed out. Recording kept; retry.') from None
         finally:
             self.busy = False
+
+    async def speak(self, text: str) -> bytes:
+        if not self.settings.xai_api_key:
+            raise HTTPException(503, 'Audio needs XAI_API_KEY in the server environment.')
+        if not re.fullmatch(r'[A-Za-z0-9._-]{1,50}', self.settings.tts_voice):
+            raise HTTPException(503, 'Configured speech voice is invalid.')
+        text = speech_text(text)
+        if not text:
+            raise HTTPException(422, 'Nothing to read aloud in this message.')
+        if self.speaking >= 2:
+            raise HTTPException(429, 'Speech is busy. Retry shortly.')
+        self.speaking += 1
+        try:
+            return await self.speaker.speak(text)
+        finally:
+            self.speaking -= 1

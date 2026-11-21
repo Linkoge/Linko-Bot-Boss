@@ -314,3 +314,58 @@ def test_forwarding_metadata_header_safety():
     assert forwarding_filename('звук.flac') == 'звук.flac'
     assert forwarding_mime('audio/unknown; codecs=weird') == 'audio/unknown; codecs=weird'
     assert forwarding_mime('audio/wav\r\nInjected: x') == 'application/octet-stream'
+
+
+def test_speak_endpoint_auth_restriction_text_cleanup_and_errors(client, monkeypatch):
+    from ai_manager.audio import MAX_SPEECH_CHARS, speech_text
+    c, app, settings = client
+    assert c.post('/api/audio/speak', json={'text': 'hi'}).status_code == 401
+    sign_in(c, app, settings)
+    headers = dict(c.headers)
+    settings.xai_api_key = ''
+    assert c.post('/api/audio/speak', headers=headers, json={'text': 'hi'}).status_code == 503  # no key
+    settings.xai_api_key = 'fake-' + 'k' * 20
+    sent = []
+
+    class Speaker:
+        async def speak(self, text):
+            sent.append(text)
+            return b'ID3audio'
+    app.state.audio.speaker = Speaker()
+    assert c.post('/api/audio/speak', json={'text': 'hi'}, headers={'X-CSRF-Token': ''}).status_code == 403
+    response = c.post('/api/audio/speak', headers=headers, json={'text': '# Title\n\nSome **bold** [link](https://x.test/a)\n```py\nprint(1)\n```\nEnd'})
+    assert response.status_code == 200 and response.content == b'ID3audio'
+    assert response.headers['content-type'] == 'audio/mpeg'
+    assert sent == ['Title Some bold link End']
+    assert c.post('/api/audio/speak', headers=headers, json={'text': '```\ncode only\n```'}).status_code == 422
+    assert c.post('/api/audio/speak', headers=headers, json={'text': 5}).status_code == 422
+    assert len(speech_text('word. ' * 5000)) <= MAX_SPEECH_CHARS
+
+
+def test_grok_speaker_request_and_error_mapping(monkeypatch):
+    from ai_manager.audio import GrokSpeaker
+    seen = {}
+
+    class Response:
+        def __init__(self, data): self.data = data
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self, n): return self.data
+
+    class Opener:
+        def __init__(self, outcome): self.outcome = outcome
+        def open(self, request, timeout):
+            seen['url'], seen['body'], seen['auth'] = request.full_url, json.loads(request.data), request.get_header('Authorization')
+            if isinstance(self.outcome, Exception):
+                raise self.outcome
+            return Response(self.outcome)
+    key = 'fake-' + 'z' * 12
+    monkeypatch.setattr('ai_manager.audio.build_opener', lambda *a: Opener(b'mp3bytes'))
+    assert GrokSpeaker(key, 'eve')._request('Hello') == b'mp3bytes'
+    assert seen['url'] == 'https://api.x.ai/v1/tts' and seen['auth'] == f'Bearer {key}'
+    assert seen['body']['voice_id'] == 'eve' and seen['body']['language'] == 'en' and seen['body']['text'] == 'Hello'
+    for outcome, code, word in [(HTTPError('u', 401, 'x', {}, None), 502, 'rejected'), (URLError('down'), 502, 'connection'), (b'', 502, 'usable')]:
+        monkeypatch.setattr('ai_manager.audio.build_opener', lambda *a, o=outcome: Opener(o))
+        with pytest.raises(HTTPException) as error:
+            GrokSpeaker(key, 'eve')._request('Hello')
+        assert error.value.status_code == code and word in error.value.detail

@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -792,6 +792,13 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     @app.post("/api/audio/transcribe", dependencies=[Depends(require_owner)])
     async def transcribe_audio(request: Request):
         return await audio.transcribe(request)
+
+    @app.post("/api/audio/speak", dependencies=[Depends(require_owner)])
+    async def speak_audio(payload: dict = Body(...)):
+        text = payload.get('text')
+        if not isinstance(text, str) or len(text) > 200000:
+            raise HTTPException(422, 'Message text is required.')
+        return Response(await audio.speak(text), media_type='audio/mpeg', headers={'Cache-Control': 'no-store'})
 
     @app.get("/api/model-settings", dependencies=[Depends(require_owner)])
     async def model_settings(project_id: str | None = None):

@@ -37,6 +37,7 @@ class Settings:
     xai_api_key: str = field(default_factory=lambda: os.getenv("XAI_API_KEY", ""), repr=False)
     audio_provider: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_PROVIDER", "grok"))
     audio_model: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_MODEL", "grok-voice-transcribe-2.0"))
+    tts_voice: str = field(default_factory=lambda: os.getenv("AI_MANAGER_TTS_VOICE", "eve"))
     audio_probe: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUDIO_PROBE", "ffprobe"))
     # Separate GitHub classic tokens, outside every repository. The legacy path remains Personal.
     github_token_file: Path | None = field(
