@@ -274,7 +274,8 @@ function renderProjectMenu(){
   for(const p of sorted.filter(p=>p.visible!==false))addRow(p,projects,false);
   const stashed=sorted.filter(p=>p.visible===false);
   if(stashed.length){const details=element('details'),summary=element('summary',`Stashed projects (${stashed.length})`);details.open=stashedProjectsOpen;
-    details.ontoggle=()=>{stashedProjectsOpen=details.open;};details.append(summary);for(const p of stashed)addRow(p,details,true);projects.append(details);}
+    // The click records the new state at once: `toggle` fires later, after a background render may have rebuilt the menu.
+    summary.onclick=()=>{stashedProjectsOpen=!details.open;};details.ontoggle=()=>{if(details.isConnected)stashedProjectsOpen=details.open;};details.append(summary);for(const p of stashed)addRow(p,details,true);projects.append(details);}
   if(!state.restricted)projects.append(global);
   const actions=group('Project actions');
   if(state.project){const rename=element('button','Change display name');rename.dataset.project='rename';rename.onclick=()=>{closeProjectMenu();renameProject();};actions.append(rename);}

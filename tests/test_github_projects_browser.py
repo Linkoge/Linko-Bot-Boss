@@ -599,3 +599,22 @@ def test_push_now_button_hidden_for_offline_projects(page):
     page.evaluate("()=>{const p=state.portfolio.projects.find(p=>p.id===state.project);p.github_tier='offline';}")
     page.locator('#project-menu-button').click()
     expect(page.locator('#project-menu [data-project="github-push"]')).to_have_count(0)
+
+
+def test_stashed_section_opened_by_click_survives_a_render_before_its_toggle_event(page):
+    """`toggle` fires asynchronously after the click; a background render in between must not close it again."""
+    project = page.evaluate('()=>state.project')
+    page.locator('#project-menu-button').click()
+    page.locator(f'[data-visibility="{project}"]').uncheck()
+    page.wait_for_function('(id)=>!state.portfolio.projects.find(p=>p.id===id).visible&&!visibilityPending.size',
+                           arg=project)
+    page.wait_for_function("()=>document.querySelector('#project-menu details summary')")
+    if page.evaluate("()=>document.querySelector('#project-menu details').open"):
+        page.locator('#project-menu summary').click()  # start closed
+        page.wait_for_function('()=>!stashedProjectsOpen')
+    opened = page.evaluate("""()=>{document.querySelector('#project-menu details summary').click();renderProjectMenu();
+      return document.querySelector('#project-menu details').open}""")
+    assert opened
+    expect(page.locator(f'[data-visibility="{project}"]')).to_be_visible()
+    page.locator(f'[data-visibility="{project}"]').check()
+    page.wait_for_function('(id)=>state.portfolio.projects.find(p=>p.id===id).visible', arg=project)
