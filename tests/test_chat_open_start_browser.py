@@ -71,12 +71,15 @@ def test_manual_gesture_during_open_and_load_older_preserve_reading(page, browse
     page.evaluate('()=>refresh()')
     assert page.locator('#messages').evaluate('n=>n.scrollTop') == 600
     # Scrolling near the top loads the older page automatically; no control is needed.
-    page.locator('#messages').evaluate('n=>n.scrollTop=50')
-    anchor = page.locator('#messages [data-message]').first
-    y = anchor.bounding_box()['y']
+    # Scroll and measure the anchor in one synchronous step: the older page may arrive before a separate measurement.
+    anchor = page.locator('#messages').evaluate("""n=>{n.scrollTop=50;const m=n.querySelector('[data-message]');
+      return {id:m.dataset.message,y:m.getBoundingClientRect().y}}""")
     page.wait_for_function("()=>document.querySelectorAll('#messages [data-message]').length===60")
     # The same message remains at the same viewport coordinate after prepend.
-    assert abs(page.locator('#messages [data-message]').nth(30).bounding_box()['y'] - y) <= 1
+    moved = page.locator('#messages').evaluate(
+        "(n,id)=>[...n.querySelectorAll('[data-message]')].findIndex(m=>m.dataset.message===id)", anchor['id'])
+    assert moved == 30
+    assert abs(page.locator('#messages [data-message]').nth(30).bounding_box()['y'] - anchor['y']) <= 1
     before = page.locator('#messages').evaluate('n=>n.scrollTop')
     page.evaluate('()=>refresh()')
     assert page.locator('#messages').evaluate('n=>n.scrollTop') == before
