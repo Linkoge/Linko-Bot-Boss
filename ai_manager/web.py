@@ -18,6 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
+from . import access
 from .account_usage import AccountUsage
 from .attachments import Attachments
 from .audio import Audio
@@ -274,18 +275,50 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
     release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
+    # The access switch (access.py) applies to instances only; Main ignores the flag.
+    gate = access.Gate(db) if restricted else None
+    stopped = set()
+
+    async def lock_out():
+        """While disabled: no session survives and every running chat reply is stopped (chats themselves stay)."""
+        if await asyncio.to_thread(db.one, "SELECT 1 FROM sessions LIMIT 1"):
+            await asyncio.to_thread(db.run, "DELETE FROM sessions")
+        rows = await asyncio.to_thread(
+            db.all, "SELECT id FROM executions WHERE agent_id='manager' AND finished_at IS NULL")
+        for row in rows:
+            if row["id"] in stopped:
+                continue
+            stopped.add(row["id"])
+            try:
+                await chat.interrupt(row["id"])
+            except Exception as error:  # already finished or its backend is gone; the stop request stays durable
+                logging.getLogger(__name__).info("access.stop_failed execution=%s reason=%s", row["id"], error)
+
+    async def watch_access():
+        while True:
+            try:
+                if await asyncio.to_thread(gate.disabled):
+                    await lock_out()
+                else:
+                    stopped.clear()
+            except Exception as error:
+                logging.getLogger(__name__).warning("access.watch_failed reason=%s", error)
+            await asyncio.sleep(1)
 
     @asynccontextmanager
     async def lifespan(app):
-        lock_file = (settings.data_dir / "manager.lock").open("a")
+        lock_file, watcher = (settings.data_dir / "manager.lock").open("a"), None
         try:
             fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             auth.bootstrap()
             registry.discover()
             reviews.recover()
             scheduler.start()
+            watcher = asyncio.create_task(watch_access()) if gate else None
             yield
         finally:
+            if watcher:
+                watcher.cancel()
             await reviews.close()
             await scheduler.close()
             await core.close()
@@ -317,6 +350,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.middleware("http")
     async def browser_security(request: Request, call_next):
+        # A disabled instance answers every request, the login page and static files included, with only "Error 69".
+        if gate and await asyncio.to_thread(gate.disabled):
+            return access.blocked()
         # Outermost check, before the host check, the session and every route: only the enrolled PC (and local health checks).
         if allowed_clients and not client_allowed(request, trusted_proxies, allowed_clients):
             return JSONResponse({"detail": "Forbidden"}, status_code=403, headers={"Cache-Control": "no-store"})
@@ -862,6 +898,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         except Exception:
             pass
         return await asyncio.to_thread(save_harness, settings.data_dir, chat.server, name, body)
+
+    @app.put('/api/instance-access', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def save_instance_access(name: str, body: dict):
+        from .instance_models import set_access
+        return set_access(settings.data_dir, chat.server, name, body)
 
     @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
     async def insert_manager_favorite(slot: int, project_id: str | None = None):

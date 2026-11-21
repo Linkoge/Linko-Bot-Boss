@@ -331,6 +331,7 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #harness-button{width:44px;height:44px;min-height:44px;flex:none;padding:0;border-radius:50%;font-size:20px;line-height:1}
 #harness-menu{position:absolute;right:8px;top:100%;width:min(320px,calc(100vw - 16px));max-height:min(75dvh,560px);overflow-y:auto;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--panel);box-shadow:0 10px 30px #0008}
 #harness-menu label{margin:10px 0 4px;font-size:12px}#harness-menu select{min-height:44px;padding:8px 10px}
+#harness-access{margin-top:12px;padding-top:10px;border-top:1px solid var(--border)}#harness-access button{min-height:44px;width:100%;margin-top:6px}
 .harness-scope{margin:0 0 4px;font-size:11px;color:var(--muted)}.harness-description{margin:4px 0 0;font-size:12px;color:var(--muted)}
 #harness-invalid{margin-top:10px;padding:8px;border:1px solid #67553a;border-radius:8px;color:#e4c58b;background:#2e281e;font-size:12px}#harness-invalid p{margin:0}#harness-invalid ul{margin:4px 0 0;padding-left:18px;overflow-wrap:anywhere}
 .task-harness{display:block}

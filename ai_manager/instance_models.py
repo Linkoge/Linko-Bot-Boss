@@ -115,7 +115,9 @@ def harness_panel(entry, server=None):
     state = harness.state(db, scopes[1] if len(scopes) == 2 else None)
     if len(scopes) > 1 and 'worker' not in state:
         state['worker'] = harness.state(db, scopes[1])['worker']
-    return {'name': entry['name'], 'harness': {**state, 'project_id': None, 'has_projects': len(scopes) > 1}}
+    from . import access
+    return {'name': entry['name'], 'harness': {**state, 'project_id': None, 'has_projects': len(scopes) > 1},
+            'access': {'disabled': access.is_disabled(db)}}
 
 
 def read_harness(data, server, name):
@@ -144,6 +146,20 @@ def save_harness(data, server, name, body):
             part = body if scope else {k: v for k, v in body.items() if k != 'worker'}
             if part:
                 harness.save(db, scope, part)
+        return harness_panel(entry, server)
+    except (OSError, sqlite3.Error) as error:
+        raise ValueError(access_error(name, error, 'its settings (unreachable)')) from error
+
+
+def set_access(data, server, name, body):
+    """The access switch: {"disabled": true} sets the instance's flag and deletes its sessions; false clears it.
+    Main is not a registered instance, so it can never be disabled."""
+    from . import access
+    if not isinstance(body, dict) or body.keys() != {'disabled'} or not isinstance(body['disabled'], bool):
+        raise ValueError('Send disabled: true or false')
+    entry = registered(data, name)
+    try:
+        access.write(ExistingDatabase(entry['data']), body['disabled'])
         return harness_panel(entry, server)
     except (OSError, sqlite3.Error) as error:
         raise ValueError(access_error(name, error, 'its settings (unreachable)')) from error

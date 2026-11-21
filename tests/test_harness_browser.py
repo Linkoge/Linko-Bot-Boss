@@ -163,3 +163,52 @@ def test_environment_picker_sets_another_instance_and_shows_unreachable(page, br
         assert page.locator('#harness-manager').input_value() == main_before
     finally:
         manifest.unlink()
+
+
+def test_access_switch_confirms_disable_enables_at_once_and_never_shows_for_main(page, browser_context, tmp_path):
+    from ai_manager import access
+    _, _, root = browser_context
+    user_db = Database(tmp_path / 'writer' / 'manager.sqlite3')
+    user_db.run("INSERT INTO sessions VALUES('someone','csrf',?)", (2e9,))
+    manifest = root / 'data' / 'deploy' / 'installed.json'
+    manifest.parent.mkdir(exist_ok=True)
+    manifest.write_text(json.dumps({'instances': [
+        {'name': 'kaxa', 'data': str(tmp_path / 'writer'), 'url': 'http://127.0.0.1:1', 'service': 'k.service'},
+        {'name': 'Offline', 'data': str(tmp_path / 'missing'), 'url': 'http://127.0.0.1:2', 'service': 'o.service'}]}))
+    toggle, dialog = page.locator('#harness-access-toggle'), page.locator('#access-confirm')
+    try:
+        page.locator('#harness-button').click()
+        page.wait_for_function("()=>harnessMenu.data&&!document.getElementById('harness-environment-group').hidden")
+        assert page.locator('#harness-access').is_hidden()  # Main has no switch
+
+        page.locator('#harness-environment').select_option('kaxa')
+        page.wait_for_function("()=>harnessMenu.access&&harnessMenu.env==='kaxa'")
+        assert toggle.inner_text() == 'Disable access' and 'danger' in toggle.get_attribute('class')
+        assert page.locator('#harness-access-state').inner_text() == 'Access to kaxa is enabled.'
+        toggle.click()
+        assert dialog.is_visible()
+        assert page.locator('#access-confirm-title').inner_text() == \
+            'Disable access to kaxa? Everyone signed in will be signed out.'
+        page.locator('#access-confirm-cancel').click()
+        assert dialog.is_hidden() and user_db.setting(access.KEY) is None  # nothing flips without confirming
+        assert page.locator('#harness-menu').is_visible()
+
+        toggle.click()
+        page.locator('#access-confirm-submit').click()
+        page.wait_for_function("()=>harnessMenu.access?.disabled&&!document.getElementById('access-confirm').open")
+        assert user_db.setting(access.KEY) is True
+        assert user_db.one('SELECT count(*) AS n FROM sessions')['n'] == 0
+        assert toggle.inner_text() == 'Enable access' and 'danger' not in toggle.get_attribute('class')
+        assert 'disabled' in page.locator('#harness-access-state').inner_text()
+
+        toggle.click()  # enabling needs no confirmation
+        page.wait_for_function("()=>harnessMenu.access&&!harnessMenu.access.disabled&&!harnessMenu.saving")
+        assert dialog.is_hidden() and user_db.setting(access.KEY) is None
+        assert toggle.inner_text() == 'Disable access'
+
+        page.locator('#harness-environment').select_option('Offline')
+        page.wait_for_function("()=>document.getElementById('harness-status').textContent==='Offline is unreachable.'")
+        assert toggle.is_disabled()
+        assert page.locator('#harness-access-state').inner_text() == 'Offline is unreachable; access cannot be changed.'
+    finally:
+        manifest.unlink()

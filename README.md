@@ -278,6 +278,20 @@ unreachable” with the reason and changes nothing. API (owner, Main only): `GET
 /api/instance-harness?name=` with `manager`, `autonomy` and/or `worker`. Code: `ai_manager/instance_models.py`.
 Permanent coverage: `tests/test_environments.py` and `tests/test_harness_browser.py`.
 
+**Access switch (Main only).** With another environment selected, the panel shows its access state and a red
+**Disable access** button. It asks “Disable access to NAME? Everyone signed in will be signed out.” and flips only after
+confirming. Main then writes `access_disabled` into that instance's own `settings` table and deletes its sessions. The
+instance's per-request check reads the flag (cached for at most 2 seconds): while it is set, *every* request (login
+page, static files, PWA manifest, API) gets a plain-text `Error 69` with HTTP 503 and nothing else, and a watcher stops
+the instance's running chat replies. The password, chats, memory and files are untouched. **Enable access** works at
+once without confirmation: the flag is cleared and the same login works again (old sessions stay signed out). Main has no
+switch and ignores the flag. If the instance database cannot be opened, the panel says it is unreachable and why, and
+the button is disabled. The deploy health check accepts a disabled instance that answers `Error 69` (its release
+cannot be checked from outside), so a disabled instance never rolls a deploy back. API: `PUT
+/api/instance-access?name=` with `{"disabled": true|false}`; `GET /api/instance-harness` reports `access`. Code:
+`ai_manager/access.py`. Permanent coverage: `tests/test_access.py`, `tests/test_harness_browser.py`,
+`tests/test_deploy_instances.py`.
+
 **Per task.** `delegate` accepts an optional `harness` (a worker harness id from the manager context
 `harness.worker_options`). Without it the project's default is used. Every new task records its harness once (`tasks.harness` column plus event
 `task.harness`). The task card shows it (“Harness: Coding”), `read_task`/`list_tasks` return it, and every turn,
@@ -900,9 +914,11 @@ This local-data mechanism works even when the user's service or URL is offline. 
 traversal permission on all parent directories, read/write access to that instance's database and existing `-wal`/`-shm`
 files, and read/write/traversal access to its data directory so SQLite can create journal files. For another Linux user,
 the host administrator can grant named-user ACLs scoped to those paths and a default ACL on the data directory for newly
-created SQLite files. Keep them scoped to the main service account. `Settings.prepare()` sets the data directory to mode
-0700 at each instance startup, so a host-managed post-start step must restore the directory access ACL/mask after that;
-default ACLs alone do not restore directory access. The app neither changes permissions nor uses sudo. Missing databases,
+created SQLite files. Keep them scoped to the main service account. At each instance startup `Settings.prepare()`
+makes the data directory owner-only (0700) and `Database()` the database file (0600) through `ai_manager/fsmode.py`
+`private()`: it sets the owner bits and clears the owning group and other, but keeps named ACL entries and the mask, so
+these grants survive restarts (a plain chmod would reset the mask to `---` and void them). Without an extended ACL it is
+a plain chmod. The app never adds ACL entries itself and uses no sudo (coverage: `tests/test_fsmode.py`). Missing databases,
 inaccessible paths, read-only files, busy databases (one-second SQLite lock timeout), invalid registries and failed saves
 produce visible errors in Users. Other instances and the main picker's controls remain usable. Reopen the picker after
 fixing access to retry. Authenticated, CSRF-protected `GET/PUT /api/instance-model-settings?name=...` resolves names only

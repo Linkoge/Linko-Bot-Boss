@@ -224,3 +224,21 @@ def test_stale_instance_restarts_even_when_main_already_runs_target(runtime, wor
     assert result['previous'] == target
     assert runtime.running() == work.running() == target
     assert (Path(result['backup']) / 'work' / 'before.sqlite3').exists()
+
+
+def test_disabled_instance_passes_health_by_answering_only_error_69(runtime, work):
+    """Main's access switch (ai_manager/access.py) must not make every deploy roll back."""
+    work.start()
+    work.sql("INSERT INTO settings VALUES('access_disabled','true')")
+    assert deploy_script.access_disabled(work.data / 'manager.sqlite3')
+    new = commit(runtime.repo, 'docs change', **{'README.md': ('# Linko Bot Boss', '# Linko Bot Boss (deployed)')})
+    runtime.request()
+    result = runtime.run()
+    assert result['status'] == 'success' and result['commit'] == new and runtime.running() == new
+    status, body = runtime.deploy.http('/api/auth-status', url=work.entry['url'])
+    assert (status, body) == (503, b'Error 69')
+    assert work.sql("SELECT value FROM settings WHERE key='access_disabled'") == [('true',)]
+    assert work.sql("SELECT count(*) FROM sessions") == [(0,)]
+    with pytest.raises(RuntimeError, match='Error 69'):  # flagged, but a normal answer: not enforcing, unhealthy
+        runtime.deploy.check_disabled(runtime.config['url'])
+    assert not deploy_script.access_disabled(work.data / 'missing.sqlite3')
