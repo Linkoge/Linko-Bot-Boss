@@ -35,3 +35,9 @@ When: a Playwright test clicks a control whose handler awaits a promise (clipboa
 Symptom: the test passes alone and under plain `pytest -n auto`, but `scripts/full_suite.py` (6 loaded workers) intermittently reports `1 failed`.
 Cause: `inner_text()` / `page.evaluate()` right after `click()` runs before the awaited handler finishes.
 Do: `page.wait_for_function(...)` for the expected state before asserting; reproduce with `python scripts/full_suite.py`, not just the single file.
+
+### Fake unfinished executions race the app's scheduler (2026-11-21, task bdc5d3)
+When: a test using a live `create_app` app (the `client`/`pair` fixtures; the scheduler runs) inserts an `executions` row with `finished_at IS NULL` by hand.
+Symptom: passes alone and in a serial run, fails only in the parallel full suite (`scripts/full_suite.py`), e.g. a guard expected 409 but got 200.
+Cause: `Chat.recover()` on the scheduler loop finishes unowned unfinished manager rows (status `running`, no live pid) between the test's requests.
+Do: insert a state recovery leaves alone, e.g. status `recovering` with `retry_at` an hour ahead (what `recovery.defer()` writes); reproduce with a `time.sleep(3)` before the assertion.
