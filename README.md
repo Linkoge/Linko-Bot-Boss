@@ -805,7 +805,57 @@ run in their usual branch/worktree flow on that one project (a Git repository). 
   The UI is then one clean chat screen. It hides the project row, the Conversation/Tasks/Agents/To-Do tab row, the
   harness ☼ button and panel, the usage-limits display, and the Compact and Archive chat-menu items (`body.office` CSS
   only, no server-side refusal). Chat, voice, attachments, login and automatic background compaction keep working. Its
-  harness, autonomy and manager model are set from Main's Environment picker (Switchable harnesses).
+  harness, autonomy and manager model are set from Main's Environment picker (Switchable harnesses). It has
+  several chats in its one project: see [Office chats](#office-chats).
+
+### Office chats
+
+Office mode only; Main is unchanged (one chat per context, no chat list; `/api/office/chats` answers 403 there and the
+office controls are `.office-only`, hidden by CSS outside `body.office`).
+
+- **Layout.** Top left, a round ☰ button opens a left sidebar with the chat list; right next to it **+ New** starts a
+  fresh empty chat in one click (an open chat that is still empty is kept instead of making another). On a wide screen
+  (over 900 px) the list stays open beside the chat and remembers open/closed; on a phone it slides in over the chat
+  and closes after you pick one. Both buttons stay visible on top. The list's **Settings** button opens the settings
+  view (Chat memory, Instructions, Sign out), since office mode hides the tabs.
+- **List.** Flat, most recently active first (newest owner/assistant message), pinned chats at the top, the current
+  chat highlighted. Per chat: ☆/★ pin, ✎ rename, × delete with a confirm. Delete moves the chat to the chat archive
+  (`archive:<id>` + `chat_archives`, titled with the chat's name), never a hard delete; deleting the open chat opens the
+  most recently active other chat, or a fresh one. The search box filters by title and message text on the server.
+  Empty chats other than the open one are not listed.
+- **Storage.** No new table. Exactly one chat is *open*: its conversation keeps the usual context (the project id), so
+  sending, history, attachments, Clear/Trash and compaction work on it unchanged. Other chats are *parked* with
+  context `chat:<id>`; opening one swaps the two in one transaction. A reply still running in a chat you left keeps
+  writing to that chat, and worker results go to their originating chat by id. The owner can only send into the open
+  chat. Per-chat metadata is the settings record `office_chat:<conversation id>`: `title`, `title_state`
+  (`pending` → `running` → `done`/`failed`; `owner` after a rename), `pinned_at`, `memory_mark`, `memory_at`.
+- **Titles.** After the first owner message of a chat, one background call with the newest catalog model whose id
+  contains "haiku" (never a fixed version) at `low` effort writes a short title (about 6 words) from that message. It is
+  set once: a later message never retitles, a failed call is not retried, and an owner rename made while the call runs
+  wins. Until then (and after a failure) the list shows the first words of the message. The call never blocks the chat.
+- **Files.** Uploads stay bound to their chat (an attachment of another chat is refused). The history shows a small
+  card (name and type), not the content. The model gets the usual one-time reference with the message and, in the chat
+  context, `chat_files`: name, type and path (`text_path` for DOCX) of every file sent in this chat, with a note to
+  open one only when a question needs it. The context is sent in full on a new thread and as changes after that, so the
+  list is not repeated every turn, and reopening the chat later keeps the files available.
+- **Memory on leaving a chat.** Memory is per environment (the instance's own database) and shared across its chats;
+  every chat, including a new one, gets the active chat memory as context, as before. When the owner leaves a chat
+  (opens another one or presses + New), one background memory update runs for it if it has at least `leave_messages`
+  (10) new owner/assistant messages since its `memory_mark`, **or** at least `leave_min_messages` (2) new messages and
+  `leave_minutes` (15) have passed since its last memory update (since the chat was created, if never). It uses the
+  compaction model/effort and the existing new/update/keep/drop pipeline on **only** the messages after the mark,
+  merges the result into chat memory, then advances the mark. It never archives, compacts or otherwise changes the chat.
+  At most one memory job runs per instance (also not while a compaction runs); a leave meanwhile is skipped and counted
+  again next time. A failed update leaves the mark, so the same messages are read next time (event
+  `chat_memory.update_failed`). Automatic compaction past the token threshold keeps working per chat; a compaction that
+  finishes after you left its chat still applies to that chat.
+- **API** (owner, office only): `GET /api/office/chats?search=`, `POST /api/office/chats` (+ New),
+  `POST /api/office/chats/{id}/open`, `PATCH /api/office/chats/{id}` (`title` and/or `pinned`),
+  `POST /api/office/chats/{id}/delete` (`confirmed: true`). Opening and + New report the memory-on-leave decision as
+  `memory_update`.
+
+Permanent coverage: `tests/test_office_chats.py` (CRUD, pin, search, title once, memory-on-leave rules, per-chat files,
+Main refused) and `tests/test_office_chats_browser.py` (desktop and mobile layout, Main without the controls).
 
 The per-project GitHub backup keeps working through the existing path. The synced folder is
 a Git repository only for that: put `.git` in the folder's Syncthing ignore list (a `.stignore` file in the folder root
@@ -1126,7 +1176,9 @@ probes, live database changes, service restarts or host installation are part of
   ids before validating (unknown refs are rejected). Only active items are sent
   to the manager as `chat_memory`, a plain-text string: the item texts as lines under the same two headers, the archived-item count and one retrieval hint (no ids, no dates), in the manager's context (outside the brief's `CONTEXT_MAXIMUM`); archived ones are searched on
   demand with `read_memory` (`path: chat_memory_archive`, `query`). Settings → **Chat memory** edits the one
-  `chat_compaction` record: model (default **Latest Haiku**: the highest-versioned catalog id containing "haiku", resolved at call time; explicit models stay possible), effort (default `low`), threshold in tokens (the caps are shown as fixed info; records saved with the old `threshold_chars` migrate once: 150 000 or 60 000 become 150 000 tokens, other values chars / 4; an unset or Haiku model becomes Latest Haiku and unset/`medium` effort becomes `low`); the
+  `chat_compaction` record: model (default **Latest Haiku**: the highest-versioned catalog id containing "haiku", resolved at call time; explicit models stay possible), effort (default `low`), threshold in tokens (the caps are shown as fixed info; records saved with the old `threshold_chars` migrate once: 150 000 or 60 000 become 150 000 tokens, other values chars / 4; an unset or Haiku model becomes Latest Haiku and unset/`medium` effort becomes `low`), and, shown in office mode only, the three
+  memory-on-leave numbers `leave_messages` (10), `leave_min_messages` (2) and `leave_minutes` (15) (see
+  [Office chats](#office-chats); a client that omits them keeps the saved values); the
   panel's "Used:" line comes from the same `route()` a compaction runs with. API: `POST /api/chat/compact` (start),
   `GET /api/chat/compact/status`, `POST /api/chat/compact/notice/dismiss`, `GET|PUT /api/chat-memory/settings`. Permanent coverage: `tests/test_chat_compaction.py` and
   `tests/test_chat_compaction_browser.py`.

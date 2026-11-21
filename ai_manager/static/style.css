@@ -325,3 +325,29 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .harness-scope{margin:0 0 4px;font-size:11px;color:var(--muted)}.harness-description{margin:4px 0 0;font-size:12px;color:var(--muted)}
 #harness-invalid{margin-top:10px;padding:8px;border:1px solid #67553a;border-radius:8px;color:#e4c58b;background:#2e281e;font-size:12px}#harness-invalid p{margin:0}#harness-invalid ul{margin:4px 0 0;padding-left:18px;overflow-wrap:anywhere}
 .task-harness{display:block}
+/* Office mode multi-chat (office-chats.js). Nothing here applies to Main: every element is .office-only. */
+body:not(.office) .office-only{display:none!important}
+#office-bar{display:flex;align-items:center;gap:6px;margin-right:auto;flex:none}
+#chat-list-button{width:40px;height:40px;min-height:40px;padding:0;border-radius:50%;display:grid;place-items:center}
+#new-chat{min-height:36px;padding:5px 14px;border-radius:18px;font-weight:600}
+#chat-sidebar{position:fixed;top:var(--viewport-top,0px);left:0;bottom:0;width:280px;z-index:30;display:flex;flex-direction:column;gap:8px;padding:12px 10px max(10px,env(safe-area-inset-bottom));background:var(--panel);border-right:1px solid var(--border)}
+#chat-search{flex:none}
+#chat-list{list-style:none;margin:0;padding:0;overflow:auto;flex:1;min-height:0}
+.chat-item{display:flex;align-items:center;gap:2px;border-radius:9px;margin:2px 0;border:1px solid transparent}
+.chat-item.current{background:var(--accent-bg);border-color:var(--accent-border)}
+.chat-item .chat-open{flex:1;min-width:0;text-align:left;border:0;background:none;padding:8px 8px;min-height:38px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.chat-item.current .chat-open{color:var(--accent)}
+.chat-item .chat-open .chat-pin-mark{margin-right:6px;color:var(--accent)}
+.chat-item .chat-untitled{color:var(--muted)}
+.chat-item-actions{display:flex;flex:none;opacity:.55}
+.chat-item:hover .chat-item-actions,.chat-item:focus-within .chat-item-actions,.chat-item.current .chat-item-actions{opacity:1}
+.chat-item-actions button{min-height:30px;width:30px;padding:0;border:0;background:none;font-size:13px}
+#chat-list-status{margin:0;font-size:12px}
+#office-settings{flex:none}
+#chat-sidebar-backdrop{position:fixed;inset:0;z-index:25;background:#070c15a0}
+#chat-memory-leave{border:1px solid var(--border);border-radius:8px;margin:15px 0;padding:4px 12px}
+.message-attachments .attachment-card{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--border);border-radius:9px;padding:5px 10px;margin:4px 6px 0 0;background:#1d2534;max-width:100%}
+.attachment-card .attachment-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.attachment-card .attachment-type{font-size:10px;font-weight:700;letter-spacing:.6px;color:var(--muted);flex:none}
+@media(min-width:901px){body.office.chats-open main{margin-left:280px;width:auto;max-width:none}body.office #chat-sidebar-backdrop{display:none!important}}
+@media(max-width:900px){#chat-sidebar{width:min(320px,86vw);padding-top:calc(60px + env(safe-area-inset-top));box-shadow:4px 0 24px #0008}body.office .navigation{z-index:40}body.office #office-bar{position:relative;z-index:41}}

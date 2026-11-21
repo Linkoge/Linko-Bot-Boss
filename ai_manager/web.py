@@ -195,6 +195,19 @@ class ChatMemorySettingsBody(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=40)
     threshold_tokens: int
+    leave_messages: int | None = None
+    leave_min_messages: int | None = None
+    leave_minutes: int | None = None
+
+
+class OfficeChatChange(BaseModel):
+    model_config = {"extra": "forbid"}
+    title: str | None = Field(default=None, max_length=200)
+    pinned: bool | None = None
+
+
+class OfficeChatDelete(BaseModel):
+    confirmed: bool = Field(default=False, strict=True)
 
 
 class MemoryStart(BaseModel):
@@ -342,6 +355,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def unrestricted():
         if restricted:
             raise HTTPException(403, RESTRICTED)
+
+    def office():
+        """Multiple chats exist in office mode only; Main keeps its one chat per context."""
+        if not restricted:
+            raise HTTPException(403, "Available in office mode only")
 
     def scope(project_id):
         """Restricted instance: every project-scoped request is the one fixed project (no All Projects, no other id)."""
@@ -595,6 +613,35 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             body.project_id, body.conversation_id, body.last_message_id, body.confirmed, archive=True, title=body.title, keep_last=body.keep_last
         )
 
+    office_only = [Depends(require_owner), Depends(office)]
+
+    @app.get("/api/office/chats", dependencies=office_only)
+    async def office_chats(search: str = ""):
+        return chat.office.list(scope(None), search)
+
+    @app.post("/api/office/chats", dependencies=office_only)
+    async def office_new_chat():
+        return chat.office.new(scope(None))
+
+    @app.post("/api/office/chats/{conversation_id}/open", dependencies=office_only)
+    async def office_open_chat(conversation_id: str):
+        return chat.office.open(scope(None), conversation_id)
+
+    @app.patch("/api/office/chats/{conversation_id}", dependencies=office_only)
+    async def office_change_chat(conversation_id: str, body: OfficeChatChange):
+        project_id, result = scope(None), {}
+        if body.title is not None:
+            result = chat.office.rename(project_id, conversation_id, body.title)
+        if body.pinned is not None:
+            result = {**result, **chat.office.pin(project_id, conversation_id, body.pinned)}
+        if not result:
+            raise HTTPException(422, "Send a title or pinned")
+        return result
+
+    @app.post("/api/office/chats/{conversation_id}/delete", dependencies=office_only)
+    async def office_delete_chat(conversation_id: str, body: OfficeChatDelete):
+        return chat.office.delete(scope(None), conversation_id, body.confirmed)
+
     @app.post("/api/chat/compact", dependencies=[Depends(require_owner)])
     async def compact_chat(body: ChatCompactStart):
         """Compact click: starts the background compaction and returns at once; it applies itself when ready."""
@@ -620,6 +667,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return {"settings": saved, "effective": effective, "error": error, "models": models,
                 "defaults": chat_memory.DEFAULTS, "latest_haiku": chat_memory.LATEST_HAIKU,
                 "threshold_range": chat_memory.THRESHOLD_RANGE, "promote_after": chat_memory.PROMOTE_AFTER,
+                "leave_ranges": chat_memory.LEAVE_RANGES,
                 "caps": chat_memory.CAPS,
                 "timeout_seconds": chat.compactor.timeout}
 

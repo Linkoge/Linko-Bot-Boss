@@ -29,8 +29,12 @@ SETTINGS_KEY = "chat_compaction"
 NOTICE = "chat_compaction_notice:"  # + chat context: the latest automatic-compaction notice for that chat
 AUTO_STATE = "chat_autocompact:"  # + conversation id: {"next_at": chars} after an automatic attempt
 LATEST_HAIKU = "latest-haiku"  # stored model choice: resolved at call time to the newest Haiku in the catalog
-DEFAULTS = {"model": LATEST_HAIKU, "effort": "low", "threshold_tokens": 150000}
+DEFAULTS = {"model": LATEST_HAIKU, "effort": "low", "threshold_tokens": 150000,
+            # Office mode, memory on leaving a chat (ai_manager/office_chats.py): update when the chat has
+            # leave_messages new messages, OR leave_min_messages and leave_minutes since its last memory update.
+            "leave_messages": 10, "leave_min_messages": 2, "leave_minutes": 15}
 THRESHOLD_RANGE = (10000, 1000000)  # tokens, estimated as characters / CHARS_PER_TOKEN
+LEAVE_RANGES = {"leave_messages": (1, 1000), "leave_min_messages": (1, 1000), "leave_minutes": (0, 10080)}
 CHARS_PER_TOKEN = 4
 PROMOTE_AFTER = 3  # reuses (compactions that kept an item) before a short-term item becomes long-term
 MAX_SHORT_TERM = 30  # active short-term items; the least recently used beyond this are archived
@@ -155,6 +159,9 @@ def save_settings(db, server, body):
     if body.get("revision") != current["revision"]:
         raise ValueError("Chat memory settings changed; refresh and try again")
     value = {k: body.get(k, current[k]) for k in DEFAULTS}
+    for key in LEAVE_RANGES:  # older clients do not send these: keep the saved values
+        if value[key] is None:
+            value[key] = current[key]
     value["model"] = (value["model"] or "").strip() or None
     value["effort"] = (value["effort"] or "").strip() or None
     if not value["model"]:
@@ -165,6 +172,9 @@ def save_settings(db, server, body):
     if not isinstance(value["threshold_tokens"], int) or isinstance(value["threshold_tokens"], bool) \
             or not low <= value["threshold_tokens"] <= high:
         raise ValueError(f"threshold_tokens must be a whole number from {low} to {high}")
+    for key, (low, high) in LEAVE_RANGES.items():
+        if not isinstance(value[key], int) or isinstance(value[key], bool) or not low <= value[key] <= high:
+            raise ValueError(f"{key} must be a whole number from {low} to {high}")
     value["revision"] = current["revision"] + 1
     db.set_setting(SETTINGS_KEY, value)
     return value
@@ -533,9 +543,10 @@ class Compactor:
         if self.busy(conversation_id):
             raise ValueError("Wait for the response to finish or stop it before compacting this chat")
         with self.db.transaction() as conn:
-            conversation = conn.execute("SELECT * FROM conversations WHERE context=?",
-                                        (context_name(project_id),)).fetchone()
-            if not conversation or conversation["id"] != conversation_id:
+            # The chat's own row: open, or (office mode) parked as chat:<id> while another chat is open.
+            conversation = conn.execute("SELECT * FROM conversations WHERE id=? AND context IN (?,?)",
+                                        (conversation_id, context_name(project_id), "chat:" + conversation_id)).fetchone()
+            if not conversation:
                 raise ValueError("the chat was cleared or archived meanwhile")
             cut = conn.execute("SELECT rowid AS position FROM messages WHERE id=? AND conversation_id=?",
                                (last_message_id, conversation_id)).fetchone()

@@ -50,6 +50,8 @@ function renderChatMemorySettings(data){
   for(const model of new Set([...data.models,...(saved.model&&saved.model!=='latest-haiku'?[saved.model]:[])])){const option=document.createElement('option');option.value=model;option.textContent=model;select.append(option);}
   select.value=saved.model||'latest-haiku';$('chat-memory-effort').value=saved.effort||'low';
   $('chat-memory-threshold').value=saved.threshold_tokens;
+  // Office mode: memory on leaving a chat (hidden on Main, which has one chat per context).
+  $('chat-memory-leave-messages').value=saved.leave_messages;$('chat-memory-leave-min').value=saved.leave_min_messages;$('chat-memory-leave-minutes').value=saved.leave_minutes;
   $('chat-memory-effective').textContent=data.effective?`Used: ${data.effective.model} · ${data.effective.effort}${saved.model==='latest-haiku'?' (Latest Haiku)':''} · memory caps ${data.caps.long} long-term / ${data.caps.short} short-term (least recently used archived when over) · promoted to long-term after ${data.promote_after} reuses · timeout ${Math.round(data.timeout_seconds/60)} min`:`Compaction model unavailable: ${data.error}`;
 }
 async function loadChatMemorySettings(){
@@ -59,7 +61,8 @@ async function loadChatMemorySettings(){
 $('chat-memory-form').onsubmit=action(async event=>{
   event.preventDefault();if(!chatMemorySettings)await loadChatMemorySettings();
   const body={revision:chatMemorySettings.settings.revision,model:$('chat-memory-model').value||'latest-haiku',effort:$('chat-memory-effort').value.trim()||'low',
-    threshold_tokens:Number($('chat-memory-threshold').value)};
+    threshold_tokens:Number($('chat-memory-threshold').value),
+    leave_messages:Number($('chat-memory-leave-messages').value),leave_min_messages:Number($('chat-memory-leave-min').value),leave_minutes:Number($('chat-memory-leave-minutes').value)};
   const data=await api(`/api/chat-memory/settings?${compactionQuery(state.project)}`,{method:'PUT',body:JSON.stringify(body)});
   renderChatMemorySettings(data);$('chat-memory-status').textContent='Saved.';
 });

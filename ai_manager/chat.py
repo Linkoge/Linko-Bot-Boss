@@ -12,6 +12,7 @@ from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import Database, new_id
 from .history import CHAT_WINDOW
 from .model_settings import manager_route, worker_context
+from .office_chats import OfficeChats
 from .providers import owns_pid
 from .recovery import (
     Failure,
@@ -79,6 +80,7 @@ class Chat:
         self.workspace = db.path.parent / "chat-workspace"
         self.workspace.mkdir(exist_ok=True, mode=0o700)
         self.compactor = Compactor(self)
+        self.office = OfficeChats(self)  # used only on a restricted (office mode) instance
 
     def conversation(self, project_id=None):
         if project_id:
@@ -454,6 +456,10 @@ class Chat:
         context['harness'] = harnesses.context(self.db, conversation['project_id'])  # counted in the context ceiling
         if conversation['project_id']:
             self.fit_context(context)
+        if self.restricted and (files := self.office.files(conversation['id'])):
+            # Office mode: the chat's files as short references only; the model opens one when a question needs it.
+            context['chat_files'] = {'note': 'Files the owner sent in this chat. Read a file (text_path for DOCX, '
+                                     'path otherwise) only when the question needs it.', 'files': files}
         saved = self.db.setting("manager_context:" + conversation["id"], {})
         source = self.db.one("SELECT e.*,t.state AS task_status,t.blocker,t.rounds,t.merge FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.delivery_execution=?", (execution_id,))
         from .auto_mode import AutoMode
@@ -628,6 +634,8 @@ class Chat:
                 self.db.event(conn, "chat.queued", {"message_id": response_id}, project_id, execution_id=execution_id)
         if fenced:
             self.launch(execution_id, response_id, conversation, content, route)
+        if self.restricted and not delivery:
+            self.office.owner_message(project_id, conversation["id"])  # the one background title call
         return receipt
 
     def _queue(self, conn, execution_id, project_id, route, now, conversation_id, content):
@@ -1056,6 +1064,7 @@ class Chat:
                     self._finish(row["id"], response_id, "failed", str(error)[:2000], row["output"])
 
     async def close(self):
+        await self.office.close()
         await self.compactor.close()
         for job in list(self.jobs.values()):
             job.cancel()

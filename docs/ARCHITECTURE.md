@@ -2,7 +2,7 @@
 
 A short, plain-language map of how the application works, for the owner and for new agents. [README.md](../README.md)
 stays the detailed reference; this page links to its sections instead of copying them. It describes the code as it is
-now, except the clearly marked [Planned](#6-planned-not-built-yet) section.
+now.
 
 ## 1. Big picture
 
@@ -55,7 +55,7 @@ one owner login. See README
   on a website address. They run in **office mode**: `/api/auth-status` reports `office` and the UI is one clean chat
   screen (project row, tabs, harness button, usage display and the Compact/Archive menu items are hidden by CSS only;
   server-side restrictions are the real protection). Chat, voice, attachments and automatic background compaction keep
-  working.
+  working. Office mode has **multiple chats** inside its one project (see [Office chats](#6-office-chats)).
 - **Environment picker.** In Main's harness panel (the ☼ button), an *Environment* selector lists Main plus every
   instance in the deploy registry (`DATA/deploy/installed.json`, `instances`). For an instance it sets that
   instance's manager harness, autonomy and manager model/effort by writing into the instance's own
@@ -142,7 +142,8 @@ Secrets are masked before text reaches either model. README: [Data and history](
   Projects, chat messages, tasks, task events, To-Dos, conversations and chat archives, and the `memory` and
   `settings` tables live there. History is kept with lossless compression only.
 - **Settings records**: key/value JSON rows in `settings` (for example `chat_compaction`, `model_choice`, `machines`,
-  harness choices, `chat_compaction_notice:<chat>` and `chat_autocompact:<conversation>` state).
+  harness choices, `chat_compaction_notice:<chat>` and `chat_autocompact:<conversation>` state, and in office mode
+  `office_chat:<conversation>` with a chat's title, pin and memory mark).
 - **Chat memory**: the `memory` table, two rows per chat scope: `chat_memory` (active items, sent to the manager) and
   `chat_memory_archive` (archived and dropped items).
 - **Chat archives**: `conversations` plus `chat_archives` rows; the compaction archive is one of them.
@@ -150,12 +151,33 @@ Secrets are masked before text reaches either model. README: [Data and history](
 
 README: [Data and history](../README.md#data-and-history).
 
-## 6. Planned, not built yet
+## 6. Office chats
 
-> **Not implemented.** Nothing in this section exists in the code today. It is a plan for the office environment.
+Office mode only (every instance but Main; Main keeps one chat per context). Code: `ai_manager/office_chats.py`,
+`ai_manager/static/office-chats.js`, API `/api/office/chats` (refused on Main). README:
+[Office chats](../README.md#office-chats).
 
-- **Chat sidebar** in office mode with **multiple chats**: search, pin and delete, and a **New chat** button.
-- **Titles**: each chat gets a title from Haiku, set **once** from its first message.
-- **Files** are saved with their chat and read only when needed, not sent with every turn.
-- **Memory on leaving a chat**: when the owner leaves a chat that has enough new messages, its memory is summarized,
-  with a **cool-down** so it does not repeat too often.
+- **Layout.** A round ☰ button (top left) opens a **left sidebar** with the chat list; **+ New** next to it starts a
+  fresh empty chat in one click. On a wide screen the list can stay open beside the chat; on a phone it slides in over
+  the chat and closes after you pick one. Both buttons stay on top.
+- **List.** Flat, most recently active first, **pinned** chats at the top; per chat pin/unpin, rename and delete (with
+  a confirm; delete moves the chat to the chat **archive**, nothing is hard-deleted). The search box filters by title and
+  message text on the server. The current chat is highlighted.
+- **How it is stored.** Exactly one chat is *open*: its conversation keeps the usual context (the project id), so
+  sending, history, attachments, compaction and Clear work unchanged. Other chats are *parked* (`chat:<id>`); opening
+  one swaps the two in one transaction. A running reply keeps writing to its own chat. Per-chat metadata is one
+  settings record `office_chat:<conversation>` (title, pin, memory mark).
+- **Titles.** After the first owner message, one background call with the newest Haiku in the catalog at `low` effort
+  writes a short title (about 6 words), **once**. Until then, and if the call fails, the list shows the message's first
+  words. The owner can rename.
+- **Files.** Files stay with the chat they were sent in. The history shows a small card (name and type). The model gets
+  a short reference (name, type, path; `text_path` for DOCX) in the chat context, never the content, and opens a file
+  only when a question needs it. Reopening the chat later keeps them.
+- **Memory on leaving a chat.** Memory is per environment (the instance's own database) and shared by all its chats;
+  every chat, including a new one, gets the active chat memory as context. When the owner leaves a chat (opens another
+  or presses + New), one background memory update runs if the chat has at least **10** new owner/assistant messages
+  since its last memory update, **or** at least **2** new messages and **15 minutes** have passed since that update (since
+  the chat started, if never). The three numbers are settings in Settings → Chat memory. The update uses the compaction
+  model/effort and the same new/update/keep/drop pipeline, reads **only** the messages after the chat's mark, then
+  advances the mark. It changes memory only, never the chat. At most one memory job runs per instance; a leave while one
+  runs is skipped. Automatic compaction past the token threshold keeps working per chat.

@@ -58,12 +58,21 @@ $('attachment-input').onchange=async()=>{
   }catch(error){notice(error.message+' Successfully uploaded files remain in the original draft.');}
   finally{attachmentState.uploads.delete(project);renderAttachments();}
 };
+function attachmentType(file){
+  const suffix=(file.name||'').includes('.')?file.name.split('.').pop():'';
+  return (/^[a-z0-9]{1,8}$/i.test(suffix)?suffix:(file.mime||'file').split('/').pop().split(/[.+-]/).pop()).toUpperCase().slice(0,8);
+}
 function renderMessageAttachments(row,message){
   if(row.dataset.attachments===JSON.stringify(message.attachments||[]))return;
   row.dataset.attachments=JSON.stringify(message.attachments||[]);row.querySelector('.message-attachments')?.remove();
   if(!message.attachments?.length)return;
   const links=element('div',undefined,'message-attachments');
-  for(const file of message.attachments){const link=element('a',file.name);link.href='/api/attachments/'+file.id;link.download=file.name;link.title=file.handling||'File attachment; interpretation depends on format and provider';links.append(link);}
+  const office=document.body.classList.contains('office');
+  for(const file of message.attachments){
+    // Office mode: a small card (name and type); the content stays in the file, opened only on demand.
+    const link=office?element('a',undefined,'attachment-card'):element('a',file.name);
+    if(office)link.append(element('span',file.name,'attachment-name'),element('span',attachmentType(file),'attachment-type'));
+    link.href='/api/attachments/'+file.id;link.download=file.name;link.title=file.handling||'File attachment; interpretation depends on format and provider';links.append(link);}
   row.append(links);
 }
 renderAttachments();

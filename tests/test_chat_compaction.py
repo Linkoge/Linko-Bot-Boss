@@ -433,7 +433,8 @@ def test_compaction_model_setting_is_shown_saved_and_used(client):
     saved = browser.put("/api/chat-memory/settings", json={**body, "model": "test-model", "effort": "high"}).json()
     assert saved["effective"] == {"model": "test-model", "effort": "high"}
     assert browser.get("/api/chat-memory/settings").json()["settings"] == {
-        "model": "test-model", "effort": "high", "threshold_tokens": 20000, "revision": 1}
+        "model": "test-model", "effort": "high", "threshold_tokens": 20000, "revision": 1,
+        "leave_messages": 10, "leave_min_messages": 2, "leave_minutes": 15}
     assert chat_memory.route(app.state.db, app.state.chat.server) == {"model": "test-model", "effort": "high"}
 
 
