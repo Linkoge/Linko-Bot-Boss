@@ -203,6 +203,7 @@ Existing optional configuration (no need to set these unless used):
 | `AI_MANAGER_SESSION_SECONDS` | Owner session lifetime; default `2592000` |
 | `AI_MANAGER_AUDIO_PROVIDER` | Audio transcription provider; default `grok` |
 | `AI_MANAGER_AUDIO_MODEL` | Default `grok-voice-transcribe-2.0` |
+| `AI_MANAGER_TTS_VOICE` | xAI voice for the message read-aloud button (`POST /api/audio/speak`, same `XAI_API_KEY`). Default `eve`; English only |
 | `AI_MANAGER_AUDIO_PROBE` | ffprobe executable; default `ffprobe` |
 | `AI_MANAGER_GITHUB_TOKEN_FILE` | Optional Personal GitHub token file, outside repositories |
 | `AI_MANAGER_GITHUB_COMPANY_TOKEN_FILE` | Optional Company GitHub token file, outside repositories |
