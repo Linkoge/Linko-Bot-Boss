@@ -3,6 +3,8 @@ import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from .fsmode import private
+
 CODE_ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -90,4 +92,4 @@ class Settings:
 
     def prepare(self) -> None:
         self.data_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
-        self.data_dir.chmod(0o700)
+        private(self.data_dir, 0o700)  # keeps named ACL entries (Main's traversal of an instance's data)

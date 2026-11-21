@@ -6,6 +6,7 @@ import uuid
 from contextlib import closing, contextmanager
 from pathlib import Path
 
+from .fsmode import private
 from .history import SCHEMA as HISTORY_SCHEMA
 from .history import install as install_history
 
@@ -162,7 +163,7 @@ class Database:
                 migrate_stray_models(conn)
                 conn.execute("INSERT INTO schema_version VALUES(18)")
             conn.commit()
-        self.path.chmod(0o600)
+        private(self.path, 0o600)  # keeps Main's named ACL entry on an instance database (fsmode.py)
 
     @staticmethod
     def migrate_queue(conn, task_columns):

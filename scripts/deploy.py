@@ -19,7 +19,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from contextlib import ExitStack
+from contextlib import ExitStack, closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -84,6 +84,16 @@ class Stop(Exception):
 
 class HealthFailed(RuntimeError):
     """The health check still failed at its deadline."""
+
+
+def access_disabled(db):
+    """The instance's access switch (ai_manager/access.py KEY), read-only; an unreadable database counts as enabled."""
+    try:
+        with closing(sqlite3.connect(Path(db).resolve().as_uri() + '?mode=ro', uri=True, timeout=10)) as conn:
+            row = conn.execute("SELECT value FROM settings WHERE key='access_disabled'").fetchone()
+        return bool(row) and json.loads(row[0]) is True
+    except (sqlite3.Error, ValueError):
+        return False
 
 
 class Deploy:
@@ -321,9 +331,20 @@ class Deploy:
         self.check(self.url, self.db, commit)
         for instance in self.instances:  # each instance has its own health check; any failure rolls the deploy back
             try:
-                self.check(instance['url'], instance['data'] / 'manager.sqlite3', commit)
+                db = instance['data'] / 'manager.sqlite3'
+                if access_disabled(db):
+                    self.check_disabled(instance['url'])
+                else:
+                    self.check(instance['url'], db, commit)
             except Exception as error:
                 raise RuntimeError(f"instance {instance['name']}: {error}") from error
+
+    def check_disabled(self, url):
+        """An instance whose access Main disabled answers everything with only "Error 69" (ai_manager/access.py):
+        that answer proves it is up and enforcing; its release and sessions cannot be checked from outside."""
+        status, body = self.http('/api/auth-status', url=url)
+        if status != 503 or body.strip() != b'Error 69':
+            raise RuntimeError('access disabled, but it does not answer Error 69')
 
     def check(self, url, db, commit):
         status, body = self.http('/api/auth-status', url=url)

@@ -62,6 +62,14 @@ one owner login. See README
   `manager.sqlite3`; the instance reads them at its next manager turn, with no restart. If the database cannot be
   opened the panel says so and changes nothing. Code: `ai_manager/instance_models.py`; see
   [Harnesses](../README.md#harnesses), "Environments (Main only)".
+- **Access switch.** For an instance (never Main) the same panel has **Disable access** (after a confirmation
+  dialog) and **Enable access** (at once). Main writes the `access_disabled` flag into the instance's own `settings`
+  table and deletes its sessions; the instance's request middleware reads it (cached ≤ 2 s) and then answers every
+  request with only `Error 69` (HTTP 503), and a watcher stops its running chat replies. Data and password are
+  untouched. The deploy health check accepts that answer for a disabled instance. Code: `ai_manager/access.py`.
+- **Main's access to instance databases.** The instance's own startup chmods (data dir 0700, database 0600) go through
+  `ai_manager/fsmode.py` `private()`, which keeps named ACL entries and the mask, so Main's `u:codex:rw-` grant on an
+  instance database survives instance restarts.
 - **Registration and isolation.** Instances are registered in the deploy registry (created by the install/provision
   scripts, see [INSTALL.md](INSTALL.md#6-optional-extra-instances)). An instance running as another Linux user sees the
   code only through a root **host adapter**'s bind-mount list (outside the repo). Every top-level path the app reads
