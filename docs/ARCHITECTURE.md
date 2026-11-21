@@ -67,6 +67,12 @@ one owner login. See README
   table and deletes its sessions; the instance's request middleware reads it (cached ≤ 2 s) and then answers every
   request with only `Error 69` (HTTP 503), and a watcher stops its running chat replies. Data and password are
   untouched. The deploy health check accepts that answer for a disabled instance. Code: `ai_manager/access.py`.
+- **Settings follow Main.** An instance's Settings view shows only Instructions and Sign out; the server rejects (403)
+  its writes to the model choice, favorites, shown providers, chat memory (compaction model, effort, context
+  threshold) and Revoke sessions. Main copies those values into every registered instance's `manager.sqlite3`
+  (`ai_manager/instance_sync.py`) after each Main save and at Main's startup, and removes per-project model locks
+  there; an unset value on Main removes the copy so defaults apply. An unreachable instance keeps its last copy.
+  Models/harness edited for one instance in the Environment picker last until Main's next global save.
 - **Main's access to instance databases.** The instance's own startup chmods (data dir 0700, database 0600) go through
   `ai_manager/fsmode.py` `private()`, which keeps named ACL entries and the mask, so Main's `u:codex:rw-` grant on an
   instance database survives instance restarts.

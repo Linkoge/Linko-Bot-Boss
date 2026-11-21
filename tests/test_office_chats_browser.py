@@ -174,14 +174,14 @@ def test_office_chat_list_desktop_and_mobile(tmp_path, width):
             page.locator('#chat-list-button').click()
         for visible in ('#message-input', '#microphone', '#attach', '#chat-menu-button'):
             assert page.locator(visible).is_visible(), visible
-        # Settings → Chat memory carries the leave numbers in office mode.
+        # Settings in office mode: only Instructions and Sign out; chat memory numbers follow Main.
         if mobile:
             page.locator('#chat-list-button').click()
         page.locator('#office-settings').click()
-        page.wait_for_function('()=>$("chat-memory-leave-messages").value!==""')
-        assert page.locator('#chat-memory-leave').is_visible()
-        assert [page.locator(f'#chat-memory-leave-{k}').input_value() for k in ('messages', 'min', 'minutes')] \
-            == ['10', '2', '15']
+        page.wait_for_function('()=>!$("view-settings").hidden')
+        assert not page.locator('#chat-memory-panel').is_visible()
+        assert not page.locator('#chat-memory-leave').is_visible()
+        assert page.locator('#global-instructions').is_visible() and page.locator('#logout').is_visible()
         assert errors == []
 
 

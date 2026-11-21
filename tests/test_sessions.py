@@ -109,6 +109,9 @@ def test_logout_and_revocation_remove_even_a_session_due_for_renewal(session_cli
     token = browser.cookies.get("ai_manager_session")
     clock[0] += 3601
     response = browser.post(endpoint)
+    if endpoint == "/api/sessions/revoke" and settings.restricted:  # Main only; an instance just signs out
+        assert response.status_code == 403
+        return
     assert response.status_code == 200
     if endpoint == "/api/logout":
         assert_cookie(response, 0)

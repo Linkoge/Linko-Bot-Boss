@@ -86,7 +86,13 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             page.evaluate("()=>showView('ideas')")
             assert not page.locator('#view-ideas').is_visible()
             assert page.locator('#project-menu').is_hidden()
-            assert page.locator('#rename-project').is_visible()
+            # Settings of an instance: only Instructions and Sign out (everything else follows Main).
+            assert [t.strip() for t in page.locator('#view-settings > article:visible h2').all_inner_texts()] == ['Instructions', 'Session']
+            for shown in ('#global-instructions', '#logout'):
+                assert page.locator(shown).is_visible(), shown
+            for hidden in ('#rename-project', '#project-settings', '#chat-memory-panel', '#chat-memory-model',
+                           '#revoke-sessions', '#load-models'):
+                assert not page.locator(hidden).is_visible(), hidden
             assert page.evaluate("async()=>(await fetch('/api/deployment')).status") == 403
             assert page.evaluate("async()=>('users' in await api('/api/model-settings'))") is False
             assert page.evaluate("async()=>(await fetch('/api/instance-model-settings?name=work')).status") == 403

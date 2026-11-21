@@ -314,6 +314,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             registry.discover()
             reviews.recover()
             scheduler.start()
+            await asyncio.to_thread(publish)
             watcher = asyncio.create_task(watch_access()) if gate else None
             yield
         finally:
@@ -391,6 +392,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def unrestricted():
         if restricted:
             raise HTTPException(403, RESTRICTED)
+
+    def publish():
+        """Main's global settings apply to every instance (instance_sync.py); an instance never writes them."""
+        if not restricted:
+            from .instance_sync import push
+            push(db, settings.data_dir)
 
     def office():
         """Multiple chats exist in office mode only; Main keeps its one chat per context."""
@@ -535,7 +542,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         )
         return response
 
-    @app.post("/api/sessions/revoke", dependencies=[Depends(require_owner)])
+    @app.post("/api/sessions/revoke", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def revoke_sessions():
         with db.transaction() as conn:
             conn.execute("DELETE FROM sessions")
@@ -711,10 +718,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     async def chat_memory_settings(project_id: str | None = None):
         return await chat_memory_settings_view(scope(project_id))
 
-    @app.put("/api/chat-memory/settings", dependencies=[Depends(require_owner)])
+    @app.put("/api/chat-memory/settings", dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def save_chat_memory_settings(body: ChatMemorySettingsBody, project_id: str | None = None):
         await chat.server.start()
         chat_memory.save_settings(db, chat.server, body.model_dump())
+        await asyncio.to_thread(publish)
         return await chat_memory_settings_view(scope(project_id))
 
     @app.get("/api/executions/{execution_id}/events", dependencies=[Depends(require_owner)])
@@ -809,23 +817,26 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
                               if project_id else "All Projects"),
                 "providers": providers, "provider_visibility": provider_visibility(db, providers)}
 
-    @app.put("/api/model-picker/providers", dependencies=[Depends(require_owner)])
+    @app.put("/api/model-picker/providers", dependencies=[Depends(require_owner), Depends(unrestricted)])
     def save_picker_providers(body: dict):
         from .model_settings import save_provider_visibility
-        return save_provider_visibility(db, body)
+        result = save_provider_visibility(db, body)
+        publish()
+        return result
 
-    @app.put("/api/projects/{project_id}/model-lock", dependencies=[Depends(require_owner)])
+    @app.put("/api/projects/{project_id}/model-lock", dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def save_repo_lock(project_id: str, body: dict):
         scope(project_id)
         from .model_settings import set_lock
         set_lock(db, project_id, body, chat.server)
         return await model_settings(project_id)
 
-    @app.put("/api/model-settings", dependencies=[Depends(require_owner)])
+    @app.put("/api/model-settings", dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def save_model_settings(body: dict, project_id: str | None = None, locked: bool | None = None):
         from .model_settings import save
         await chat.server.start()
         result = save(db, chat.server, body, project_id, locked)
+        await asyncio.to_thread(publish)
         invalidate_usage()
         return result
 
@@ -904,17 +915,20 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         from .instance_models import set_access
         return set_access(settings.data_dir, chat.server, name, body)
 
-    @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
+    @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def insert_manager_favorite(slot: int, project_id: str | None = None):
         from .model_settings import insert_favorite
         await chat.server.start()
-        return insert_favorite(db, chat.server, slot, project_id)
+        result = insert_favorite(db, chat.server, slot, project_id)
+        await asyncio.to_thread(publish)
+        return result
 
-    @app.post("/api/manager-favorites/{slot}/recall", dependencies=[Depends(require_owner)])
+    @app.post("/api/manager-favorites/{slot}/recall", dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def recall_manager_favorite(slot: int, project_id: str | None = None, locked: bool | None = None):
         from .model_settings import recall_favorite
         await chat.server.start()
         recall_favorite(db, chat.server, slot, project_id, locked)
+        await asyncio.to_thread(publish)
         invalidate_usage()
         return await model_settings(project_id)
 
