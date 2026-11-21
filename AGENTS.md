@@ -29,3 +29,9 @@ When: you add a `schema_version` step in `ai_manager/db.py`.
 Symptom: only the full suite fails: `tests/test_core.py::test_migration_closes_old_nonfinal_tasks...` and `tests/test_chat_reliability.py::test_schema10_additive_migration...` (`assert 18 == 17`).
 Cause: both assert the exact highest schema version after migrating.
 Do: raise the expected version in both tests in the same commit.
+
+### Browser asserts on async UI state flake only in the deploy's suite (2026-11-21, task 155c8a)
+When: a Playwright test clicks a control whose handler awaits a promise (clipboard, `api(...)`) and then reads the result.
+Symptom: the test passes alone and under plain `pytest -n auto`, but `scripts/full_suite.py` (6 loaded workers) intermittently reports `1 failed`.
+Cause: `inner_text()` / `page.evaluate()` right after `click()` runs before the awaited handler finishes.
+Do: `page.wait_for_function(...)` for the expected state before asserting; reproduce with `python scripts/full_suite.py`, not just the single file.

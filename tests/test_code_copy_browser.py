@@ -28,7 +28,9 @@ def test_each_block_has_a_copy_button_that_copies_exact_text_with_feedback(page)
     button.click()
     page.wait_for_function("()=>document.querySelector('#copy-fixture .code-copy').textContent==='Copied'")
     second.locator('button.code-copy').click()
-    assert page.evaluate('()=>clipboardWrites') == ['echo "<b>one</b>"\n  indented line\n', 'second block\n']
+    # The write and the label change land after an awaited clipboard promise: wait for them, never read them at once.
+    page.wait_for_function("()=>clipboardWrites.length===2&&document.querySelectorAll('#copy-fixture .code-copy')[1].textContent==='Copied'")
+    assert page.evaluate('()=>clipboardWrites') ==['echo "<b>one</b>"\n  indented line\n', 'second block\n']
     assert second.locator('button.code-copy').inner_text() == 'Copied'
     page.wait_for_function("()=>document.querySelector('#copy-fixture .code-copy').textContent==='Copy'")
 
