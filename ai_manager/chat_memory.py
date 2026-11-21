@@ -6,10 +6,12 @@
 - Memory items live in the existing `memory` table, two rows per chat scope (a project, or All Projects with
   project_id NULL): `chat_memory` holds the active items fed to the manager every turn, `chat_memory_archive` holds
   expired or dropped items, searchable on demand with read_memory (path + query).
-- Short-term items carry last_used; a compaction that reuses an item refreshes it. Short-term items idle for
-  `short_term_days` move to the archive; one reused in PROMOTE_AFTER compactions becomes long-term.
-- One settings record `chat_compaction`: model (default Latest Haiku) / effort (default low), the automatic threshold and
-  the inactivity window. The same `route()` resolves what the settings panel shows and what a compaction uses.
+- Items carry last_used; a compaction that reuses an item refreshes it; one reused in PROMOTE_AFTER compactions becomes
+  long-term. Size is the only reason to archive: age never removes anything. A tier over its cap (MAX_LONG_TERM /
+  MAX_SHORT_TERM) moves its least recently used items to the archive with reason "capacity".
+- The compaction model sees memory as plain numbered lines (L1.., S1..) and answers with those refs; the server maps
+  them back to the real ids. The chat model gets the item texts only.
+- One settings record `chat_compaction`: model (default Latest Haiku) / effort (default low) and the automatic threshold. The same `route()` resolves what the settings panel shows and what a compaction uses.
 """
 
 import asyncio
@@ -27,12 +29,16 @@ SETTINGS_KEY = "chat_compaction"
 NOTICE = "chat_compaction_notice:"  # + chat context: the latest automatic-compaction notice for that chat
 AUTO_STATE = "chat_autocompact:"  # + conversation id: {"next_at": chars} after an automatic attempt
 LATEST_HAIKU = "latest-haiku"  # stored model choice: resolved at call time to the newest Haiku in the catalog
-DEFAULTS = {"model": LATEST_HAIKU, "effort": "low", "threshold_tokens": 150000, "short_term_days": 30}
+DEFAULTS = {"model": LATEST_HAIKU, "effort": "low", "threshold_tokens": 150000}
 THRESHOLD_RANGE = (10000, 1000000)  # tokens, estimated as characters / CHARS_PER_TOKEN
 CHARS_PER_TOKEN = 4
-DAYS_RANGE = (1, 3650)
 PROMOTE_AFTER = 3  # reuses (compactions that kept an item) before a short-term item becomes long-term
 MAX_SHORT_TERM = 30  # active short-term items; the least recently used beyond this are archived
+MAX_LONG_TERM = 50  # active long-term items; the least recently used beyond this are archived
+CAPS = {"long": MAX_LONG_TERM, "short": MAX_SHORT_TERM}
+FULL_MARGIN = 3  # a tier within this many items of its cap counts as nearly full
+LONG_HEADER = "Long-term memory (lasting facts: decisions, preferences, how things work):"
+SHORT_HEADER = "Short-term memory (current state, may become outdated):"
 MAX_OUTPUT_ITEMS = 60
 ITEM_CHARS = 400
 SUMMARY_CHARS = 2000
@@ -52,7 +58,9 @@ ASSIGNED = re.compile(r"(?i)\b([A-Za-z0-9_]*(?:key|token|secret|passw(?:or)?d|cr
                       r"(?=[^\s]*\d)[^\s\"']{8,}")
 
 INSTRUCTIONS = f"""You compact a long owner/manager chat into durable memory. Never call tools; reply with JSON only.
-Work in this order: first read existing_memory (long-term and short-term items with ids), then read the chat.
+Work in this order: first read existing_memory, then read the chat.
+existing_memory is plain text: numbered lines under a long-term and a short-term header. L1, L2... are long-term items,
+S1, S2... are short-term items; use these refs as "id" (never invent one).
 For each point in the chat decide: new item, update of an existing item, reuse of an existing item that is still
 relevant, or noise. Keep decisions together with their reasons, open items and what they wait for, owner preferences,
 how the project works, and recurring lessons. Keep one line per dead end ("tried X, failed because Y"). Drop
@@ -64,12 +72,24 @@ Return exactly one JSON object:
 {{"summary": "<= {SUMMARY_CHARS} characters: where the conversation stands and what happens next",
  "items": [
   {{"action": "new", "tier": "short|long", "text": "..."}},
-  {{"action": "update", "id": "<existing id>", "tier": "short|long", "text": "..."}},
-  {{"action": "keep", "id": "<existing id that the chat referenced or that is relevant again>"}},
-  {{"action": "drop", "id": "<existing id that is now wrong or obsolete>"}}
+  {{"action": "update", "id": "<ref, e.g. L2 or S4>", "tier": "short|long", "text": "..."}},
+  {{"action": "keep", "id": "<ref of an item that the chat referenced or that is relevant again>"}},
+  {{"action": "drop", "id": "<ref of an item that is now wrong or obsolete>"}}
  ]}}
 Existing items you do not mention stay unchanged. At most {MAX_OUTPUT_ITEMS} entries.
 """
+
+MERGE_NOTE = """
+MEMORY IS FULL: {tiers}. Before adding new items, merge similar or overlapping items: one "update" that carries the
+combined fact plus "drop" for the items it replaces. Add a "new" item only when nothing existing can be merged with it.
+"""
+
+
+def instructions(items):
+    """INSTRUCTIONS, plus the merge-first note when a tier is at or near its cap (same call, no extra model call)."""
+    full = [f"{tier}-term {sum(1 for i in items if i['tier'] == tier)} of {cap} items"
+            for tier, cap in CAPS.items() if sum(1 for i in items if i["tier"] == tier) >= cap - FULL_MARGIN]
+    return INSTRUCTIONS + (MERGE_NOTE.format(tiers="; ".join(full)) if full else "")
 
 
 def encode(value):
@@ -141,9 +161,10 @@ def save_settings(db, server, body):
         value["model"] = LATEST_HAIKU
     value["effort"] = value["effort"] or DEFAULTS["effort"]
     server.route(resolve_model(server, value["model"]), value["effort"])  # rejects models/efforts not in the catalog
-    for key, (low, high) in (("threshold_tokens", THRESHOLD_RANGE), ("short_term_days", DAYS_RANGE)):
-        if not isinstance(value[key], int) or isinstance(value[key], bool) or not low <= value[key] <= high:
-            raise ValueError(f"{key} must be a whole number from {low} to {high}")
+    low, high = THRESHOLD_RANGE
+    if not isinstance(value["threshold_tokens"], int) or isinstance(value["threshold_tokens"], bool) \
+            or not low <= value["threshold_tokens"] <= high:
+        raise ValueError(f"threshold_tokens must be a whole number from {low} to {high}")
     value["revision"] = current["revision"] + 1
     db.set_setting(SETTINGS_KEY, value)
     return value
@@ -163,47 +184,57 @@ def write_row(conn, scope, name, value):
         conn.execute("INSERT INTO memory VALUES(?,?,?,0,?)", (scope, name, encode(value), now))
 
 
-def expire(items, archive, now, days):
-    """Move short-term items idle longer than the window into the archive; returns (active, archive, moved)."""
-    cutoff, keep, moved = now - days * 86400, [], []
-    for item in items:
-        (moved if item["tier"] == "short" and item["last_used"] < cutoff else keep).append(item)
-    shorts = sorted((i for i in keep if i["tier"] == "short"), key=lambda i: i["last_used"], reverse=True)
-    overflow = {i["id"] for i in shorts[MAX_SHORT_TERM:]}
-    moved += [i for i in keep if i["id"] in overflow]
-    keep = [i for i in keep if i["id"] not in overflow]
-    archived = archive + [{**i, "archived_at": now, "archive_reason": "capacity" if i["id"] in overflow else "inactive"}
-                          for i in moved]
-    return keep, archived, moved
+def enforce(items, archive, now):
+    """Capacity is the only reason to archive: per tier, the least recently used items beyond the cap move to the
+    archive. Returns (active, archive, moved)."""
+    over = set()
+    for tier, cap in CAPS.items():
+        ranked = sorted((i for i in items if i["tier"] == tier),
+                        key=lambda i: (i["last_used"], i.get("created_at", 0)), reverse=True)
+        over.update(i["id"] for i in ranked[cap:])
+    keep = [i for i in items if i["id"] not in over]
+    moved = [i for i in items if i["id"] in over]
+    return keep, archive + [{**i, "archived_at": now, "archive_reason": "capacity"} for i in moved], moved
 
 
 def sweep(db, scope, now=None):
-    """Expire inactive short-term items of one scope; writes only when something moved. Returns active items."""
+    """Apply the caps to one scope (only matters for data stored over a cap); writes only when something moved.
+    Returns (active items, archived count)."""
     now = time.time() if now is None else now
-    days = load_settings(db)["short_term_days"]
     with db.transaction() as conn:
         active, archive = read_row(conn, scope, ACTIVE), read_row(conn, scope, ARCHIVE)
-        items, archived, moved = expire(active["items"], archive["items"], now, days)
+        items, archived, moved = enforce(active["items"], archive["items"], now)
         if moved:
             write_row(conn, scope, ACTIVE, {**active, "items": items})
             write_row(conn, scope, ARCHIVE, {**archive, "items": archived})
-            db.event(conn, "chat_memory.expired", {"items": [i["id"] for i in moved]}, scope)
+            db.event(conn, "chat_memory.archived", {"items": [i["id"] for i in moved], "reason": "capacity"}, scope)
     return items, len(archived)
 
 
+def lines(items, tier, numbered):
+    texts = [i["text"] for i in items if i["tier"] == tier]
+    return [f"{'LS'[tier == 'short']}{n} {t}" if numbered else t for n, t in enumerate(texts, 1)] or (
+        ["(none)"] if numbered else [])
+
+
+def memory_text(items, numbered):
+    """Plain lines under the two headers. numbered: L1.. / S1.. refs for the compaction model, none for the chat."""
+    return "\n".join([LONG_HEADER, *lines(items, "long", numbered), SHORT_HEADER, *lines(items, "short", numbered)])
+
+
+def refs(items):
+    """ref -> real id, in the order memory_text numbers them."""
+    return {f"{'LS'[tier == 'short']}{n}": i["id"] for tier in ("long", "short")
+            for n, i in enumerate((i for i in items if i["tier"] == tier), 1)}
+
+
 def manager_view(db, scope):
-    """The active memory sent with the manager's context; archived items are only counted, never sent."""
+    """The active memory sent with the manager's context: item texts as plain lines. Archived items are only counted."""
     items, archived = sweep(db, scope)
     if not items and not archived:
         return None
-    return {
-        "long_term": [{"id": i["id"], "text": i["text"]} for i in items if i["tier"] == "long"],
-        "short_term": [{"id": i["id"], "text": i["text"],
-                        "last_used": datetime.fromtimestamp(i["last_used"], timezone.utc).strftime("%Y-%m-%d")}
-                       for i in items if i["tier"] == "short"],
-        "archived_items": archived,
-        "retrieval": f"Archived items: read_memory path={ARCHIVE} with query. Older chats: list_history/read_history.",
-    }
+    return (memory_text(items, False) + f"\nArchived items: {archived}. Search them with read_memory path={ARCHIVE} "
+            "and a query; older chats: list_history/read_history.")
 
 
 def search(db, scope, name, query, offset=0):
@@ -231,7 +262,8 @@ def parse(text):
     raise ValueError("Compaction did not return JSON: " + scrub(text[:200]).replace("\n", " "))
 
 
-def validate(result, known_ids):
+def validate(result, known_refs):
+    """known_refs maps the short refs (L1, S2) the model saw to real item ids; refs are mapped back here."""
     if not isinstance(result, dict) or not isinstance(result.get("summary"), str) or not result["summary"].strip():
         raise ValueError("Compaction result needs a summary text")
     entries = result.get("items")
@@ -244,12 +276,14 @@ def validate(result, known_ids):
         action = entry["action"]
         out = {"action": action}
         if action != "new":
-            if entry.get("id") not in known_ids:
-                raise ValueError(f"Compaction referenced an unknown memory item: {str(entry.get('id'))[:40]}")
-            if entry["id"] in seen:
+            ref = entry.get("id")
+            real = known_refs.get(ref) if isinstance(ref, str) else None
+            if real is None:
+                raise ValueError(f"Compaction referenced an unknown memory item: {str(ref)[:40]}")
+            if real in seen:
                 raise ValueError("Compaction referenced one memory item twice")
-            seen.add(entry["id"])
-            out["id"] = entry["id"]
+            seen.add(real)
+            out["id"] = real
         if action in ("new", "update"):
             text = entry.get("text")
             if entry.get("tier") not in TIERS or not isinstance(text, str) or not text.strip():
@@ -259,7 +293,7 @@ def validate(result, known_ids):
     return {"summary": scrub(result["summary"].strip())[:SUMMARY_CHARS], "items": clean}
 
 
-def merge(items, archive, result, now, days):
+def merge(items, archive, result, now):
     """Apply a validated result to active items; pure. Returns (active, archive, report)."""
     by_id = {i["id"]: dict(i) for i in items}
     report = {"new": [], "updated": [], "reused": [], "dropped": [], "promoted": []}
@@ -278,7 +312,7 @@ def merge(items, archive, result, now, days):
             report["new"].append(fresh["text"])
             continue
         if not item:
-            continue  # A kept item that expired meanwhile stays archived.
+            continue  # A kept item that was archived meanwhile stays archived.
         if entry["action"] == "update":
             item.update(text=entry["text"], tier="long" if item["tier"] == "long" else entry["tier"])
             report["updated"].append(item["text"])
@@ -289,8 +323,8 @@ def merge(items, archive, result, now, days):
             item.update(tier="long", promoted_at=now)
             report["promoted"].append(item["text"])
         by_id[item["id"]] = item
-    active, archived, expired = expire(list(by_id.values()), archived, now, days)
-    report["expired"] = [i["text"] for i in expired]
+    active, archived, moved = enforce(list(by_id.values()), archived, now)
+    report["archived"] = [i["text"] for i in moved]
     return active, archived, report
 
 
@@ -364,21 +398,19 @@ class Compactor:
                          "at": datetime.fromtimestamp(row["created_at"], timezone.utc).strftime("%Y-%m-%d %H:%M")})
         chat.reverse()
         prompt = {
-            "existing_memory": {"long_term": [{"id": i["id"], "text": i["text"]} for i in items if i["tier"] == "long"],
-                                "short_term": [{"id": i["id"], "text": i["text"], "reuses": i.get("reuses", 0)}
-                                               for i in items if i["tier"] == "short"]},
+            "existing_memory": memory_text(items, True),
             "chat": chat,
             "earlier_messages_omitted": len(messages) - len(chat),
         }
         if project_id:
             from .project_memory import ProjectMemory
             prompt["project_brief"] = ProjectMemory(self.db, self.chat.registry).snapshot(project_id)["brief"]
-        return prompt, {i["id"] for i in items}
+        return prompt, refs(items), items
 
     async def generate(self, project_id, messages):
         """One model call, bounded by the timeout; returns a validated result. Never changes anything."""
         server = self.chat.server
-        prompt, known = self.prompt(project_id, messages)
+        prompt, known, items = self.prompt(project_id, messages)
         thread = turn_id = None
         done = False
 
@@ -386,7 +418,7 @@ class Compactor:
             nonlocal thread, turn_id, done
             await server.start()
             chosen = route(self.db, server, project_id)
-            thread = await server.thread(self.workspace, INSTRUCTIONS, None, chosen["model"])
+            thread = await server.thread(self.workspace, instructions(items), None, chosen["model"])
             queue = asyncio.Queue()
             server.queues[thread] = queue
             turn = await server.request("turn/start", {"threadId": thread, "input": [{"type": "text",
@@ -525,8 +557,7 @@ class Compactor:
                 conn.execute("DELETE FROM messages WHERE conversation_id=?", (archive_id,))
                 conn.executemany("INSERT INTO messages VALUES(?,?,?,?,?,?,?)", [tuple(r) for r in moved])
             active, archive = read_row(conn, project_id, ACTIVE), read_row(conn, project_id, ARCHIVE)
-            items, archived, report = merge(active["items"], archive["items"], result, now,
-                                            load_settings(self.db)["short_term_days"])
+            items, archived, report = merge(active["items"], archive["items"], result, now)
             write_row(conn, project_id, ACTIVE, {"items": items, "compactions": active.get("compactions", 0) + 1})
             write_row(conn, project_id, ARCHIVE, {"items": archived})
             long_count = sum(1 for i in items if i["tier"] == "long")

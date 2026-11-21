@@ -1113,11 +1113,17 @@ probes, live database changes, service restarts or host installation are part of
   `push_diagnosis` secret patterns, provider tokens, URL credentials, `password: ...` style assignments) replaced with
   `[redacted]`. Memory lives in the `memory` table, per project (All Projects: `project_id` NULL): `chat_memory`
   (active) and `chat_memory_archive`. Short-term items carry `last_used`; a compaction that keeps or updates an item
-  refreshes it, and one reused in 3 compactions becomes long-term. Short-term items unused for `short_term_days`
-  (default 30), or beyond the 30 most recently used, move to the archive (never deleted). Only active items are sent
-  as `chat_memory` in the manager's context (outside the brief's `CONTEXT_MAXIMUM`); archived ones are searched on
+  refreshes it, and one reused in 3 compactions becomes long-term. Size is the only reason to archive: nothing is
+  archived for age or idleness. When a tier is over its cap (50 long-term, 30 short-term), its least recently used
+  items (oldest `last_used`) move to the archive with `archive_reason` "capacity" (never deleted; `drop` also archives).
+  The old `short_term_days` setting is gone (a stored value is ignored). When a tier is at or within 3 items of its cap,
+  the same compaction call's instructions say memory is full and to merge similar items (one `update` + `drop`s) before
+  adding new ones. The compaction model gets memory as plain numbered lines under two headers (`L1 ...` long-term,
+  `S1 ...` short-term; no ids, dates or counts) and answers with those refs; the server maps them back to the real item
+  ids before validating (unknown refs are rejected). Only active items are sent
+  to the manager as `chat_memory`, a plain-text string: the item texts as lines under the same two headers, the archived-item count and one retrieval hint (no ids, no dates), in the manager's context (outside the brief's `CONTEXT_MAXIMUM`); archived ones are searched on
   demand with `read_memory` (`path: chat_memory_archive`, `query`). Settings → **Chat memory** edits the one
-  `chat_compaction` record: model (default **Latest Haiku**: the highest-versioned catalog id containing "haiku", resolved at call time; explicit models stay possible), effort (default `low`), threshold in tokens and inactivity days (records saved with the old `threshold_chars` migrate once: 150 000 or 60 000 become 150 000 tokens, other values chars / 4; an unset or Haiku model becomes Latest Haiku and unset/`medium` effort becomes `low`); the
+  `chat_compaction` record: model (default **Latest Haiku**: the highest-versioned catalog id containing "haiku", resolved at call time; explicit models stay possible), effort (default `low`), threshold in tokens (the caps are shown as fixed info; records saved with the old `threshold_chars` migrate once: 150 000 or 60 000 become 150 000 tokens, other values chars / 4; an unset or Haiku model becomes Latest Haiku and unset/`medium` effort becomes `low`); the
   panel's "Used:" line comes from the same `route()` a compaction runs with. API: `POST /api/chat/compact` (start),
   `GET /api/chat/compact/status`, `POST /api/chat/compact/notice/dismiss`, `GET|PUT /api/chat-memory/settings`. Permanent coverage: `tests/test_chat_compaction.py` and
   `tests/test_chat_compaction_browser.py`.

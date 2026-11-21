@@ -49,8 +49,8 @@ function renderChatMemorySettings(data){
   const manager=document.createElement('option');manager.value='latest-haiku';manager.textContent='Latest Haiku (newest available)';select.replaceChildren(manager);
   for(const model of new Set([...data.models,...(saved.model&&saved.model!=='latest-haiku'?[saved.model]:[])])){const option=document.createElement('option');option.value=model;option.textContent=model;select.append(option);}
   select.value=saved.model||'latest-haiku';$('chat-memory-effort').value=saved.effort||'low';
-  $('chat-memory-threshold').value=saved.threshold_tokens;$('chat-memory-days').value=saved.short_term_days;
-  $('chat-memory-effective').textContent=data.effective?`Used: ${data.effective.model} · ${data.effective.effort}${saved.model==='latest-haiku'?' (Latest Haiku)':''} · promoted to long-term after ${data.promote_after} reuses · timeout ${Math.round(data.timeout_seconds/60)} min`:`Compaction model unavailable: ${data.error}`;
+  $('chat-memory-threshold').value=saved.threshold_tokens;
+  $('chat-memory-effective').textContent=data.effective?`Used: ${data.effective.model} · ${data.effective.effort}${saved.model==='latest-haiku'?' (Latest Haiku)':''} · memory caps ${data.caps.long} long-term / ${data.caps.short} short-term (least recently used archived when over) · promoted to long-term after ${data.promote_after} reuses · timeout ${Math.round(data.timeout_seconds/60)} min`:`Compaction model unavailable: ${data.error}`;
 }
 async function loadChatMemorySettings(){
   const project=state.project,data=await api(`/api/chat-memory/settings?${compactionQuery(project)}`);
@@ -59,7 +59,7 @@ async function loadChatMemorySettings(){
 $('chat-memory-form').onsubmit=action(async event=>{
   event.preventDefault();if(!chatMemorySettings)await loadChatMemorySettings();
   const body={revision:chatMemorySettings.settings.revision,model:$('chat-memory-model').value||'latest-haiku',effort:$('chat-memory-effort').value.trim()||'low',
-    threshold_tokens:Number($('chat-memory-threshold').value),short_term_days:Number($('chat-memory-days').value)};
+    threshold_tokens:Number($('chat-memory-threshold').value)};
   const data=await api(`/api/chat-memory/settings?${compactionQuery(state.project)}`,{method:'PUT',body:JSON.stringify(body)});
   renderChatMemorySettings(data);$('chat-memory-status').textContent='Saved.';
 });

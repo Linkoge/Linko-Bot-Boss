@@ -13,7 +13,7 @@ from test_web import sign_in
 
 from ai_manager import chat_memory
 from ai_manager.chat import Chat
-from ai_manager.chat_memory import ACTIVE, ARCHIVE, INSTRUCTIONS, PROMOTE_AFTER, merge, scrub, sweep
+from ai_manager.chat_memory import ACTIVE, ARCHIVE, INSTRUCTIONS, MAX_LONG_TERM, MAX_SHORT_TERM, PROMOTE_AFTER, instructions, merge, scrub, sweep
 from ai_manager.config import Settings
 from ai_manager.db import Database, new_id
 from ai_manager.orchestration import Scheduler
@@ -42,7 +42,7 @@ class CompactServer(FakeServer):
             self.catalog.append({**self.catalog[0], "model": name, "isDefault": False})
 
     async def thread(self, cwd, instructions, thread_id=None, model=None, dynamic_tools=None):
-        if instructions == INSTRUCTIONS:
+        if instructions.startswith(INSTRUCTIONS):
             return f"compact-{len(self.compactions)}-{new_id()[:6]}"
         return await super().thread(cwd, instructions, thread_id, model, dynamic_tools)
 
@@ -129,7 +129,7 @@ async def test_compact_starts_in_the_background_and_applies_itself_archiving_the
     # The model read existing memory and the owner/manager chat only.
     sent = chat.server.compactions[0]["prompt"]
     assert [m["text"] for m in sent["chat"]] == [m["content"] for m in before]
-    assert sent["existing_memory"] == {"long_term": [], "short_term": []}
+    assert sent["existing_memory"] == (chat_memory.LONG_HEADER + "\n(none)\n" + chat_memory.SHORT_HEADER + "\n(none)")
     # Applied without any confirm step.
     current = chat.history(project)
     assert current["conversation"]["id"] == conversation["id"]  # pending worker results still reach this chat
@@ -151,8 +151,10 @@ async def test_compact_starts_in_the_background_and_applies_itself_archiving_the
     # The next turn starts a fresh thread from the summary message plus active memory.
     prompt, _ = chat.prompt(chat.conversation(project), "next", "next-execution", None, None)
     assert [m["content"] for m in prompt["conversation_history"]] == [current["messages"][0]["content"]]
-    assert [i["text"] for i in prompt["context"]["chat_memory"]["long_term"]] == [
-        "Decision: SQLite stays the store because backups are one file."]
+    view = prompt["context"]["chat_memory"]
+    assert view.startswith(chat_memory.LONG_HEADER + "\nDecision: SQLite stays the store because backups are one file.\n"
+                           + chat_memory.SHORT_HEADER + "\n")
+    assert "m_" not in view and "last_used" not in view and view.endswith("and a query; older chats: list_history/read_history.")
 
 
 async def test_messages_sent_during_compaction_stay_after_the_summary(system):
@@ -279,44 +281,92 @@ async def test_invalid_results_never_change_the_chat_or_memory(system):
     assert len(chat.history(None)["messages"]) == 2 and items(db, None) == []
 
 
-def test_short_term_items_expire_to_a_searchable_archive_and_reuse_refreshes_them(system):
+def fill(count, tier, now, prefix):
+    return [{"id": f"{prefix}{n}", "text": f"{prefix} fact {n}", "tier": tier, "created_at": now, "last_used": now + n,
+             "reuses": 0} for n in range(count)]
+
+
+def test_only_capacity_archives_least_recently_used_items_and_idle_time_never_does(system):
     db, registry, chat, settings = system
     project = registry.list()[0]["id"]
-    now, day = time.time(), 86400
-    result = {"summary": "s", "items": [{"action": "new", "tier": "short", "text": "Bug X fixed by Y"},
-                                        {"action": "new", "tier": "short", "text": "Tried Z, failed because W"},
-                                        {"action": "new", "tier": "long", "text": "Owner prefers short reports"}]}
-    active, archive, _ = merge([], [], result, now - 29 * day, 30)
-    reused = next(i for i in active if i["text"] == "Bug X fixed by Y")
-    active, archive, report = merge(active, archive, {"summary": "s", "items": [{"action": "keep", "id": reused["id"]}]},
-                                    now - 20 * day, 30)
-    assert report["reused"] == ["Bug X fixed by Y"]
+    now, year = time.time(), 365 * 86400
+    old = [{"id": "m_old", "text": "Tried Z, failed because W", "tier": "short", "created_at": now - 5 * year,
+            "last_used": now - 5 * year, "reuses": 0},
+           {"id": "m_oldlong", "text": "Owner prefers short reports", "tier": "long", "created_at": now - 5 * year,
+            "last_used": now - 5 * year, "reuses": 0}]
     with db.transaction() as conn:
-        chat_memory.write_row(conn, project, ACTIVE, {"items": active})
-    kept, archived = sweep(db, project, now + 1.5 * day)
-    assert {i["text"] for i in kept} == {"Bug X fixed by Y", "Owner prefers short reports"}  # refreshed, long-term
-    assert archived == 1
-    assert [(i["text"], i["archive_reason"]) for i in items(db, project, ARCHIVE)] == [
-        ("Tried Z, failed because W", "inactive")]
+        chat_memory.write_row(conn, project, ACTIVE, {"items": old})
+    kept, archived = sweep(db, project, now)  # years idle: nothing moves
+    assert [i["id"] for i in kept] == ["m_old", "m_oldlong"] and archived == 0
+    # Over the caps: only the least recently used of the tier that is over move, with reason "capacity".
+    full = fill(MAX_SHORT_TERM, "short", now, "s") + fill(MAX_LONG_TERM + 2, "long", now, "l")
+    active, archive, report = merge(old + full, [], {"summary": "s", "items": []}, now)
+    assert sum(i["tier"] == "short" for i in active) == MAX_SHORT_TERM
+    assert sum(i["tier"] == "long" for i in active) == MAX_LONG_TERM
+    assert sorted(i["id"] for i in archive) == ["l0", "l1", "m_old", "m_oldlong"]
+    assert {i["archive_reason"] for i in archive} == {"capacity"} and len(report["archived"]) == 4
+    # reuse refreshes last_used, so the reused item survives and a newer one goes instead
+    active, archive, _ = merge(fill(MAX_SHORT_TERM, "short", now, "s"), [], {"summary": "s", "items": [
+        {"action": "keep", "id": "s0"}, {"action": "new", "tier": "short", "text": "Fresh"}]}, now + 100)
+    assert "s0" in {i["id"] for i in active} and [i["id"] for i in archive] == ["s1"]
     # Archived items are never fed to the manager but stay searchable through read_memory.
+    with db.transaction() as conn:
+        chat_memory.write_row(conn, project, ARCHIVE, {"items": archive})
     context = chat.context(project)
-    assert "Tried Z" not in json.dumps(context) and context["chat_memory"]["archived_items"] == 1
+    assert "failed because W" in context["chat_memory"] and "Archived items: 1." in context["chat_memory"]
+    assert "s1 fact" not in context["chat_memory"]
     scheduler = Scheduler(db, registry, settings, type("Core", (), {"pipeline": None})(), chat)
     found = asyncio.run(scheduler.manager_action(project, {"tool": "manager_action", "arguments": {
-        "action": "read_memory", "path": ARCHIVE, "query": "tried z"}, "conversation_id": "c"}))
-    assert [i["text"] for i in found["items"]] == ["Tried Z, failed because W"]
+        "action": "read_memory", "path": ARCHIVE, "query": "s1 fact"}, "conversation_id": "c"}))
+    assert [i["text"] for i in found["items"]] == ["s fact 1"]
+
+
+def test_compaction_prompt_uses_plain_numbered_refs_mapped_back_and_unknown_refs_fail(system):
+    db, registry, chat, _ = system
+    now = time.time()
+    items_ = [{"id": "m_aaa", "text": "Client X invoices are due on the 5th", "tier": "long", "created_at": now,
+               "last_used": now, "reuses": 2},
+              {"id": "m_bbb", "text": "Waiting for the contract from Nino", "tier": "short", "created_at": now,
+               "last_used": now, "reuses": 1}]
+    text = chat_memory.memory_text(items_, True)
+    assert text == ("Long-term memory (lasting facts: decisions, preferences, how things work):\n"
+                    "L1 Client X invoices are due on the 5th\n"
+                    "Short-term memory (current state, may become outdated):\n"
+                    "S1 Waiting for the contract from Nino")
+    refs = chat_memory.refs(items_)
+    assert refs == {"L1": "m_aaa", "S1": "m_bbb"}
+    result = chat_memory.validate({"summary": "s", "items": [{"action": "keep", "id": "S1"},
+                                  {"action": "drop", "id": "L1"}]}, refs)
+    assert [(e["action"], e["id"]) for e in result["items"]] == [("keep", "m_bbb"), ("drop", "m_aaa")]
+    for bad in ("m_aaa", "L2", "S9", None, ["L1"]):
+        with pytest.raises(ValueError, match="unknown memory item"):
+            chat_memory.validate({"summary": "s", "items": [{"action": "keep", "id": bad}]}, refs)
+    with pytest.raises(ValueError, match="twice"):
+        chat_memory.validate({"summary": "s", "items": [{"action": "keep", "id": "L1"},
+                                                        {"action": "drop", "id": "L1"}]}, refs)
+    assert "L1, L2" in INSTRUCTIONS and "S1, S2" in INSTRUCTIONS
+    assert "m_" not in text and "reuses" not in text
+
+
+def test_full_memory_adds_the_merge_instruction_in_the_same_call(system):
+    now = time.time()
+    assert instructions([]) == INSTRUCTIONS
+    assert instructions(fill(MAX_SHORT_TERM - 4, "short", now, "s")) == INSTRUCTIONS
+    near = instructions(fill(MAX_SHORT_TERM - 1, "short", now, "s"))
+    assert near.startswith(INSTRUCTIONS) and "MEMORY IS FULL" in near and "merge" in near and "short-term" in near
+    assert "long-term" in instructions(fill(MAX_LONG_TERM, "long", now, "l"))
 
 
 def test_a_short_term_item_reused_in_three_compactions_is_promoted(system):
     now = time.time()
     active, archive, _ = merge([], [], {"summary": "s", "items": [
-        {"action": "new", "tier": "short", "text": "Deploy needs the VPN up"}]}, now, 30)
+        {"action": "new", "tier": "short", "text": "Deploy needs the VPN up"}]}, now)
     item = active[0]["id"]
     for round_ in range(PROMOTE_AFTER):
         assert active[0]["tier"] == "short"
         active, archive, report = merge(active, archive, {"summary": "s", "items": [
             {"action": "keep" if round_ % 2 else "update", "id": item, "tier": "short",
-             "text": "Deploy needs the VPN up"}]}, now + round_, 30)
+             "text": "Deploy needs the VPN up"}]}, now + round_)
     assert active[0]["tier"] == "long" and report["promoted"] == ["Deploy needs the VPN up"]
     assert active[0]["reuses"] == PROMOTE_AFTER
 
@@ -374,15 +424,16 @@ def test_compaction_model_setting_is_shown_saved_and_used(client):
     shown = browser.get("/api/chat-memory/settings").json()
     assert shown["settings"]["model"] == "latest-haiku" and shown["settings"]["effort"] == "low"
     assert shown["effective"] == {"model": "claude-haiku-5-10", "effort": "low"}  # newest Haiku, by version not text
-    assert shown["settings"]["threshold_tokens"] == 150000 and shown["settings"]["short_term_days"] == 30
-    body = {"revision": 0, "model": "unknown-model", "effort": None, "threshold_tokens": 20000, "short_term_days": 7}
+    assert shown["settings"]["threshold_tokens"] == 150000 and "short_term_days" not in shown["settings"]
+    assert shown["caps"] == {"long": 50, "short": 30}
+    body = {"revision": 0, "model": "unknown-model", "effort": None, "threshold_tokens": 20000}
     assert browser.put("/api/chat-memory/settings", json=body).status_code == 409
     assert browser.put("/api/chat-memory/settings", json={**body, "model": None, "threshold_tokens": 10}).status_code == 409
     assert browser.put("/api/chat-memory/settings", json={**body, "model": None, "threshold_tokens": 2000000}).status_code == 409
     saved = browser.put("/api/chat-memory/settings", json={**body, "model": "test-model", "effort": "high"}).json()
     assert saved["effective"] == {"model": "test-model", "effort": "high"}
     assert browser.get("/api/chat-memory/settings").json()["settings"] == {
-        "model": "test-model", "effort": "high", "threshold_tokens": 20000, "short_term_days": 7, "revision": 1}
+        "model": "test-model", "effort": "high", "threshold_tokens": 20000, "revision": 1}
     assert chat_memory.route(app.state.db, app.state.chat.server) == {"model": "test-model", "effort": "high"}
 
 
@@ -400,6 +451,7 @@ def test_legacy_settings_migrate_to_tokens_latest_haiku_and_low_effort(system):
         20000, "latest-haiku", "low", 3) and "threshold_chars" not in value
     value = migrated(model="test-model", effort="high", threshold_chars=40000)
     assert (value["model"], value["effort"]) == ("test-model", "high")
+    assert "short_term_days" not in migrated(model="m", effort="low")  # a stored old value is ignored
     assert chat_memory.latest_haiku(chat.server) == "claude-haiku-5-10"
 
 

@@ -195,7 +195,6 @@ class ChatMemorySettingsBody(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=40)
     threshold_tokens: int
-    short_term_days: int
 
 
 class MemoryStart(BaseModel):
@@ -621,6 +620,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         return {"settings": saved, "effective": effective, "error": error, "models": models,
                 "defaults": chat_memory.DEFAULTS, "latest_haiku": chat_memory.LATEST_HAIKU,
                 "threshold_range": chat_memory.THRESHOLD_RANGE, "promote_after": chat_memory.PROMOTE_AFTER,
+                "caps": chat_memory.CAPS,
                 "timeout_seconds": chat.compactor.timeout}
 
     @app.get("/api/chat-memory/settings", dependencies=[Depends(require_owner)])
