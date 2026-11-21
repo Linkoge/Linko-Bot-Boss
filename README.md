@@ -262,6 +262,18 @@ applies from the next manager turn and posts a short notice in that chat. A new 
 thread, which still gets the recent chat history. Keyboard: ArrowDown/ArrowUp on the button opens it, Tab cycles
 inside, Escape closes it and returns focus.
 
+**Environments (Main only).** When the deploy registry (`DATA/deploy/installed.json` `instances`, the list deploy and
+doctor use) has instances, an **Environment** selector sits at the top of the picker: **Main** (the default, the panel
+as above) plus every registered instance by name (for example kaxa), so a new instance appears by itself. For another
+environment the panel sets that instance's manager harness, autonomy and manager model/effort. Main reads and writes
+the instance's own existing `manager.sqlite3`, the same local-data path and permissions as the Users model panel
+(“Owner-selected user models”). No HTTP call or restart is needed: the instance reads them at its next manager turn. The harness
+is written to its All Projects scope and to each live project's scope (a restricted instance's chat is its one fixed
+project). If the database cannot be opened, the panel shows “NAME is unreachable” with the reason and changes nothing.
+API (owner, Main only): `GET /api/environments`; `GET`/`PUT /api/instance-harness?name=` with `manager` and/or `autonomy`.
+Model/effort use `PUT /api/instance-model-settings?name=`. Code: `ai_manager/instance_models.py`. Permanent coverage:
+`tests/test_environments.py` and `tests/test_harness_browser.py`.
+
 **Per task.** `delegate` accepts an optional `harness` (a worker harness id from the manager context
 `harness.worker_options`). Without it the project's default is used. Every new task records its harness once (`tasks.harness` column plus event
 `task.harness`). The task card shows it (“Harness: Coding”), `read_task`/`list_tasks` return it, and every turn,
@@ -786,6 +798,11 @@ run in their usual branch/worktree flow on that one project (a Git repository). 
   Discover/Add project and the Deployment panel (cosmetic: `body.restricted` CSS only, elements stay in the DOM so no script breaks; the server-side
   rejections are the real protection). Word editing and browsing tools stay
   allowed. Rejections use `Not available on a restricted instance` (HTTP 403, or a rejected manager action).
+- **Office mode.** Every instance except Main is a restricted instance, and `/api/auth-status` reports `office` for it.
+  The UI is then one clean chat screen. It hides the project row, the Conversation/Tasks/Agents/To-Do tab row, the
+  harness ☼ button and panel, the usage-limits display, and the Compact and Archive chat-menu items (`body.office` CSS
+  only, no server-side refusal). Chat, voice, attachments, login and automatic background compaction keep working. Its
+  harness, autonomy and manager model are set from Main's Environment picker (Switchable harnesses).
 
 The per-project GitHub backup keeps working through the existing path. The synced folder is
 a Git repository only for that: put `.git` in the folder's Syncthing ignore list (a `.stignore` file in the folder root

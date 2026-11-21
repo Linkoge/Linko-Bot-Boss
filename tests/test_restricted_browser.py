@@ -57,7 +57,24 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             assert page.evaluate('()=>state.restricted') is True
             assert page.locator('#projects button').all_inner_texts() == ['work']
             assert page.locator('#projects button.selected').count() == 1
-            page.locator('[data-view=settings]').click()
+            # Office mode (every instance but Main): one clean chat screen; chat, voice and attachments stay.
+            assert page.evaluate("()=>document.body.classList.contains('office')") is True
+            for hidden in ('.project-row', '.tabs', '#harness-button', '#harness-menu', '#usage-button'):
+                assert not page.locator(hidden).is_visible(), hidden
+            for visible in ('#message-input', '#microphone', '#attach', '#chat-menu-button'):
+                assert page.locator(visible).is_visible(), visible
+            page.locator('#chat-menu-button').click()
+            assert page.locator('#chat-menu').is_visible()
+            for hidden in ('#compact-chat', '#archive-chat', '#archive-part-chat'):
+                assert not page.locator(hidden).is_visible(), hidden
+            for visible in ('#clear-chat', '#copy-all'):
+                assert page.locator(visible).is_visible(), visible
+            page.keyboard.press('Escape')
+            # UI hiding only: no new server-side refusal of the chat-scoped endpoints.
+            assert page.evaluate("async()=>(await fetch('/api/harnesses')).status") == 200
+            assert page.evaluate("async()=>(await fetch('/api/environments')).status") == 403  # Main's picker only
+            assert page.locator('#messages').is_visible()
+            page.evaluate("()=>showView('settings')")  # the tabs row is hidden in office mode
             for hidden in ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel',
                            '#model-settings-button', '#models-panel', '#model-dialog', '#instance-models', '#github-panel',
                            '#github-token', '#github-company-token'):

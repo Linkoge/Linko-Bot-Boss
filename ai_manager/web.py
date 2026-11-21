@@ -403,6 +403,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "csrf": session["csrf"] if session else None,
             "release_commit": release_commit,
             "restricted": restricted,
+            "office": restricted,  # every instance but Main is restricted: office mode shows only the chat
             "scheduler_running": bool(scheduler.job and not scheduler.job.done()),
         }
 
@@ -779,6 +780,32 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         from .instance_models import save
         await chat.server.start()
         return await asyncio.to_thread(save, settings.data_dir, chat.server, name, body)
+
+    @app.get('/api/environments', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def read_environments():
+        from .instance_models import environments
+        try:
+            return {'environments': environments(settings.data_dir)}
+        except ValueError as error:
+            return {'environments': [{'name': 'Main', 'main': True}], 'error': str(error)}
+
+    @app.get('/api/instance-harness', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def read_instance_harness(name: str):
+        from .instance_models import read_harness
+        try:
+            await chat.server.start()
+        except Exception:
+            pass  # harness choices still load; unavailable models render disabled
+        return await asyncio.to_thread(read_harness, settings.data_dir, chat.server, name)
+
+    @app.put('/api/instance-harness', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def save_instance_harness(name: str, body: dict):
+        from .instance_models import save_harness
+        try:
+            await chat.server.start()
+        except Exception:
+            pass
+        return await asyncio.to_thread(save_harness, settings.data_dir, chat.server, name, body)
 
     @app.put("/api/manager-favorites/{slot}", dependencies=[Depends(require_owner)])
     async def insert_manager_favorite(slot: int, project_id: str | None = None):

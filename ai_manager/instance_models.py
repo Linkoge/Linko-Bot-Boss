@@ -1,4 +1,7 @@
-"""Owner edits of registered instances' existing model records, without starting or migrating them."""
+"""Owner edits of registered instances' existing model and harness records, without starting or migrating them.
+
+The main instance reads and writes another instance's own manager.sqlite3 (mode=rw, never created or migrated); the
+instance reads those records at its next manager turn, so nothing has to be restarted or reached over HTTP."""
 import json
 import sqlite3
 from pathlib import Path
@@ -52,8 +55,8 @@ def instances(data):
         raise ValueError(f'Cannot read Users from {path}: invalid instance registry') from error
 
 
-def access_error(name, error):
-    return (f'{name}: cannot access model settings: {error}. The main service needs read/write access to the '
+def access_error(name, error, what='model settings'):
+    return (f'{name}: cannot access {what}: {error}. The main service needs read/write access to the '
             'existing manager.sqlite3, its SQLite WAL/SHM files and data directory, and traversal of parent directories. '
             'Check the registered data path and permissions; no settings were confirmed.')
 
@@ -99,3 +102,50 @@ def save(data, server, name, value):
         return panel(entry, server)
     except (OSError, sqlite3.Error) as error:
         raise ValueError(access_error(name, error)) from error
+
+
+def environments(data):
+    """The harness panel's environment picker: Main, then every registered instance (deploy/doctor registry)."""
+    return [{'name': 'Main', 'main': True}] + [{'name': e['name']} for e in instances(data)]
+
+
+def harness_scopes(db):
+    """Where an instance's manager reads its harness: All Projects plus each live project (a restricted instance's
+    manager runs in its one fixed project's scope). The environment setting is written to all of them."""
+    return [None] + [row['id'] for row in db.all("SELECT id FROM projects WHERE status!='removed' ORDER BY id")]
+
+
+def harness_panel(entry, server):
+    from . import harness
+    db = ExistingDatabase(entry['data'])
+    scopes = harness_scopes(db)
+    state = harness.state(db, scopes[1] if len(scopes) == 2 else None)
+    state.pop('worker', None)  # the environment picker sets the manager only; workers keep their project defaults
+    try:
+        models = panel(entry, server)
+    except (ValueError, KeyError, TypeError) as error:
+        models = {'name': entry['name'], 'error': f'{entry["name"]}: cannot read model settings: {error}'}
+    return {'name': entry['name'], 'harness': {**state, 'project_id': None}, 'models': models}
+
+
+def read_harness(data, server, name):
+    entry = registered(data, name)
+    try:
+        return harness_panel(entry, server)
+    except (OSError, sqlite3.Error) as error:
+        raise ValueError(access_error(name, error, 'its settings (unreachable)')) from error
+
+
+def save_harness(data, server, name, body):
+    """Set the instance's manager harness and/or autonomy with the instance's own validation."""
+    from . import harness
+    entry = registered(data, name)
+    if not isinstance(body, dict) or not body or body.keys() - {'manager', 'autonomy'}:
+        raise ValueError('Send manager and/or autonomy')
+    try:
+        db = ExistingDatabase(entry['data'])
+        for scope in harness_scopes(db):
+            harness.save(db, scope, body)
+        return harness_panel(entry, server)
+    except (OSError, sqlite3.Error) as error:
+        raise ValueError(access_error(name, error, 'its settings (unreachable)')) from error

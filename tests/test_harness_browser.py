@@ -105,3 +105,56 @@ def test_harness_picker_keyboard_persistence_task_card_and_mobile(page, browser_
     page.locator('#harness-button').click()
     page.locator('#chat-menu-button').click()  # the chat menu replaces it
     assert page.locator('#harness-menu').is_hidden() and page.locator('#chat-menu').is_visible()
+
+
+def test_environment_picker_sets_another_instance_and_shows_unreachable(page, browser_context, tmp_path):
+    from ai_manager import harness
+    _, _, root = browser_context
+    user_db = Database(tmp_path / 'writer' / 'manager.sqlite3')
+    manifest = root / 'data' / 'deploy' / 'installed.json'
+    manifest.parent.mkdir(exist_ok=True)
+    manifest.write_text(json.dumps({'instances': [
+        {'name': 'kaxa', 'data': str(tmp_path / 'writer'), 'url': 'http://127.0.0.1:1', 'service': 'k.service'},
+        {'name': 'Offline', 'data': str(tmp_path / 'missing'), 'url': 'http://127.0.0.1:2', 'service': 'o.service'}]}))
+    main_scope = "()=>api(`/api/harnesses?${harnessQuery(state.project)}`)"
+    main_before = page.evaluate(main_scope)['manager']['id']
+    try:
+        page.locator('#harness-button').click()
+        page.wait_for_function("()=>harnessMenu.data&&!document.getElementById('harness-environment-group').hidden")
+        assert page.locator('#harness-environment option').all_inner_texts() == ['Main', 'kaxa', 'Offline']
+        assert page.locator('#harness-environment').input_value() == ''  # Main is the default
+        assert page.locator('#harness-model-group').is_hidden()  # Main keeps its own model picker
+
+        page.locator('#harness-environment').select_option('kaxa')
+        page.wait_for_function("()=>harnessMenu.data&&harnessMenu.models&&"
+                               "document.getElementById('harness-status').textContent===''")
+        assert 'kaxa' in page.locator('#harness-scope').inner_text()
+        assert page.locator('#harness-worker-group').is_hidden() and page.locator('#harness-model-group').is_visible()
+        page.locator('#harness-manager').select_option('zero')
+        page.wait_for_function("()=>document.getElementById('harness-status').textContent.startsWith('Saved for kaxa')")
+        assert harness.manager_turn(user_db, None)[0].id == 'zero'
+        page.locator('#harness-autonomy').select_option('finish_request')
+        page.wait_for_function("()=>harnessMenu.data.autonomy==='finish_request'&&!harnessMenu.saving")
+        assert harness.manager_turn(user_db, None)[1] == 'finish_request'
+        model = page.locator('#harness-model option:not([disabled])').nth(1).get_attribute('value')
+        page.locator('#harness-model').select_option(model)
+        page.wait_for_function("(m)=>harnessMenu.models.settings.manager.model===m&&!harnessMenu.saving", arg=model)
+        assert user_db.setting('model_choice')['manager']['model'] == model
+        page.locator('#harness-effort').select_option('high')
+        page.wait_for_function("()=>harnessMenu.models.settings.manager.effort==='high'&&!harnessMenu.saving")
+        assert user_db.setting('model_choice')['manager'] == {'model': model, 'effort': 'high'}
+        assert page.evaluate(main_scope)['manager']['id'] == main_before  # Main unchanged
+
+        page.locator('#harness-environment').select_option('Offline')
+        page.wait_for_function("()=>document.getElementById('harness-status').textContent==='Offline is unreachable.'")
+        assert page.locator('#harness-scope').inner_text() == 'Offline is unreachable'
+        assert 'unreachable' in page.locator('#harness-manager-description').inner_text()
+        assert page.locator('#harness-manager').is_disabled()
+        assert not (tmp_path / 'missing').exists()
+
+        page.locator('#harness-environment').select_option('')
+        page.wait_for_function("()=>harnessMenu.data&&!harnessMenu.models&&!harnessMenu.error")
+        assert page.locator('#harness-manager').input_value() == main_before
+        assert page.locator('#harness-model-group').is_hidden()
+    finally:
+        manifest.unlink()
