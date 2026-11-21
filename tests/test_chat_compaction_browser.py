@@ -127,7 +127,7 @@ def test_a_failed_compaction_leaves_the_chat_unchanged_with_a_notice(page, brows
 def test_chat_memory_settings_panel_shows_what_is_saved_and_used(page):
     page.locator('.tabs [data-view=settings]').click()
     page.wait_for_function("()=>document.querySelector('#chat-memory-effective').textContent.startsWith('Used:')")
-    assert "Used: test-model · low (the manager's choice)" in page.locator('#chat-memory-effective').inner_text()
+    assert "Latest Haiku" in page.locator('#chat-memory-model').inner_text() and "Used: claude-haiku-5-10 · low (Latest Haiku)" in page.locator('#chat-memory-effective').inner_text()
     page.locator('#chat-memory-model').select_option('test-model')
     page.locator('#chat-memory-effort').fill('high')
     page.locator('#chat-memory-threshold').fill('20000')

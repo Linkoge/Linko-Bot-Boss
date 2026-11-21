@@ -8,7 +8,7 @@
   expired or dropped items, searchable on demand with read_memory (path + query).
 - Short-term items carry last_used; a compaction that reuses an item refreshes it. Short-term items idle for
   `short_term_days` move to the archive; one reused in PROMOTE_AFTER compactions becomes long-term.
-- One settings record `chat_compaction`: model/effort (null = the manager's own choice), the automatic threshold and
+- One settings record `chat_compaction`: model (default Latest Haiku) / effort (default low), the automatic threshold and
   the inactivity window. The same `route()` resolves what the settings panel shows and what a compaction uses.
 """
 
@@ -19,7 +19,6 @@ import time
 from datetime import datetime, timezone
 
 from .db import new_id
-from .model_settings import manager_route
 from .push_diagnosis import PEM_BLOCK, SECRET_PATTERNS, USERINFO
 
 ACTIVE, ARCHIVE = "chat_memory", "chat_memory_archive"
@@ -27,8 +26,10 @@ NAMES = (ACTIVE, ARCHIVE)
 SETTINGS_KEY = "chat_compaction"
 NOTICE = "chat_compaction_notice:"  # + chat context: the latest automatic-compaction notice for that chat
 AUTO_STATE = "chat_autocompact:"  # + conversation id: {"next_at": chars} after an automatic attempt
-DEFAULTS = {"model": None, "effort": None, "threshold_chars": 60000, "short_term_days": 30}
-THRESHOLD_RANGE = (5000, 2000000)
+LATEST_HAIKU = "latest-haiku"  # stored model choice: resolved at call time to the newest Haiku in the catalog
+DEFAULTS = {"model": LATEST_HAIKU, "effort": "low", "threshold_tokens": 150000, "short_term_days": 30}
+THRESHOLD_RANGE = (10000, 1000000)  # tokens, estimated as characters / CHARS_PER_TOKEN
+CHARS_PER_TOKEN = 4
 DAYS_RANGE = (1, 3650)
 PROMOTE_AFTER = 3  # reuses (compactions that kept an item) before a short-term item becomes long-term
 MAX_SHORT_TERM = 30  # active short-term items; the least recently used beyond this are archived
@@ -90,16 +91,43 @@ def context_name(project_id):
 
 # Settings: shown = saved = used.
 
+def migrate(saved):
+    """Records saved before tokens/Latest Haiku (they carry `threshold_chars`) move to the new defaults once."""
+    if "threshold_chars" not in saved:
+        return saved
+    saved = dict(saved)
+    chars = saved.pop("threshold_chars")
+    saved.setdefault("threshold_tokens", DEFAULTS["threshold_tokens"] if chars in (150000, 60000)
+                     or not isinstance(chars, int) else chars // CHARS_PER_TOKEN)
+    if not saved.get("model") or "haiku" in str(saved["model"]).lower():
+        saved["model"] = LATEST_HAIKU
+    if saved.get("effort") in (None, "", "medium"):
+        saved["effort"] = DEFAULTS["effort"]
+    return saved
+
+
 def load_settings(db):
-    saved = db.setting(SETTINGS_KEY) or {}
+    saved = migrate(db.setting(SETTINGS_KEY) or {})
     return {**DEFAULTS, "revision": 0, **{k: v for k, v in saved.items() if k in (*DEFAULTS, "revision")}}
 
 
+def latest_haiku(server):
+    """The newest Haiku in the provider catalog: the highest version among ids containing "haiku"."""
+    found = [m["model"] for m in getattr(server, "catalog", None) or [] if not m.get("hidden")
+             and "haiku" in m["model"].lower()]
+    if not found:
+        raise ValueError("No Haiku model is available from the provider")
+    return max(found, key=lambda name: ([int(n) for n in re.findall(r"\d+", name)], name))
+
+
+def resolve_model(server, model):
+    return latest_haiku(server) if model == LATEST_HAIKU else model
+
+
 def route(db, server, project_id=None):
-    """The exact model/effort a compaction runs with: the saved override, otherwise the manager's choice."""
+    """The exact model/effort a compaction runs with: the saved choice (Latest Haiku resolved now)."""
     saved = load_settings(db)
-    chosen = {"model": saved["model"], "effort": saved["effort"]} if saved["model"] else manager_route(db, project_id)
-    return server.route(chosen.get("model"), chosen.get("effort"))
+    return server.route(resolve_model(server, saved["model"]), saved["effort"])
 
 
 def save_settings(db, server, body):
@@ -109,11 +137,11 @@ def save_settings(db, server, body):
     value = {k: body.get(k, current[k]) for k in DEFAULTS}
     value["model"] = (value["model"] or "").strip() or None
     value["effort"] = (value["effort"] or "").strip() or None
-    if value["effort"] and not value["model"]:
-        raise ValueError("Choose a compaction model to set its effort, or leave both on the manager's choice")
-    if value["model"]:
-        value.update(server.route(value["model"], value["effort"]))  # rejects models/efforts not in the catalog
-    for key, (low, high) in (("threshold_chars", THRESHOLD_RANGE), ("short_term_days", DAYS_RANGE)):
+    if not value["model"]:
+        value["model"] = LATEST_HAIKU
+    value["effort"] = value["effort"] or DEFAULTS["effort"]
+    server.route(resolve_model(server, value["model"]), value["effort"])  # rejects models/efforts not in the catalog
+    for key, (low, high) in (("threshold_tokens", THRESHOLD_RANGE), ("short_term_days", DAYS_RANGE)):
         if not isinstance(value[key], int) or isinstance(value[key], bool) or not low <= value[key] <= high:
             raise ValueError(f"{key} must be a whole number from {low} to {high}")
     value["revision"] = current["revision"] + 1
@@ -528,7 +556,7 @@ class Compactor:
 
     def due(self):
         """Current chats past their threshold, idle, not yet attempted at this crossing, not already compacting."""
-        threshold = load_settings(self.db)["threshold_chars"]
+        threshold = load_settings(self.db)["threshold_tokens"] * CHARS_PER_TOKEN  # chars
         for conversation in self.db.all(
                 "SELECT * FROM conversations WHERE context=COALESCE(project_id,'global') AND (project_id IS NULL "
                 "OR project_id IN (SELECT id FROM projects WHERE status!='removed'))"):

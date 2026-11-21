@@ -38,6 +38,8 @@ class CompactServer(FakeServer):
         super().__init__(settings)
         self.reply, self.hang, self.compactions, self.interrupted = default_reply, False, [], []
         self.gate, self.delay = None, float(os.environ.get("COMPACT_DELAY", "0"))
+        for name in ("claude-haiku-5-5", "claude-haiku-5-10", "claude-haiku-4-9", "claude-sonnet-9-9"):
+            self.catalog.append({**self.catalog[0], "model": name, "isDefault": False})
 
     async def thread(self, cwd, instructions, thread_id=None, model=None, dynamic_tools=None):
         if instructions == INSTRUCTIONS:
@@ -215,7 +217,7 @@ def test_a_running_notice_left_by_a_restart_reads_as_interrupted(system):
 async def test_automatic_compaction_past_threshold_once_never_mid_turn_and_safe_on_failure(system):
     db, registry, chat, _ = system
     project = registry.list()[0]["id"]
-    db.set_setting(chat_memory.SETTINGS_KEY, {**chat_memory.DEFAULTS, "threshold_chars": 5000, "revision": 1})
+    db.set_setting(chat_memory.SETTINGS_KEY, {**chat_memory.DEFAULTS, "threshold_tokens": 1250, "revision": 1})
     conversation = chat.conversation(project)
     compactor, clock = chat.compactor, iter(range(1000, 100000, 100))
     seed(db, conversation["id"], [("user", "short question"), ("assistant", "x" * 3000)])
@@ -366,17 +368,39 @@ async def test_saved_chat_has_owner_messages_and_final_replies_only_never_reason
 def test_compaction_model_setting_is_shown_saved_and_used(client):
     browser, app, settings = client
     sign_in(browser, app, settings)
+    catalog = app.state.chat.server.catalog
+    catalog += [{**catalog[0], "model": name, "isDefault": False}
+                for name in ("claude-haiku-5-5", "claude-haiku-5-10", "claude-haiku-4-9", "claude-sonnet-9-9")]
     shown = browser.get("/api/chat-memory/settings").json()
-    assert shown["settings"]["model"] is None and shown["effective"] == {"model": "test-model", "effort": "low"}
-    assert shown["settings"]["threshold_chars"] == 60000 and shown["settings"]["short_term_days"] == 30
-    body = {"revision": 0, "model": "unknown-model", "effort": None, "threshold_chars": 9000, "short_term_days": 7}
+    assert shown["settings"]["model"] == "latest-haiku" and shown["settings"]["effort"] == "low"
+    assert shown["effective"] == {"model": "claude-haiku-5-10", "effort": "low"}  # newest Haiku, by version not text
+    assert shown["settings"]["threshold_tokens"] == 150000 and shown["settings"]["short_term_days"] == 30
+    body = {"revision": 0, "model": "unknown-model", "effort": None, "threshold_tokens": 20000, "short_term_days": 7}
     assert browser.put("/api/chat-memory/settings", json=body).status_code == 409
-    assert browser.put("/api/chat-memory/settings", json={**body, "model": None, "threshold_chars": 10}).status_code == 409
+    assert browser.put("/api/chat-memory/settings", json={**body, "model": None, "threshold_tokens": 10}).status_code == 409
+    assert browser.put("/api/chat-memory/settings", json={**body, "model": None, "threshold_tokens": 2000000}).status_code == 409
     saved = browser.put("/api/chat-memory/settings", json={**body, "model": "test-model", "effort": "high"}).json()
     assert saved["effective"] == {"model": "test-model", "effort": "high"}
     assert browser.get("/api/chat-memory/settings").json()["settings"] == {
-        "model": "test-model", "effort": "high", "threshold_chars": 9000, "short_term_days": 7, "revision": 1}
+        "model": "test-model", "effort": "high", "threshold_tokens": 20000, "short_term_days": 7, "revision": 1}
     assert chat_memory.route(app.state.db, app.state.chat.server) == {"model": "test-model", "effort": "high"}
+
+
+def test_legacy_settings_migrate_to_tokens_latest_haiku_and_low_effort(system):
+    db, _, chat, _ = system
+
+    def migrated(**old):
+        db.set_setting(chat_memory.SETTINGS_KEY, {"short_term_days": 30, "revision": 3, **old})
+        return chat_memory.load_settings(db)
+
+    for chars in (150000, 60000):
+        assert migrated(model=None, effort=None, threshold_chars=chars)["threshold_tokens"] == 150000
+    value = migrated(model="claude-haiku-4-9", effort="medium", threshold_chars=80000)
+    assert (value["threshold_tokens"], value["model"], value["effort"], value["revision"]) == (
+        20000, "latest-haiku", "low", 3) and "threshold_chars" not in value
+    value = migrated(model="test-model", effort="high", threshold_chars=40000)
+    assert (value["model"], value["effort"]) == ("test-model", "high")
+    assert chat_memory.latest_haiku(chat.server) == "claude-haiku-5-10"
 
 
 def test_compact_http_round_trip_uses_the_saved_model(tmp_path):

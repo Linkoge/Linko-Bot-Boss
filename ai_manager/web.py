@@ -194,7 +194,7 @@ class ChatMemorySettingsBody(BaseModel):
     revision: int
     model: str | None = Field(default=None, max_length=200)
     effort: str | None = Field(default=None, max_length=40)
-    threshold_chars: int
+    threshold_tokens: int
     short_term_days: int
 
 
@@ -619,7 +619,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             effective, error = None, str(failure)[:300]
         models = sorted({m["model"] for m in getattr(chat.server, "catalog", []) or [] if not m.get("hidden")})
         return {"settings": saved, "effective": effective, "error": error, "models": models,
-                "defaults": chat_memory.DEFAULTS, "promote_after": chat_memory.PROMOTE_AFTER,
+                "defaults": chat_memory.DEFAULTS, "latest_haiku": chat_memory.LATEST_HAIKU,
+                "threshold_range": chat_memory.THRESHOLD_RANGE, "promote_after": chat_memory.PROMOTE_AFTER,
                 "timeout_seconds": chat.compactor.timeout}
 
     @app.get("/api/chat-memory/settings", dependencies=[Depends(require_owner)])

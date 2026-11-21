@@ -1104,9 +1104,9 @@ probes, live database changes, service restarts or host installation are part of
   running. A "running" notice left by a restart reads as interrupted.
   **Automatic compaction** uses the same background job: the scheduler checks every 10 s between turns. When the
   characters of the owner messages and replies in the current chat (what the manager's thread carries) reach
-  `threshold_chars` (default 60 000), it starts the job. Never while a turn is queued, running, held or recovering;
+  `threshold_tokens` (default 150 000 tokens, estimated as characters / 4; range 10 000–1 000 000), it starts the job. Never while a turn is queued, running, held or recovering;
   one attempt per threshold crossing (recorded before the call, so the next attempt waits for another
-  `threshold_chars` of growth). The notice is `compaction_notice` (`text`, `state` running/done/failed) in
+  `threshold_tokens` of growth). The notice is `compaction_notice` (`text`, `state` running/done/failed) in
   `/api/history`.
   The model output is JSON (`summary`, `items` with `new`/`update`/`keep`/`drop`), validated before anything is applied
   (unknown IDs, bad tiers, empty text are rejected), and every text has key-shaped values (the
@@ -1117,7 +1117,7 @@ probes, live database changes, service restarts or host installation are part of
   (default 30), or beyond the 30 most recently used, move to the archive (never deleted). Only active items are sent
   as `chat_memory` in the manager's context (outside the brief's `CONTEXT_MAXIMUM`); archived ones are searched on
   demand with `read_memory` (`path: chat_memory_archive`, `query`). Settings → **Chat memory** edits the one
-  `chat_compaction` record: model and effort (default: the manager's own choice), threshold and inactivity days; the
+  `chat_compaction` record: model (default **Latest Haiku**: the highest-versioned catalog id containing "haiku", resolved at call time; explicit models stay possible), effort (default `low`), threshold in tokens and inactivity days (records saved with the old `threshold_chars` migrate once: 150 000 or 60 000 become 150 000 tokens, other values chars / 4; an unset or Haiku model becomes Latest Haiku and unset/`medium` effort becomes `low`); the
   panel's "Used:" line comes from the same `route()` a compaction runs with. API: `POST /api/chat/compact` (start),
   `GET /api/chat/compact/status`, `POST /api/chat/compact/notice/dismiss`, `GET|PUT /api/chat-memory/settings`. Permanent coverage: `tests/test_chat_compaction.py` and
   `tests/test_chat_compaction_browser.py`.

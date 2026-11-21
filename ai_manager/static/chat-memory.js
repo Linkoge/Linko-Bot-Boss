@@ -46,21 +46,20 @@ $('compaction-notice-dismiss').onclick=action(async()=>{
 let chatMemorySettings=null;
 function renderChatMemorySettings(data){
   chatMemorySettings=data;const saved=data.settings,select=$('chat-memory-model');
-  const manager=document.createElement('option');manager.value='';manager.textContent='Same as the manager';select.replaceChildren(manager);
-  for(const model of new Set([...data.models,...(saved.model?[saved.model]:[])])){const option=document.createElement('option');option.value=model;option.textContent=model;select.append(option);}
-  select.value=saved.model||'';$('chat-memory-effort').value=saved.effort||'';$('chat-memory-effort').disabled=!saved.model;
-  $('chat-memory-threshold').value=saved.threshold_chars;$('chat-memory-days').value=saved.short_term_days;
-  $('chat-memory-effective').textContent=data.effective?`Used: ${data.effective.model} · ${data.effective.effort}${saved.model?'':' (the manager\'s choice)'} · promoted to long-term after ${data.promote_after} reuses · timeout ${Math.round(data.timeout_seconds/60)} min`:`Compaction model unavailable: ${data.error}`;
+  const manager=document.createElement('option');manager.value='latest-haiku';manager.textContent='Latest Haiku (newest available)';select.replaceChildren(manager);
+  for(const model of new Set([...data.models,...(saved.model&&saved.model!=='latest-haiku'?[saved.model]:[])])){const option=document.createElement('option');option.value=model;option.textContent=model;select.append(option);}
+  select.value=saved.model||'latest-haiku';$('chat-memory-effort').value=saved.effort||'low';
+  $('chat-memory-threshold').value=saved.threshold_tokens;$('chat-memory-days').value=saved.short_term_days;
+  $('chat-memory-effective').textContent=data.effective?`Used: ${data.effective.model} · ${data.effective.effort}${saved.model==='latest-haiku'?' (Latest Haiku)':''} · promoted to long-term after ${data.promote_after} reuses · timeout ${Math.round(data.timeout_seconds/60)} min`:`Compaction model unavailable: ${data.error}`;
 }
 async function loadChatMemorySettings(){
   const project=state.project,data=await api(`/api/chat-memory/settings?${compactionQuery(project)}`);
   if(project===state.project)renderChatMemorySettings(data);
 }
-$('chat-memory-model').onchange=()=>{$('chat-memory-effort').disabled=!$('chat-memory-model').value;if(!$('chat-memory-model').value)$('chat-memory-effort').value='';};
 $('chat-memory-form').onsubmit=action(async event=>{
   event.preventDefault();if(!chatMemorySettings)await loadChatMemorySettings();
-  const body={revision:chatMemorySettings.settings.revision,model:$('chat-memory-model').value||null,effort:$('chat-memory-effort').value.trim()||null,
-    threshold_chars:Number($('chat-memory-threshold').value),short_term_days:Number($('chat-memory-days').value)};
+  const body={revision:chatMemorySettings.settings.revision,model:$('chat-memory-model').value||'latest-haiku',effort:$('chat-memory-effort').value.trim()||'low',
+    threshold_tokens:Number($('chat-memory-threshold').value),short_term_days:Number($('chat-memory-days').value)};
   const data=await api(`/api/chat-memory/settings?${compactionQuery(state.project)}`,{method:'PUT',body:JSON.stringify(body)});
   renderChatMemorySettings(data);$('chat-memory-status').textContent='Saved.';
 });
