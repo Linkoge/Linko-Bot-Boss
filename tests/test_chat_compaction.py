@@ -314,10 +314,10 @@ def test_only_capacity_archives_least_recently_used_items_and_idle_time_never_do
         chat_memory.write_row(conn, project, ARCHIVE, {"items": archive})
     context = chat.context(project)
     assert "failed because W" in context["chat_memory"] and "Archived items: 1." in context["chat_memory"]
-    assert "s1 fact" not in context["chat_memory"]
+    assert "s fact 1" not in context["chat_memory"]
     scheduler = Scheduler(db, registry, settings, type("Core", (), {"pipeline": None})(), chat)
     found = asyncio.run(scheduler.manager_action(project, {"tool": "manager_action", "arguments": {
-        "action": "read_memory", "path": ARCHIVE, "query": "s1 fact"}, "conversation_id": "c"}))
+        "action": "read_memory", "path": ARCHIVE, "query": "s fact 1"}, "conversation_id": "c"}))
     assert [i["text"] for i in found["items"]] == ["s fact 1"]
 
 
