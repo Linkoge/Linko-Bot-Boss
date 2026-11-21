@@ -283,6 +283,12 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .message-actions::details-content{width:100%}
 .message-actions:not([open])>.message-action-buttons{display:none}
 .message-action-buttons button{font-size:11px;padding:3px 9px;min-height:32px;color:var(--muted)}
+.message-action-buttons .message-speak{display:inline-flex;align-items:center;justify-content:center;min-width:58px;padding:3px 16px}
+.message-speak svg{width:16px;height:16px;display:block}
+.message-speak[data-state=playing]{color:var(--accent);border-color:var(--accent-border)}
+.speak-spinner{animation:speak-spin .9s linear infinite;opacity:.8}
+@keyframes speak-spin{to{transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.speak-spinner{animation-duration:2.5s}}
 
 /* Keep the right stack fixed; audio uses the bottom row immediately left of Send. */
 .composer-audio .composer-input{padding-bottom:48px}

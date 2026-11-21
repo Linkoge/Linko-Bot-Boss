@@ -173,7 +173,7 @@ def speech_text(markdown: str) -> str:
 class GrokSpeaker:
     """xAI text-to-speech (POST /v1/tts, same bearer key as transcription); returns MP3 bytes."""
     def __init__(self, api_key: str, voice: str):
-        self.api_key, self.voice = api_key, voice
+        self.api_key, self.voice = api_key, voice.strip().lower()  # xAI voice ids are lowercase (eve, ara, rex, ...)
 
     async def speak(self, text: str) -> bytes:
         return await asyncio.to_thread(self._request, text)
@@ -196,6 +196,10 @@ class GrokSpeaker:
                 message = 'xAI rejected the server credential or access. Check the server audio configuration.'
             elif error.code == 429:
                 message = 'xAI audio usage limit reached. Retry later.'
+            elif error.code == 404:
+                message = f'xAI does not know the speech voice "{self.voice}". Check AI_MANAGER_TTS_VOICE.'
+            elif error.code in (400, 422):
+                message = f'xAI rejected the speech request (HTTP {error.code}).'
             raise HTTPException(502, message) from None
         except (URLError, TimeoutError, OSError):
             raise HTTPException(502, 'xAI speech connection failed. Retry later.') from None

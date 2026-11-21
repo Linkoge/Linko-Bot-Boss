@@ -546,8 +546,8 @@ function renderMessageActions(row,message,conversation){
     copy.type=remove.type='button';remove.className='message-delete';
     copy.onclick=action(async()=>{await copyText(row._wholeMessage.content);controls.open=false;});
     remove.onclick=()=>confirmMessageDelete(row._wholeMessage,conversation);
-    const sent=element('span',undefined,'message-sent-time'),speak=element('button','🔊');
-    speak.type='button';speak.className='message-speak';speak.title=speak.ariaLabel='Read aloud';
+    const sent=element('span',undefined,'message-sent-time'),speak=element('button');
+    speak.type='button';speak.className='message-speak';setSpeechButton(speak,'idle');
     speak.onclick=()=>toggleSpeech(row,speak);
     buttons.append(sent,copy,remove,speak);controls.append(toggle,buttons);row.append(controls);
   }
@@ -557,34 +557,55 @@ function renderMessageActions(row,message,conversation){
   const m=row._wholeMessage;
   controls.querySelector('.message-delete').disabled=['queued','streaming','waiting','processing'].includes(m.status)||(!!m.execution_id&&m.finished_at===null);
 }
-const speech={audio:null,button:null,url:null,controller:null};
+const speechIcons={
+  idle:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 4.7a.7.7 0 0 0-1.2-.5L6.4 7.6a1.4 1.4 0 0 1-1 .4H3a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2.4a1.4 1.4 0 0 1 1 .4l3.4 3.4a.7.7 0 0 0 1.2-.5z"/><path d="M16 9a5 5 0 0 1 0 6"/><path d="M19.4 18.4a9 9 0 0 0 0-12.8"/></svg>',
+  loading:'<svg class="speak-spinner" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-6.2-8.6"/></svg>',
+  playing:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linejoin="round" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>'};
+const speechLabels={idle:'Read aloud',loading:'Generating speech',playing:'Stop reading'};
+function setSpeechButton(button,mode){button.dataset.state=mode;button.innerHTML=speechIcons[mode];button.title=button.ariaLabel=speechLabels[mode];}
+// A short silent WAV played inside the click gesture unlocks the element for the later real clip (mobile autoplay rules).
+function silentWavUrl(){const b=new ArrayBuffer(46),v=new DataView(b),w=(o,t)=>[...t].forEach((c,i)=>v.setUint8(o+i,c.charCodeAt(0)));
+  w(0,'RIFF');v.setUint32(4,38,true);w(8,'WAVE');w(12,'fmt ');v.setUint32(16,16,true);v.setUint16(20,1,true);v.setUint16(22,1,true);
+  v.setUint32(24,8000,true);v.setUint32(28,16000,true);v.setUint16(32,2,true);v.setUint16(34,16,true);w(36,'data');v.setUint32(40,2,true);
+  return URL.createObjectURL(new Blob([b],{type:'audio/wav'}));}
+const speech={audio:null,button:null,urls:[],controller:null};
 function stopSpeech(){
-  speech.controller?.abort();speech.audio?.pause();if(speech.url)URL.revokeObjectURL(speech.url);
-  if(speech.button){speech.button.textContent='🔊';speech.button.title=speech.button.ariaLabel='Read aloud';speech.button.disabled=false;}
-  Object.assign(speech,{audio:null,button:null,url:null,controller:null});
+  speech.controller?.abort();
+  if(speech.audio){speech.audio.onended=speech.audio.onerror=null;speech.audio.pause();}
+  for(const url of speech.urls)URL.revokeObjectURL(url);
+  if(speech.button){setSpeechButton(speech.button,'idle');speech.button.disabled=false;}
+  Object.assign(speech,{audio:null,button:null,urls:[],controller:null});
 }
-async function toggleSpeech(row,button){
+function speechFailed(controller,message){if(speech.controller!==controller)return;stopSpeech();notice('Read aloud failed: '+message);}
+function toggleSpeech(row,button){
   const wasThis=speech.button===button;
   if(speech.button)stopSpeech();
   if(wasThis)return;
-  const controller=new AbortController();
-  Object.assign(speech,{button,controller});
-  button.textContent='…';button.title=button.ariaLabel='Generating speech';
-  try{
-    const response=await fetch('/api/audio/speak',{method:'POST',signal:controller.signal,
-      headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf||''},body:JSON.stringify({text:row._wholeMessage.content})});
-    if(!response.ok){let detail;try{detail=(await response.json()).detail;}catch{}throw new Error(typeof detail==='string'?detail:`Speech failed (${response.status}).`);}
-    const url=URL.createObjectURL(await response.blob());
-    if(speech.controller!==controller){URL.revokeObjectURL(url);return;}
-    const audio=new Audio(url);Object.assign(speech,{audio,url});
-    audio.onended=audio.onerror=()=>{if(speech.audio===audio)stopSpeech();};
-    button.textContent='■';button.title=button.ariaLabel='Stop reading';
-    await audio.play();
-  }catch(error){
-    if(speech.controller!==controller)return;
-    stopSpeech();
-    notice(error.name==='NotAllowedError'?'Your browser blocked audio playback.':'Speech failed: '+error.message);
-  }
+  const controller=new AbortController(),audio=new Audio(),unlock=silentWavUrl();
+  Object.assign(speech,{button,controller,audio,urls:[unlock]});
+  setSpeechButton(button,'loading');
+  // Synchronous, still inside the click: create and start the element before any await.
+  audio.src=unlock;try{audio.play()?.catch(()=>{});}catch{}
+  return (async()=>{
+    try{
+      const response=await fetch('/api/audio/speak',{method:'POST',signal:controller.signal,
+        headers:{'Content-Type':'application/json','X-CSRF-Token':state.csrf||''},body:JSON.stringify({text:row._wholeMessage.content})});
+      if(!response.ok){let detail;try{detail=(await response.json()).detail;}catch{}throw new Error(typeof detail==='string'?detail:`server returned HTTP ${response.status}.`);}
+      const blob=await response.blob();
+      if(speech.controller!==controller)return;
+      if(!blob.size)throw new Error('the server returned no audio.');
+      const url=URL.createObjectURL(blob.type.startsWith('audio/')?blob:new Blob([blob],{type:'audio/mpeg'}));speech.urls.push(url);
+      audio.pause();
+      audio.onended=()=>{if(speech.controller===controller)stopSpeech();};
+      audio.onerror=()=>speechFailed(controller,'the browser could not play the audio'+(audio.error?.code?` (media error ${audio.error.code}).`:'.'));
+      audio.src=url;
+      setSpeechButton(button,'playing');
+      await audio.play();
+    }catch(error){
+      if(error.name==='AbortError'&&speech.controller!==controller)return;
+      speechFailed(controller,error.name==='NotAllowedError'?'your browser blocked audio playback. Tap the button again.':error.message);
+    }
+  })();
 }
 function confirmMessageDelete(message,conversation){
   const project=state.project,selection=state.selection;

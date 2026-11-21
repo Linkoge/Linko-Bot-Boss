@@ -1,7 +1,11 @@
 """Project-switch timing and cache regressions on a disposable Chromium/server."""
 # ruff: noqa: F811
+import io
+import math
+import struct
 import time
 import uuid
+import wave
 
 from test_model_picker_browser import browser_context, page, server  # noqa: F401
 
@@ -141,31 +145,58 @@ def test_expanded_message_shows_sent_time_left_of_actions(page, browser_context)
     assert sent.bounding_box()['x'] < page.locator('.message-action-buttons button').first.bounding_box()['x']
 
 
-def test_speak_button_sits_right_of_delete_and_toggles_audio(page, browser_context):
+def tone_wav(seconds=1.5):
+    """A real, decodable PCM WAV the browser plays (built at runtime)."""
+    out = io.BytesIO()
+    with wave.open(out, 'wb') as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(8000)
+        w.writeframes(b''.join(struct.pack('<h', int(8000 * math.sin(i / 8))) for i in range(int(8000 * seconds))))
+    return out.getvalue()
+
+
+def test_speak_button_plays_real_audio_and_shows_errors(page, browser_context):
     project, _ = make_project(browser_context, count=1)
     page.evaluate('p=>selectProject(p)', project)
     page.wait_for_selector('.message-actions')
-    page.evaluate("""()=>{window.speakCalls=0;window.played=0;window.paused=0;
-      const wav=new Uint8Array(44);
-      window.fetchSpeak=window.fetch;
-      window.fetch=async(url,opts)=>{if(String(url).includes('/api/audio/speak')){window.speakCalls++;await new Promise(r=>setTimeout(r,150));
-        return window.failSpeak?new Response(JSON.stringify({detail:'Audio needs XAI_API_KEY in the server environment.'}),{status:503}):new Response(wav,{status:200});}return window.fetchSpeak(url,opts);};
-      window.Audio=class{play(){window.played++;return Promise.resolve();}pause(){window.paused++;}};}""")
+    reply = {'status': 200, 'body': tone_wav(), 'content_type': 'audio/wav'}
+    calls, held = [], []
+
+    def speak(route):
+        calls.append(route.request.post_data_json)
+        (held.append if reply.get('hold') else lambda r: r.fulfill(**{k: v for k, v in reply.items() if k != 'hold'}))(route)
+    page.route('**/api/audio/speak', speak)
+    reply['hold'] = True
     page.locator('.message-actions > summary').first.click()
     names = page.locator('.message-actions').first.locator('.message-action-buttons > *')
     assert names.evaluate_all('els=>els.map(e=>e.textContent.trim())')[1:3] == ['Copy', 'Delete']
-    sent, copy, delete, speak = [page.locator(f'.message-actions >> nth=0 >> {s}').bounding_box() for s in
-                                 ('.message-sent-time', 'button:text-is("Copy")', '.message-delete', '.message-speak')]
-    assert sent['x'] < copy['x'] < delete['x'] < speak['x']
+    sent, copy, delete, speak_box = [page.locator(f'.message-actions >> nth=0 >> {s}').bounding_box() for s in
+                                     ('.message-sent-time', 'button:text-is("Copy")', '.message-delete', '.message-speak')]
+    assert sent['x'] < copy['x'] < delete['x'] < speak_box['x']
     assert sent['x'] - page.locator('.message-actions').first.bounding_box()['x'] < 5  # far left
+    assert speak_box['width'] > delete['width'] * 0.9 and abs(speak_box['height'] - delete['height']) < 2  # wide pill like Delete
     button = page.locator('.message-speak').first
+    assert button.locator('svg').count() == 1 and button.get_attribute('data-state') == 'idle'
     button.click()
-    page.wait_for_function("()=>document.querySelector('.message-speak').title==='Generating speech'")
-    page.wait_for_function("()=>document.querySelector('.message-speak').title==='Stop reading'&&window.played===1")
+    page.wait_for_function("()=>document.querySelector('.message-speak').title==='Generating speech'&&!!document.querySelector('.message-speak svg.speak-spinner')")
+    while not held:
+        page.wait_for_timeout(50)
+    del reply['hold']
+    held.pop().fulfill(**reply)
+    # The real element plays the routed clip under the page's real CSP (blob: media).
+    page.wait_for_function("()=>speech.audio&&speech.audio.src.startsWith('blob:')&&!speech.audio.paused&&speech.audio.currentTime>0.05")
+    assert button.get_attribute('title') == 'Stop reading' and button.get_attribute('data-state') == 'playing'
+    assert calls[0]['text'].startswith('Message 0')
     button.click()
-    page.wait_for_function("()=>document.querySelector('.message-speak').title==='Read aloud'&&window.paused>=1")
-    assert page.evaluate('window.speakCalls') == 1
-    page.evaluate('window.failSpeak=true')
+    page.wait_for_function("()=>document.querySelector('.message-speak').title==='Read aloud'&&speech.audio===null")
+    assert len(calls) == 1
+    reply.update(status=503, body='{"detail":"Audio needs XAI_API_KEY in the server environment."}', content_type='application/json')
     button.click()
-    page.wait_for_function("()=>document.getElementById('notice-text').textContent.includes('XAI_API_KEY')")
-    assert button.get_attribute('title') == 'Read aloud'
+    page.wait_for_function("()=>!document.getElementById('notice').hidden&&document.getElementById('notice-text').textContent.includes('XAI_API_KEY')")
+    page.wait_for_function("()=>document.querySelector('.message-speak').dataset.state==='idle'")
+    page.evaluate("notice('')")
+    reply.update(status=200, body=b'not audio at all', content_type='audio/mpeg')
+    button.click()
+    page.wait_for_function("()=>!document.getElementById('notice').hidden&&document.getElementById('notice-text').textContent.includes('could not play')")
+    page.wait_for_function("()=>document.querySelector('.message-speak').dataset.state==='idle'")

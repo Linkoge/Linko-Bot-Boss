@@ -339,6 +339,9 @@ def test_speak_endpoint_auth_restriction_text_cleanup_and_errors(client, monkeyp
     assert sent == ['Title Some bold link End']
     assert c.post('/api/audio/speak', headers=headers, json={'text': '```\ncode only\n```'}).status_code == 422
     assert c.post('/api/audio/speak', headers=headers, json={'text': 5}).status_code == 422
+    # The browser plays the reply from a blob: URL; without media-src blob: the CSP silently blocks it.
+    csp = c.get('/').headers['content-security-policy']
+    assert "media-src 'self' blob:" in csp
     assert len(speech_text('word. ' * 5000)) <= MAX_SPEECH_CHARS
 
 
@@ -364,7 +367,13 @@ def test_grok_speaker_request_and_error_mapping(monkeypatch):
     assert GrokSpeaker(key, 'eve')._request('Hello') == b'mp3bytes'
     assert seen['url'] == 'https://api.x.ai/v1/tts' and seen['auth'] == f'Bearer {key}'
     assert seen['body']['voice_id'] == 'eve' and seen['body']['language'] == 'en' and seen['body']['text'] == 'Hello'
-    for outcome, code, word in [(HTTPError('u', 401, 'x', {}, None), 502, 'rejected'), (URLError('down'), 502, 'connection'), (b'', 502, 'usable')]:
+    # Documented xAI contract (docs.x.ai text-to-speech): no model/voice field, raw MP3 bytes back.
+    assert set(seen['body']) == {'text', 'voice_id', 'language', 'output_format'}
+    assert seen['body']['output_format'] == {'codec': 'mp3', 'sample_rate': 24000, 'bit_rate': 128000}
+    GrokSpeaker(key, ' Eve ')._request('Hello')
+    assert seen['body']['voice_id'] == 'eve'
+    for outcome, code, word in [(HTTPError('u', 401, 'x', {}, None), 502, 'rejected'), (URLError('down'), 502, 'connection'), (b'', 502, 'usable'),
+                                (HTTPError('u', 404, 'x', {}, None), 502, 'AI_MANAGER_TTS_VOICE'), (HTTPError('u', 400, 'x', {}, None), 502, 'HTTP 400')]:
         monkeypatch.setattr('ai_manager.audio.build_opener', lambda *a, o=outcome: Opener(o))
         with pytest.raises(HTTPException) as error:
             GrokSpeaker(key, 'eve')._request('Hello')
