@@ -2,7 +2,7 @@
   "id": "zero",
   "name": "Zero",
   "role": "manager",
-  "description": "A plain agent with a minimal prompt: only the hard safety rules plus the delegate, inspect and To-Do tools. No briefing or brevity rules; good for brainstorming.",
+  "description": "A lightweight manager with a minimal prompt: only the hard safety rules plus tools to inspect code, delegate to workers and keep To-Dos. No briefing ritual or brevity rules, so it talks naturally. Best for brainstorming, quick questions and loose planning. Less strict about process, so double-check big changes.",
   "prompt": "prompt.md",
   "rules": [],
   "architecture_guide": false,

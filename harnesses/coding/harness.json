@@ -2,7 +2,7 @@
   "id": "coding",
   "name": "Coding",
   "role": "worker",
-  "description": "The standard worker: an isolated Git worktree, permanent checks after every turn, repair rounds, then the application merges and deploys.",
+  "description": "The standard worker that does the actual code changes: works in its own isolated Git worktree and branch, runs the permanent checks after every turn, gets repair rounds if checks fail, then the application merges and deploys. Use this for any real change.",
   "prompt": "prompt.md",
   "rules": "all"
 }

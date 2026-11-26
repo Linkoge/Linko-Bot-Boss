@@ -2,7 +2,7 @@
   "id": "linko",
   "name": "Linko manager",
   "role": "manager",
-  "description": "The full Linko Bot Boss manager: all of RULES.md, briefing, delegation, To-Do, deploy and host-repair rules, every manager action.",
+  "description": "The full manager. Follows every project rule: reads the project brief and memory first, plans, delegates complete tasks to workers, tracks To-Dos, watches deploys and can drive host repair. Replies are short status-style. Best for day-to-day running of projects when you want it careful and by the book. Slower and stricter; less chatty for brainstorming.",
   "prompt": "prompt.md",
   "rules": "all",
   "architecture_guide": true,
