@@ -8,6 +8,20 @@ function showCompactionNotice(project,notice){
   if(project!==state.project)return;
   if(state.history)state.history.compaction_notice=notice;
   $('compaction-notice').hidden=!notice;$('compaction-notice-text').textContent=notice?.text||'';
+  scheduleCompactionHide(project,notice);
+}
+// Every compaction notice leaves after the shared 5 s; a running one only hides (the watcher shows the result later).
+function scheduleCompactionHide(project,notice){
+  clearTimeout(compaction.hideTimer);compaction.hideKey=null;
+  if(!notice)return;
+  compaction.hideKey=`${project}|${notice.state}|${notice.text}`;
+  compaction.hideTimer=setTimeout(()=>{
+    if(project!==state.project)return;
+    $('compaction-notice').hidden=true;
+    if(notice.state==='running'){if(state.history?.compaction_notice)state.history.compaction_notice.autoHidden=true;return;}
+    if(state.history)state.history.compaction_notice=null;
+    api('/api/chat/compact/notice/dismiss',{method:'POST',body:JSON.stringify({project_id:project})}).catch(()=>{});
+  },NOTICE_MS);
 }
 function watchCompaction(project,selection){
   const key=project||'global';clearTimeout(compaction.timers[key]);
@@ -34,7 +48,8 @@ async function startCompaction(){
 $('compact-chat').onclick=()=>startCompaction();
 function renderCompactionNotice(){
   const notice=state.history?.compaction_notice;
-  $('compaction-notice').hidden=!notice;$('compaction-notice-text').textContent=notice?.text||'';
+  $('compaction-notice').hidden=!notice||!!notice.autoHidden;$('compaction-notice-text').textContent=notice?.text||'';
+  if(notice&&!notice.autoHidden&&compaction.hideKey!==`${state.project}|${notice.state}|${notice.text}`)scheduleCompactionHide(state.project,notice);
   if(notice?.state==='running'&&!compaction.timers[state.project||'global'])watchCompaction(state.project,state.selection);
 }
 $('compaction-notice-dismiss').onclick=action(async()=>{

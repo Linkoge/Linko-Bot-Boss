@@ -83,7 +83,10 @@ function submitWithModelSelection(submission){
 function saveDrafts(){try{sessionStorage.setItem('linko-drafts-v1',JSON.stringify({drafts:[...state.drafts],transcripts:[...appliedTranscripts]}));}catch{notice('Draft recovery storage unavailable. Keep this tab open.');}}
 function saveSubmissions(){sessionStorage.setItem(submissionKey,JSON.stringify([...submissions]));}
 const element = (tag, text, cls) => {const node=document.createElement(tag);if(text!==undefined)node.textContent=text;if(cls)node.className=cls;return node;};
-function notice(text){$('notice-text').textContent=text;$('notice').hidden=!text;}
+const NOTICE_MS=5000;
+function autoHide(timers,key,fn){clearTimeout(timers[key]);timers[key]=setTimeout(fn,NOTICE_MS);}
+const noticeTimers={};
+function notice(text){$('notice-text').textContent=text;$('notice').hidden=!text;clearTimeout(noticeTimers.n);if(text)autoHide(noticeTimers,'n',()=>{$('notice').hidden=true;});}
 $('notice-dismiss').onclick=()=>notice('');
 const updateFailures=new Map();
 function renderUpdateStatus(){
@@ -706,7 +709,7 @@ async function copyChat(all){
     }
     await copyText(messages.map(m=>`${messageAuthor(m)}:\n${m.content}`).join('\n\n'));
     $('chat-notice').textContent=all?'Copied the whole chat.':`Copied the latest ${messages.length} message${messages.length===1?'':'s'}.`;
-    $('chat-notice').hidden=false;clearTimeout(state.chatNoticeTimer);state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,4000);
+    $('chat-notice').hidden=false;clearTimeout(state.chatNoticeTimer);state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,NOTICE_MS);
   }finally{state.copyingChat=false;updateChatActions();}
 }
 async function copyText(text){
@@ -731,7 +734,7 @@ function confirmChatReset(archive,keepLast=0){
     event.preventDefault();const button=$('chat-confirm-submit');if(button.disabled)return;button.disabled=true;
     try{
       const result=await api(archive?'/api/chat/archive':'/api/chat/clear',{method:'POST',body:JSON.stringify({project_id:project,conversation_id:history.conversation.id,last_message_id:history.messages.at(-1).id,confirmed:true,title:archive?$('chat-archive-name').value:'',...(archive?{keep_last:keepLast}:{})})});
-      $('chat-confirm').close();$('chat-notice').textContent=result.message;$('chat-notice').hidden=false;clearTimeout(state.chatNoticeTimer);state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,8000);
+      $('chat-confirm').close();$('chat-notice').textContent=result.message;$('chat-notice').hidden=false;clearTimeout(state.chatNoticeTimer);state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,NOTICE_MS);
       if(selection===state.selection){state.source?.close();state.source=null;state.execution=null;$('stop-chat').hidden=true;$('send').disabled=false;await loadHistory(selection);}
     }catch(error){$('chat-confirm-error').textContent=error.message;}finally{button.disabled=false;}
   };

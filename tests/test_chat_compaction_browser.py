@@ -140,3 +140,17 @@ def test_chat_memory_settings_panel_shows_what_is_saved_and_used(page):
     page.wait_for_function("()=>document.querySelector('#chat-memory-threshold').value==='20000'")
     assert page.locator('#chat-memory-model').input_value() == 'test-model'
 
+
+
+def test_every_transient_notification_disappears_after_five_seconds(page, browser_context):
+    seed_history(browser_context)
+    page.reload()
+    page.wait_for_function('()=>state.history?.messages.length===30')
+    page.evaluate("()=>{window.__t0=performance.now();notice('Something happened');"
+                  "showCompactionNotice(state.project,{text:'Chat compacted: test',state:'done'});"
+                  "$('chat-notice').textContent='Copied';$('chat-notice').hidden=false;"
+                  "state.chatNoticeTimer=setTimeout(()=>$('chat-notice').hidden=true,NOTICE_MS);}")
+    assert page.locator('#notice').is_visible() and page.locator('#compaction-notice').is_visible()
+    page.wait_for_function("()=>$('notice').hidden&&$('compaction-notice').hidden&&$('chat-notice').hidden", timeout=9000)
+    assert page.evaluate('performance.now()-window.__t0') >= 4500
+    assert page.evaluate('state.history.messages.length') == 30  # transcript untouched
