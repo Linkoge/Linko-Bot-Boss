@@ -129,7 +129,7 @@ def load(folder, source="external"):
         raise ValueError(f"missing field(s): {', '.join(missing)}")
     if not isinstance(data["id"], str) or not ID.fullmatch(data["id"]):
         raise ValueError("id must be 1-40 lowercase letters, digits, '-' or '_'")
-    for key, limit in (("name", 40), ("description", 300)):
+    for key, limit in (("name", 40), ("description", 500)):
         if not isinstance(data[key], str) or not data[key].strip() or len(data[key]) > limit:
             raise ValueError(f"{key} must be text of 1-{limit} characters")
     name = data["prompt"]

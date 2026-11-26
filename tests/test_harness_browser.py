@@ -60,8 +60,8 @@ def test_harness_picker_keyboard_persistence_task_card_and_mobile(page, browser_
     assert page.locator('#harness-autonomy').input_value() == 'finish_request'
     assert page.locator('#harness-autonomy option[value=rounds]').is_disabled()
     assert 'not yet available' in page.locator('#harness-autonomy option[value=rounds]').inner_text()
-    assert 'Linko' in page.locator('#harness-manager-description').inner_text() or \
-        'RULES.md' in page.locator('#harness-manager-description').inner_text()
+    assert 'full manager' in page.locator('#harness-manager-description').inner_text() or \
+        'by the book' in page.locator('#harness-manager-description').inner_text()
     invalid = page.locator('#harness-invalid').inner_text()
     assert 'sneaky' in invalid and 'cannot set deploy' in invalid
     assert page.locator('#harness-worker option').all_inner_texts() == ['Coding', 'Docs writer']
