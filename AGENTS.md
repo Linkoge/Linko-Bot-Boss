@@ -65,3 +65,9 @@ When: you edit `MANAGER_TOOL` in `ai_manager/orchestration.py` (its description 
 Symptom: `tests/test_harness.py::test_default_harnesses_are_byte_for_byte_todays_prompts_and_tools` fails on `digest(...) == TOOL_BEFORE`.
 Cause: the default harness must keep today's manager tool byte for byte; the test pins its sha256.
 Do: prefer telling the manager through data it already gets (`result_notice` in `ai_manager/chat.py`, the manager context); change the tool and `TOOL_BEFORE` together only when the tool itself must change.
+
+### A deploy repair round after a parallel task touched the same file   (2026-11-27, task de4cb8)
+When: a deploy repair round arrives and the last main commit is "Merge task; preserve user files and save AI versions".
+Symptom: the deploy's full suite fails (the receipt names no test) although your branch passed: main kept the other task's version of a file you both changed and saved yours as `<name> (AI version).<ext>`, so your tests run against code without your change.
+Cause: `merge_into_main` (`ai_manager/pipeline.py`) never overwrites on a conflict; it keeps main's file and adds a copy.
+Do: `git log -1 --format=%B <base>` lists the copies; reconcile each into the real file (one implementation, keep both tasks' tests) and delete the copy in the same commit.
