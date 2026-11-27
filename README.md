@@ -286,6 +286,29 @@ autonomy. Each harness is a folder with `harness.json` and a prompt file. Built-
   with `OFFICE_LIMIT_UNITS`, `OFFICE_CONFIRM_PERCENT` and `OFFICE_CAP_PERCENT`. Office results are committed as files
   and still go through the normal checks, merge and deploy: a worker harness has no no-merge/no-deploy option.
   Permanent coverage: `tests/test_office_harness.py`.
+- **Humanizer** (`humanizer`, worker): makes the owner's document read as written by a person, as its own function:
+  attach any document in the chat and ask to humanize it, optionally with rates ("typos 0.5%", "punctuation 3%"); the
+  manager delegates it with this harness. Level 1 is the AI rewrite in the owner's style (the Writing samples below),
+  level 2 the script `harnesses/humanizer/tools/humanize.py` (also `python -m ai_manager.humanize humanize FILE
+  --typos 0.2 --punct 2 [--seed N] [--out NEW]`): standard library only, no AI, deterministic for a seed, reads .txt,
+  .md and .docx (the text runs of `word/document.xml`; tables untouched) and always writes a NEW file
+  (`<name> humanized.<ext>`). Two separate rates: typos in that % of eligible words (exactly one of insert a keyboard
+  neighbour on English QWERTY or the Georgian standard layout, delete a letter, swap two adjacent letters; at most one
+  per word) and deletion of that % of eligible `, ; : . ! ?` (never insertion; the last mark of a line or paragraph is
+  kept). Never touched: tokens with a digit, words of 1-2 letters, capitalised words (names, and sentence-initial
+  words too), URLs, emails, paths and identifiers, inline and fenced code, text inside quotes, markdown table rows.
+  `humanize.py measure FILE` prints a sample's statistics. "Humanize" runs both levels; "only typos" just the script.
+  Permanent coverage: `tests/test_humanizer.py`, `tests/test_writing_browser.py`.
+
+**Writing settings.** Settings > Writing (on Main and on every instance; per profile, since each instance keeps its
+own in its database and Main does not push it) holds an English and a Georgian style sample (2-3 paragraphs of the
+owner's own writing, at most 6000 characters each), the default typo rate (0.2%) and the default punctuation rate
+(2%), via owner-only `GET`/`PUT /api/writing/settings` (`ai_manager/writing.py`). Saving measures each sample with the
+Humanizer script (average sentence length, commas per sentence, paragraph length, frequency of ! ? : -) and stores the
+statistics. Every Office and Humanizer task prompt carries them as `writing_style` (`ai_manager/core.py`): the samples
+with their statistics per language, the punctuation habits (periods and question marks normal, fewer commas than
+typical AI, exclamation marks rare, hyphens moderate, colons occasional, no semicolons, no em or en dashes) and the
+Humanizer's default rates.
 
 **Choosing.** The round ☼ button left of the chat menu (▾) opens the harness picker for the current chat. It has the
 manager harness, its autonomy and, for a project, the default worker harness, each with a short description. Every
@@ -863,7 +886,7 @@ office controls are `.office-only`, hidden by CSS outside `body.office`).
   fresh empty chat in one click (an open chat that is still empty is kept instead of making another). On a wide screen
   (over 900 px) the list stays open beside the chat and remembers open/closed; on a phone it slides in over the chat
   and closes after you pick one. Both buttons stay visible on top. The list's **Settings** button opens the settings
-  view (Chat memory, Instructions, Sign out), since office mode hides the tabs.
+  view (Writing, Instructions, Sign out), since office mode hides the tabs.
 - **List.** Flat, most recently active first (newest owner/assistant message), pinned chats at the top, the current
   chat highlighted. Per chat: ☆/★ pin, ✎ rename, × delete with a confirm. Delete moves the chat to the chat archive
   (`archive:<id>` + `chat_archives`, titled with the chat's name), never a hard delete; deleting the open chat opens the

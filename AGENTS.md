@@ -53,3 +53,9 @@ When: a test or fixture deletes every `AI_MANAGER_*` (or similar) variable to is
 Symptom: the test passes but is slow again (fsync per commit, ~85 ms argon2 per password); smoke drifts past its 45 s budget, worst on a loaded host.
 Cause: `tests/conftest.py` sets the suite's speed switches as env vars (`AI_MANAGER_SQLITE_SYNCHRONOUS`, `AI_MANAGER_TEST_WEAK_PASSWORD_HASH`) so server subprocesses inherit them.
 Do: keep `SYNCHRONOUS_ENV` (`ai_manager/db.py`) and `WEAK_HASH_ENV` (`ai_manager/auth.py`) when stripping (see `tests/test_public_access.py` `clean_env`); compare smoke timings under load (4 `python3 -c 'while True: pass'`), not just idle.
+
+### New Settings panel is invisible on instances   (2026-11-27, task 6b2525)
+When: you add an `<article class="panel">` to `#view-settings` that instances (office mode) must show too.
+Symptom: it works on Main, but on an instance the panel never appears; no error, only `tests/test_restricted_browser.py` (exact list of visible settings headings) notices.
+Cause: `ai_manager/static/style.css` hides every settings article on `.restricted` except a `:not(#id)` whitelist.
+Do: add the panel's id to that `:not(...)` list and its heading to the test's list; check with `pytest -q tests/test_restricted_browser.py`.

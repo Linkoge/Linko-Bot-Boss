@@ -24,7 +24,7 @@ from .attachments import Attachments
 from .audio import Audio
 from .auth import Auth
 from .auto_mode import AutoMode
-from . import chat_memory
+from . import chat_memory, writing
 from .chat import Chat
 from .chat_memory import NOTICE as COMPACTION_NOTICE
 from .codex import CodexError
@@ -168,6 +168,17 @@ class ChatTrashBody(BaseModel):
 
 class InstructionsBody(BaseModel):
     content: str = Field(max_length=10000)
+
+
+class WritingSamples(BaseModel):
+    en: str | None = Field(default=None, max_length=writing.SAMPLE_LIMIT)
+    ka: str | None = Field(default=None, max_length=writing.SAMPLE_LIMIT)
+
+
+class WritingBody(BaseModel):
+    samples: WritingSamples | None = None
+    typo_rate: float | None = None
+    punct_rate: float | None = None
 
 
 class ProjectIdeaBody(BaseModel):
@@ -944,6 +955,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def global_instructions(body: InstructionsBody):
         db.set_setting("global_instructions", body.content)
         return {"updated": True}
+
+    # Writing (Humanizer and Office style): per profile, so an instance saves its own (not Main's global settings).
+    @app.get("/api/writing/settings", dependencies=[Depends(require_owner)])
+    def writing_settings():
+        return writing.view(db)
+
+    @app.put("/api/writing/settings", dependencies=[Depends(require_owner)])
+    def save_writing_settings(body: WritingBody):
+        value = body.model_dump(exclude_none=True)
+        if "samples" in value and not value["samples"]:
+            value.pop("samples")
+        writing.save(db, value)
+        return writing.view(db)
 
     @app.get("/")
     def index():

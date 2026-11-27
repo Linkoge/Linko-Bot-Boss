@@ -22,7 +22,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import fence, isolation, scratch
+from . import fence, isolation, scratch, writing
 from .attachments import native_image
 from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
@@ -560,6 +560,8 @@ class Core:
         selected = self.db.one("SELECT payload FROM events WHERE task_id=? AND kind='task.context' ORDER BY seq DESC LIMIT 1", (task["id"],))
         if selected:
             value["task_context"] = json.loads(selected["payload"])
+        if (harnesses.task_choice(self.db, task["id"]) or {}).get("id") in writing.HARNESSES:
+            value["writing_style"] = writing.prompt(self.db)  # the owner's samples and punctuation habits
         if task["native_thread"]:
             value["continuation"] = ("This task already has work in the workspace. Inspect it and the git log first; "
                                      "do not repeat finished work or replay uncertain operations.")
