@@ -376,3 +376,5 @@ body:not(.office) .office-only{display:none!important}
 .project-menu-version{display:flex;flex-wrap:wrap;align-items:center;gap:4px 10px;padding:6px 10px 8px;border-bottom:1px solid var(--border);font-size:13px}
 .project-menu-version-label{font-weight:600}.project-menu-version-times{font-size:12px}
 .machine-version{padding:0 8px;font-size:12px;white-space:nowrap}.machine-version.latest{color:#5fd38d}.machine-version.behind{color:#f0a14a}.machine-version.offline{color:var(--muted)}
+
+.host-agent-line{margin:10px 0 0!important;padding-top:8px;border-top:1px solid var(--border);overflow-wrap:anywhere}.host-agent-line[data-state=stuck],.host-agent-line[data-state=login_expired]{color:#e4a0a0}.host-agent-line[data-state=running]{color:#8fd6b4}#harness-button[data-host-agent=bad]::before{content:"";position:absolute;top:6px;left:6px;width:7px;height:7px;border-radius:50%;background:#e06c6c}

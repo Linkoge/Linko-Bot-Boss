@@ -150,7 +150,8 @@ class Scheduler:
 
             repair = Repair(self.settings.data_dir)
             if action == 'repair_status':
-                return repair.status()
+                from .repair_agent import compact_summary
+                return compact_summary(self.settings.data_dir)  # bounded: the full receipts overflowed the tool output
             from .model_settings import repair_route
             try:
                 await self.chat.server.start()

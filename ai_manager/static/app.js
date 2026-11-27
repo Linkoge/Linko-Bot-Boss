@@ -376,7 +376,21 @@ function hostRepairLabels(){
   const current=state.history?.conversation?.id;
   return (state.portfolio?.host_repair||[]).filter(r=>!r.conversation_known||r.conversation_id===current).map(hostRepairLabel);
 }
+// Compact host-agent line in the harness menu (idle / running / waiting / stuck / login expired); a red dot on the button when it needs the owner.
+function hostAgentText(a){
+  const ago=t=>{if(!t)return 'never';const m=Math.max(0,Math.round((Date.now()/1000-t)/60));return m<1?'just now':m+' min ago';};
+  const head={idle:'Host agent idle',running:'Host agent running',waiting:'Host agent waiting to retry',stuck:'Host agent stuck',login_expired:'Host agent login expired'}[a.state]||'Host agent';
+  const job=a.job?` · ${a.job.title}${a.started_at?' · started '+ago(a.started_at):''}`:'';
+  return `${head}${job} · heartbeat ${ago(a.heartbeat)}${a.last_error?' · '+a.last_error:''}`;
+}
+function renderHostAgent(){
+  const line=$('host-agent-line'),a=state.restricted?null:state.portfolio?.host_agent;
+  const show=!!a&&a.installed;line.hidden=!show;line.textContent=show?hostAgentText(a):'';line.dataset.state=show?a.state:'';
+  const bad=show&&['stuck','login_expired'].includes(a.state);
+  if(bad)$('harness-button').dataset.hostAgent='bad';else delete $('harness-button').dataset.hostAgent;
+}
 function renderProgress(stale=false){
+  renderHostAgent();
   const chip=$('progress-chip'),progress=stale?null:state.portfolio?.progress,queue=!!progress?.active,host=stale?[]:hostRepairLabels();
   const labels=[...(queue?[progress.label]:[]),...host],show=labels.length>0&&!state.execution,label=labels.join('  |  ');
   clearTimeout(state.progressTimer);

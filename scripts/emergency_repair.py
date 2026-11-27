@@ -109,6 +109,9 @@ def elevated(invoker):
         os.seteuid(invoker[0])
 
 
+AUTH_WORDS = ('oauth token has expired', 'token expired', 'login expired', 'not logged in', 'please run /login',
+              'authentication_error', 'authentication error', 'invalid api key', 'failed to authenticate',
+              'invalid authentication credentials', '401 unauthorized')
 LIMIT_WORDS = ('usage limit', 'rate limit', 'usage_limit', 'rate_limit', 'usagelimit', 'ratelimit', 'quota', '429')
 
 
@@ -361,6 +364,11 @@ class Repair:
             text = output.read_text()
         diagnostics = (error or log.read_text(errors='replace')[-4000:]).lower()
         limit = any(word in diagnostics for word in LIMIT_WORDS)
+        if (returncode or error) and any(word in diagnostics for word in AUTH_WORDS):
+            row['auth_expired'] = True  # the provider login on this host needs the owner; retrying cannot help
+            self.save(row)
+            raise ProviderFailure('Agent login expired - run claude /login (or codex login) as the host agent user. '
+                                  + (error or diagnostics)[-500:], False)
         retryable = limit or any(word in diagnostics for word in (
             'connection', 'network', 'overloaded', '503', '502', 'timed out'))
         if returncode or error:
@@ -384,6 +392,8 @@ class Repair:
         return True
 
     def run(self, provider=None):
+        with contextlib.suppress(OSError):
+            atomic(self.root / 'heartbeat.json', {'at': time.time(), 'pid': os.getpid()})
         try:
             with locked(self.root / 'run.lock', False) as lock:
                 self.detect()

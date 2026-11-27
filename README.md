@@ -1165,8 +1165,13 @@ Requests, instructions, attempts, status, errors, final result and pending chat 
 receipts under `DATA/repair/requests`; native JSONL/output logs live under `DATA/repair/runs`. The request key is
 idempotent forever. A different request while a repair is unfinished is accepted and put in a FIFO line (ordered by
 creation time) behind it: the `emergency_repair` response and the receipt notice give `position` (1 = active/next),
-`queued` and the IDs `ahead`, and `repair_status` / `GET /api/repair` list every receipt with its `position` (null once
-finished). Only the head of the line runs, even while it waits for a bounded retry; when it finishes (succeeded or
+`queued` and the IDs `ahead`, and `GET /api/repair` lists every receipt with its `position` (null once
+finished). The manager's `repair_status` returns a bounded summary instead (`ai_manager/repair_agent.py`: state, current
+job, last 5 jobs with one-line results, last error). The same status (`idle`/`running`/`waiting`/`stuck`/`login_expired`,
+job, started, heartbeat, last error; also `GET /api/repair/agent` and `host_agent` in the portfolio) shows as one line in
+the harness menu, with a red dot on the button when stuck or the login expired. The launcher writes
+`repair/heartbeat.json` on every tick; a running job silent for 20 min, or no tick for 10 min, is `stuck`; provider
+auth failures are detected explicitly, not retried, and shown as "Agent login expired - run `claude /login`". Only the head of the line runs, even while it waits for a bounded retry; when it finishes (succeeded or
 failed) the next starts in the same tick, and each request keeps its own receipt and result notice in its originating
 chat. A stuck head cannot block the line forever: a request that has held the line longer than `max_active_seconds`
 (installed config, default 6 hours, retries and waits included; each turn is still bounded by `turn_seconds`) is marked

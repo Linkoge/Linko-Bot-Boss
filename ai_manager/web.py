@@ -39,6 +39,7 @@ from .onboarding import NeedsAuthKey, Onboarding, Unknown
 from .orchestration import Scheduler
 from .pipeline import RESTRICTED, Pipeline
 from .progress import progress
+from .repair_agent import agent_status
 from .repair_progress import host_requests
 from .project_ideas import ProjectIdeas
 from .provision import DEVICE_RE, ProvisionError
@@ -536,6 +537,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     def repair_status():
         from scripts.emergency_repair import Repair
         return Repair(settings.data_dir).status()
+
+    @app.get('/api/repair/agent', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def repair_agent():
+        from .repair_agent import agent_status
+        return agent_status(settings.data_dir)
 
     @app.post('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
     async def request_repair(body: dict):
@@ -1112,6 +1118,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "has_older_tasks": task_page['has_more'],
             **execution_summary(db, project_id, through=execution_through, older=older == 'executions'),
             "progress": progress(db, scheduler.pipeline, project_id),
+            "host_agent": None if restricted else agent_status(settings.data_dir),
             "host_repair": [] if restricted else [
                 {**r, "conversation_known": bool(r.get("conversation_id") and db.one(
                     "SELECT 1 FROM conversations WHERE id=?", (r["conversation_id"],)))}
