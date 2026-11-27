@@ -1,4 +1,5 @@
 import json
+import os
 import shutil
 import sqlite3
 import time
@@ -9,6 +10,15 @@ from pathlib import Path
 from .fsmode import private
 from .history import SCHEMA as HISTORY_SCHEMA
 from .history import install as install_history
+
+# Every commit is fsynced (synchronous=FULL). Only disposable data may opt out: the test suite sets this to OFF
+# (tests/conftest.py), because a check whose temporary directory is on a real disk otherwise spends most of its time in
+# fsync. Any other value keeps FULL.
+SYNCHRONOUS_ENV = "AI_MANAGER_SQLITE_SYNCHRONOUS"
+
+
+def synchronous():
+    return "OFF" if os.environ.get(SYNCHRONOUS_ENV, "").strip().upper() == "OFF" else "FULL"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS schema_version(version INTEGER PRIMARY KEY);
@@ -232,7 +242,7 @@ class Database:
         install_history(conn)
         conn.execute("PRAGMA foreign_keys=ON")
         conn.execute("PRAGMA busy_timeout=10000")
-        conn.execute("PRAGMA synchronous=FULL")
+        conn.execute(f"PRAGMA synchronous={synchronous()}")
         return conn
 
     @contextmanager

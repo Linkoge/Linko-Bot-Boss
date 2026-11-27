@@ -7,6 +7,9 @@ import pytest
 # Smoke takes ~21s idle (105 tests). The ~2x margin absorbs a host shared with other projects' parallel suites and gates
 # a smoke that really slows down still fails. The deploy-flow test lifts it for its nested gate (LINKO_SMOKE_BUDGET_SECONDS=0).
 SMOKE_BUDGET_SECONDS = 45
+# Test databases are disposable: no fsync per commit (ai_manager/db.py synchronous()). With the temporary directory on a
+# real disk instead of tmpfs, fsync alone took smoke from ~38s to ~80s. Set here so server subprocesses inherit it.
+os.environ.setdefault('AI_MANAGER_SQLITE_SYNCHRONOUS', 'OFF')
 # The wall-clock budget guards the real smoke gate. A test that runs the gate as a nested step of something else (the
 # deploy-flow test) sets this to 0: what it verifies is the pipeline, and the nested run's 180s timeout still applies.
 BUDGET_ENV = 'LINKO_SMOKE_BUDGET_SECONDS'

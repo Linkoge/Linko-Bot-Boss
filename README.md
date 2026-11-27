@@ -50,7 +50,10 @@ rules 8–9; worker-only: rule 11). The manager and worker prompts themselves li
    (`python -m pytest -q -m smoke`, 180 s) plus the test files the branch added or changed (600 s). Only permanent
    repository suites can block delivery; one-off probes are informational. Probes run under a 60 s timeout. Checks run
    with disposable `AI_MANAGER_DATA`, `PYTHONPATH` set to the worktree and `AI_MANAGER_SECURE_COOKIE=0`, using
-   the project shared checkout's `.venv/bin/python` when available. Each worker prompt, including repair turns,
+   the project shared checkout's `.venv/bin/python` when available. The test suite's disposable databases skip the
+   per-commit fsync (`tests/conftest.py` sets `AI_MANAGER_SQLITE_SYNCHRONOUS=OFF`; the app itself always uses
+   `synchronous=FULL`), so the smoke suite keeps its 45 s budget even when the temporary directory is on a real disk.
+   Each worker prompt, including repair turns,
    includes an exact ready-to-run self-check command using the manager installation's interpreter and absolute script
    path, so it also works from other projects. After committing, run it before finishing:
 

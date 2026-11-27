@@ -7,7 +7,7 @@ import sqlite3
 from pathlib import Path
 
 from . import model_settings
-from .db import Database
+from .db import Database, synchronous
 from .providers import provider_of
 
 
@@ -21,7 +21,7 @@ class ExistingDatabase(Database):
         conn = sqlite3.connect(self.path.as_uri() + '?mode=rw', uri=True, timeout=1)
         conn.row_factory = sqlite3.Row
         conn.execute('PRAGMA foreign_keys=ON')
-        conn.execute('PRAGMA synchronous=FULL')
+        conn.execute(f'PRAGMA synchronous={synchronous()}')  # FULL unless disposable test data (db.py)
         return conn
 
 

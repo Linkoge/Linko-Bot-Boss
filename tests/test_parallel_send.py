@@ -152,3 +152,4 @@ def test_instance_server_rejects_parallel_send(pair):  # noqa: F811
     assert not pair[3].state.db.all("SELECT 1 FROM messages")
     # Main accepts the field; outside a project chat it is refused plainly.
     assert owner.post('/api/chat', json={'content': 'Hi', 'parallel': True}).status_code == 409
+
