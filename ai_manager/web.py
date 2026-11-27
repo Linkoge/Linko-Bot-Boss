@@ -277,7 +277,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     reviews = MemoryReviews(memory, settings)
     release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
     # The access switch (access.py) applies to instances only; Main ignores the flag.
-    gate = access.Gate(db) if restricted else None
+    gate = access.Gate(db, access.TTL) if restricted else None
     stopped = set()
 
     async def lock_out():

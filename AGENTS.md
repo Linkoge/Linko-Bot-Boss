@@ -47,3 +47,9 @@ When: you add a folder to `BUILTIN_FOLDERS` in `ai_manager/harness.py`.
 Symptom: harness, browser and code-view tests fail on an exact set or list of built-in ids or picker option names.
 Cause: `tests/test_harness.py` (catalog set, worker options, manager context), `tests/test_harness_browser.py` (worker `<option>` texts) and `tests/test_code_view.py` (`START` probe set) pin the built-ins.
 Do: update all four in the same commit; run those three files, the browser one included.
+
+### Stripping AI_MANAGER_* env silently re-slows smoke   (2026-11-27, task 72503a)
+When: a test or fixture deletes every `AI_MANAGER_*` (or similar) variable to isolate itself from the host.
+Symptom: the test passes but is slow again (fsync per commit, ~85 ms argon2 per password); smoke drifts past its 45 s budget, worst on a loaded host.
+Cause: `tests/conftest.py` sets the suite's speed switches as env vars (`AI_MANAGER_SQLITE_SYNCHRONOUS`, `AI_MANAGER_TEST_WEAK_PASSWORD_HASH`) so server subprocesses inherit them.
+Do: keep `SYNCHRONOUS_ENV` (`ai_manager/db.py`) and `WEAK_HASH_ENV` (`ai_manager/auth.py`) when stripping (see `tests/test_public_access.py` `clean_env`); compare smoke timings under load (4 `python3 -c 'while True: pass'`), not just idle.

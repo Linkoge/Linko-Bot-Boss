@@ -53,6 +53,8 @@ rules 8–9; worker-only: rule 11). The manager and worker prompts themselves li
    the project shared checkout's `.venv/bin/python` when available. The test suite's disposable databases skip the
    per-commit fsync (`tests/conftest.py` sets `AI_MANAGER_SQLITE_SYNCHRONOUS=OFF`; the app itself always uses
    `synchronous=FULL`), so the smoke suite keeps its 45 s budget even when the temporary directory is on a real disk.
+   For the same reason test passwords use minimal argon2 parameters (`AI_MANAGER_TEST_WEAK_PASSWORD_HASH=1`, also set
+   there; the app itself always uses argon2's defaults).
    Each worker prompt, including repair turns,
    includes an exact ready-to-run self-check command using the manager installation's interpreter and absolute script
    path, so it also works from other projects. After committing, run it before finishing:
