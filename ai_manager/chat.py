@@ -2,6 +2,7 @@ import asyncio
 import hashlib
 import json
 import time
+import re
 from contextlib import contextmanager
 from datetime import datetime, timezone
 
@@ -29,6 +30,7 @@ from .registry import Registry
 from .todos import Todos
 
 CHAT_PAGE_SIZE = 30
+AUTOPILOT_WORD = re.compile(r"auto-?pilot", re.I)  # the owner asks about Autopilot: add its setup note
 
 
 # Application-created transport rows only; never classify by text or JSON shape.
@@ -491,6 +493,12 @@ class Chat:
         if self.autopilot and self.autopilot.config():  # absent everywhere Autopilot is not configured
             from .autopilot import Goals, context as autopilot_context
             context['autopilot'] = autopilot_context(Goals(self.db), self.autopilot, conversation['project_id'])
+        if (self.autopilot and not source and not self.restricted and AUTOPILOT_WORD.search(content or '')
+                and self.autopilot.level() != 'full'):
+            # "set up autopilot": the manager cannot sudo before setup, so it hands the owner the one setup command.
+            from .autopilot import setup_note
+            if note := setup_note(self.autopilot.settings, self.autopilot):
+                context['autopilot'] = {**context.get('autopilot', {}), **note}
         prompt = {"message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
         if source:
             prompt["worker_result"] = self.result_notice(source)

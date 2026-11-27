@@ -23,7 +23,7 @@ async function loadHarnessEnvironments(){
   renderHarnessEnvironments();
 }
 function harnessQuery(project){const query=new URLSearchParams();if(project)query.set('project_id',project);return query;}
-function harnessControls(){return [...$('harness-menu').querySelectorAll('select:not(:disabled),button:not(:disabled)')].filter(e=>e.getClientRects().length);}
+function harnessControls(){return [...$('harness-menu').querySelectorAll('select:not(:disabled),button:not(:disabled),input:not(:disabled),a[href]')].filter(e=>e.getClientRects().length);}
 function harnessOptions(select,items,current,label=item=>item.name){
   select.replaceChildren();
   for(const item of items){const option=element('option',label(item));option.value=item.id;if(item.available===false){option.disabled=true;}select.append(option);}

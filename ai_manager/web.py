@@ -29,7 +29,7 @@ from . import chat_memory, writing
 from .chat import Chat
 from .chat_memory import NOTICE as COMPACTION_NOTICE
 from .codex import CodexError
-from .config import Settings
+from .config import CODE_ROOT, Settings
 from .core import Core, Tasks
 from .db import Database
 from .execution_ui import event_page, execution_page, execution_summary
@@ -262,9 +262,9 @@ class GoalBody(BaseModel):
     deadline: str | None = Field(default=None, max_length=10)
 
 
-class AutopilotPause(BaseModel):
-    model_config = {"extra": "forbid"}  # the pause button only: no field can set a lock or a limit
-    paused: bool = Field(strict=True)
+class AutopilotSwitch(BaseModel):
+    model_config = {"extra": "forbid"}  # the soft on/off switch only: no field can set a lock or a limit
+    on: bool = Field(strict=True)
 
 
 def create_app(settings: Settings | None = None, server=None, worker_factory=None, github_fetch=None):
@@ -498,8 +498,10 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "restricted": restricted,
             "office": restricted,  # every instance but Main is restricted: office mode shows only the chat
             "scheduler_running": bool(scheduler.job and not scheduler.job.done()),
-            # The header badge; only for the signed-in owner. A restricted instance is always off (no sudo probe).
+            # The harness menu's Autopilot switch; only for the signed-in owner. A restricted instance is always off
+            # (no sudo probe). autopilot_on is the local soft switch, meaningful only on full.
             "autopilot": (autopilot_locks.level() if session else None),
+            "autopilot_on": (autopilot.on(db) if session and not restricted else None),
         }
 
     @app.get('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
@@ -1299,29 +1301,33 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             db.event(conn, "question.answered", {"question_id": question_id}, execution_id=question["execution_id"])
         return {"result": "accepted"}
 
-    # Autopilot: read the locks and the setup guide, manage goals, pause. There is deliberately no route that sets a
-    # lock: the config lock is this machine's env file, the OS lock its owner-installed sudoers drop-in.
+    # Autopilot: read the locks, the one setup command, the soft on/off switch, goals. There is deliberately no route
+    # that sets a lock: both come from scripts/autopilot_setup.sh, which the owner runs with sudo on this machine.
     autopilot_only = [Depends(require_owner), Depends(unrestricted)]
     goals = scheduler.autopilot.goals
 
     def autopilot_view():
-        return {"status": autopilot_locks.status(), "guide": autopilot.guide(settings),
-                "paused": bool(db.setting(autopilot.PAUSED)), "goals": goals.list(),
-                "check_minutes": autopilot.CHECK_SECONDS // 60, "pass_percent": int(autopilot.PASS * 100),
-                "stall_rounds": autopilot.STALL_ROUNDS}
+        return {"status": autopilot_locks.status(), **autopilot.setup_view(settings, autopilot_locks, db),
+                "goals": goals.list()}
 
     def configured():
         if not autopilot_locks.config():
-            raise ValueError(f"Autopilot is off on this machine: add {autopilot.ENV}={autopilot.ENV_VALUE} to "
-                             f"{settings.env_file} and restart (Settings > Autopilot)")
+            raise ValueError("Autopilot is not set up on this machine: run the setup command in Settings > Autopilot "
+                             f"(it adds {autopilot.ENV}={autopilot.ENV_VALUE} to {settings.env_file})")
 
     @app.get("/api/autopilot", dependencies=autopilot_only)
     def autopilot_status():
         return autopilot_view()
 
-    @app.post("/api/autopilot/pause", dependencies=autopilot_only)
-    def autopilot_pause(body: AutopilotPause):
-        db.set_setting(autopilot.PAUSED, body.paused)
+    @app.get("/api/autopilot/docs", dependencies=autopilot_only)
+    def autopilot_docs():  # Settings > Autopilot "Details": docs/AUTOPILOT.md, read on demand
+        return Response((CODE_ROOT / "docs" / "AUTOPILOT.md").read_text(), media_type="text/plain; charset=utf-8")
+
+    @app.post("/api/autopilot/switch", dependencies=autopilot_only)
+    def autopilot_switch(body: AutopilotSwitch):
+        if body.on and autopilot_locks.level() != "full":
+            raise ValueError("Autopilot is not set up on this machine: run the setup command in Settings > Autopilot")
+        db.set_setting(autopilot.PAUSED, not body.on)
         return autopilot_view()
 
     @app.post("/api/autopilot/goals", dependencies=autopilot_only)

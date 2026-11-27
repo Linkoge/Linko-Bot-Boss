@@ -18,6 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ON_DEMAND = {
     "scripts": "worker self-check command text, onboarding launcher, host repair (main instance installs)",
     "deploy": "Windows enrollment script download (main instance onboarding)",
+    "docs": "Settings > Autopilot Details page (docs/AUTOPILOT.md, read per request; never on restricted instances)",
 }
 START = '''
 import pathlib, sys

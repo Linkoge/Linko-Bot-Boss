@@ -70,7 +70,9 @@ def test_harness_picker_keyboard_persistence_task_card_and_mobile(page, browser_
     page.keyboard.press('Tab')
     assert page.evaluate('document.activeElement.id') == 'harness-autonomy'
     page.keyboard.press('Shift+Tab')
-    page.keyboard.press('Shift+Tab')  # wraps inside the menu
+    page.keyboard.press('Shift+Tab')  # wraps inside the menu, to its last control: Autopilot's "Set up" link
+    assert page.evaluate('document.activeElement.id') == 'autopilot-setup-link'  # the suite is never set up
+    page.keyboard.press('Shift+Tab')  # the disabled switch is skipped
     assert page.evaluate('document.activeElement.id') == 'harness-worker'
 
     page.locator('#harness-manager').select_option('zero')
@@ -127,6 +129,8 @@ def test_environment_picker_sets_another_instance_and_shows_unreachable(page, br
         assert page.locator('#harness-environment').input_value() == ''  # Main is the default
         assert page.locator('#harness-model-group').count() == 0  # models are chosen only in the model picker
         main_labels = page.locator('#harness-menu label:visible').all_inner_texts()
+        assert main_labels[-1] == 'Autopilot'  # this machine's own switch: only while Main is the environment
+        main_labels.remove('Autopilot')
 
         page.locator('#harness-environment').select_option('kaxa')
         page.wait_for_function("()=>harnessMenu.data&&harnessMenu.env==='kaxa'&&"

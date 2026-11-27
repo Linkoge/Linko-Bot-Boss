@@ -3,8 +3,9 @@
 Two locks, both local to the machine and both outside this application's reach:
 - config lock: AI_MANAGER_AUTOPILOT=full in the process environment (this machine's own env file). Read once from the
   environment (config.Settings); there is no database setting, API or UI control that sets it, and nothing syncs it.
-- OS lock: passwordless sudo for this user from a sudoers drop-in the owner installs by hand. Detected with `sudo -n
-  true`; this module only ever prints the drop-in's text, it never writes one.
+- OS lock: passwordless sudo for this user from a sudoers drop-in the owner installs. Detected with `sudo -n true`.
+Both are set by scripts/autopilot_setup.sh, which the owner runs once with sudo; the app only shows its command line.
+On top, a per-machine soft switch (the PAUSED setting, local DB, never synced) can stop Autopilot; it cannot start it.
 Level: full = both, partial = exactly one, off = neither. A restricted instance is always off and never probes sudo.
 Only full runs the loop. Goals may be saved while the config lock is set (partial or full).
 
@@ -126,50 +127,57 @@ def env_line_present(path):
         return False
 
 
-def guide(settings, user=None):
-    """Everything the owner copies to turn Autopilot on or off on this machine. Text only: nothing here is applied."""
-    user = user or getpass.getuser()
-    env_file = str(settings.env_file)
-    rule = f"{user} ALL=(ALL:ALL) NOPASSWD: ALL"
-    try:  # the separate worker user (README "How work runs") needs the same rule for workers to use sudo
+DEFAULT_ENV_FILE = "~/.config/linko-bot-manager.env"
+ROLE_ENV = "AI_MANAGER_MACHINE_ROLE"  # =main on the owner's Main: no setup command there, and the script refuses
+
+
+def is_main():
+    return os.getenv(ROLE_ENV, "").strip().lower() == "main"
+
+
+def on(db):
+    """The per-machine soft switch (local DB, never synced). It can only stop work: running still needs both locks."""
+    return not db.setting(PAUSED)
+
+
+def worker_user():
+    try:  # the separate worker user (README "How work runs") gets the same sudo rule so workers can use sudo
         from . import isolation
         found = isolation.detect(isolation.CONFIG)
-        worker = found.user if found else None
+        return found.user if found else None
     except Exception:
-        worker = None
-    content = rule + "\n" + (f"{worker} ALL=(ALL:ALL) NOPASSWD: ALL\n" if worker else "")
-    staged = "/tmp/linko-autopilot"
-    return {
-        "env_line": f"{ENV}={ENV_VALUE}", "env_file": env_file,
-        "env_file_exists": Path(env_file).is_file(), "env_line_present": env_line_present(env_file),
-        "env_command": f"printf '%s\\n' '{ENV}={ENV_VALUE}' >> {shlex.quote(env_file)}",
-        "user": user, "worker_user": worker,
-        "sudoers_path": SUDOERS, "sudoers_content": content,
-        "sudoers_install": "\n".join([
-            f"printf '%s' {shlex.quote(content)} > {staged}",
-            f"sudo visudo -cf {staged}",
-            f"sudo install -o root -g root -m 0440 {staged} {SUDOERS}",
-            f"sudo visudo -cf {SUDOERS}",
-            f"rm {staged}"]),
-        "sudoers_validate": f"sudo visudo -cf {SUDOERS}",
-        "override_path": OVERRIDE, "override_content": "[Service]\nNoNewPrivileges=no\n",
-        "override_install": "\n".join([
-            f"mkdir -p ~/.config/systemd/user/{UNIT}.service.d",
-            f"printf '[Service]\\nNoNewPrivileges=no\\n' > {OVERRIDE}",
-            "systemctl --user daemon-reload"]),
-        "restart": f"systemctl --user restart {UNIT}",
-        "etckeeper_install": "sudo apt-get install -y etckeeper\nsudo etckeeper commit 'baseline before autopilot' || true",
-        "etckeeper_installed": bool(shutil.which("etckeeper")),
-        "snapshot_line": "AI_MANAGER_SNAPSHOT_CMD=ssh owner@hypervisor /usr/local/bin/snapshot-vm botos",
-        "snapshot_configured": bool(settings.snapshot_cmd),
-        "screenshot_line": "AI_MANAGER_SCREENSHOT_CMD=import -window root",
-        "off": "\n".join([
-            f"sed -i '/^{ENV}=/d' {shlex.quote(env_file)}",
-            f"sudo rm -f {SUDOERS}",
-            f"rm -f {OVERRIDE} && systemctl --user daemon-reload",
-            f"systemctl --user restart {UNIT}"]),
-        "approvals": list(APPROVALS),
-    }
+        return None
+
+
+def setup_command(settings, user=None, worker=None):
+    """The one line the owner pastes in a terminal on this machine (scripts/autopilot_setup.sh). Never run by the app."""
+    from .config import CODE_ROOT
+    user = user or getpass.getuser()
+    argv = ["sudo", "bash", str(CODE_ROOT / "scripts" / "autopilot_setup.sh"), "--user", user]
+    if Path(settings.env_file).expanduser() != Path(DEFAULT_ENV_FILE).expanduser():
+        argv += ["--env-file", str(settings.env_file)]
+    if worker:
+        argv += ["--worker", worker]
+    return shlex.join(argv)
+
+
+def setup_view(settings, locks, db):
+    status = locks.status()
+    main = is_main()
+    return {"set_up": status["level"] == "full", "on": on(db), "main": main,
+            "command": "" if main or settings.restricted else setup_command(settings, worker=worker_user())}
+
+
+def setup_note(settings, locks):
+    """Manager context when the owner mentions Autopilot on a machine where it is not set up yet."""
+    if settings.restricted:
+        return None
+    if is_main():
+        return {"setup": "This is the owner's Main machine: Autopilot is not for it (use a dedicated machine)."}
+    return {"level": locks.level(), "setup": (
+        "Autopilot is not set up on this machine. If the owner asks to set it up, reply with exactly this one command "
+        "to paste in a terminal on this machine (you cannot run sudo before setup, so do not try it yourself); it asks "
+        "for confirmation, and --remove undoes it:"), "command": setup_command(settings, worker=worker_user())}
 
 
 # Goals ----------------------------------------------------------------------------------------------------------------

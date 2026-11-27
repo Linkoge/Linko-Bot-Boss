@@ -27,7 +27,7 @@ uvicorn.run(create_app(s, FakeServer(s)), host='127.0.0.1', port=s.port, log_lev
 
 
 @contextmanager
-def served(tmp_path, office=True):
+def served(tmp_path, office=True, extra_env=None):
     (tmp_path / 'work').mkdir()
     with socket.socket() as sock:
         sock.bind(('127.0.0.1', 0))
@@ -38,6 +38,7 @@ def served(tmp_path, office=True):
         env.update(AI_MANAGER_RESTRICTED='1', AI_MANAGER_PROJECT=str(tmp_path / 'work'))
     else:
         env.update(AI_MANAGER_PROJECT_ROOTS=str(tmp_path / 'work'))
+    env.update(extra_env or {})
     process = subprocess.Popen([sys.executable, '-c', PROGRAM], env=env, cwd=ROOT)
     url = f'http://127.0.0.1:{port}'
     try:

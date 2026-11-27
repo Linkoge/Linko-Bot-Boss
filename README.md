@@ -1004,11 +1004,12 @@ and `tests/test_model_picker_browser.py` cover owner model selection, persistenc
 ## Autopilot
 
 Autonomous, goal-driven manager mode for a dedicated machine (a VM), **off by default** everywhere. It runs only with two
-locks the owner sets by hand on that machine: `AI_MANAGER_AUTOPILOT=full` in its own env file (never a setting, never
-synced, untouched by deploys) and passwordless sudo from an owner-installed `/etc/sudoers.d/linko-autopilot` (detected
-with `sudo -n true`, never created by the app). The header badge shows `Autopilot: full / partial / off`; restricted
+local locks that the owner sets once with `sudo bash scripts/autopilot_setup.sh` on that machine (Settings > Autopilot
+shows the exact command; `--remove` undoes it): `AI_MANAGER_AUTOPILOT=full` in its own env file (never a setting, never
+synced, untouched by deploys) and passwordless sudo from `/etc/sudoers.d/linko-autopilot` (detected with `sudo -n true`,
+never created by the app). Then an on/off switch in the harness menu (☼) pauses or resumes it per machine; restricted
 instances are always off. Goals (title, description, reference images, a "done when" checklist, optional daily token
-budget and deadline) are created in Settings > Autopilot or in chat; the loop plans one step, delegates it to a worker,
+budget and deadline) are created in chat; the loop plans one step, delegates it to a worker,
 verifies it (desktop screenshot vs. reference images with a vision model), scores the checklist and journals until 90%
 pass and a final Opus medium check confirms. Stalls switch approach, then pause and ask; budgets pause; a cheap 20-minute
 probe keeps idle checks token-free. Setup, commands and rules: **[docs/AUTOPILOT.md](docs/AUTOPILOT.md)**.

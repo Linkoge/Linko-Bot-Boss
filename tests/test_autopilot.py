@@ -1,9 +1,12 @@
 """Autopilot (ai_manager/autopilot.py): the two local locks, no way to enable it through the app, restricted instances
-never, the goal loop's state machine, the wake-up ladder, checkpoints and the Settings panel's setup guide."""
+never, the goal loop's state machine, the wake-up ladder, checkpoints, the
+soft switch, the one setup command (Settings, chat) and the tiny Settings panel."""
 import asyncio
+import getpass
 import json
 import re
 import secrets
+import shlex
 import subprocess
 import time
 from pathlib import Path
@@ -128,7 +131,10 @@ def test_off_by_default_and_no_route_can_enable_it(served):
     for method, path, body in (("put", "/api/autopilot", {"level": "full"}), ("post", "/api/autopilot", {"level": "full"}),
                                ("patch", "/api/autopilot", {"config": True})):
         assert getattr(client, method)(path, json=body).status_code == 405
-    assert client.post("/api/autopilot/pause", json={"paused": False, "level": "full"}).status_code == 422
+    assert client.post("/api/autopilot/switch", json={"on": True, "level": "full"}).status_code == 422
+    refused = client.post("/api/autopilot/switch", json={"on": True})  # the switch never creates a lock
+    assert refused.status_code == 409 and "not set up" in refused.json()["detail"]
+    assert client.get("/api/autopilot").json()["status"]["level"] == "partial"
     for key in ("autopilot", "AI_MANAGER_AUTOPILOT", "autopilot_level"):
         app.state.db.set_setting(key, "full")
     assert client.get("/api/autopilot").json()["status"]["level"] == "partial"
@@ -136,9 +142,11 @@ def test_off_by_default_and_no_route_can_enable_it(served):
     refused = client.post("/api/autopilot/goals", json={"project_id": project["id"], "title": "Desktop",
                                                         "done_when": ["wallpaper is blue"]})
     assert refused.status_code == 409 and "AI_MANAGER_AUTOPILOT=full" in refused.json()["detail"]
+    assert "setup command" in refused.json()["detail"]
     routes = {(method, route.path) for route in app.routes if route.path.startswith("/api/autopilot")
               for method in getattr(route, "methods", ())}
-    assert routes == {("GET", "/api/autopilot"), ("POST", "/api/autopilot/pause"), ("POST", "/api/autopilot/goals"),
+    assert routes == {("GET", "/api/autopilot"), ("GET", "/api/autopilot/docs"), ("POST", "/api/autopilot/switch"),
+                      ("POST", "/api/autopilot/goals"),
                       ("POST", "/api/autopilot/goals/{goal_id}/images"), ("POST", "/api/autopilot/goals/{goal_id}/{op}"),
                       ("GET", "/api/autopilot/goals/{goal_id}/journal")}
 
@@ -161,7 +169,9 @@ def test_restricted_instance_is_never_autopilot(tmp_path, monkeypatch):
         sign_in(client, settings)
         assert client.get("/api/auth-status").json()["autopilot"] == "off"
         assert client.get("/api/autopilot").status_code == 403
-        assert client.post("/api/autopilot/pause", json={"paused": False}).status_code == 403
+        assert client.post("/api/autopilot/switch", json={"on": False}).status_code == 403
+        assert client.get("/api/autopilot/docs").status_code == 403
+        assert client.get("/api/auth-status").json()["autopilot_on"] is None
         assert client.post("/api/autopilot/goals", json={"project_id": "x", "title": "t", "done_when": ["a"]}).status_code == 403
         assert app.state.chat.autopilot.config() is False
     css = (ROOT / "ai_manager/static/style.css").read_text()
@@ -169,40 +179,67 @@ def test_restricted_instance_is_never_autopilot(tmp_path, monkeypatch):
     assert "#autopilot-panel" not in hidden  # the panel stays hidden on instances
 
 
-def test_setup_guide_has_this_machines_exact_lines(served):
+def test_setup_view_has_this_machines_one_command(served, monkeypatch):
+    monkeypatch.setattr(autopilot, "worker_user", lambda: None)
+    monkeypatch.delenv("AI_MANAGER_MACHINE_ROLE", raising=False)
     client, _, settings = served(sudo=False)
-    settings.env_file.write_text("AI_MANAGER_PORT=8787\n")
-    guide = client.get("/api/autopilot").json()["guide"]
-    user = guide["user"]
-    assert guide["env_line"] == "AI_MANAGER_AUTOPILOT=full" and guide["env_file"] == str(settings.env_file)
-    assert guide["env_file_exists"] is True and guide["env_line_present"] is False
-    assert guide["sudoers_path"] == "/etc/sudoers.d/linko-autopilot"
-    assert guide["sudoers_content"].splitlines()[0] == f"{user} ALL=(ALL:ALL) NOPASSWD: ALL"
-    install = guide["sudoers_install"].splitlines()
-    assert install.index("sudo visudo -cf /tmp/linko-autopilot") < next(
-        n for n, line in enumerate(install) if line.startswith("sudo install"))  # validated before it is installed
-    assert guide["sudoers_validate"] == "sudo visudo -cf /etc/sudoers.d/linko-autopilot"
-    assert "NoNewPrivileges=no" in guide["override_install"] and "etckeeper" in guide["etckeeper_install"]
-    assert guide["snapshot_line"].startswith("AI_MANAGER_SNAPSHOT_CMD=")
-    off = guide["off"]
-    assert "sed -i '/^AI_MANAGER_AUTOPILOT=/d'" in off and "sudo rm -f /etc/sudoers.d/linko-autopilot" in off
-    assert len(guide["approvals"]) == 5
-    settings.env_file.write_text("AI_MANAGER_AUTOPILOT=full\n")
-    assert client.get("/api/autopilot").json()["guide"]["env_line_present"] is True
+    view = client.get("/api/autopilot").json()
+    assert view["set_up"] is False and view["on"] is True and view["main"] is False
+    script = ROOT / "scripts" / "autopilot_setup.sh"
+    user = getpass.getuser()
+    # tests use a non-default env file, so the command names it; on a standard machine it is just the script and user
+    assert shlex.split(view["command"]) == ["sudo", "bash", str(script), "--user", user,
+                                            "--env-file", str(settings.env_file)]
+    assert shlex.split(autopilot.setup_command(Settings(data_dir=settings.data_dir,
+                                                        env_file=Path("~/.config/linko-bot-manager.env").expanduser()),
+                                               user="bot", worker="botwork")) == [
+        "sudo", "bash", str(script), "--user", "bot", "--worker", "botwork"]
+    monkeypatch.setenv("AI_MANAGER_MACHINE_ROLE", "main")
+    view = client.get("/api/autopilot").json()
+    assert view["main"] is True and view["command"] == ""  # no setup command on the owner's Main
+    docs = client.get("/api/autopilot/docs")
+    assert docs.status_code == 200 and "autopilot_setup.sh --remove" in docs.text
 
 
-def test_settings_panel_has_a_copy_button_for_every_command():
+def test_switch_works_instantly_once_set_up_and_is_local(served):
+    client, app, _ = served(autopilot="full", sudo=True)
+    assert client.get("/api/auth-status").json()["autopilot_on"] is True
+    view = client.post("/api/autopilot/switch", json={"on": False}).json()
+    assert view["set_up"] is True and view["on"] is False and app.state.db.setting(autopilot.PAUSED) is True
+    assert client.get("/api/auth-status").json()["autopilot_on"] is False
+    assert client.post("/api/autopilot/switch", json={"on": True}).json()["on"] is True
+    assert client.post("/api/autopilot/switch", json={"on": "yes"}).status_code == 422
+    from ai_manager import instance_sync
+    assert not any("autopilot" in key for key in instance_sync.KEYS)  # never pushed from Main to instances
+    assert "autopilot" not in json.dumps(instance_sync.values(app.state.db))
+
+
+def test_settings_panel_is_tiny_with_one_copy_command():
     html = (ROOT / "ai_manager/static/index.html").read_text()
     panel = re.search(r'<article class="panel" id="autopilot-panel".*?</article>', html).group(0)
     blocks = re.findall(r'<code id="(autopilot-[\w-]+)"></code></pre><button type="button" data-copy="\1"', panel)
-    assert set(blocks) == {"autopilot-env-line", "autopilot-env-command", "autopilot-sudoers-content",
-                           "autopilot-sudoers-install", "autopilot-sudoers-validate", "autopilot-override-install",
-                           "autopilot-restart", "autopilot-etckeeper-install", "autopilot-snapshot-line",
-                           "autopilot-screenshot-line", "autopilot-off"}
-    for text in ("Config lock", "OS lock", "visudo", "etckeeper", "snapshot", "Turn it off", 'id="autopilot-pause"',
-                 'id="autopilot-env-file"', 'id="autopilot-goal-form"', 'id="autopilot-goals"'):
-        assert text in panel
-    assert 'id="autopilot-badge"' in html and '/static/autopilot.js' in html
+    assert blocks == ["autopilot-setup-command"]
+    assert 'id="autopilot-goals"' in panel and 'href="/api/autopilot/docs"' in panel and ">Details<" in panel
+    text = re.sub(r"<[^>]+>", " ", panel)
+    assert len(text.split()) < 30, text  # the long explanations live in docs/AUTOPILOT.md
+    assert "autopilot-badge" not in html and '/static/autopilot.js' in html
+    menu = re.search(r'<div id="harness-menu".*?<button id="chat-menu-button"', html).group(0)
+    assert 'id="autopilot-toggle" type="checkbox" role="switch" disabled' in menu and "Not set up" in menu
+
+
+def test_chat_set_up_autopilot_gets_the_one_command(served, monkeypatch):
+    monkeypatch.setattr(autopilot, "worker_user", lambda: None)
+    monkeypatch.delenv("AI_MANAGER_MACHINE_ROLE", raising=False)
+    client, app, settings = served(sudo=False)
+    chat = app.state.chat
+    conversation = {"id": "c1", "project_id": None}
+    _, context = chat.prompt(conversation, "please set up autopilot", "e1", "t1", False)
+    assert context["autopilot"]["command"] == autopilot.setup_command(settings)
+    assert "cannot run sudo" in context["autopilot"]["setup"]
+    assert "autopilot" not in chat.prompt(conversation, "hello", "e2", "t1", False)[1]
+    monkeypatch.setenv("AI_MANAGER_MACHINE_ROLE", "main")
+    note = chat.prompt(conversation, "set up Autopilot", "e3", "t1", False)[1]["autopilot"]
+    assert "command" not in note and "Main" in note["setup"]
 
 
 def test_goals_through_the_api_with_images_pause_and_journal(served):
@@ -221,7 +258,7 @@ def test_goals_through_the_api_with_images_pause_and_journal(served):
     assert client.post(f"/api/autopilot/goals/{goal['id']}/explode").status_code == 422
     journal = client.get(f"/api/autopilot/goals/{goal['id']}/journal").json()["journal"]
     assert [row["kind"] for row in journal] == ["resume", "pause", "created"]
-    assert client.post("/api/autopilot/pause", json={"paused": True}).json()["paused"] is True
+    assert client.post("/api/autopilot/switch", json={"on": False}).json()["on"] is False
     listed = client.get("/api/autopilot").json()["goals"]
     assert [g["id"] for g in listed] == [goal["id"]] and listed[0]["last_journal"]["kind"] == "resume"
     bad = client.post("/api/autopilot/goals", json={"project_id": project["id"], "title": "x", "done_when": ["a"],

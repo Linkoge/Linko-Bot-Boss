@@ -2,71 +2,71 @@
 
 Autopilot is an autonomous, goal-driven manager mode for a **dedicated machine** (intended: a VM you can snapshot).
 You give it a goal with a "done when" checklist; it works toward it step by step, on its own, with root rights inside
-that machine. The software is the same everywhere and Autopilot is **off by default**. Code: `ai_manager/autopilot.py`;
-tests: `tests/test_autopilot.py`, `tests/test_autopilot_browser.py`. Everything below is also in
-**Settings > Autopilot** on the machine itself, with that machine's real paths and copy buttons.
+that machine. The software is the same everywhere and Autopilot is **off by default**. Code: `ai_manager/autopilot.py`,
+`scripts/autopilot_setup.sh`; tests: `tests/test_autopilot.py`, `tests/test_autopilot_setup.py`,
+`tests/test_autopilot_browser.py`. The UI is deliberately small: an **Autopilot** switch in the harness menu (☼, a green
+dot on that button while it is on) and **Settings > Autopilot** (status, the setup command, goals). This page has the
+details; the panel's **Details** link opens it.
 
-## The two locks
+## Set up (once per machine)
 
-Both are local to the machine and outside the app's reach:
+Settings > Autopilot shows one command with this machine's real paths; paste it in a terminal on that machine:
 
-| Lock | What | Detected by | Who sets it |
-| --- | --- | --- | --- |
-| Config lock | `AI_MANAGER_AUTOPILOT=full` in this machine's env file (Main unit: `~/.config/linko-bot-manager.env`; another path with `AI_MANAGER_ENV_FILE`) | the process environment at start | you, by hand |
-| OS lock | passwordless sudo for the service user, from `/etc/sudoers.d/linko-autopilot` | `sudo -n true` (cached 30 s) | you, by hand |
+```bash
+sudo bash /path/to/checkout/scripts/autopilot_setup.sh --user SERVICE_USER
+```
 
-- **full** = both locks: the loop runs and workers may use sudo. **partial** = one lock: goals can be saved (with the
-  config lock) but nothing runs. **off** = neither. The header badge shows `Autopilot: full / partial / off`.
-- The config lock is never a database setting. No route, setting, chat action or manager action sets it; it is not part
-  of the settings that Main pushes to instances (`instance_sync.py`), and deploys never edit env files. When
-  `scripts/install_machine.py --secrets` restores an env file from a backup it drops the Autopilot lines
-  (`AI_MANAGER_AUTOPILOT`, `AI_MANAGER_SNAPSHOT_CMD`, `AI_MANAGER_SCREENSHOT_CMD`, `AI_MANAGER_AUTOPILOT_DISPLAY`).
-- The app only detects the sudoers drop-in; it never writes one.
+It lists what it will do and asks you to type `yes` (`--yes` skips that; `--dry-run` only prints the plan). It is
+idempotent; running it again changes nothing. In order:
+
+1. Writes `/etc/sudoers.d/linko-autopilot` (`SERVICE_USER ALL=(ALL:ALL) NOPASSWD: ALL`, plus the separate worker
+   user's line when that is installed, README "How work runs"), checked with `visudo -cf` **before** it is installed
+   (root:root 0440) and again after; a rejected file is never left in place, because a broken drop-in can break sudo.
+2. Adds `AI_MANAGER_AUTOPILOT=full` to this machine's env file (default `~/.config/linko-bot-manager.env`;
+   `--env-file` for another one; the command shows it when this machine uses another path).
+3. Writes the systemd user-unit override `~/.config/systemd/user/linko-bot-manager.service.d/autopilot.conf` with
+   `NoNewPrivileges=no`: the unit sets `NoNewPrivileges=yes`, which blocks sudo (`--unit` for another unit name).
+4. Installs etckeeper when `apt-get` is available (skipped otherwise) and commits a baseline of `/etc`.
+5. Reloads the user's systemd and restarts **only** this machine's service, then prints `Autopilot ready`.
+
+It refuses to run on a restricted instance (`AI_MANAGER_RESTRICTED=1`) and on the owner's Main: put
+`AI_MANAGER_MACHINE_ROLE=main` in Main's env file (the script reads it there; sudo strips the environment). On Main
+Settings then shows no setup command at all.
+
+**Remove**: `sudo bash .../scripts/autopilot_setup.sh --remove` deletes the env line, the drop-in and the override,
+reloads systemd and restarts the service. etckeeper stays installed: it only records `/etc` history.
+
+In chat, "set up autopilot" gets you the same command: the manager cannot use sudo before setup, so on a machine that is
+not set up it receives the command in its context (`autopilot.setup`, only when your message mentions Autopilot) and
+replies with it. The manager tool is unchanged.
+
+## The two locks and the switch
+
+Both locks are local to the machine and outside the app's reach:
+
+| Lock | What | Detected by |
+| --- | --- | --- |
+| Config lock | `AI_MANAGER_AUTOPILOT=full` in this machine's env file | the process environment at start |
+| OS lock | passwordless sudo for the service user, from `/etc/sudoers.d/linko-autopilot` | `sudo -n true` (cached 30 s) |
+
+- **full** = both locks ("set up"): the loop runs and workers may use sudo. **partial** = one lock: goals can be saved
+  (with the config lock) but nothing runs; Settings says "Set up: partly", run the script again. **off** = neither.
+- **The switch** (harness menu): on a machine that is set up it turns Autopilot on or off at once; off stops every goal
+  (a running step finishes; nothing new starts). It is stored in this machine's local database (`autopilot_paused`),
+  is never synced from Main (`instance_sync.py` pushes only its own key list) and can only stop work: it never creates
+  a lock. Until setup it is disabled with "Not set up · Set up" (the link opens Settings > Autopilot).
+- The config lock is never a database setting. No route, setting, chat action or manager action sets it; deploys never
+  edit env files. When `scripts/install_machine.py --secrets` restores an env file from a backup it drops the
+  Autopilot lines (`AI_MANAGER_AUTOPILOT`, `AI_MANAGER_SNAPSHOT_CMD`, `AI_MANAGER_SCREENSHOT_CMD`,
+  `AI_MANAGER_AUTOPILOT_DISPLAY`).
+- The app itself never writes the drop-in; only the script you run with sudo does.
 - Restricted instances (office mode, e.g. kaxa) are always **off**: they do not even probe sudo, the Autopilot API
-  answers 403 and the Settings panel is hidden there.
-
-### Turn it on
-
-1. Env line (Settings shows the exact file):
-
-   ```bash
-   printf '%s\n' 'AI_MANAGER_AUTOPILOT=full' >> ~/.config/linko-bot-manager.env
-   ```
-
-2. Sudoers drop-in for the service user (`USER` below is the user the service runs as; Settings shows it filled in).
-   It is validated before it is installed, because a broken drop-in can break sudo:
-
-   ```bash
-   printf '%s' 'USER ALL=(ALL:ALL) NOPASSWD: ALL
-   ' > /tmp/linko-autopilot
-   sudo visudo -cf /tmp/linko-autopilot
-   sudo install -o root -g root -m 0440 /tmp/linko-autopilot /etc/sudoers.d/linko-autopilot
-   sudo visudo -cf /etc/sudoers.d/linko-autopilot
-   rm /tmp/linko-autopilot
-   ```
-
-   If the separate worker user is installed (README "How work runs"), Settings adds its line too, so workers can use
-   sudo as well.
-
-3. The service unit sets `NoNewPrivileges=yes`, which blocks sudo. On this machine only, override it:
-
-   ```bash
-   mkdir -p ~/.config/systemd/user/linko-bot-manager.service.d
-   printf '[Service]\nNoNewPrivileges=no\n' > ~/.config/systemd/user/linko-bot-manager.service.d/autopilot.conf
-   systemctl --user daemon-reload
-   ```
-
-4. Restart: `systemctl --user restart linko-bot-manager`. The badge should read `Autopilot: full`.
+  answers 403, and the switch and the Settings panel are hidden there.
 
 `linko-doctor` reports the blanket NOPASSWD rule as this machine's OS lock (PASS) instead of a warning while the env line
 is present.
 
-### Recommended: etckeeper
-
-```bash
-sudo apt-get install -y etckeeper
-sudo etckeeper commit 'baseline before autopilot' || true
-```
+### etckeeper
 
 Before and after every step Autopilot runs `sudo -n etckeeper commit ...`, so every change to `/etc` can be reviewed
 and reverted. Without etckeeper it notes that in the journal and continues.
@@ -88,24 +88,17 @@ appended as its last argument.
 
 ### Turn it off
 
-- **Pause** (Settings > Autopilot): stops every goal at once. A running step finishes; nothing new starts.
-- For good: remove the env line, the drop-in and the override, then restart:
-
-  ```bash
-  sed -i '/^AI_MANAGER_AUTOPILOT=/d' ~/.config/linko-bot-manager.env
-  sudo rm -f /etc/sudoers.d/linko-autopilot
-  rm -f ~/.config/systemd/user/linko-bot-manager.service.d/autopilot.conf && systemctl --user daemon-reload
-  systemctl --user restart linko-bot-manager
-  ```
+- **Switch** in the harness menu: off at once (see above).
+- For good: `sudo bash .../scripts/autopilot_setup.sh --remove`.
 
 ## Goals
 
-Create one in Settings > Autopilot or in a chat on that machine ("Autopilot goal: ..."; with the config lock set the
+Create one in a chat on that machine ("Autopilot goal: ..."; with the config lock set the
 manager gets the `autopilot_goal` action and an `autopilot` context entry; elsewhere its tool and context are unchanged).
 A goal has a title, description, reference images (PNG/JPEG/WebP, at most 6; chat attachments become reference images),
 a "done when" checklist (1-30 items), an optional daily token budget and an optional deadline, and belongs to a project
-whose queue workers carry out the steps. Stored in `autopilot_goals` and `autopilot_journal`. The panel lists each goal
-with status, score, rounds, approach, the last journal entry and Pause / Resume / Stop.
+whose queue workers carry out the steps. Stored in `autopilot_goals` and `autopilot_journal`. Settings > Autopilot lists each
+goal with status, score and Pause / Resume / Stop (`/api/autopilot/goals` also accepts goals with reference images).
 
 ## The loop (full only)
 
