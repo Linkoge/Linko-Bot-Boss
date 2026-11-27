@@ -417,7 +417,9 @@ def test_root_repair_launcher_keeps_files_as_the_service_user_and_runs_the_agent
     options = repair.agent()
     assert options['user'] == 0 and options['group'] == 0 and options['extra_groups'] == []
     assert options['env']['HOME'] == pwd.getpwuid(0).pw_dir and options['env']['PATH'] == '/opt/node/bin:/usr/bin'
-    assert repair_module.Repair(tmp_path, {}).agent() == {}
+    monkeypatch.setenv('AI_MANAGER_TMPDIR', str(tmp_path / 'scratch'))
+    plain = repair_module.Repair(tmp_path, {}).agent()
+    assert set(plain) == {'env'} and plain['env']['TMPDIR'] == str(tmp_path / 'scratch' / 'repair')
     ids = []
     monkeypatch.setattr(os, 'seteuid', lambda uid: ids.append(('u', uid)))
     monkeypatch.setattr(os, 'setegid', lambda gid: ids.append(('g', gid)))

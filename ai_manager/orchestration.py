@@ -5,8 +5,9 @@ import copy
 import hashlib
 import json
 import logging
+import time
 
-from . import chat_memory
+from . import chat_memory, scratch
 from . import harness as harnesses
 from .chat import internal_result
 from .chat_memory import NAMES as CHAT_MEMORY
@@ -90,6 +91,7 @@ class Scheduler:
         self.maintenance = Maintenance(db)
         self.tasks, self.job = Tasks(db), None
         self.lock = asyncio.Lock()
+        self.scratch_at = 0.0
         self.error = ""
         self.pipeline = pipeline or core.pipeline
         self.restricted = settings.restricted
@@ -398,8 +400,18 @@ class Scheduler:
         return {"path": args["path"], "content": content[offset:offset + 12000],
                 "next_offset": offset + 12000 if len(content) > offset + 12000 else None}
 
+    def clean_scratch(self, now=None):
+        """Hourly (and at start): drop scratch entries older than 2 days that belong to no running execution."""
+        now = now or time.time()
+        if now - self.scratch_at < scratch.INTERVAL:
+            return []
+        self.scratch_at = now
+        active = [row["id"] for row in self.db.all("SELECT id FROM executions WHERE finished_at IS NULL")]
+        return scratch.cleanup(active, now=now)
+
     async def tick(self):
         async with self.lock:
+            await asyncio.to_thread(self.clean_scratch)
             if receipt := self.pipeline.report():
                 await asyncio.to_thread(self.core.repair_deploy, receipt)
             await self.core.runner.tick()  # first: no chat state can keep queued work from starting

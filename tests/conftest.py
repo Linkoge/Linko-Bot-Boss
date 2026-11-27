@@ -39,3 +39,4 @@ def pytest_sessionfinish(session, exitstatus):
 def isolated_claude_login(tmp_path_factory, monkeypatch):
     """Tests never find a real Claude login, so the host's usage request cannot reach the network."""
     monkeypatch.setenv('CLAUDE_CONFIG_DIR', str(tmp_path_factory.mktemp('claude-config')))
+    monkeypatch.setenv('AI_MANAGER_TMPDIR', str(tmp_path_factory.mktemp('scratch')))  # never the real scratch space
