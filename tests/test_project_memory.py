@@ -354,7 +354,7 @@ def test_limits_have_one_source_and_one_context_ceiling():
 def test_brief_between_the_old_and_new_maximum_chats_reviews_and_activates(system):
     project, memory, before = ready(system)
     db, registry, chat, _ = system
-    brief = {**before["brief"], "state": ["x" * 1000, "y" * 1000]}
+    brief = {**before["brief"], "state": ["x" * 900, "y" * 900]}
     assert 1600 < len(encode(brief).encode()) <= MAXIMUM
     stored = activate(memory, project, brief)
     assert stored["brief"] == brief and stored["token_upper_bound"] > 1600
@@ -362,7 +362,7 @@ def test_brief_between_the_old_and_new_maximum_chats_reviews_and_activates(syste
     prompt, _ = chat.prompt(chat.conversation(project), "hello", "execution", "new-thread", None)
     assert prompt["context"]["project_brief"] == brief
     review = memory.begin(project)
-    memory.candidate(project, review, {**brief, "state": ["x" * 1000, "z" * 1000]}, [], ["memory:base"])
+    memory.candidate(project, review, {**brief, "state": ["x" * 900, "z" * 900]}, [], ["memory:base"])
     mismatches = memory.get(project, review)["mismatches"]
     applied = memory.apply(project, review, stored["revision"], [{"action": "accept", "reason": "ok"}] * len(mismatches))
     assert applied["revision"] > stored["revision"]

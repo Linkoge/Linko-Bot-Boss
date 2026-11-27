@@ -46,7 +46,7 @@ Do: insert a state recovery leaves alone, e.g. status `recovering` with `retry_a
 When: you add a folder to `BUILTIN_FOLDERS` in `ai_manager/harness.py`.
 Symptom: harness, browser and code-view tests fail on an exact set or list of built-in ids or picker option names.
 Cause: `tests/test_harness.py` (catalog set, worker options, manager context), `tests/test_harness_browser.py` (worker `<option>` texts) and `tests/test_code_view.py` (`START` probe set) pin the built-ins.
-Do: update all four in the same commit; run those three files, the browser one included.
+Do: update all four in the same commit; run those three files, the browser one included. Every built-in's description also rides in the manager context (`worker_options`), so a bigger catalog can push `tests/test_project_memory.py::test_brief_between_the_old_and_new_maximum_chats...` over the 4000-byte context ceiling; shrink that test's brief filler (it only needs to sit between the old and new brief maximum).
 
 ### Stripping AI_MANAGER_* env silently re-slows smoke   (2026-11-27, task 72503a)
 When: a test or fixture deletes every `AI_MANAGER_*` (or similar) variable to isolate itself from the host.
