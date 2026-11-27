@@ -211,3 +211,16 @@ def test_claude_model_list_comes_from_the_environment_with_names_derived_from_id
     assert [(m['displayName'], m['isDefault']) for m in default] == [('Haiku', False), ('Sonnet', True), ('Opus', False)]
     custom = catalog(AI_MANAGER_CLAUDE_MODELS='claude-fable-5-1,claude-opus-5-5')
     assert [m['model'] for m in custom] == ['claude-fable-5-1', 'claude-opus-5-5'] and custom[0]['displayName'] == 'Fable'
+
+
+def test_host_socket_stays_short_when_tmpdir_is_long(tmp_path, monkeypatch):
+    from ai_manager.claude_host import Host
+    long_tmp = tmp_path / ('d' * 90)
+    long_tmp.mkdir()
+    monkeypatch.setenv('TMPDIR', str(long_tmp))
+    monkeypatch.setattr('tempfile.tempdir', None)
+    host = Host(tmp_path / 'data', 'claude', True)
+    try:
+        assert len(os.fsencode(host.socket)) <= 107
+    finally:
+        host.socket.parent.rmdir()

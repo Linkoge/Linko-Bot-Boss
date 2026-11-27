@@ -107,7 +107,11 @@ class Host:
         # Isolated worker (ai_manager/isolation.py): turns run as the worker user through the fixed launcher argv.
         self.worker_prefix, self.worker_tag = worker_prefix, worker_tag
         # Unix socket paths are short (108 bytes); keep it in a private temporary directory.
+        # A long TMPDIR (the scratch folder of a run) would overflow it, so fall back to a short system directory.
         self.socket = Path(tempfile.mkdtemp(prefix='linko-claude-')) / 'host.sock'
+        if len(os.fsencode(self.socket)) > 100:
+            self.socket.parent.rmdir()
+            self.socket = Path(tempfile.mkdtemp(prefix='linko-claude-', dir='/tmp')) / 'host.sock'
         self.running = {}  # thread_id -> {'turn', 'process', 'interrupted'}
         self.pending = {}
         self.serial = 0
