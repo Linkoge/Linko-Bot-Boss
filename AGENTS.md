@@ -41,3 +41,9 @@ When: a test using a live `create_app` app (the `client`/`pair` fixtures; the sc
 Symptom: passes alone and in a serial run, fails only in the parallel full suite (`scripts/full_suite.py`), e.g. a guard expected 409 but got 200.
 Cause: `Chat.recover()` on the scheduler loop finishes unowned unfinished manager rows (status `running`, no live pid) between the test's requests.
 Do: insert a state recovery leaves alone, e.g. status `recovering` with `retry_at` an hour ahead (what `recovery.defer()` writes); reproduce with a `time.sleep(3)` before the assertion.
+
+### New built-in harness breaks exact-list tests (2026-11-27, task 21af98)
+When: you add a folder to `BUILTIN_FOLDERS` in `ai_manager/harness.py`.
+Symptom: harness, browser and code-view tests fail on an exact set or list of built-in ids or picker option names.
+Cause: `tests/test_harness.py` (catalog set, worker options, manager context), `tests/test_harness_browser.py` (worker `<option>` texts) and `tests/test_code_view.py` (`START` probe set) pin the built-ins.
+Do: update all four in the same commit; run those three files, the browser one included.
