@@ -1,6 +1,5 @@
 """One queue per project: a project runs one task at a time, different projects run in parallel."""
 import asyncio
-import sqlite3
 
 import pytest
 from test_core import git, world  # noqa: F401
@@ -54,8 +53,7 @@ async def test_tasks_of_different_projects_run_at_once_but_a_project_runs_one(tw
     assert len(two.core.jobs) == 2 and len(two.core.servers) == 2
     await two.core.runner.tick()  # nothing more may start while both projects are busy
     assert states(two, a1, a2, b1) == ["running", "queued", "running"]
-    with pytest.raises(sqlite3.IntegrityError):  # the database itself refuses a second running task in a project
-        two.db.run("UPDATE tasks SET state='running' WHERE id=?", (a2["id"],))
+    assert two.tasks.claim() is None  # the queue refuses a second (not parallel-sent) running task in a project
     two.lab.release.set()
     while two.core.jobs:
         await asyncio.gather(*list(two.core.jobs.values()))

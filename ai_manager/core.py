@@ -1,5 +1,5 @@
-"""Task-execution core: one queue per project (one running task each, projects in parallel), durable repair rounds, a
-watchdog. See README.md.
+"""Task-execution core: one queue per project (one running task each, projects in parallel; on Main an owner's
+parallel-send task may run beside it, at most MAX_PARALLEL), durable repair rounds, a watchdog. See README.md.
 
 States: queued -> running -> done | failed. `held` is a flag on a queued task (skipped until released); order within
 a project is the only dependency. A worker implements on an isolated branch, the application runs the permanent checks
@@ -32,12 +32,14 @@ from . import harness as harnesses
 from .harness import builtin
 from .listing import CARD_WINDOW, bounded_listing
 from .model_settings import RouteBlocked, assignment_route
-from .pipeline import IDENTITY, git, merge_tree
+from .pipeline import IDENTITY, MainMoved, git, merge_tree
 from .push_diagnosis import precheck
 from .recovery import turn_error
 from .runner import Runner, plain
 
 REPAIR_ROUNDS = 5
+# Parallel send (Main only): an owner-flagged task may start beside the project's running ones, at most this many.
+MAX_PARALLEL = 3
 # A To-Do can contain a 200-character title, a separator and 24000 characters of details.
 MAX_OBJECTIVE_CHARS = 24202
 SMOKE_SECONDS, SUITE_SECONDS, PROBE_SECONDS = 180, 600, 60
@@ -179,7 +181,7 @@ class Tasks:
     @staticmethod
     def context(task):
         keys = ("id", "description", "acceptance", "status", "blocker", "lease_owner", "revision", "rounds",
-                "workspace", "workspace_branch", "merge", "retry_at", "chain_root", "chain_parent")
+                "workspace", "workspace_branch", "merge", "retry_at", "chain_root", "chain_parent", "parallel")
         return {k: task.get(k) for k in keys} | {"worker_route": task.get("worker_route"), "harness": task.get("harness")}
 
     def page(self, project_id=None, *, limit=CARD_WINDOW, offset=0, query="", status=None, through=None, older=False):
@@ -193,7 +195,7 @@ class Tasks:
             blocker,lease_owner,revision,rounds,created_at,updated_at,retry_at,
             (SELECT history_preview(output) FROM executions e WHERE e.task_id=tasks.id
                 ORDER BY e.rowid DESC LIMIT 1) AS result_summary,
-            json_extract(harness,'$.name') AS harness"""
+            json_extract(harness,'$.name') AS harness,parallel"""
         where = "instr(lower(description),lower(?))>0"
         params = [query]
         if status:
@@ -214,8 +216,10 @@ class Tasks:
 
     def add(self, project_id, description, origin_conversation=None, request_key=None, acceptance="", selected=None,
             model_route=None, todos=None, reuse_objective=True, chain_root=None, chain_parent=None, on_create=None,
-            harness=None):
-        """harness: a worker harness id, else the project's default; recorded once and kept (shown = dispatched)."""
+            harness=None, parallel=False):
+        """harness: a worker harness id, else the project's default; recorded once and kept (shown = dispatched).
+        parallel: the owner's parallel send (Main only, checked by the caller): may run beside the project's running
+        tasks, at most MAX_PARALLEL at once (claim()); recorded once, shown as a badge."""
         if not description.strip() or len(description) > MAX_OBJECTIVE_CHARS:
             raise ValueError(f"Objective must be 1–{MAX_OBJECTIVE_CHARS} characters")
         if not isinstance(acceptance, str) or len(acceptance) > 12000:
@@ -245,10 +249,11 @@ class Tasks:
                 return self.get(previous["id"])
             conn.execute(
                 """INSERT INTO tasks(id,project_id,description,acceptance,created_at,updated_at,queued_at,state,
-                origin_conversation,request_key,chain_root,chain_parent) VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?)""",
+                origin_conversation,request_key,chain_root,chain_parent,parallel) VALUES(?,?,?,?,?,?,?,'queued',?,?,?,?,?)""",
                 (task_id, project_id, description, acceptance, now, now, now, origin_conversation, request_key,
-                 chain_root, chain_parent))
-            self.db.event(conn, "task.created", {"objective": description}, project_id, task_id)
+                 chain_root, chain_parent, int(bool(parallel))))
+            self.db.event(conn, "task.created", {"objective": description, **({"parallel": True} if parallel else {})},
+                          project_id, task_id)
             if model_route:
                 self.db.event(conn, "task.model_selected", model_route, project_id, task_id)
             harnesses.record_task(self.db, conn, project_id, task_id, worker_harness)
@@ -307,20 +312,26 @@ class Tasks:
             self.db.event(conn, "task." + action, {}, task["project_id"], task_id)
         return self.get(task_id)
 
-    def claim(self, ready=None):
+    def claim(self, ready=None, parallel=True):
+        """parallel=False (every instance but Main) ignores the parallel flag: one running task per project."""
         try:
             with fence.hold(self.db.path.parent, exclusive=False):
-                return self._claim(ready)
+                return self._claim(ready, parallel)
         except Busy:
             return None  # A deploy holds the fence: no new work starts until it finishes.
 
-    def _claim(self, ready=None):
+    def _claim(self, ready=None, parallel=True):
         now, claimed = time.time(), None
         with self.db.transaction() as conn:
+            running = {r["project_id"]: r["n"] for r in conn.execute(
+                "SELECT project_id,count(*) AS n FROM tasks WHERE state='running' GROUP BY project_id")}
+            waiting = set()  # projects whose earlier queued task cannot start yet: later ones keep their place
             for task in conn.execute("""SELECT t.*,p.path,p.status AS project_status FROM tasks t
                     JOIN projects p ON p.id=t.project_id WHERE t.state='queued' AND t.held=0
-                    AND NOT EXISTS(SELECT 1 FROM tasks r WHERE r.state='running' AND r.project_id=t.project_id)
                     ORDER BY t.queued_at,t.rowid""").fetchall():
+                busy = running.get(task["project_id"], 0)
+                if busy and task["project_id"] in waiting:
+                    continue
                 if task["project_status"] == "removed":
                     self.fail_queued(conn, task, "Project was removed")
                     continue
@@ -328,7 +339,11 @@ class Tasks:
                     continue  # paused or archived by the owner: skipped like a hold
                 if task["retry_at"] and task["retry_at"] > now:
                     continue  # waiting for a usage limit or the network: skipped like a hold until its retry time
-                if ready is not None and not ready(task["project_id"], (task["id"], task["revision"])):
+                if busy and not (parallel and task["parallel"] and busy < MAX_PARALLEL):
+                    waiting.add(task["project_id"])  # default: one running task per project, strict order
+                    continue
+                # Beside running work the checkout is not updated from GitHub (sync defers while work runs).
+                if not busy and ready is not None and not ready(task["project_id"], (task["id"], task["revision"])):
                     continue
                 execution_id = new_id()
                 conn.execute("UPDATE tasks SET state='running',blocker='',retry_at=NULL,lease_owner=?,revision=revision+1,"
@@ -701,23 +716,41 @@ class Core:
         if git(root, "rev-list", "--count", f"{task['workspace_base']}..HEAD") == "0":
             return {"reason": "", "merge": {"state": "none", "reason": "no changes"}}
         shared = Path(self.registry.allowed_path(project["path"]))
-        branch = git(shared, "rev-parse", main_branch(shared))
-        before = head
-        already_merged = git(root, "merge-base", "--is-ancestor", head, branch, check=False).returncode == 0
-        _, conflicts = merge_tree(root, branch, head)
-        # Keep the delivered task commit stable so a restart can recover its copy report.
-        if not conflicts and not already_merged:
-            sync = git(root, *IDENTITY, "merge", "--no-edit", branch, check=False)
-            if sync.returncode:
-                raise ValueError("Could not bring main into the task branch: " + (sync.stderr or sync.stdout).strip()[:300])
-        head = git(root, "rev-parse", "HEAD")
-        if head != before:  # main brought changes: the combined result must pass too
-            result = await asyncio.to_thread(self.check, root, task["workspace_base"])
-            if not result["ok"]:
-                return {"outcome": result}
-        main_head, changed, deployment = await asyncio.to_thread(
-            self.pipeline.merge, project["path"], head,
-            (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]))
+        # Work that ran beside other tasks of its project (parallel send) merges strictly: tested on the current main,
+        # fast-forward only (merges stay one at a time under the checkout fence), and a conflict goes back to its
+        # worker to redo the change on top of main instead of saving duplicate "(AI version)" copies.
+        strict = self.overlapped(task)
+        for _ in range(MAX_PARALLEL * 2):
+            branch = git(shared, "rev-parse", main_branch(shared))
+            before = head = git(root, "rev-parse", "HEAD")
+            already_merged = git(root, "merge-base", "--is-ancestor", head, branch, check=False).returncode == 0
+            _, conflicts = merge_tree(root, branch, head)
+            if conflicts and strict and not already_merged:
+                git(root, *IDENTITY, "merge", "--no-edit", branch, check=False)  # leaves the conflict markers
+                if result := unresolved(root):
+                    self.event(task, eid, "task.merge_conflict", {"paths": conflicts[:20], "main": branch})
+                    return {"outcome": result}
+                conflicts = []
+            # Keep the delivered task commit stable so a restart can recover its copy report.
+            if not conflicts and not already_merged and git(root, "rev-parse", "HEAD") == before:
+                sync = git(root, *IDENTITY, "merge", "--no-edit", branch, check=False)
+                if sync.returncode:
+                    raise ValueError("Could not bring main into the task branch: " + (sync.stderr or sync.stdout).strip()[:300])
+            head = git(root, "rev-parse", "HEAD")
+            if head != before:  # main brought changes: the combined result must pass too
+                result = await asyncio.to_thread(self.check, root, task["workspace_base"])
+                if not result["ok"]:
+                    return {"outcome": result}
+            try:
+                main_head, changed, deployment = await asyncio.to_thread(
+                    self.pipeline.merge, project["path"], head,
+                    (task["project_id"], "auto", task["id"], task["origin_conversation"], "task " + task["id"][:8]),
+                    **({"fast_forward": True} if strict else {}))
+                break
+            except MainMoved:
+                self.event(task, eid, "task.main_moved", {"tested_on": branch})
+        else:
+            raise Busy("main keeps moving under parallel merges")
         deployment = deployment or {}
         requested = bool(deployment.get('id'))
         text = 'deploy requested' if requested else deployment.get('reason', 'already in main')
@@ -735,6 +768,13 @@ class Core:
         return {"reason": "", "merge": {"state": "merged" if changed else "already in main", "main": main_head,
                                         "deploy": requested, "deployment": text,
                                         "copies": deployment.get("copies", [])}}
+
+    def overlapped(self, task):
+        """True when this task is parallel work or ran beside a parallel task of its project (both merge strictly)."""
+        return bool(task.get("parallel") or self.db.one(
+            """SELECT 1 FROM tasks o JOIN executions e ON e.task_id=o.id WHERE o.project_id=? AND o.id<>? AND o.parallel=1
+            AND e.started_at>=COALESCE((SELECT MIN(started_at) FROM executions WHERE task_id=?),0) LIMIT 1""",
+            (task["project_id"], task["id"], task["id"])))
 
     def queue_deploy_setup(self, task):
         """Queue one Create deploy setup task in the project unless one is open; returns a plain status. The task that

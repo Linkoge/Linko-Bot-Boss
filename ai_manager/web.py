@@ -136,6 +136,7 @@ class MessageBody(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     todos: list[str] = Field(default_factory=list, max_length=200)
     conversation_id: str | None = None
+    parallel: bool = False  # parallel send (Main only): the delegated task may run beside the project's running one
 
 
 class ChatResetBody(BaseModel):
@@ -1164,10 +1165,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
+        if body.parallel and restricted:
+            raise HTTPException(403, RESTRICTED)  # parallel send exists on Main only
         body.project_id = scope(body.project_id)
         return await chat.submit(
             body.project_id, body.content, body.conversation_id, request_id=body.request_id,
-            attachment_ids=body.attachment_ids, todos=body.todos
+            attachment_ids=body.attachment_ids, todos=body.todos, parallel=body.parallel
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])

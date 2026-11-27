@@ -277,6 +277,9 @@ class Scheduler:
                 f"{params['manager_execution_id']}:{project_id}:{hashlib.sha256(args['objective'].encode()).hexdigest()[:12]}",
                 acceptance=args.get("acceptance", ""), selected=selected, model_route=route, todos=args.get("todos"),
                 harness=args.get("harness"),
+                # Parallel send: only the owner's own message on Main flags it, never a notice turn or an instance.
+                parallel=not internal and not self.restricted and bool(
+                    self.db.setting('execution_parallel:' + str(params.get('manager_execution_id')))),
                 # An auto task has no owner-typed root, so its own notices get no bounded follow-ups (only auto mode).
                 chain_root=None if followup and followup.get("auto") else chain_root,
                 chain_parent=followup and followup["parent"],

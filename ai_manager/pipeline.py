@@ -91,8 +91,15 @@ def saved_copies(root, head, commit):
     return []
 
 
-def merge_into_main(root, commit):
-    """Return (head, changed, copies), keeping the folder's conflicting files untouched. Never forces."""
+class MainMoved(ValueError):
+    """fast_forward merge: main moved past the commit's tested base (another parallel task merged first)."""
+
+
+def merge_into_main(root, commit, fast_forward=False):
+    """Return (head, changed, copies), keeping the folder's conflicting files untouched. Never forces.
+
+    fast_forward: only a commit that already contains main merges (it was tested on exactly this main); otherwise
+    MainMoved is raised and nothing changes, so the task brings the new main in and is tested again."""
     root = Path(root)
     commit = git(root, 'rev-parse', '--verify', commit + '^{commit}')
     branch = main_branch(root)
@@ -104,6 +111,8 @@ def merge_into_main(root, commit):
     head = git(root, 'rev-parse', 'HEAD')
     if git(root, 'merge-base', '--is-ancestor', commit, head, check=False).returncode == 0:
         return head, False, saved_copies(root, head, commit)
+    if fast_forward and git(root, 'merge-base', '--is-ancestor', head, commit, check=False).returncode:
+        raise MainMoved('main moved since the task was tested')
 
     tree, conflicts = merge_tree(root, head, commit)
     main, task, merged = (tree_files(root, ref) for ref in (head, commit, tree))
@@ -375,7 +384,7 @@ class Pipeline:
             self.db.event(conn, 'task.merge_copies', {'commit': commit, 'copies': copies}, project_id, task_id)
             self.post(conn, conversation_id, key, text)
 
-    def merge(self, project_path, commit, deploy=None):
+    def merge(self, project_path, commit, deploy=None, fast_forward=False):
         """The only path into main: exclusive checkout fence, re-checked pending deploy, then the merge.
 
         Tasks of different projects run in parallel and share this one fence, so a merge waits briefly for another's.
@@ -389,7 +398,7 @@ class Pipeline:
             if self.pending():
                 raise Busy('a deploy is pending')
             commit = git(project_path, 'rev-parse', '--verify', commit + '^{commit}')
-            head, changed, copies = merge_into_main(project_path, commit)
+            head, changed, copies = merge_into_main(project_path, commit, fast_forward)
             self.report_merge_copies(commit, copies, deploy)
             project = self.db.one('SELECT id FROM projects WHERE path=?', (str(project_path),))
             note = None

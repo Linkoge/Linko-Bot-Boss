@@ -56,6 +56,9 @@ def hidden_message(alias="messages"):
 
 PROCESS_RETRIES = 3
 HELD = "chat_held:"  # settings key prefix of owner messages waiting for a deploy restart
+PARALLEL = "execution_parallel:"  # owner message sent with parallel send (Main only); its delegated task may run beside
+PARALLEL_NOTE = ("\n\n[Parallel send: the owner sent this with the parallel button. A task you delegate for this "
+                 "message may run in parallel with the project's running task (it is flagged automatically).]")
 RECOVERY_QUIET_SECONDS = 30  # a resume within this long shows no recovery status, only the reply
 
 
@@ -155,6 +158,7 @@ class Chat:
                 row['retry_at'] = row['recovery_reason'] = None
             row.pop('recovering_since', None)
             row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
+            row['parallel'] = row['role'] == 'user' and bool(self.db.setting(PARALLEL + str(row['execution_id'])))
         first = self.db.one('SELECT rowid AS position FROM messages WHERE conversation_id=? AND NOT '
                             + hidden_message() + ' ORDER BY rowid LIMIT 1', (conversation['id'],))
         return {'conversation': conversation, 'messages': rows, 'updates': updates,
@@ -400,6 +404,7 @@ class Chat:
         )
         for row in rows:
             row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
+            row['parallel'] = row['role'] == 'user' and bool(self.db.setting(PARALLEL + str(row['execution_id'])))
         return {
             "conversation": conversation,
             "messages": list(reversed(rows[:CHAT_WINDOW])),
@@ -527,9 +532,13 @@ class Chat:
         yield False
 
     async def submit(self, project_id, content, conversation_id=None, delivery=None, request_id=None,
-                     attachment_ids=None, todos=None):
+                     attachment_ids=None, todos=None, parallel=False):
         display_content = content
+        if parallel and (self.restricted or delivery or not project_id):
+            raise ValueError("Parallel send is available only in a project chat on Main")
         payload = [project_id, conversation_id, content]
+        if parallel:
+            payload.append({"parallel": True})
         if attachment_ids:
             payload.append(attachment_ids)
         if todos:
@@ -593,7 +602,7 @@ class Chat:
                     "result:" + delivery if delivery else new_id(),
                     conversation["id"],
                     "worker" if delivery else "user",
-                    display_content if items else content,
+                    display_content if items else content,  # the shown text: never the manager-only notes
                     "completed",
                     execution_id,
                     now,
@@ -607,6 +616,9 @@ class Chat:
             if items:
                 conn.execute('INSERT INTO settings VALUES(?,?)',
                              ('execution_attachments:' + execution_id, json.dumps(references)))
+            if parallel:  # saved = shown (message badge) = dispatched (the delegated task's flag)
+                conn.execute('INSERT INTO settings VALUES(?,?)', (PARALLEL + execution_id, 'true'))
+                content += PARALLEL_NOTE
             if fenced:
                 self._queue(conn, execution_id, project_id, route, now, conversation["id"], content)
             else:

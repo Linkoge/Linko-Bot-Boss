@@ -73,6 +73,15 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             # UI hiding only: no new server-side refusal of the chat-scoped endpoints.
             assert page.evaluate("async()=>(await fetch('/api/harnesses')).status") == 200
             assert page.evaluate("async()=>(await fetch('/api/environments')).status") == 403  # Main's picker only
+            # Parallel send is Main's only: never rendered here, even with a task running; the server rejects the flag.
+            page.evaluate("()=>{state.portfolio.tasks=[{id:'x',project_id:state.project,status:'running'}];updateComposer();}")
+            page.locator('#message-input').fill('Parallel?')
+            page.wait_for_function("()=>!document.getElementById('send').hidden")
+            assert page.locator('#send-parallel').count() == 0
+            assert page.evaluate('()=>parallelAvailable()') is False
+            assert page.evaluate("""async()=>{try{await api('/api/chat',{method:'POST',body:JSON.stringify(
+                {project_id:state.project,content:'Parallel?',parallel:true})});return 0;}catch(e){return e.status;}}""") == 403
+            page.locator('#message-input').fill('')
             assert page.locator('#messages').is_visible()
             page.evaluate("()=>showView('settings')")  # the tabs row is hidden in office mode
             for hidden in ('#all-projects', '#project-menu-button', '#discover', '#add-project', '#deployment-panel',

@@ -23,7 +23,18 @@ and report the generated initial owner password to them once, in chat.
 One queue per project: at most one running task per project, in strict queue order, while tasks of different
 projects run in parallel (no global cap, no exceptions per project). States: **queued → running → done | failed**. A
 **held** task is a queued task with the hold flag set; it is skipped until released. Order within a project is the only
-dependency. The code is `ai_manager/core.py`. [RULES.md](RULES.md) is the single source of rules: the manager
+dependency. The code is `ai_manager/core.py`.
+
+**Parallel send (Main only).** While a task of the current project is running or queued, a double-arrow button (⇈)
+appears beside the Send arrow. A message sent with it is saved with a `parallel` flag (a settings record
+`execution_parallel:<manager execution>`, shown as a "parallel" badge on the message), the manager is told, and a task
+it delegates for that message is flagged too (`tasks.parallel`, a "parallel" badge on the task card). A flagged task may
+start beside the project's running tasks, at most **3** running per project (`MAX_PARALLEL`); an unflagged task still
+waits for the project to be idle, and a flagged task never overtakes an earlier queued one. Merges stay one at a time
+under the checkout fence: work that ran beside a parallel task is re-tested on the current main and merged fast-forward
+only (if another task merged first it brings the new main in and is tested again); a conflict with main goes back to its
+worker as a merge repair round to redo the change on top of main, never as "(AI version)" copies. Instances never
+render the button; their server rejects the flag (403) and their queue ignores it. [RULES.md](RULES.md) is the single source of rules: the manager
 and worker each omit sections marked only for the other role (manager-only: the manager paragraph of rule 7 and
 rules 8–9; worker-only: rule 11). The manager and worker prompts themselves live in harness files (see
 [Harnesses](#harnesses)).
