@@ -25,12 +25,13 @@ projects run in parallel (no global cap, no exceptions per project). States: **q
 **held** task is a queued task with the hold flag set; it is skipped until released. Order within a project is the only
 dependency. The code is `ai_manager/core.py`.
 
-**Parallel send (Main only).** While a task of the current project is running or queued, a double-arrow button (⇈)
-appears beside the Send arrow. A message sent with it is saved with a `parallel` flag (a settings record
+**Parallel send (Main only).** Whenever a worker task of the current project is running or queued, a double-arrow
+button (⇈) shows beside the Send arrow (also with an empty composer and while the manager is replying; the 3-second
+poll shows and hides it as tasks start and finish; its tooltip explains it). A message sent with it is saved with a `parallel` flag (a settings record
 `execution_parallel:<manager execution>`, shown as a "parallel" badge on the message), the manager is told, and a task
 it delegates for that message is flagged too (`tasks.parallel`, a "parallel" badge on the task card). A flagged task may
 start beside the project's running tasks, at most **3** running per project (`MAX_PARALLEL`); an unflagged task still
-waits for the project to be idle, and a flagged task never overtakes an earlier queued one. Merges stay one at a time
+waits for the project to be idle in strict order, while a flagged task does not wait behind those queued normal tasks. Merges stay one at a time
 under the checkout fence: work that ran beside a parallel task is re-tested on the current main and merged fast-forward
 only (if another task merged first it brings the new main in and is tested again); a conflict with main goes back to its
 worker as a merge repair round to redo the change on top of main, never as "(AI version)" copies. Instances never

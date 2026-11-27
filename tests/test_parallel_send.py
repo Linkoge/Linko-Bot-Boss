@@ -50,13 +50,15 @@ async def test_parallel_tasks_start_beside_the_running_one_up_to_the_cap(lab):
 
 
 @pytest.mark.asyncio
-async def test_default_stays_one_at_a_time_and_order_is_kept(lab):
+async def test_default_stays_one_at_a_time_and_a_parallel_send_does_not_wait_behind_it(lab):
     pid = lab.project["id"]
     first, normal, later = (lab.tasks.add(pid, "first"), lab.tasks.add(pid, "second, normal"),
                             lab.tasks.add(pid, "third, parallel", parallel=True))
+    last = lab.tasks.add(pid, "fourth, normal")
     await lab.core.runner.tick()
-    # The normal second task waits for the slot, and the parallel one behind it keeps its place in the queue.
-    assert states(lab, first, normal, later) == ["running", "queued", "queued"]
+    # The normal tasks wait for the slot in strict order; the owner's parallel send runs beside the running one at
+    # once instead of queuing behind the waiting normal task (the owner's report: it "waited in the queue").
+    assert states(lab, first, normal, later, last) == ["running", "queued", "running", "queued"]
     await finish(lab)
 
 

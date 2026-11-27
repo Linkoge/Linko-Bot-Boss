@@ -45,3 +45,41 @@ def test_parallel_send_button_badges_and_flag(page, browser_context):  # noqa: F
     page.locator('#message-input').fill('Global note')
     page.wait_for_function("()=>!document.getElementById('send').hidden")
     assert page.locator('#send-parallel').is_hidden()
+
+
+def test_parallel_button_shows_with_an_idle_composer_and_follows_the_queue(page, browser_context):  # noqa: F811
+    """The owner's report: with a task running or queued, ⇈ stayed hidden until text was typed (it followed the
+    composer's active state). It now shows whenever the project has worker work, and the 3 s poll keeps it current."""
+    _, _, root = browser_context
+    db = Database(root / 'data/manager.sqlite3')
+    path = root / 'projects' / 'parallel-idle'
+    path.mkdir()
+    project = Registry(db, (root / 'projects',)).add(path)['id']
+    db.run("UPDATE projects SET status='paused' WHERE id=?", (project,))  # the live scheduler leaves it queued
+    page.evaluate('id=>selectProject(id)', project)
+    page.wait_for_function('id=>state.project===id&&!!state.history', arg=project)
+    page.evaluate('()=>document.activeElement?.blur()')
+    assert page.locator('#send-parallel').is_hidden()
+    queued = Tasks(db).add(project, 'Running work')
+    # No reload, no typing: the regular poll picks the task up.
+    page.wait_for_function("()=>!document.getElementById('send-parallel').hidden", timeout=15000)
+    assert page.locator('#message-input').input_value() == ''
+    assert not page.evaluate("()=>document.getElementById('chat-form').classList.contains('composer-active')")
+    button = page.locator('#send-parallel')
+    assert 'parallel' in button.get_attribute('title').lower() and 'up to 3' in button.get_attribute('title')
+    box = button.bounding_box()
+    form = page.locator('#chat-form').bounding_box()
+    assert box['width'] >= 40 and box['y'] + box['height'] <= form['y'] + form['height'] + 1  # inside the composer
+    # An empty click sends nothing: it asks for the message and focuses the input.
+    sent = []
+    page.on('request', lambda r: sent.append(r) if r.url.endswith('/api/chat') and r.method == 'POST' else None)
+    button.click()
+    page.wait_for_function("()=>document.activeElement===document.getElementById('message-input')")
+    assert not sent
+    page.locator('#message-input').fill('Run this alongside')
+    with page.expect_request(lambda r: r.url.endswith('/api/chat') and r.method == 'POST') as request:
+        button.click()
+    assert request.value.post_data_json['parallel'] is True
+    # The task finishes: the button goes away on the next poll, without a reload.
+    db.run("UPDATE tasks SET state='done' WHERE id=?", (queued['id'],))
+    page.wait_for_function("()=>document.getElementById('send-parallel').hidden", timeout=15000)

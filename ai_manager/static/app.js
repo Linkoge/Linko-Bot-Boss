@@ -872,17 +872,23 @@ function appendRepositoryLinks(remote){
 }
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:(state.restricted?['active','paused']:['active','paused','archived','removed']).map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
-// Parallel send (Main only): a double-arrow button beside Send, shown only while a task of the current project is
-// running or queued. The message is saved with the flag; a task it delegates may run beside the others (at most 3).
+// Parallel send (Main only): a double-arrow button beside Send, shown whenever a worker task of the current project is
+// running or queued (typed text or not, manager replying or not). The message is saved with the flag; a task it
+// delegates may run beside the others (at most 3), ahead of queued normal tasks.
 function renderParallelSend(){
   const existing=$('send-parallel');
   if(state.restricted){existing?.remove();return;}  // never rendered on an instance; the server rejects the flag too
   if(existing)return;
   const button=element('button','⇈');button.id='send-parallel';button.type='button';button.hidden=true;
-  button.setAttribute('aria-label','Send to run in parallel');button.title='Send: may run in parallel with the running task';
-  button.onclick=action(async()=>{if(!parallelAvailable()||(!$('message-input').value.trim()&&!attachmentDraft(state.project).length))return;await sendSubmission(null,true);});
+  button.setAttribute('aria-label','Send in parallel');button.title=PARALLEL_TITLE;
+  button.onclick=action(async()=>{
+    if(!parallelAvailable())return;
+    if(!$('message-input').value.trim()&&!attachmentDraft(state.project).length){notice('Type the message to send in parallel, then press ⇈.');$('message-input').focus();return;}
+    await sendSubmission(null,true);
+  });
   $('send').after(button);
 }
+const PARALLEL_TITLE='Send in parallel: the task this message starts runs alongside the project\'s running or queued work (up to 3 at once) instead of waiting its turn';
 function parallelAvailable(){return !state.restricted&&!!state.project&&(state.portfolio?.tasks||[]).some(t=>t.project_id===state.project&&['running','queued'].includes(t.status));}
 function renderParallelBadge(row,m){
   const content=row.querySelector('.message-content');if(!content)return;
@@ -1027,7 +1033,7 @@ function updateComposer(){
   form.classList.toggle('composer-caret',focused&&!document.hidden&&(!mobile||(composerKeyboard.seen&&!composerKeyboard.closed)));
   $('send').hidden=!active;
   const parallelButton=$('send-parallel');
-  if(parallelButton){parallelButton.hidden=!active||!parallelAvailable()||(typeof audioState!=='undefined'&&!!audioState.session);parallelButton.disabled=state.pending.has(state.project);}
+  if(parallelButton){parallelButton.hidden=!parallelAvailable()||(typeof audioState!=='undefined'&&!!audioState.session);parallelButton.disabled=state.pending.has(state.project);}
   // Measure at the initial active size, independent of the previous overflow size.
   form.style.setProperty('--composer-height',(active?140:92)+'px');
   form.classList.toggle('composer-overflow',false);

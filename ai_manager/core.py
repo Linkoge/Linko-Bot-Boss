@@ -334,7 +334,8 @@ class Tasks:
                     JOIN projects p ON p.id=t.project_id WHERE t.state='queued' AND t.held=0
                     ORDER BY t.queued_at,t.rowid""").fetchall():
                 busy = running.get(task["project_id"], 0)
-                if busy and task["project_id"] in waiting:
+                beside = parallel and task["parallel"] and busy  # owner's parallel send: never waits its turn
+                if busy and task["project_id"] in waiting and not beside:
                     continue
                 if task["project_status"] == "removed":
                     self.fail_queued(conn, task, "Project was removed")
@@ -343,7 +344,7 @@ class Tasks:
                     continue  # paused or archived by the owner: skipped like a hold
                 if task["retry_at"] and task["retry_at"] > now:
                     continue  # waiting for a usage limit or the network: skipped like a hold until its retry time
-                if busy and not (parallel and task["parallel"] and busy < MAX_PARALLEL):
+                if busy and not (beside and busy < MAX_PARALLEL):
                     waiting.add(task["project_id"])  # default: one running task per project, strict order
                     continue
                 # Beside running work the checkout is not updated from GitHub (sync defers while work runs).
