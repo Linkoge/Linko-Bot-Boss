@@ -59,3 +59,9 @@ When: you add an `<article class="panel">` to `#view-settings` that instances (o
 Symptom: it works on Main, but on an instance the panel never appears; no error, only `tests/test_restricted_browser.py` (exact list of visible settings headings) notices.
 Cause: `ai_manager/static/style.css` hides every settings article on `.restricted` except a `:not(#id)` whitelist.
 Do: add the panel's id to that `:not(...)` list and its heading to the test's list; check with `pytest -q tests/test_restricted_browser.py`.
+
+### Manager tool text is pinned by digest   (2026-11-27, task de4cb8)
+When: you edit `MANAGER_TOOL` in `ai_manager/orchestration.py` (its description or schema), e.g. to tell the manager about a new flow.
+Symptom: `tests/test_harness.py::test_default_harnesses_are_byte_for_byte_todays_prompts_and_tools` fails on `digest(...) == TOOL_BEFORE`.
+Cause: the default harness must keep today's manager tool byte for byte; the test pins its sha256.
+Do: prefer telling the manager through data it already gets (`result_notice` in `ai_manager/chat.py`, the manager context); change the tool and `TOOL_BEFORE` together only when the tool itself must change.
