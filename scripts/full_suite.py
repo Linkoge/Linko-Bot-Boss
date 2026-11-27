@@ -13,6 +13,11 @@ import importlib.util
 import os
 import subprocess
 import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from ai_manager import scratch  # noqa: E402
 
 # Tests wait on browsers, services and git about half the time, so 1.5 workers per core keeps the CPUs busy; the cap
 # bounds memory (each worker may hold a Chromium and a uvicorn). Measured on the 4-core, 8 GB host: 4 -> 220 s, 6 -> 191 s.
@@ -43,6 +48,7 @@ def run(name, argv):
 
 
 def main(args):
+    scratch.apply()  # pytest and its children keep temp files on the normal disk, not /tmp
     failed = []
     if not XDIST:
         print('pytest-xdist is not installed in this environment; the parallel phase runs in one process', flush=True)

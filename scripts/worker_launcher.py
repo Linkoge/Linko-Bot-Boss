@@ -45,7 +45,19 @@ def environment(config, tag, user=None):
     env = {key: os.environ[key] for key in KEEP if key in os.environ}
     env.update(HOME=user.pw_dir, USER=user.pw_name, LOGNAME=user.pw_name, PATH=config.get('path') or DEFAULT_PATH)
     env[VARIABLE] = tag
+    env.update(scratch(config, tag, user))
     return env
+
+
+def scratch(config, tag, user):
+    """Temp files on the worker's own disk (never the RAM-backed /tmp): config `tmpdir` or ~/.cache/linko-tmp, one folder per run tag."""
+    base = os.path.expanduser(config.get('tmpdir') or os.path.join(user.pw_dir, '.cache', 'linko-tmp'))
+    folder = os.path.join(base, tag)
+    try:
+        os.makedirs(folder, mode=0o700, exist_ok=True)
+    except OSError:
+        return {}
+    return {key: folder for key in ('TMPDIR', 'TMP', 'TEMP', 'CLAUDE_CODE_TMPDIR')}
 
 
 def run(config, argv):

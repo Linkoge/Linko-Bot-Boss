@@ -9,6 +9,7 @@ import time
 import tomllib
 from pathlib import Path
 
+from . import scratch
 from .config import Settings
 from .tool_content import ImageResult
 
@@ -148,6 +149,7 @@ class AppServer:
                 stdin=asyncio.subprocess.PIPE,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                env={**os.environ, **scratch.env(getattr(self, "scratch", None))},
                 start_new_session=True,
                 limit=8 * 1024 * 1024,
             )

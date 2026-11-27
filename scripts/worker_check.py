@@ -8,6 +8,7 @@ from pathlib import Path
 # Invoked by absolute path using the manager's interpreter from any project's cwd.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from ai_manager import scratch  # noqa: E402
 from ai_manager.core import run_gate  # noqa: E402
 
 
@@ -45,6 +46,7 @@ def main():
     parser.add_argument("--root", type=Path, required=True, help="Project worktree")
     parser.add_argument("--base", required=True, help="Assignment base commit")
     args = parser.parse_args()
+    scratch.apply()
     root = args.root.resolve()
     result = run_gate(root, args.base)
     result["stale_pitfalls"] = stale_pitfalls(root)

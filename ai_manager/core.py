@@ -22,7 +22,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import fence, isolation
+from . import fence, isolation, scratch
 from .attachments import native_image
 from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
@@ -131,7 +131,9 @@ def run_gate(root, base):
     root = Path(root)
     env = {**os.environ, "PYTHONPATH": str(root), "AI_MANAGER_SECURE_COOKIE": "0"}
     failed = [secret_check(root, base)]
-    with tempfile.TemporaryDirectory(prefix="linko-gate-") as data:
+    scratch_base = scratch.prepare(environ=env) if scratch.env(environ=env) else None
+    with tempfile.TemporaryDirectory(prefix="linko-gate-", dir=scratch_base) as data:
+        env.update(scratch.env(Path(data).name, env) if scratch_base else {})
         env["AI_MANAGER_DATA"] = data  # disposable runtime data; the real database is never reachable
         base_argv = [interpreter(root), "-m", "pytest", "-q", "-rfE", "-p", "no:cacheprovider"]
         if (root / "tests").is_dir() or (root / "test").is_dir():
@@ -408,6 +410,7 @@ class Core:
     async def _run(self, task):
         eid, started = task["lease_owner"], time.monotonic()
         server = self.servers[eid] = self.factory(self.settings, native=True)
+        server.scratch = eid  # its provider processes get their own temp folder (ai_manager/scratch.py)
         try:
             self.isolate(task, eid, server)
             await self.work(task, eid, server)
