@@ -81,6 +81,19 @@ CREATE TABLE IF NOT EXISTS onboarding(
  pending_action TEXT CHECK(pending_action IN ('plan','apply')), requested_at REAL,
  steps TEXT NOT NULL DEFAULT '[]', error TEXT NOT NULL DEFAULT '', login_secret TEXT, port INTEGER,
  created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS autopilot_goals(
+ id TEXT PRIMARY KEY, project_id TEXT NOT NULL REFERENCES projects(id), title TEXT NOT NULL,
+ description TEXT NOT NULL DEFAULT '', checklist TEXT NOT NULL DEFAULT '[]', images TEXT NOT NULL DEFAULT '[]',
+ daily_budget INTEGER, deadline REAL,
+ status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','paused','waiting','stopped','done')),
+ score REAL NOT NULL DEFAULT 0, rounds INTEGER NOT NULL DEFAULT 0, task_id TEXT, next_wake REAL,
+ pause_reason TEXT NOT NULL DEFAULT '', loop TEXT NOT NULL DEFAULT '{}', created_at REAL NOT NULL, updated_at REAL NOT NULL);
+CREATE TABLE IF NOT EXISTS autopilot_journal(
+ id INTEGER PRIMARY KEY AUTOINCREMENT, goal_id TEXT NOT NULL REFERENCES autopilot_goals(id), round INTEGER,
+ kind TEXT NOT NULL, done TEXT NOT NULL DEFAULT '', result TEXT NOT NULL DEFAULT '', score REAL, scores TEXT,
+ next_idea TEXT NOT NULL DEFAULT '', model TEXT NOT NULL DEFAULT '', effort TEXT NOT NULL DEFAULT '',
+ tokens INTEGER NOT NULL DEFAULT 0, created_at REAL NOT NULL);
+CREATE INDEX IF NOT EXISTS autopilot_journal_goal ON autopilot_journal(goal_id,id);
 """
 
 

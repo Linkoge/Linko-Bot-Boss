@@ -39,6 +39,7 @@ Other components worth knowing:
 | Settings and paths | `ai_manager/config.py`, `model_settings.py` |
 | Worker isolation (separate Linux user) | `ai_manager/isolation.py`, `fence.py` |
 | Auto mode and follow-ups | `auto_mode.py`, `followups.py` |
+| Autopilot (goal loop on a dedicated machine; off by default) | `autopilot.py`, [AUTOPILOT.md](AUTOPILOT.md) |
 | Chat memory and compaction | `chat_memory.py` |
 | Harnesses | `harness.py`, `harnesses/` |
 | Instances registry and per-instance settings | `registry.py`, `instance_models.py`, `code_view.py` |

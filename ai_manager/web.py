@@ -24,6 +24,7 @@ from .attachments import Attachments
 from .audio import Audio
 from .auth import Auth
 from .auto_mode import AutoMode
+from . import autopilot
 from . import chat_memory, writing
 from .chat import Chat
 from .chat_memory import NOTICE as COMPACTION_NOTICE
@@ -251,6 +252,21 @@ class AnswerBody(BaseModel):
     answers: dict
 
 
+class GoalBody(BaseModel):
+    model_config = {"extra": "forbid"}
+    project_id: str = Field(min_length=1, max_length=100)
+    title: str = Field(max_length=200)
+    description: str = Field(default="", max_length=8000)
+    done_when: list[str] = Field(min_length=1, max_length=30)
+    daily_budget: int | None = Field(default=None, strict=True)
+    deadline: str | None = Field(default=None, max_length=10)
+
+
+class AutopilotPause(BaseModel):
+    model_config = {"extra": "forbid"}  # the pause button only: no field can set a lock or a limit
+    paused: bool = Field(strict=True)
+
+
 def create_app(settings: Settings | None = None, server=None, worker_factory=None, github_fetch=None):
     settings = settings or Settings()
     settings.prepare()
@@ -281,6 +297,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     scheduler = Scheduler(db, registry, settings, core, chat, pipeline)
     chat.action_handler = scheduler.manager_action
     chat.restricted = restricted
+    # Autopilot (autopilot.py): both locks live outside the app (env line, owner-installed sudoers); off by default.
+    autopilot_locks = autopilot.Locks(settings)
+    chat.autopilot = autopilot_locks
+    scheduler.autopilot = autopilot.Engine(db, registry, settings, chat.server, pipeline, core, autopilot_locks,
+                                           workspace=chat.compactor.workspace)
     github = GitHubProjects(db, registry, settings, pipeline, fetch=github_fetch)
     onboarding = Onboarding(db, settings, settings.onboarding_config)
     pipeline.backups.credentials = github.push_credentials
@@ -477,6 +498,8 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "restricted": restricted,
             "office": restricted,  # every instance but Main is restricted: office mode shows only the chat
             "scheduler_running": bool(scheduler.job and not scheduler.job.done()),
+            # The header badge; only for the signed-in owner. A restricted instance is always off (no sudo probe).
+            "autopilot": (autopilot_locks.level() if session else None),
         }
 
     @app.get('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
@@ -1275,6 +1298,55 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             )
             db.event(conn, "question.answered", {"question_id": question_id}, execution_id=question["execution_id"])
         return {"result": "accepted"}
+
+    # Autopilot: read the locks and the setup guide, manage goals, pause. There is deliberately no route that sets a
+    # lock: the config lock is this machine's env file, the OS lock its owner-installed sudoers drop-in.
+    autopilot_only = [Depends(require_owner), Depends(unrestricted)]
+    goals = scheduler.autopilot.goals
+
+    def autopilot_view():
+        return {"status": autopilot_locks.status(), "guide": autopilot.guide(settings),
+                "paused": bool(db.setting(autopilot.PAUSED)), "goals": goals.list(),
+                "check_minutes": autopilot.CHECK_SECONDS // 60, "pass_percent": int(autopilot.PASS * 100),
+                "stall_rounds": autopilot.STALL_ROUNDS}
+
+    def configured():
+        if not autopilot_locks.config():
+            raise ValueError(f"Autopilot is off on this machine: add {autopilot.ENV}={autopilot.ENV_VALUE} to "
+                             f"{settings.env_file} and restart (Settings > Autopilot)")
+
+    @app.get("/api/autopilot", dependencies=autopilot_only)
+    def autopilot_status():
+        return autopilot_view()
+
+    @app.post("/api/autopilot/pause", dependencies=autopilot_only)
+    def autopilot_pause(body: AutopilotPause):
+        db.set_setting(autopilot.PAUSED, body.paused)
+        return autopilot_view()
+
+    @app.post("/api/autopilot/goals", dependencies=autopilot_only)
+    def autopilot_goal_create(body: GoalBody):
+        configured()
+        return goals.create(body.project_id, body.title, body.description, body.done_when, body.daily_budget,
+                            body.deadline)
+
+    @app.post("/api/autopilot/goals/{goal_id}/images", dependencies=autopilot_only)
+    async def autopilot_goal_image(goal_id: str, request: Request, name: str = Query("image", max_length=200)):
+        configured()
+        data = b""
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > autopilot.IMAGE_BYTES:
+                raise ValueError("A reference image must be at most 8 MB")
+        return await asyncio.to_thread(goals.add_image, goal_id, name, data)
+
+    @app.post("/api/autopilot/goals/{goal_id}/{op}", dependencies=autopilot_only)
+    def autopilot_goal_control(goal_id: str, op: Literal["pause", "resume", "stop"]):
+        return goals.control(goal_id, op)
+
+    @app.get("/api/autopilot/goals/{goal_id}/journal", dependencies=autopilot_only)
+    def autopilot_journal(goal_id: str, limit: int = Query(20, ge=1, le=200)):
+        return {"goal": goals.view(goal_id), "journal": goals.journal(goal_id, limit)}
 
     @app.get("/api/settings", dependencies=[Depends(require_owner)])
     def get_settings():

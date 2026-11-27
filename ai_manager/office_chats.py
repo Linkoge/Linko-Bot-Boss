@@ -53,8 +53,8 @@ def clean_title(text):
     return " ".join(words[:TITLE_WORDS + 2])[:TITLE_CHARS].strip()
 
 
-async def ask(server, workspace, instructions, text, route, timeout):
-    """One tool-less model turn; returns the reply text. Raises on failure or timeout."""
+async def ask(server, workspace, instructions, text, route, timeout, images=()):
+    """One tool-less model turn; returns the reply text. Raises on failure or timeout. images: local image paths."""
     thread = turn_id = None
     done = False
 
@@ -64,7 +64,8 @@ async def ask(server, workspace, instructions, text, route, timeout):
         thread = await server.thread(workspace, instructions, None, route["model"])
         queue = asyncio.Queue()
         server.queues[thread] = queue
-        turn = await server.request("turn/start", {"threadId": thread, "input": [{"type": "text", "text": text}],
+        turn = await server.request("turn/start", {"threadId": thread, "input": [{"type": "text", "text": text}, *(
+            {"type": "localImage", "path": str(path)} for path in images)],
                                                    **route, "serviceTierForTurn": "default"})
         turn_id, output = turn["turn"]["id"], ""
         while True:

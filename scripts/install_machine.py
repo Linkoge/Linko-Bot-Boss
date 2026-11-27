@@ -18,6 +18,9 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 HUMAN = 2
+# Machine-local env lines a restored env file must not carry over (the Autopilot config lock and its hooks).
+LOCAL_ONLY = ("AI_MANAGER_AUTOPILOT=", "AI_MANAGER_SNAPSHOT_CMD=", "AI_MANAGER_SCREENSHOT_CMD=",
+              "AI_MANAGER_AUTOPILOT_DISPLAY=")
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -87,21 +90,26 @@ class Installer:
             self.say(f"{'would restore' if self.dry else 'restored'} {target}" + (f" (previous copy: {bak})" if bak else ""))
 
     def allow_new_host(self):
-        """A restored env file names the old machine: add this machine's address to the allowed hosts."""
+        """A restored env file names the old machine: add this machine's address to the allowed hosts. Autopilot's
+        lines never move to another machine (docs/AUTOPILOT.md): they are dropped from the restored file."""
         if self.dry or not self.secrets or not self.env_file.is_file():
             return
-        lines = self.env_file.read_text().splitlines()
+        original = self.env_file.read_text().splitlines()
+        lines = [line for line in original if not line.startswith(LOCAL_ONLY)]
+        if len(lines) != len(original):
+            self.say("dropped the Autopilot lines from the restored env file: Autopilot is set up on each machine itself")
         for number, line in enumerate(lines):
             if line.startswith("AI_MANAGER_ALLOWED_HOSTS="):
                 hosts = line.split("=", 1)[1].split(",")
                 if self.hostname not in hosts:
                     lines[number] = line + "," + self.hostname
-                    fd = os.open(self.env_file, os.O_WRONLY | os.O_TRUNC, 0o600)
-                    with os.fdopen(fd, "w") as handle:
-                        handle.write("\n".join(lines) + "\n")
-                return
-        with open(self.env_file, "a") as handle:
-            handle.write(f"AI_MANAGER_ALLOWED_HOSTS=localhost,127.0.0.1,{self.hostname}\n")
+                break
+        else:
+            lines.append(f"AI_MANAGER_ALLOWED_HOSTS=localhost,127.0.0.1,{self.hostname}")
+        if lines != original:
+            fd = os.open(self.env_file, os.O_WRONLY | os.O_TRUNC, 0o600)
+            with os.fdopen(fd, "w") as handle:
+                handle.write("\n".join(lines) + "\n")
 
     def tailscale_host(self):
         result = self.probe(["tailscale", "status", "--json"])

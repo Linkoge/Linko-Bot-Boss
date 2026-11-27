@@ -69,6 +69,15 @@ class Settings:
         default_factory=lambda: tuple(os.getenv("AI_MANAGER_ALLOWED_CLIENTS", "").split(","))
     )
 
+    # Autopilot (ai_manager/autopilot.py, docs/AUTOPILOT.md). The config lock is only this process's environment, i.e.
+    # the line AI_MANAGER_AUTOPILOT=full in this machine's own env file: never a database setting, never synced.
+    autopilot: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUTOPILOT", "").strip().lower())
+    env_file: Path = field(default_factory=lambda: Path(
+        os.getenv("AI_MANAGER_ENV_FILE", "~/.config/linko-bot-manager.env")).expanduser())
+    snapshot_cmd: str = field(default_factory=lambda: os.getenv("AI_MANAGER_SNAPSHOT_CMD", "").strip())
+    screenshot_cmd: str = field(default_factory=lambda: os.getenv("AI_MANAGER_SCREENSHOT_CMD", "").strip())
+    autopilot_display: str = field(default_factory=lambda: os.getenv("AI_MANAGER_AUTOPILOT_DISPLAY", "").strip())
+
     def __post_init__(self):
         self.allowed_clients = tuple(c.strip() for c in self.allowed_clients if c.strip())
         hosts = [h.strip() for h in (*self.allowed_hosts, *self.public_hosts) if h.strip()]

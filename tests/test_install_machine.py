@@ -176,6 +176,16 @@ def test_secrets_restore_mode_600_owner_and_new_host(tmp_path, monkeypatch, back
     assert PASS not in capsys.readouterr().out
 
 
+def test_restored_env_file_never_carries_the_autopilot_lock(tmp_path, monkeypatch, backup_file, capsys):
+    im, inst, home = installer(tmp_path, monkeypatch, backup_file)
+    inst.env_file.parent.mkdir(parents=True, exist_ok=True)
+    inst.env_file.write_text("XAI_API_KEY=x\nAI_MANAGER_AUTOPILOT=full\nAI_MANAGER_SNAPSHOT_CMD=ssh hv snap\n"
+                             f"AI_MANAGER_ALLOWED_HOSTS=localhost,{HOST}\n")
+    inst.allow_new_host()
+    assert inst.env_file.read_text() == f"XAI_API_KEY=x\nAI_MANAGER_ALLOWED_HOSTS=localhost,{HOST}\n"
+    assert "dropped the Autopilot lines" in capsys.readouterr().out
+
+
 def test_secrets_dry_run_writes_nothing(tmp_path, monkeypatch, backup_file, capsys):
     im, inst, home = installer(tmp_path, monkeypatch, backup_file, dry=True)
     inst.restore_secrets()

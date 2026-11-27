@@ -96,6 +96,7 @@ class Scheduler:
         self.pipeline = pipeline or core.pipeline
         self.restricted = settings.restricted
         self.followups = Followups(db, registry, self.pipeline)
+        self.autopilot = None  # autopilot.Engine, set by create_app; its tick is a no-op without the config lock
 
     async def manager_action(self, selected_project, params):
         args = params["arguments"]
@@ -119,6 +120,12 @@ class Scheduler:
         if execution and (execution["stop_requested"] or execution["finished_at"] is not None):
             raise ValueError("This manager execution has stopped")
         internal = params.get('internal', False)
+        if action == "autopilot_goal":  # offered only where the config lock is set (autopilot.extend_tool)
+            from .autopilot import chat_action
+            if self.restricted or not self.autopilot:
+                raise ValueError("Autopilot is off on this machine")
+            return chat_action(self.autopilot.goals, self.autopilot.locks, args, selected_project, internal,
+                               self.db.setting('execution_attachments:' + str(params.get('manager_execution_id')), []))
         if not internal and action in {'delegate', 'continue'} and not args.get('todos'):
             sources = self.db.setting('execution_todo_sources:' + str(params.get('manager_execution_id')))
             if sources:
@@ -420,6 +427,8 @@ class Scheduler:
             await self.chat.recover()
             await self.chat.deliver_results()
             self.chat.compactor.check()  # between turns only; at most one automatic attempt per threshold crossing
+            if self.autopilot:
+                await self.autopilot.tick()  # returns at once unless this machine's config lock is set
 
     async def run(self):
         while True:
@@ -437,6 +446,8 @@ class Scheduler:
 
     async def close(self):
         await self.maintenance.close()
+        if self.autopilot:
+            await self.autopilot.close()
         if self.job:
             self.job.cancel()
             await asyncio.gather(self.job, return_exceptions=True)

@@ -88,6 +88,7 @@ class Chat:
         self.resumed = False
         self.action_handler = None
         self.restricted = False
+        self.autopilot = None  # autopilot.Locks, set by create_app: the tool/context extension needs the config lock
         self.attachments = None
         self.workspace = db.path.parent / "chat-workspace"
         self.workspace.mkdir(exist_ok=True, mode=0o700)
@@ -487,6 +488,9 @@ class Chat:
         from .auto_mode import AutoMode
         auto = AutoMode(self.db)
         context['auto_mode'] = {k: v for k, v in auto.state().items() if k != 'used_24h'}
+        if self.autopilot and self.autopilot.config():  # absent everywhere Autopilot is not configured
+            from .autopilot import Goals, context as autopilot_context
+            context['autopilot'] = autopilot_context(Goals(self.db), self.autopilot, conversation['project_id'])
         prompt = {"message": "Internal worker completion; retrieve evidence before deciding next steps." if source else content}
         if source:
             prompt["worker_result"] = self.result_notice(source)
@@ -765,6 +769,9 @@ class Chat:
             # prompt or tool changes the schema below, so the turn starts a fresh thread with the recent history.
             harness, autonomy = harnesses.manager_turn(self.db, conversation["project_id"])
             tool = harnesses.manager_tool(harness, self.restricted)
+            if self.autopilot and self.autopilot.config():  # only where this machine's own env sets the config lock
+                from .autopilot import extend_tool
+                tool = extend_tool(tool)
             instructions = harness.instructions(self.restricted)
             schema = hashlib.sha256((instructions + json.dumps(tool, sort_keys=True)).encode()).hexdigest()
             prior = conversation["thread_id"]
@@ -972,6 +979,7 @@ class Chat:
             FROM executions e JOIN tasks t ON t.id=e.task_id
             LEFT JOIN executions reply ON reply.id=e.delivery_execution
             WHERE e.delivery='pending' AND e.finished_at IS NOT NULL AND t.lease_owner IS NULL
+            AND (t.request_key IS NULL OR substr(t.request_key,1,10)!='autopilot:')
             AND (reply.id IS NULL OR reply.finished_at<=?) ORDER BY e.finished_at""",
             (time.time() - 30,),
         ):

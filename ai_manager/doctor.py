@@ -243,8 +243,12 @@ class Doctor:
         self.report(bool(found), 'worker user installed', install + "; until then workers run with your user's rights",
                     warning=True)
         _, listing = command(['sudo', '-n', '-l'])
-        self.report(not isolation.blanket_nopasswd(listing), 'no blanket NOPASSWD sudo for the service user',
-                    'remove the temporary NOPASSWD: ALL rule (README "Emergency host repair")', warning=not found)
+        from .autopilot import env_line_present
+        if isolation.blanket_nopasswd(listing) and env_line_present(self.home / '.config/linko-bot-manager.env'):
+            self.report(True, 'blanket NOPASSWD sudo is this Autopilot machine\'s OS lock (docs/AUTOPILOT.md)', '')
+        else:
+            self.report(not isolation.blanket_nopasswd(listing), 'no blanket NOPASSWD sudo for the service user',
+                        'remove the temporary NOPASSWD: ALL rule (README "Emergency host repair")', warning=not found)
         if not found:
             return
         config = json.loads(Path(self.isolation_config).read_text())

@@ -440,6 +440,17 @@ def test_doctor_reports_missing_isolation_and_blanket_nopasswd(tmp_path, monkeyp
     assert not check.failed
 
 
+def test_doctor_accepts_blanket_nopasswd_as_the_autopilot_os_lock(tmp_path, monkeypatch):
+    listing = '(ALL : ALL) NOPASSWD: ALL'
+    monkeypatch.setattr(doctor, 'command', lambda argv, **kw: (0, listing) if argv[:2] == ['sudo', '-n'] else (1, ''))
+    (tmp_path / '.config').mkdir()
+    (tmp_path / '.config/linko-bot-manager.env').write_text('AI_MANAGER_AUTOPILOT=full\n')
+    lines = []
+    check = doctor.Doctor(home=tmp_path, repo=ROOT, output=lines.append, isolation_config=tmp_path / 'missing.json')
+    check.worker_isolation(tmp_path)
+    assert lines[1].startswith("PASS blanket NOPASSWD sudo is this Autopilot machine's OS lock")
+
+
 def test_doctor_isolation_working_when_the_probe_reaches_nothing(tmp_path, monkeypatch):
     found = Isolation('linko-worker', str(tmp_path / 'worker-launcher.py'), ME)
     shutil.copy(ROOT / 'scripts/worker_launcher.py', found.launcher)

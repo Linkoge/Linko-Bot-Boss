@@ -471,6 +471,8 @@ def test_fresh_schema_contains_only_current_storage(system):
         "project_ideas",
         "onboarding",
         "questions",
+        "autopilot_goals",
+        "autopilot_journal",
         "sqlite_sequence",
     }
     columns = {r["name"] for r in db.all("PRAGMA table_info(tasks)")}
