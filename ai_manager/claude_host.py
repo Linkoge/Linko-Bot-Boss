@@ -99,6 +99,21 @@ def usage_windows(payload):
     return found
 
 
+SOCKET_PATH_MAX = 107  # Linux sun_path is 108 bytes including the terminating NUL
+
+
+def socket_dir():
+    """A private (0700) folder for the bridge socket. The temp dir (the scratch space) when the socket path fits; a deep
+    scratch path (a per-run folder, another user's home, a test's temp root) would make bind() fail and the host die at
+    start, so it then falls back to /tmp: a socket takes no disk space."""
+    for base in (None, '/tmp'):
+        folder = Path(tempfile.mkdtemp(prefix='linko-claude-', dir=base))
+        if len(os.fsencode(folder / 'host.sock')) <= SOCKET_PATH_MAX:
+            return folder
+        folder.rmdir()
+    raise SystemExit('No temporary folder is short enough for the Claude host bridge socket')
+
+
 class Host:
     def __init__(self, data, claude, native, worker_prefix=None, worker_tag=None):
         self.dir = Path(data) / 'claude-threads'
@@ -106,8 +121,7 @@ class Host:
         self.claude, self.native = claude, native
         # Isolated worker (ai_manager/isolation.py): turns run as the worker user through the fixed launcher argv.
         self.worker_prefix, self.worker_tag = worker_prefix, worker_tag
-        # Unix socket paths are short (108 bytes); keep it in a private temporary directory.
-        self.socket = Path(tempfile.mkdtemp(prefix='linko-claude-')) / 'host.sock'
+        self.socket = socket_dir() / 'host.sock'
         self.running = {}  # thread_id -> {'turn', 'process', 'interrupted'}
         self.pending = {}
         self.serial = 0

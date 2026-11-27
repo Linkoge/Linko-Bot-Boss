@@ -164,6 +164,43 @@ async def test_claude_host_translates_turns_resume_interrupt_and_limits(tmp_path
 
 
 @pytest.mark.asyncio
+async def test_claude_host_starts_when_the_scratch_path_is_too_deep_for_a_socket(tmp_path, monkeypatch):
+    # The full suite's temp root (~/.cache/linko-tmp/pytest-of-USER/pytest-N/popen-gwK/...) used to push the bridge
+    # socket past the 108-byte Unix socket limit: the host died at start ("connection closed").
+    deep = tmp_path / ('scratch-' + 'd' * 60) / ('run-' + 'e' * 60)
+    monkeypatch.setenv('AI_MANAGER_TMPDIR', str(deep))
+    fake = tmp_path / 'claude'
+    fake.write_text(FAKE_CLAUDE.format(python=sys.executable))
+    fake.chmod(fake.stat().st_mode | stat.S_IEXEC)
+    settings = Settings(data_dir=tmp_path / 'data', claude_bin=str(fake))
+    settings.prepare()
+    server = ClaudeServer(settings, native=True)
+    try:
+        await server.start()
+        thread = await server.thread(tmp_path, 'Be helpful', None, 'claude-haiku-5-5')
+        _, events = await run_turn(server, thread, 'hello')
+        assert events[-1]['params']['turn']['status'] == 'completed'
+        assert deep.is_dir()  # the scratch space itself is still used for everything else
+    finally:
+        await server.close()
+
+
+def test_bridge_socket_folder_fits_the_unix_socket_limit(tmp_path, monkeypatch):
+    from ai_manager import claude_host
+    short = claude_host.socket_dir()
+    assert len(os.fsencode(short / 'host.sock')) <= claude_host.SOCKET_PATH_MAX and oct(short.stat().st_mode)[-3:] == '700'
+    short.rmdir()
+    deep = tmp_path / ('x' * 120)
+    deep.mkdir()
+    monkeypatch.setattr(claude_host.tempfile, 'tempdir', str(deep))
+    folder = claude_host.socket_dir()
+    try:
+        assert str(folder).startswith('/tmp/linko-claude-') and list(deep.iterdir()) == []
+    finally:
+        folder.rmdir()
+
+
+@pytest.mark.asyncio
 async def test_claude_manager_has_only_read_tools_in_the_real_project_directory(tmp_path):
     repo = tmp_path / 'shop'
     repo.mkdir()
