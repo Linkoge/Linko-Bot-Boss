@@ -877,3 +877,5 @@ class Core:
         await asyncio.gather(*list(self.jobs.values()), return_exceptions=True)
         await self.pipeline.sync.close()
         await self.pipeline.backups.close()
+        if self.pipeline.self_update:
+            await self.pipeline.self_update.close()

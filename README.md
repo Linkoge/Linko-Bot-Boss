@@ -860,6 +860,33 @@ stored in this instance's settings (`machines`) through the owner-only `GET`/`PU
 validates: http/https only, no credentials, query or fragment, unique names/URLs, at most 20). Each instance keeps its own
 login and its own list.
 
+Each saved machine shows its version next to its name: green **latest** (same or newer commit count than this machine),
+orange **behind by N** (commits on main), or **offline** (unreachable, or no Bot Boss answer). This server fetches every
+saved address's `GET /api/version` over the tailnet in parallel with a 3-second timeout (owner-only
+`GET /api/machines/versions`), so the page's CSP and CORS stay unchanged.
+
+### Version and auto-update
+
+The version is derived from git at startup, never bumped by hand: `YYYY.MM.DD.N (hash)`, e.g. `2026.11.28.1873
+(c4fe69b)`, where the date is the HEAD commit's date (UTC), N is `git rev-list --count HEAD` and the hash is the short
+commit (`ai_manager/self_update.py`). It heads the project menu (with or without a selected project), appears in
+Settings → **Version** (also on restricted instances) and in `/api/auth-status` (`version`). `GET /api/version` is
+unauthenticated and read-only and returns only `{version, commit, commit_count}`.
+
+**Auto-update from GitHub** (Settings → Version, owner's switch, saved as the `self_update` setting) is on by default on
+machines other than Main and off on Main, where task merges already deploy. Main is `AI_MANAGER_MACHINE_ROLE=main`, or,
+with no role set, a machine where this checkout is a registered project (it merges and deploys Bot Boss itself); any
+other role value is a non-Main machine. Restricted instances never update (they share Main's checkout). Every 30 minutes
+(first check 2 minutes after start) it fetches `origin`'s main (any remote URL, e.g. an SSH deploy key
+`git@github.com:...`; 60-second timeout, no prompts) into `refs/remotes/origin/main`. When main moved ahead, the
+installed deploy (`<data>/deploy/installed.json`) runs this checkout, the checkout is on `main` with no tracked local
+changes, and nothing runs (no unfinished execution, running/leased task, streaming reply or pending deploy), it
+fast-forwards under the checkout fence and queues the existing deploy (full tests, backup, restart, health check,
+rollback). It never forces, resets or commits: local changes, another branch or a diverged main are skipped and the
+reason is shown; busy work defers to the next check. The menu line and the Settings panel show last checked / last
+updated and an **Update now** button (a manual check that runs even while the switch is off). Permanent coverage:
+`tests/test_self_update.py` and `tests/test_version_browser.py`.
+
 ### Onboarding
 
 Project menu → **Add user** (owner only, main instance only) onboards a restricted user: fill name, email and Windows folder,

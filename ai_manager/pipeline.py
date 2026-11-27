@@ -171,6 +171,7 @@ def merge_into_main(root, commit, fast_forward=False):
 class Pipeline:
     def __init__(self, db, registry, restricted=False):
         self.db, self.registry, self.job, self.restricted = db, registry, None, restricted
+        self.self_update = None  # self_update.SelfUpdate, set by the app
         self.root = db.path.parent / 'deploy'
         self.backups = GitHubBackup(db, registry, self.deployable)
         self.sync = GitHubSync(self)
@@ -318,6 +319,22 @@ class Pipeline:
         value = {'id': hashlib.sha256(os.urandom(16)).hexdigest()[:16], 'project_id': project_id, 'source': source,
                  'task_id': task_id, 'conversation_id': conversation_id, 'reason': reason[:300],
                  'requested_at': time.time(), 'repo': str(self.registry.allowed_path(project['path'])), 'setup': setup}
+        atomic(self.root / 'request.json', value)
+        return value
+
+    def request_runtime(self, source, reason=''):
+        """Deploy this application's own checkout (self_update.py); the caller holds the checkout fence. A registered
+        project for the checkout uses its saved setup; otherwise scripts/deploy.py uses the installed runtime."""
+        installed = read(self.root / 'installed.json') or {}
+        repo = Path(installed.get('repo') or '.').resolve()
+        for project in self.registry.list():
+            if Path(project['path']).resolve() == repo:
+                return self._request(project['id'], source, None, None, reason)
+        if self.pending():
+            raise ValueError('Another deploy is pending; retry after it finishes')
+        value = {'id': hashlib.sha256(os.urandom(16)).hexdigest()[:16], 'project_id': None, 'source': source,
+                 'task_id': None, 'conversation_id': None, 'reason': reason[:300], 'requested_at': time.time(),
+                 'repo': str(repo), 'setup': None}
         atomic(self.root / 'request.json', value)
         return value
 

@@ -118,7 +118,7 @@ async function api(path, options={}){
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
 function showAuth(){clearChatCache();state.history=null;$('messages').replaceChildren();cancelInitialChat();initialChatPosition=true;$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
-async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;state.restricted=!!auth.restricted;state.autopilot=auth.autopilot;state.autopilotOn=auth.autopilot_on;if(typeof renderAutopilotSwitch==='function')renderAutopilotSwitch();document.body.classList.toggle('restricted',state.restricted);document.body.classList.toggle('office',!!auth.office);renderParallelSend();$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
+async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;state.restricted=!!auth.restricted;state.version=auth.version||'';state.autopilot=auth.autopilot;state.autopilotOn=auth.autopilot_on;if(typeof renderAutopilotSwitch==='function')renderAutopilotSwitch();document.body.classList.toggle('restricted',state.restricted);document.body.classList.toggle('office',!!auth.office);renderParallelSend();$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();if(typeof refreshAutopilot==='function')refreshAutopilot();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;const isolationWarning=settings.worker_isolation?.warning||'';$('worker-isolation-warning').textContent=isolationWarning;$('worker-isolation-warning').hidden=!isolationWarning;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[...(state.restricted?[]:[null]),...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;loadGithubStatus();if(!state.restricted)refreshVisibility();}
 let refreshVersion=0,listingLoad=null;
 async function refresh(loadChat=true,older=null){
@@ -220,15 +220,15 @@ async function setProjectVisibility(p,visible){
 }
 let machinesLoaded=false;
 function sameOrigin(url){try{const u=new URL(url);return u.origin===location.origin;}catch{return false;}}
-async function saveMachines(list){const r=await api('/api/machines',{method:'PUT',body:JSON.stringify({machines:list})});state.machines=r.machines;state.machineForm=false;state.machineDraft=null;renderProjectMenu();}
+async function saveMachines(list){const r=await api('/api/machines',{method:'PUT',body:JSON.stringify({machines:list})});state.machines=r.machines;state.machineForm=false;state.machineDraft=null;renderProjectMenu();if(typeof loadMachineVersions==='function')loadMachineVersions(true);}
 function renderMachines(section){
   const list=state.machines||[];
   if(!machinesLoaded){machinesLoaded=true;api('/api/machines').then(r=>{state.machines=r.machines;if(!$('project-menu').hidden)renderProjectMenu();}).catch(()=>{machinesLoaded=false;});}
   const here=element('div','This machine · '+location.host,'project-menu-machine-here');section.append(here);
   for(const m of list){
     const row=element('div',undefined,'project-menu-machine');
-    if(sameOrigin(m.url)){row.append(element('span',m.name+' · This machine',undefined));row.classList.add('current');}
-    else{const go=element('button',m.name);go.title=m.url;go.dataset.machine=m.id;go.onclick=()=>{location.assign(m.url);};row.append(go);}
+    if(sameOrigin(m.url)){row.append(element('span',m.name+' · This machine',undefined),element('span'));row.classList.add('current');}
+    else{const go=element('button',m.name);go.title=m.url;go.dataset.machine=m.id;go.onclick=()=>{location.assign(m.url);};row.append(go,typeof machineVersion==='function'?machineVersion(m):'');}
     const edit=element('button','✎');edit.type='button';edit.setAttribute('aria-label','Edit '+m.name);edit.onclick=()=>{const name=prompt('Machine name',m.name);if(name===null)return;const url=prompt('Machine URL',m.url);if(url===null)return;action(()=>saveMachines(list.map(x=>x.id===m.id?{...x,name,url}:x)))();};
     const del=element('button','×');del.type='button';del.setAttribute('aria-label','Remove '+m.name);del.onclick=action(()=>saveMachines(list.filter(x=>x.id!==m.id)));
     row.append(edit,del);section.append(row);
@@ -249,6 +249,7 @@ function renderProjectMenu(){
   const machineInputs=[...menu.querySelectorAll('.project-menu-machine-form input')],machineIndex=active?machineInputs.indexOf(active):-1,machineSel=machineIndex>=0?[active.selectionStart,active.selectionEnd]:null;
   const focusKey=active?.dataset.visibility,focused=active?.dataset.project,summaryFocused=active?.tagName==='SUMMARY',scroll=menu.scrollTop;renderingProjectMenu=true;
   const content=$('project-menu-content');content.replaceChildren();
+  if(typeof renderVersionHead==='function')renderVersionHead(content);
   const group=label=>{const section=element('div',undefined,'project-menu-group');section.setAttribute('role','group');section.setAttribute('aria-label',label);content.append(section);return section;};
   if(!state.restricted){const ideas=element('button','Project ideas');ideas.dataset.project='ideas';ideas.onclick=()=>{closeProjectMenu(true);showView('ideas');};group('Future projects').append(ideas);const addUser=element('button','Add user');addUser.dataset.project='add-user';addUser.onclick=action(openOnboarding);group('Users').append(addUser);renderMachines(group('Machines'));}
   const projects=group('Projects and stashed projects');

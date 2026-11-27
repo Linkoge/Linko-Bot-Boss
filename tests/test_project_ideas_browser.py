@@ -9,7 +9,7 @@ from test_github_projects_browser import browser_app, page  # noqa: F401
 def open_ideas(page):  # noqa: F811
     page.locator('#project-menu-button').click()
     menu = page.locator('#project-menu')
-    expect(menu.locator('#project-menu-content > :first-child button')).to_have_text('Project ideas')
+    expect(menu.locator('#project-menu-content > .project-menu-group').first.locator('button')).to_have_text('Project ideas')
     menu.get_by_role('button', name='Project ideas', exact=True).click()
     expect(menu).not_to_be_visible()
     expect(page.locator('#view-ideas')).to_be_visible()

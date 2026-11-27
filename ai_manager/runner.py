@@ -49,6 +49,8 @@ class Runner:
             core.launch(task)
         core.pipeline.sync.tick()
         core.pipeline.backups.tick()
+        if core.pipeline.self_update:
+            core.pipeline.self_update.tick()
         self.idle_since = (self.idle_since or time.monotonic()) if self.starved() else None
         self.reported &= self.idle_since is not None
 

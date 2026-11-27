@@ -373,7 +373,8 @@ def test_report_after_provisioning_started_cannot_change_anything(host):
 @pytest.mark.smoke
 def test_no_route_is_reachable_without_a_session_except_the_known_public_ones(host):
     public = {("GET", "/"), ("GET", "/api/auth-status"), ("GET", "/manifest.webmanifest"), ("POST", "/api/login"),
-              ("POST", "/api/setup"), ("POST", "/api/enroll/report")}
+              ("POST", "/api/setup"), ("POST", "/api/enroll/report"),
+              ("GET", "/api/version")}  # read-only {version, commit, commit_count} for other machines
     anonymous = host.plain()
     seen = set()
     for route in host.app.routes:

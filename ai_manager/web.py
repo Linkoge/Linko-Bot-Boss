@@ -45,6 +45,8 @@ from .provision import DEVICE_RE, ProvisionError
 from .project_memory import MemoryReviews, ProjectMemory
 from .proxy import client_allowed, client_ip, enrollment_address, is_https, parse_clients, parse_trusted
 from .registry import Registry, git
+from . import self_update
+from .self_update import SelfUpdate
 from .todos import Todos
 
 
@@ -308,6 +310,9 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
     release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
+    # Bot Boss's own version (self_update.py): derived from git once at startup, like release_commit.
+    updater = SelfUpdate(db, registry, pipeline, restricted)
+    pipeline.self_update = updater
     # The access switch (access.py) applies to instances only; Main ignores the flag.
     gate = access.Gate(db, access.TTL) if restricted else None
     stopped = set()
@@ -495,6 +500,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "authenticated": bool(session),
             "csrf": session["csrf"] if session else None,
             "release_commit": release_commit,
+            "version": self_update.label(updater.version),
             "restricted": restricted,
             "office": restricted,  # every instance but Main is restricted: office mode shows only the chat
             "scheduler_running": bool(scheduler.job and not scheduler.job.done()),
@@ -503,6 +509,28 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "autopilot": (autopilot_locks.level() if session else None),
             "autopilot_on": (autopilot.on(db) if session and not restricted else None),
         }
+
+    @app.get("/api/version")
+    def version():
+        """Unauthenticated and read-only: other machines' Machines lists compare against it. Only these three fields."""
+        return {k: updater.version[k] for k in ("version", "commit", "commit_count")}
+
+    @app.get("/api/self-update", dependencies=[Depends(require_owner)])
+    def self_update_status():
+        return updater.status()
+
+    @app.put("/api/self-update", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def save_self_update(body: dict):
+        return updater.set_enabled(body.get("enabled"))
+
+    @app.post("/api/self-update/check", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def self_update_now():
+        return await updater.run_now()
+
+    @app.get('/api/machines/versions', dependencies=[Depends(require_owner), Depends(unrestricted)])
+    async def machine_versions():
+        from .machines import read
+        return {'version': updater.version, 'machines': await asyncio.to_thread(self_update.peers, updater.version, read(db))}
 
     @app.get('/api/repair', dependencies=[Depends(require_owner), Depends(unrestricted)])
     def repair_status():

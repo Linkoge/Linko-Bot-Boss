@@ -96,7 +96,7 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             assert not page.locator('#view-ideas').is_visible()
             assert page.locator('#project-menu').is_hidden()
             # Settings of an instance: Instructions, its own Writing samples and Sign out (everything else follows Main).
-            assert [t.strip() for t in page.locator('#view-settings > article:visible h2').all_inner_texts()] == ['Writing', 'Instructions', 'Session']
+            assert [t.strip() for t in page.locator('#view-settings > article:visible h2').all_inner_texts()] == ['Version', 'Writing', 'Instructions', 'Session']
             for shown in ('#global-instructions', '#logout'):
                 assert page.locator(shown).is_visible(), shown
             for hidden in ('#rename-project', '#project-settings', '#chat-memory-panel', '#chat-memory-model',
