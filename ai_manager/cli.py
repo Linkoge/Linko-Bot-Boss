@@ -85,6 +85,10 @@ def main():
     elif args.command == "serve":
         import uvicorn
 
+        from . import scratch
+
+        scratch.apply()  # every spawned process inherits a temp dir on the normal disk, not /tmp
+
         uvicorn.run(
             "ai_manager.web:create_app", factory=True, host="127.0.0.1", port=settings.port, workers=1, proxy_headers=False
         )

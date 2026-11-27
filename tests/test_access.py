@@ -38,8 +38,10 @@ def login_owner(client, settings):
 
 
 @pytest.fixture
-def instance(tmp_path):
-    """Main signed in, a restricted instance whose owner password is known."""
+def instance(tmp_path, monkeypatch):
+    """Main signed in, a restricted instance whose owner password is known. Its flag cache window is 0.2 s instead of
+    2 s, so waiting for it twice does not dominate the smoke suite; the window itself is test_gate_caches_for_at_most..."""
+    monkeypatch.setattr(access, 'TTL', 0.2)
     project = tmp_path / 'projects' / 'docs'
     project.mkdir(parents=True)
     main = Settings(data_dir=tmp_path / 'main', project_roots=(tmp_path / 'main-projects',), secure_cookie=False)
@@ -70,7 +72,7 @@ def test_disable_blocks_everything_with_error_69_and_enable_restores_login(insta
     assert db.one('SELECT count(*) AS n FROM sessions')['n'] == 0  # everyone signed out at once
     assert owner.get('/api/instance-harness?name=Writer').json()['access'] == {'disabled': True}
 
-    # Within the cache window (~2 s) every request, signed in or not, gets only Error 69.
+    # Within the cache window (access.TTL) every request, signed in or not, gets only Error 69.
     wait(lambda: blocked(client.get('/api/auth-status')))
     anonymous = TestClient(user_app, base_url='http://localhost')
     for response in (client.get('/'), client.get('/static/app.js'), client.get('/api/portfolio'),

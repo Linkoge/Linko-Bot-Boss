@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import os
 import secrets
 import time
 
@@ -9,6 +10,16 @@ from argon2.exceptions import VerificationError
 from .config import Settings
 from .db import Database
 
+# Disposable test data only (tests/conftest.py sets it, server subprocesses inherit it): argon2's default 64 MiB x 4 lanes
+# costs ~85 ms per hash and much more on a loaded host, ~8 s of the smoke suite. The app itself never sets this.
+WEAK_HASH_ENV = "AI_MANAGER_TEST_WEAK_PASSWORD_HASH"
+
+
+def password_hasher() -> PasswordHasher:
+    if os.environ.get(WEAK_HASH_ENV, "").strip() == "1":
+        return PasswordHasher(time_cost=1, memory_cost=8, parallelism=1)
+    return PasswordHasher()
+
 
 def digest(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()
@@ -17,7 +28,7 @@ def digest(value: str) -> str:
 class Auth:
     def __init__(self, db: Database, settings: Settings):
         self.db, self.settings = db, settings
-        self.hasher = PasswordHasher()
+        self.hasher = password_hasher()
         self.dummy_hash = self.hasher.hash(secrets.token_urlsafe(32))
 
     def bootstrap(self):

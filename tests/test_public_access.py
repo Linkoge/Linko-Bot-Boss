@@ -6,7 +6,9 @@ import pytest
 from fake_codex import FakeServer
 from fastapi.testclient import TestClient
 
+from ai_manager.auth import WEAK_HASH_ENV
 from ai_manager.config import Settings
+from ai_manager.db import SYNCHRONOUS_ENV
 from ai_manager.proxy import client_ip, is_https, parse_trusted
 from ai_manager.web import create_app
 
@@ -16,8 +18,9 @@ PUBLIC = "public.example"
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    """Ambient AI_MANAGER_* settings of the machine running the tests must not change what these tests see."""
-    for name in [n for n in os.environ if n.startswith("AI_MANAGER_")]:
+    """Ambient AI_MANAGER_* settings of the machine running the tests must not change what these tests see. The test
+    suite's own speed switches (tests/conftest.py) stay."""
+    for name in [n for n in os.environ if n.startswith("AI_MANAGER_") and n not in (SYNCHRONOUS_ENV, WEAK_HASH_ENV)]:
         monkeypatch.delenv(name)
 
 

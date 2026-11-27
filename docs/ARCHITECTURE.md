@@ -14,7 +14,9 @@ owner ──chat──▶ manager ──delegate──▶ worker queue ──▶
 2. The **manager** is an AI turn (Codex or Claude) that reads project state and acts through a fixed set of actions
    (delegate a task, read history, To-Dos, deploy, ...). Code: `ai_manager/chat.py`, `codex.py`, `providers.py`.
 3. A delegated job becomes a **task** in that project's **queue**: one running task per project, strict order, different
-   projects in parallel. The **worker** gets its own Git worktree and branch, edits, adds permanent tests and commits.
+   projects in parallel; on Main the owner's **parallel send** button lets a task run beside its project's running one
+   (at most 3, merged one at a time, conflicts redone on main; README [How work runs](../README.md#how-work-runs)).
+   The **worker** gets its own Git worktree and branch, edits, adds permanent tests and commits.
    Code: `ai_manager/core.py`, `orchestration.py`, `runner.py`, `pipeline.py`.
 4. The application (never the worker) runs the **checks**: the project's permanent tests plus the fixed smoke suite
    (`scripts/worker_check.py` is the same check as a self-check). A failure goes back to the same worker as a **repair

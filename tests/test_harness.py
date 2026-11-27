@@ -140,7 +140,7 @@ def test_invalid_external_harnesses_are_listed_with_their_reason_and_never_used(
     world = World(tmp_path)
     folder = write(tmp_path / "data/harnesses/broken", manifest)
     found, invalid = harness.catalog(world.db)
-    assert set(found) == {"linko", "zero", "coding", "zero-worker"}
+    assert set(found) == {"linko", "zero", "coding", "zero-worker", "office", "humanizer"}
     assert invalid == [{"folder": "broken", "path": str(folder), "error": invalid[0]["error"]}]
     assert reason in invalid[0]["error"]
     with pytest.raises(ValueError, match="broken' is invalid"):
@@ -189,7 +189,7 @@ def test_selection_is_per_project_persists_and_reports_the_next_turn(tmp_path):
     assert harness.manager_turn(world.db, None)[0].id == "linko"
     state = harness.state(world.db, world.project)
     assert state["manager"]["id"] == "zero" and state["worker"]["id"] == "docs" and state["autonomy"] == "finish_request"
-    assert [o["id"] for o in state["options"]["worker"]] == ["coding", "zero-worker", "docs"]
+    assert [o["id"] for o in state["options"]["worker"]] == ["coding", "zero-worker", "office", "humanizer", "docs"]
     assert {level["id"]: level["available"] for level in state["autonomy_levels"]} == {
         "ask": True, "finish_request": True, "rounds": False}
     # Switching manager harness again resets autonomy to the new harness's own default.
@@ -325,10 +325,9 @@ async def test_manager_turn_uses_the_scope_harness_from_the_next_turn(tmp_path):
     (instructions, tools, _), prompt = await turn("Hello")
     assert instructions == MANAGER_INSTRUCTIONS and tools == [MANAGER_TOOL]
     assert prompt["context"]["harness"] == {"manager": "linko", "autonomy": "finish_request", "worker_default": "coding",
-                                            "worker_options": [
-                                                {"id": h, "name": harness.builtin(h).name,
-                                                 "description": harness.builtin(h).description}
-                                                for h in ("coding", "zero-worker")]}
+                                            "worker_options": [{"id": h, "name": harness.builtin(h).name,
+                                                                "description": harness.builtin(h).description}
+                                                               for h in ("coding", "zero-worker", "office", "humanizer")]}
     harness.save(world.db, world.project, {"manager": "zero"})
     (instructions, tools, prior), prompt = await turn("Let's brainstorm")
     assert instructions == harness.builtin("zero").instructions() and tools == [harness.manager_tool(harness.builtin("zero"))]

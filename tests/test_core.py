@@ -171,10 +171,13 @@ def test_migration_closes_old_nonfinal_tasks_and_keeps_every_row_and_branch(tmp_
     # Idempotent: a later start must not close new work again.
     reopened.run("INSERT INTO tasks(id,project_id,description,created_at,updated_at,queued_at,state) VALUES('new','p','n',1,1,1,'queued')")
     assert Database(path).one("SELECT state FROM tasks WHERE id='new'")["state"] == "queued"
-    with sqlite3.connect(path) as conn:  # one running task at most, enforced by the database
+    with sqlite3.connect(path) as conn:  # one running task per project, enforced by the queue (parallel send aside)
         conn.execute("UPDATE tasks SET state='running' WHERE id='new'")
-        with pytest.raises(sqlite3.IntegrityError):
-            conn.execute("INSERT INTO tasks(id,project_id,description,created_at,updated_at,queued_at,state) VALUES('b','p','n',1,1,1,'running')")
+        conn.execute("INSERT INTO tasks(id,project_id,description,created_at,updated_at,queued_at,state) VALUES('b','p','n',1,1,1,'queued')")
+        assert conn.execute("SELECT parallel FROM tasks WHERE id='b'").fetchone()[0] == 0
+    assert Tasks(Database(path)).claim() is None
+    Database(path).run("UPDATE tasks SET parallel=1 WHERE id='b'")
+    assert Tasks(Database(path)).claim()["id"] == "b"  # only an owner's parallel send may start beside it
 
 
 def test_unused_columns_are_dropped_and_their_neighbours_keep_their_data(tmp_path):

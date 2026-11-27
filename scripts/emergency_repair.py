@@ -119,13 +119,26 @@ class Repair:
         self.config = config if config is not None else read(self.root / 'installed.json', {})
         self.invoker = invoker  # (uid, gid) of the service user when this launcher runs as root
 
+    @staticmethod
+    def scratch(home, name):
+        """TMPDIR & co. on the normal disk (AI_MANAGER_TMPDIR or <home>/.cache/linko-tmp), one folder per repair; never /tmp."""
+        base = Path(os.environ.get('AI_MANAGER_TMPDIR') or Path(home) / '.cache' / 'linko-tmp').expanduser()
+        folder = base / name
+        try:
+            folder.mkdir(parents=True, exist_ok=True, mode=0o700)
+        except OSError:
+            return {}
+        return {key: str(folder) for key in ('TMPDIR', 'TMP', 'TEMP', 'CLAUDE_CODE_TMPDIR')}
+
     def agent(self):
         """Popen options for the host agent: root (with root's own provider login) when started through sudo."""
         if not self.invoker:
-            return {}
+            return {'env': {**os.environ, **self.scratch(Path.home(), 'repair')}}
         home = pwd.getpwuid(0).pw_dir
         env = {**os.environ, 'HOME': home, 'USER': 'root', 'LOGNAME': 'root',
                'PATH': self.config.get('path') or os.environ.get('PATH', '/usr/local/bin:/usr/bin:/bin')}
+        env.pop('AI_MANAGER_TMPDIR', None)  # the service user's folder is not root's
+        env.update(self.scratch(home, 'repair'))
         return {'user': 0, 'group': 0, 'extra_groups': [], 'env': env}
 
     def records(self):

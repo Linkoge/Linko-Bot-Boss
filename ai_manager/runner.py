@@ -42,7 +42,9 @@ class Runner:
         if time.monotonic() >= self.watchdog_at:
             self.watchdog_at = time.monotonic() + WATCHDOG_SECONDS
             await self.watchdog()
-        while not core.pipeline.pending() and (task := core.tasks.claim(core.pipeline.sync.ready)):
+        # Parallel send is Main's only: an instance runs one task per project whatever a row says.
+        parallel = not getattr(core.settings, "restricted", False)
+        while not core.pipeline.pending() and (task := core.tasks.claim(core.pipeline.sync.ready, parallel)):
             core.pipeline.sync.consumed(task["project_id"])
             core.launch(task)
         core.pipeline.sync.tick()

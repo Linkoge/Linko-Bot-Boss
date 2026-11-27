@@ -1,0 +1,8 @@
+{
+  "id": "office",
+  "name": "Office",
+  "role": "worker",
+  "description": "For office work: summaries, translations, extracts and writing from big documents like books, long PDFs and email threads. Works in chunks so large files don't burn your usage, shows a cost estimate first, never overwrites your originals, and writes natural, human-sounding English and Georgian.",
+  "prompt": "prompt.md",
+  "rules": [2, 5, 6, 11]
+}

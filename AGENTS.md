@@ -41,3 +41,21 @@ When: a test using a live `create_app` app (the `client`/`pair` fixtures; the sc
 Symptom: passes alone and in a serial run, fails only in the parallel full suite (`scripts/full_suite.py`), e.g. a guard expected 409 but got 200.
 Cause: `Chat.recover()` on the scheduler loop finishes unowned unfinished manager rows (status `running`, no live pid) between the test's requests.
 Do: insert a state recovery leaves alone, e.g. status `recovering` with `retry_at` an hour ahead (what `recovery.defer()` writes); reproduce with a `time.sleep(3)` before the assertion.
+
+### New built-in harness breaks exact-list tests (2026-11-27, task 21af98)
+When: you add a folder to `BUILTIN_FOLDERS` in `ai_manager/harness.py`.
+Symptom: harness, browser and code-view tests fail on an exact set or list of built-in ids or picker option names.
+Cause: `tests/test_harness.py` (catalog set, worker options, manager context), `tests/test_harness_browser.py` (worker `<option>` texts) and `tests/test_code_view.py` (`START` probe set) pin the built-ins.
+Do: update all four in the same commit; run those three files, the browser one included.
+
+### Stripping AI_MANAGER_* env silently re-slows smoke   (2026-11-27, task 72503a)
+When: a test or fixture deletes every `AI_MANAGER_*` (or similar) variable to isolate itself from the host.
+Symptom: the test passes but is slow again (fsync per commit, ~85 ms argon2 per password); smoke drifts past its 45 s budget, worst on a loaded host.
+Cause: `tests/conftest.py` sets the suite's speed switches as env vars (`AI_MANAGER_SQLITE_SYNCHRONOUS`, `AI_MANAGER_TEST_WEAK_PASSWORD_HASH`) so server subprocesses inherit them.
+Do: keep `SYNCHRONOUS_ENV` (`ai_manager/db.py`) and `WEAK_HASH_ENV` (`ai_manager/auth.py`) when stripping (see `tests/test_public_access.py` `clean_env`); compare smoke timings under load (4 `python3 -c 'while True: pass'`), not just idle.
+
+### New Settings panel is invisible on instances   (2026-11-27, task 6b2525)
+When: you add an `<article class="panel">` to `#view-settings` that instances (office mode) must show too.
+Symptom: it works on Main, but on an instance the panel never appears; no error, only `tests/test_restricted_browser.py` (exact list of visible settings headings) notices.
+Cause: `ai_manager/static/style.css` hides every settings article on `.restricted` except a `:not(#id)` whitelist.
+Do: add the panel's id to that `:not(...)` list and its heading to the test's list; check with `pytest -q tests/test_restricted_browser.py`.

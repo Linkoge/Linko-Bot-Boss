@@ -1,0 +1,8 @@
+{
+  "id": "humanizer",
+  "name": "Humanizer",
+  "description": "Makes a document read as written by a person: rewrites it in your own style from your Writing samples (English or Georgian), then adds a few natural typos and dropped commas with a script. Rates are adjustable, for example \"typos 0.5%\". Always writes a new file and keeps the original.",
+  "prompt": "prompt.md",
+  "role": "worker",
+  "rules": [2, 5, 6, 11]
+}

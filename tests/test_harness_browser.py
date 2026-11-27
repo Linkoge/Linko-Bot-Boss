@@ -64,7 +64,7 @@ def test_harness_picker_keyboard_persistence_task_card_and_mobile(page, browser_
         'by the book' in page.locator('#harness-manager-description').inner_text()
     invalid = page.locator('#harness-invalid').inner_text()
     assert 'sneaky' in invalid and 'cannot set deploy' in invalid
-    assert page.locator('#harness-worker option').all_inner_texts() == ['Coding', 'Docs writer']
+    assert page.locator('#harness-worker option').all_inner_texts() == ['Coding', 'Zero worker', 'Office', 'Humanizer', 'Docs writer']
     menu = page.locator('#harness-menu').bounding_box()
     assert menu['x'] >= 0 and menu['x'] + menu['width'] <= 390.5
     page.keyboard.press('Tab')

@@ -24,7 +24,7 @@ from .attachments import Attachments
 from .audio import Audio
 from .auth import Auth
 from .auto_mode import AutoMode
-from . import chat_memory
+from . import chat_memory, writing
 from .chat import Chat
 from .chat_memory import NOTICE as COMPACTION_NOTICE
 from .codex import CodexError
@@ -136,6 +136,7 @@ class MessageBody(BaseModel):
     attachment_ids: list[str] = Field(default_factory=list, max_length=4)
     todos: list[str] = Field(default_factory=list, max_length=200)
     conversation_id: str | None = None
+    parallel: bool = False  # parallel send (Main only): the delegated task may run beside the project's running one
 
 
 class ChatResetBody(BaseModel):
@@ -167,6 +168,17 @@ class ChatTrashBody(BaseModel):
 
 class InstructionsBody(BaseModel):
     content: str = Field(max_length=10000)
+
+
+class WritingSamples(BaseModel):
+    en: str | None = Field(default=None, max_length=writing.SAMPLE_LIMIT)
+    ka: str | None = Field(default=None, max_length=writing.SAMPLE_LIMIT)
+
+
+class WritingBody(BaseModel):
+    samples: WritingSamples | None = None
+    typo_rate: float | None = None
+    punct_rate: float | None = None
 
 
 class ProjectIdeaBody(BaseModel):
@@ -276,7 +288,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     reviews = MemoryReviews(memory, settings)
     release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
     # The access switch (access.py) applies to instances only; Main ignores the flag.
-    gate = access.Gate(db) if restricted else None
+    gate = access.Gate(db, access.TTL) if restricted else None
     stopped = set()
 
     async def lock_out():
@@ -944,6 +956,19 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
         db.set_setting("global_instructions", body.content)
         return {"updated": True}
 
+    # Writing (Humanizer and Office style): per profile, so an instance saves its own (not Main's global settings).
+    @app.get("/api/writing/settings", dependencies=[Depends(require_owner)])
+    def writing_settings():
+        return writing.view(db)
+
+    @app.put("/api/writing/settings", dependencies=[Depends(require_owner)])
+    def save_writing_settings(body: WritingBody):
+        value = body.model_dump(exclude_none=True)
+        if "samples" in value and not value["samples"]:
+            value.pop("samples")
+        writing.save(db, value)
+        return writing.view(db)
+
     @app.get("/")
     def index():
         return HTMLResponse(index_html)
@@ -1164,10 +1189,12 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
 
     @app.post("/api/chat", dependencies=[Depends(require_owner)])
     async def submit(body: MessageBody):
+        if body.parallel and restricted:
+            raise HTTPException(403, RESTRICTED)  # parallel send exists on Main only
         body.project_id = scope(body.project_id)
         return await chat.submit(
             body.project_id, body.content, body.conversation_id, request_id=body.request_id,
-            attachment_ids=body.attachment_ids, todos=body.todos
+            attachment_ids=body.attachment_ids, todos=body.todos, parallel=body.parallel
         )
 
     @app.patch("/api/tasks/{task_id}", dependencies=[Depends(require_owner)])

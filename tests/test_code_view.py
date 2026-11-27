@@ -38,7 +38,7 @@ settings = Settings()
 with TestClient(create_app(settings, Idle(settings), Idle), base_url="http://localhost") as client:
     assert client.get("/api/auth-status").status_code == 200
     assert client.get("/").status_code == 200
-assert set(harness.builtins()) == {"linko", "zero", "coding", "zero-worker"} and MANAGER_INSTRUCTIONS and WORKER_INSTRUCTIONS
+assert set(harness.builtins()) == {"linko", "zero", "coding", "zero-worker", "office", "humanizer"} and MANAGER_INSTRUCTIONS and WORKER_INSTRUCTIONS
 print("STARTED")
 '''
 

@@ -118,7 +118,7 @@ async function api(path, options={}){
 function action(fn){return async event=>{const button=event?.currentTarget;if(button?.tagName==='BUTTON')button.disabled=true;try{await fn(event);}catch(error){notice(error.ambiguous?error.message:'Rejected or failed: '+error.message);}finally{if(button?.tagName==='BUTTON')button.disabled=false;}};}
 function actionResult(result){notice(`${result.result||'accepted'}: ${result.message||result.status||'Operation recorded'}`);}
 function showAuth(){clearChatCache();state.history=null;$('messages').replaceChildren();cancelInitialChat();initialChatPosition=true;$('agent-list').replaceChildren();if($('history-reader').open)$('history-reader').close();if($('model-dialog')?.open)$('model-dialog').close();closeChatMenu();audioChanged(true);updateFailures.clear();renderUpdateStatus();stopUsage();state.ready=false;state.selection++;state.source?.close();state.source=null;state.execution=null;clearTimeout(state.reconcileTimer);$('app').hidden=true;$('auth-screen').hidden=false;$('chat-notice').hidden=true;clearTimeout(state.chatNoticeTimer);}
-async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;state.restricted=!!auth.restricted;document.body.classList.toggle('restricted',state.restricted);document.body.classList.toggle('office',!!auth.office);$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
+async function boot(){const auth=await api('/api/auth-status');state.csrf=auth.csrf;state.setup=auth.setup_required;state.restricted=!!auth.restricted;document.body.classList.toggle('restricted',state.restricted);document.body.classList.toggle('office',!!auth.office);renderParallelSend();$('setup-label').hidden=!state.setup;$('setup-token').required=state.setup;if(auth.authenticated)await enter();else showAuth();}
 async function enter(){startUsage();state.ready=false;const selection=state.selection;$('auth-screen').hidden=true;$('app').hidden=false;const settings=await api('/api/settings');$('global-instructions').value=settings.global_instructions;const isolationWarning=settings.worker_isolation?.warning||'';$('worker-isolation-warning').textContent=isolationWarning;$('worker-isolation-warning').hidden=!isolationWarning;if(typeof setProviderIcon==='function')setProviderIcon(settings.model_provider);await refresh(false);if(selection!==state.selection){state.ready=true;return;}const initial=[...(state.restricted?[]:[null]),...state.portfolio.projects.filter(p=>p.visible!==false)].sort((a,b)=>contextRecency(b)-contextRecency(a)||compareContexts(a,b))[0];await selectProject(initial?.id||null);await positionInitialChat(state.selection);state.ready=true;loadGithubStatus();if(!state.restricted)refreshVisibility();}
 let refreshVersion=0,listingLoad=null;
 async function refresh(loadChat=true,older=null){
@@ -407,7 +407,8 @@ function renderTasks(){
   $('task-count').textContent=count;$('task-count').hidden=count===0;$('task-list').replaceChildren();
   for(const t of tasks){
     const row=element('article',undefined,'panel');row.dataset.taskId=t.id;
-    row.append(element('h3',t.title),element('small',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
+    const title=element('h3',t.title);if(t.parallel){const badge=element('span','parallel','parallel-badge');badge.title='May run in parallel with the project\'s other tasks';title.append(' ',badge);}
+    row.append(title,element('small',`${taskStateLabel(t.status)} · ${projectName(t.project_id)}`),element('p',t.description),element('p',t.blocker));
     if(t.harness)row.append(element('small',`Harness: ${t.harness}`,'task-harness'));
     if(t.rounds)row.append(element('small',`Repair rounds ${t.rounds} of ${t.repair_limit}`));
     const controls=element('div',undefined,'task-controls');controls.append(timestamp('Created',t.created_at));appendTaskControls(controls,t);
@@ -524,7 +525,7 @@ function renderHistory(history,selection,before=null,cached=false){
     label.hidden=m.status==='completed';
     badge.textContent=m.status==='waiting'&&m.retry_at?recoveryLabel(m):m.status;
     badge.className=`badge ${m.status==='completed'?'':m.status}`;
-    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role,false);renderMessageAttachments(row,m);renderMessageActions(row,m,history.conversation.id);
+    updateMessageContent(row.querySelector('.message-content'),messageText(m),m.role,false);renderMessageAttachments(row,m);renderParallelBadge(row,m);renderMessageActions(row,m,history.conversation.id);
 
   }
   if(before){messages.scrollTop=previousTop+messages.scrollHeight-previousHeight;return;}
@@ -871,12 +872,30 @@ function appendRepositoryLinks(remote){
 }
 function editProject(p){editor('Project settings',[{name:'display_name',label:'Display name (blank uses original name)',value:p.display_name||''},{name:'objective',label:'Objective',value:p.objective,long:true},{name:'success_criteria',label:'Success criteria',value:p.success_criteria,long:true},{name:'instructions',label:'Project instructions',value:p.instructions,long:true},{name:'priority',label:'Priority',type:'number',value:p.priority,min:0,max:100},{name:'status',label:'Registry status (source files are preserved)',value:p.status,options:(state.restricted?['active','paused']:['active','paused','archived','removed']).map(x=>[x,x])}],async values=>{await api(`/api/projects/${p.id}`,{method:'PATCH',body:JSON.stringify({...values,priority:Number(values.priority),revision:p.revision})});if(values.status==='removed'&&state.project===p.id)state.project=null;});}
 $('auth-form').onsubmit=action(async event=>{event.preventDefault();try{if(state.setup)await api('/api/setup',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value,token:$('setup-token').value})});const result=await api('/api/login',{method:'POST',body:JSON.stringify({username:$('username').value,password:$('password').value})});state.csrf=result.csrf;await enter();}catch(error){$('auth-error').textContent=error.message;}});
-async function sendSubmission(bound=null){
+// Parallel send (Main only): a double-arrow button beside Send, shown only while a task of the current project is
+// running or queued. The message is saved with the flag; a task it delegates may run beside the others (at most 3).
+function renderParallelSend(){
+  const existing=$('send-parallel');
+  if(state.restricted){existing?.remove();return;}  // never rendered on an instance; the server rejects the flag too
+  if(existing)return;
+  const button=element('button','⇈');button.id='send-parallel';button.type='button';button.hidden=true;
+  button.setAttribute('aria-label','Send to run in parallel');button.title='Send: may run in parallel with the running task';
+  button.onclick=action(async()=>{if(!parallelAvailable()||(!$('message-input').value.trim()&&!attachmentDraft(state.project).length))return;await sendSubmission(null,true);});
+  $('send').after(button);
+}
+function parallelAvailable(){return !state.restricted&&!!state.project&&(state.portfolio?.tasks||[]).some(t=>t.project_id===state.project&&['running','queued'].includes(t.status));}
+function renderParallelBadge(row,m){
+  const content=row.querySelector('.message-content');if(!content)return;
+  const badge=row.querySelector('.parallel-badge');
+  if(m.parallel&&!badge){const node=element('span','parallel','parallel-badge message-parallel');node.title='Sent with parallel send';content.before(node);}
+  else if(!m.parallel)badge?.remove();
+}
+async function sendSubmission(bound=null,parallel=false){
   if(audioState.session||attachmentState.uploads.has(bound?bound.project_id:state.project))return;
   const project=bound?bound.project_id:state.project,selection=state.selection;
   if(state.pending.has(project))return;
   let submission=submissions.get(project);
-  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,attachment_ids:attachmentDraft(project).map(file=>file.id)};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
+  if(!submission){submission={request_id:crypto.randomUUID(),project_id:project,content:bound?bound.content:$('message-input').value,conversation_id:bound?bound.conversation_id:state.history?.conversation.id,attachment_ids:attachmentDraft(project).map(file=>file.id),...(parallel?{parallel:true}:{})};submissions.set(project,submission);try{saveSubmissions();}catch(error){submissions.delete(project);throw error;}}
   state.pending.add(project);$('send').disabled=true;renderAttachments();
   let accepted=false;
   try{
@@ -1007,6 +1026,8 @@ function updateComposer(){
   form.classList.toggle('composer-recording',typeof audioState!=='undefined'&&audioState.session?.phase==='recording');
   form.classList.toggle('composer-caret',focused&&!document.hidden&&(!mobile||(composerKeyboard.seen&&!composerKeyboard.closed)));
   $('send').hidden=!active;
+  const parallelButton=$('send-parallel');
+  if(parallelButton){parallelButton.hidden=!active||!parallelAvailable()||(typeof audioState!=='undefined'&&!!audioState.session);parallelButton.disabled=state.pending.has(state.project);}
   // Measure at the initial active size, independent of the previous overflow size.
   form.style.setProperty('--composer-height',(active?140:92)+'px');
   form.classList.toggle('composer-overflow',false);

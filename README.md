@@ -23,7 +23,18 @@ and report the generated initial owner password to them once, in chat.
 One queue per project: at most one running task per project, in strict queue order, while tasks of different
 projects run in parallel (no global cap, no exceptions per project). States: **queued → running → done | failed**. A
 **held** task is a queued task with the hold flag set; it is skipped until released. Order within a project is the only
-dependency. The code is `ai_manager/core.py`. [RULES.md](RULES.md) is the single source of rules: the manager
+dependency. The code is `ai_manager/core.py`.
+
+**Parallel send (Main only).** While a task of the current project is running or queued, a double-arrow button (⇈)
+appears beside the Send arrow. A message sent with it is saved with a `parallel` flag (a settings record
+`execution_parallel:<manager execution>`, shown as a "parallel" badge on the message), the manager is told, and a task
+it delegates for that message is flagged too (`tasks.parallel`, a "parallel" badge on the task card). A flagged task may
+start beside the project's running tasks, at most **3** running per project (`MAX_PARALLEL`); an unflagged task still
+waits for the project to be idle, and a flagged task never overtakes an earlier queued one. Merges stay one at a time
+under the checkout fence: work that ran beside a parallel task is re-tested on the current main and merged fast-forward
+only (if another task merged first it brings the new main in and is tested again); a conflict with main goes back to its
+worker as a merge repair round to redo the change on top of main, never as "(AI version)" copies. Instances never
+render the button; their server rejects the flag (403) and their queue ignores it. [RULES.md](RULES.md) is the single source of rules: the manager
 and worker each omit sections marked only for the other role (manager-only: the manager paragraph of rule 7 and
 rules 8–9; worker-only: rule 11). The manager and worker prompts themselves live in harness files (see
 [Harnesses](#harnesses)).
@@ -39,7 +50,12 @@ rules 8–9; worker-only: rule 11). The manager and worker prompts themselves li
    (`python -m pytest -q -m smoke`, 180 s) plus the test files the branch added or changed (600 s). Only permanent
    repository suites can block delivery; one-off probes are informational. Probes run under a 60 s timeout. Checks run
    with disposable `AI_MANAGER_DATA`, `PYTHONPATH` set to the worktree and `AI_MANAGER_SECURE_COOKIE=0`, using
-   the project shared checkout's `.venv/bin/python` when available. Each worker prompt, including repair turns,
+   the project shared checkout's `.venv/bin/python` when available. The test suite's disposable databases skip the
+   per-commit fsync (`tests/conftest.py` sets `AI_MANAGER_SQLITE_SYNCHRONOUS=OFF`; the app itself always uses
+   `synchronous=FULL`), so the smoke suite keeps its 45 s budget even when the temporary directory is on a real disk.
+   For the same reason test passwords use minimal argon2 parameters (`AI_MANAGER_TEST_WEAK_PASSWORD_HASH=1`, also set
+   there; the app itself always uses argon2's defaults).
+   Each worker prompt, including repair turns,
    includes an exact ready-to-run self-check command using the manager installation's interpreter and absolute script
    path, so it also works from other projects. After committing, run it before finishing:
 
@@ -255,8 +271,44 @@ autonomy. Each harness is a folder with `harness.json` and a prompt file. Built-
 - **Zero** (`zero`): a plain agent for brainstorming. Its prompt has only RULES.md rules 1, 3 and 10 and a short
   `harnesses/zero/prompt.md`. It keeps the delegate, task-control, read/inspect and To-Do actions, but has no deploy,
   host repair, pause/resume or auto-mode actions. Its default autonomy is Ask.
-- **Coding** (`coding`, the only worker harness so far): today's worker: worktree, permanent checks, repair rounds,
+- **Coding** (`coding`, the default worker harness): today's worker: worktree, permanent checks, repair rounds,
   then merge and deploy by the application. Prompt: the worker view of RULES.md plus `harnesses/coding/prompt.md`.
+- **Office** (`office`, worker): summaries, translations, extracts and writing from large documents (books, long PDFs,
+  email threads). Prompt: RULES.md rules 1, 2, 3, 5, 6, 10 and 11 plus `harnesses/office/prompt.md` (the large-input
+  procedure and the English/Georgian writing style). It ships `harnesses/office/tools/office.py` (standard library,
+  no AI calls): `measure` (pages, characters, estimated tokens, scanned-PDF check; PDFs need `pdftotext` or `pypdf`),
+  `plan` (extract and chunk into the git-ignored work folder `.linko-work/<doc>/` of the task workspace, print the
+  estimate as a rough % of the 5-hour limit; above 10% it stops for the owner's confirmation), `next`/`done`/`fail`
+  (chunk N/M handout with a per-task budget cap, default 20%, and a loop guard of 2 retries per chunk), `confirm`,
+  `status`, `search` (keyword ranking for Q&A), `combine` (final-pass input, hierarchical if large), `assemble`,
+  `outpath` (a new file name next to the original, never an existing one) and `dashfix` (em/en dashes to keyboard
+  punctuation, skipping code, URLs and tables; it rewrites only new outputs). The estimate's calibration can be set
+  with `OFFICE_LIMIT_UNITS`, `OFFICE_CONFIRM_PERCENT` and `OFFICE_CAP_PERCENT`. Office results are committed as files
+  and still go through the normal checks, merge and deploy: a worker harness has no no-merge/no-deploy option.
+  Permanent coverage: `tests/test_office_harness.py`.
+- **Humanizer** (`humanizer`, worker): makes the owner's document read as written by a person, as its own function:
+  attach any document in the chat and ask to humanize it, optionally with rates ("typos 0.5%", "punctuation 3%"); the
+  manager delegates it with this harness. Level 1 is the AI rewrite in the owner's style (the Writing samples below),
+  level 2 the script `harnesses/humanizer/tools/humanize.py` (also `python -m ai_manager.humanize humanize FILE
+  --typos 0.2 --punct 2 [--seed N] [--out NEW]`): standard library only, no AI, deterministic for a seed, reads .txt,
+  .md and .docx (the text runs of `word/document.xml`; tables untouched) and always writes a NEW file
+  (`<name> humanized.<ext>`). Two separate rates: typos in that % of eligible words (exactly one of insert a keyboard
+  neighbour on English QWERTY or the Georgian standard layout, delete a letter, swap two adjacent letters; at most one
+  per word) and deletion of that % of eligible `, ; : . ! ?` (never insertion; the last mark of a line or paragraph is
+  kept). Never touched: tokens with a digit, words of 1-2 letters, capitalised words (names, and sentence-initial
+  words too), URLs, emails, paths and identifiers, inline and fenced code, text inside quotes, markdown table rows.
+  `humanize.py measure FILE` prints a sample's statistics. "Humanize" runs both levels; "only typos" just the script.
+  Permanent coverage: `tests/test_humanizer.py`, `tests/test_writing_browser.py`.
+
+**Writing settings.** Settings > Writing (on Main and on every instance; per profile, since each instance keeps its
+own in its database and Main does not push it) holds an English and a Georgian style sample (2-3 paragraphs of the
+owner's own writing, at most 6000 characters each), the default typo rate (0.2%) and the default punctuation rate
+(2%), via owner-only `GET`/`PUT /api/writing/settings` (`ai_manager/writing.py`). Saving measures each sample with the
+Humanizer script (average sentence length, commas per sentence, paragraph length, frequency of ! ? : -) and stores the
+statistics. Every Office and Humanizer task prompt carries them as `writing_style` (`ai_manager/core.py`): the samples
+with their statistics per language, the punctuation habits (periods and question marks normal, fewer commas than
+typical AI, exclamation marks rare, hyphens moderate, colons occasional, no semicolons, no em or en dashes) and the
+Humanizer's default rates.
 
 **Choosing.** The round ☼ button left of the chat menu (▾) opens the harness picker for the current chat. It has the
 manager harness, its autonomy and, for a project, the default worker harness, each with a short description. Every
@@ -307,7 +359,8 @@ default autonomy per chat scope. The existing follow-up limits and auto-mode bou
 
 **Extra harnesses.** Put folders in `AI_MANAGER_HARNESS_DIR` (default `<data>/harnesses`). Each folder needs
 `harness.json` with `id` (lowercase, unique, not a built-in id), `name`, `role` (`manager` or `worker`), `description`
-and `prompt` (a file name inside the folder; no symlinks or paths). Optional `rules` is `"all"` or a list of RULES.md
+and `prompt` (a file name inside the folder; no symlinks or paths). In the prompt, `{{HARNESS_DIR}}` is replaced by the harness folder's
+absolute path, so a harness can name the tools it ships. Optional `rules` is `"all"` or a list of RULES.md
 rule numbers. Rules 1, 3 and 10 are always added. A manager also needs `actions` (`"all"` or a subset of the
 manager tool's actions; a harness cannot add any) and `autonomy`, and may set `architecture_guide`. Enabling `deploy`,
 `save_deploy_setup` or `emergency_repair` (or `"all"`) requires `rules: "all"`. A worker harness may not set `deploy`,
@@ -833,7 +886,7 @@ office controls are `.office-only`, hidden by CSS outside `body.office`).
   fresh empty chat in one click (an open chat that is still empty is kept instead of making another). On a wide screen
   (over 900 px) the list stays open beside the chat and remembers open/closed; on a phone it slides in over the chat
   and closes after you pick one. Both buttons stay visible on top. The list's **Settings** button opens the settings
-  view (Chat memory, Instructions, Sign out), since office mode hides the tabs.
+  view (Writing, Instructions, Sign out), since office mode hides the tabs.
 - **List.** Flat, most recently active first (newest owner/assistant message), pinned chats at the top, the current
   chat highlighted. Per chat: ☆/★ pin, ✎ rename, × delete with a confirm. Delete moves the chat to the chat archive
   (`archive:<id>` + `chat_archives`, titled with the chat's name), never a hard delete; deleting the open chat opens the

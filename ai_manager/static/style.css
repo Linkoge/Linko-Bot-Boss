@@ -156,7 +156,7 @@ button:focus-visible,a:focus-visible{outline:2px solid var(--accent-focus);outli
 .composer-input{flex:1;min-width:0;display:flex;flex-direction:column;justify-content:flex-end}
 .composer textarea{flex:1;width:100%;min-height:96px;height:140px;max-height:140px;overflow-y:auto}
 .composer-footer{flex:none;display:flex;flex-direction:column;gap:4px;margin:0;align-items:center;justify-content:flex-end}
-.composer-footer :is(#attach,#send,#microphone){width:44px;height:44px;min-height:44px;min-width:44px;padding:0;font-size:20px;line-height:1}
+.composer-footer :is(#attach,#send,#send-parallel,#microphone){width:44px;height:44px;min-height:44px;min-width:44px;padding:0;font-size:20px;line-height:1}
 #microphone{font-size:16px}.audio-panel{display:block;margin:4px 0 0;max-height:100px;overflow:auto}
 .audio-actions{display:flex;justify-content:flex-end;gap:4px;flex-wrap:wrap}.audio-panel button{min-height:44px;min-width:64px;padding:4px 10px;font-size:12px}
 #stop-chat{position:absolute;right:58px;top:8px;font-size:11px;min-height:32px;padding:2px 6px}
@@ -262,7 +262,7 @@ input,textarea,select{accent-color:var(--accent-solid)}
 #project-menu details{border-top:1px solid var(--border);margin:6px 0}
 
 /* Approved right stack and one-request double Send; controls remain 44px tall. */
-.composer-footer :is(#attach,#microphone,#send){width:44px;height:44px;min-height:44px;min-width:44px;padding:0;font-size:20px;line-height:1}
+.composer-footer :is(#attach,#microphone,#send,#send-parallel){width:44px;height:44px;min-height:44px;min-width:44px;padding:0;font-size:20px;line-height:1}
 .composer textarea{padding-bottom:0}
 .audio-panel{display:flex;align-items:center;gap:4px;margin:0;min-height:44px;max-height:88px;overflow:auto;flex:0 0 auto}
 .audio-panel #audio-status,#progress-chip{font-size:11px;color:var(--muted)}
@@ -314,7 +314,7 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .restricted #all-projects,.restricted #project-menu-button,.restricted #discover,.restricted #add-project,.restricted #deployment-panel,.restricted #model-settings-button,.restricted #models-panel,.restricted #model-dialog{display:none}
 .restricted #github-panel,.restricted #onboarding-dialog{display:none}
 /* Instances show only Instructions and Sign out in Settings; every other setting follows Main (instance_sync.py). */
-.restricted #view-settings>article:not(#instructions-panel):not(#session-panel),.restricted #revoke-sessions{display:none!important}
+.restricted #view-settings>article:not(#instructions-panel):not(#writing-panel):not(#session-panel),.restricted #revoke-sessions{display:none!important}
 /* Office mode (every instance but Main): one clean chat screen. Cosmetic only, the elements stay in the DOM. */
 .office .project-row,.office #project-menu,.office .tabs,.office #harness-button,.office #harness-menu,.office #usage-button,.office #usage-dialog,.office #compact-chat,.office #archive-chat,.office #archive-part-chat{display:none!important}
 #onboarding-dialog{max-width:560px;width:calc(100% - 16px);max-height:calc(var(--app-height,100dvh) - 16px);overflow:auto;padding:12px 14px}#onboarding-dialog h3{margin:12px 0 6px;color:var(--muted);font-size:13px}#onboarding-dialog label{display:block;margin:8px 0}#onboarding-dialog input:not([type=checkbox]),#onboarding-dialog textarea{display:block;width:100%}#onboarding-dialog textarea{font:12px monospace}.onboarding-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.onboarding-state.failed,.onboarding-problem{color:var(--accent)}.onboarding-state.done,.onboarding-ok{color:#7ad99b}.onboarding-steps{list-style:none;padding:0;margin:0}.onboarding-step{padding:4px 0;overflow-wrap:anywhere}.onboarding-step.failed,.onboarding-step.refused{color:var(--accent)}.onboarding-hint{color:var(--muted);font-size:12px}.onboarding-login{user-select:all;overflow-wrap:anywhere;white-space:pre-wrap}.onboarding-list{display:flex;gap:6px;flex-wrap:wrap}
@@ -370,3 +370,5 @@ body:not(.office) .office-only{display:none!important}
 .attachment-card .attachment-type{font-size:10px;font-weight:700;letter-spacing:.6px;color:var(--muted);flex:none}
 @media(min-width:901px){body.office.chats-open main{margin-left:280px;width:auto;max-width:none}body.office #chat-sidebar-backdrop{display:none!important}}
 @media(max-width:900px){#chat-sidebar{width:min(320px,86vw);padding-top:calc(60px + env(safe-area-inset-top));box-shadow:4px 0 24px #0008}body.office .navigation{z-index:40}body.office #office-bar{position:relative;z-index:41}}
+/* Parallel send (Main only): the message and the task it delegates carry a visible "parallel" badge. */
+.parallel-badge{display:inline-block;margin-left:6px;padding:0 6px;border:1px solid var(--accent-border);border-radius:8px;color:var(--accent);font-size:11px;font-weight:600;line-height:16px;vertical-align:middle}

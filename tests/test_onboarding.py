@@ -21,7 +21,9 @@ from test_provision import ROOT, World
 
 from ai_manager import enrollment
 from ai_manager import provision as pv
+from ai_manager.auth import WEAK_HASH_ENV
 from ai_manager.config import Settings
+from ai_manager.db import SYNCHRONOUS_ENV
 from ai_manager.web import create_app
 
 DEVICE = "-".join(["MGMTDEV"] * 8)
@@ -40,7 +42,8 @@ class Host:
 
     def __init__(self, tmp_path, monkeypatch, env=None, trusted=("testclient",), port=80):
         self.tmp, self.env = tmp_path, dict(ENV if env is None else env)
-        for name in [n for n in os.environ if n.startswith(("AI_MANAGER_", "TAILSCALE_", "LINKO_", "CLOUDFLARE_", "SYNCTHING_"))]:
+        for name in [n for n in os.environ if n.startswith(("AI_MANAGER_", "TAILSCALE_", "LINKO_", "CLOUDFLARE_", "SYNCTHING_"))
+                     and n not in (SYNCHRONOUS_ENV, WEAK_HASH_ENV)]:  # the suite's own speed switches stay
             monkeypatch.delenv(name)
         monkeypatch.setenv("HOME", str(tmp_path / "service-home"))
         (tmp_path / "service-home/.ssh").mkdir(parents=True)

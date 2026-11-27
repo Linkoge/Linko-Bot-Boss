@@ -204,6 +204,7 @@ Existing optional configuration (no need to set these unless used):
 | `AI_MANAGER_AUDIO_PROVIDER` | Audio transcription provider; default `grok` |
 | `AI_MANAGER_AUDIO_MODEL` | Default `grok-voice-transcribe-2.0` |
 | `AI_MANAGER_TTS_VOICE` | xAI voice for the message read-aloud button (`POST /api/audio/speak`, same `XAI_API_KEY`). Default `eve`; any xAI voice id (`eve`, `ara`, `rex`, `sal`, `leo`, ...; case-insensitive). English only. Playback uses a `blob:` URL, which the CSP allows via `media-src 'self' blob:` |
+| `AI_MANAGER_TMPDIR` | Scratch folder on the normal disk for every process the app starts (manager and worker sessions, gate, `scripts/full_suite.py`, host-repair agent): they get `TMPDIR`, `TMP`, `TEMP` and `CLAUDE_CODE_TMPDIR` here instead of the RAM-backed `/tmp`. Default `~/.cache/linko-tmp` (created `0700`); each worker run gets its own subfolder. Hourly and at start the scheduler deletes entries older than 2 days that belong to no running execution (never outside this folder). The worker-user launcher uses `tmpdir` in `/etc/linko/worker.json` or the worker's `~/.cache/linko-tmp` (reinstall the launcher to pick this up) |
 | `AI_MANAGER_AUDIO_PROBE` | ffprobe executable; default `ffprobe` |
 | `AI_MANAGER_GITHUB_TOKEN_FILE` | Optional Personal GitHub token file, outside repositories |
 | `AI_MANAGER_GITHUB_COMPANY_TOKEN_FILE` | Optional Company GitHub token file, outside repositories |
