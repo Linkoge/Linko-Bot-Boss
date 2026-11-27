@@ -16,7 +16,10 @@ from the saved chunks and partial results and never rereads the whole document.
   office.py search SOURCE QUERY [--top N]       keyword search over chunks (Q&A reads only these)
   office.py combine SOURCE [--budget N]         build the final-pass input, hierarchical if needed
   office.py assemble SOURCE OUT                 join chunk outputs in order (chunk-by-chunk translation)
-  office.py outpath SOURCE KIND [--ext .md]     a NEW output path next to the source ("<name> summary.md")
+  office.py outpath SOURCE KIND [--ext .md] [--dir DIR] [--name NAME]
+                                                a NEW output path next to the source ("<name> summary.md"); --dir
+                                                puts it in DIR instead (a source outside the workspace), --name
+                                                takes the stem from the original file name (a stored attachment)
   office.py dashfix FILE [--out OUT]            replace em/en dashes in a produced output, never in an original
 
 Exit codes: 0 ok, 2 error, 3 stop for owner confirmation or budget cap (progress is saved), 4 loop guard stop.
@@ -562,14 +565,17 @@ def guard_new_output(source, out):
                           "(`office.py outpath SOURCE KIND`)")
 
 
-def output_path(source, kind, ext=".md"):
+def output_path(source, kind, ext=".md", directory=None, name=None):
     source = Path(source).resolve()
     kind = re.sub(r"[\\/\0]+", " ", kind).strip() or "output"
     ext = ext if ext.startswith(".") else "." + ext
-    candidate = source.with_name(f"{source.stem} {kind}{ext}")
+    folder = Path(directory).resolve() if directory else source.parent
+    stem = Path(re.sub(r"[\\/\0]+", " ", name)).stem.strip() if name else source.stem
+    stem = stem or source.stem
+    candidate = folder / f"{stem} {kind}{ext}"
     n = 2
     while candidate.exists():
-        candidate = source.with_name(f"{source.stem} {kind} {n}{ext}")
+        candidate = folder / f"{stem} {kind} {n}{ext}"
         n += 1
     register_output(candidate)
     return candidate
@@ -703,6 +709,8 @@ def main(argv=None):
     p.add_argument("source")
     p.add_argument("kind")
     p.add_argument("--ext", default=".md")
+    p.add_argument("--dir")
+    p.add_argument("--name")
     p = sub.add_parser("dashfix")
     p.add_argument("file")
     p.add_argument("--out")
@@ -736,7 +744,7 @@ def main(argv=None):
         elif args.command == "assemble":
             lines = assemble(args.source, args.out)
         elif args.command == "outpath":
-            lines = [str(output_path(args.source, args.kind, args.ext))]
+            lines = [str(output_path(args.source, args.kind, args.ext, args.dir, args.name))]
         else:
             lines = dashfix(args.file, args.out)
     except Stop as stop:

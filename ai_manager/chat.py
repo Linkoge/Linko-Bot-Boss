@@ -49,6 +49,14 @@ def owner_authored(db, execution_id):
         "SELECT 1 FROM executions d WHERE d.delivery_execution=e.id)", (execution_id,)))
 
 
+def delivered_files(conn, execution_id):
+    """The chat attachment references of the delivered files of a finished task run (empty for merged work)."""
+    from .delivery import references
+    row = conn.execute("SELECT t.merge FROM executions e JOIN tasks t ON t.id=e.task_id WHERE e.id=?",
+                       (execution_id,)).fetchone()
+    return references(json.loads(row["merge"])) if row and row["merge"] else []
+
+
 def hidden_message(alias="messages"):
     return (f"({internal_result(alias)} OR EXISTS(SELECT 1 FROM settings hidden "
             f"WHERE hidden.key='chat_deleted_message:' || {alias}.id))")
@@ -56,6 +64,7 @@ def hidden_message(alias="messages"):
 
 PROCESS_RETRIES = 3
 HELD = "chat_held:"  # settings key prefix of owner messages waiting for a deploy restart
+DELIVERED = "execution_delivered_files:"  # + manager execution id: output files of the task result it reports
 PARALLEL = "execution_parallel:"  # owner message sent with parallel send (Main only); its delegated task may run beside
 PARALLEL_NOTE = ("\n\n[Parallel send: the owner sent this with the parallel button. A task you delegate for this "
                  "message may run in parallel with the project's running task (it is flagged automatically).]")
@@ -157,7 +166,7 @@ class Chat:
                 row['status'] = 'streaming' if row['role'] == 'assistant' else 'processing'
                 row['retry_at'] = row['recovery_reason'] = None
             row.pop('recovering_since', None)
-            row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
+            row['attachments'] = self.message_attachments(row)
             row['parallel'] = row['role'] == 'user' and bool(self.db.setting(PARALLEL + str(row['execution_id'])))
         first = self.db.one('SELECT rowid AS position FROM messages WHERE conversation_id=? AND NOT '
                             + hidden_message() + ' ORDER BY rowid LIMIT 1', (conversation['id'],))
@@ -170,6 +179,14 @@ class Chat:
                     "WHERE key='chat_deleted_message:' || messages.id)", (conversation['id'],))],
                 'trash': self.db.setting('chat_trash:' + (project_id or 'global')),
                 'compaction_notice': self.compactor.current_notice(project_id)}
+
+    def message_attachments(self, row):
+        """An owner message's uploads, or the output files a delivered task result attached to the reply."""
+        if row['role'] == 'user':
+            return self.db.setting('execution_attachments:' + str(row['execution_id']), [])
+        if row['role'] == 'assistant' and row['execution_id']:
+            return self.db.setting(DELIVERED + str(row['execution_id']), [])
+        return []
 
     def delete_message(self, project_id, conversation_id, message_id, confirmed):
         """Remove a whole display message, preserving native/task/recovery evidence."""
@@ -403,7 +420,7 @@ class Chat:
             ),
         )
         for row in rows:
-            row['attachments'] = self.db.setting('execution_attachments:' + str(row['execution_id']), []) if row['role'] == 'user' else []
+            row['attachments'] = self.message_attachments(row)
             row['parallel'] = row['role'] == 'user' and bool(self.db.setting(PARALLEL + str(row['execution_id'])))
         return {
             "conversation": conversation,
@@ -616,6 +633,8 @@ class Chat:
             if items:
                 conn.execute('INSERT INTO settings VALUES(?,?)',
                              ('execution_attachments:' + execution_id, json.dumps(references)))
+            if delivery and (files := delivered_files(conn, delivery)):  # a files task: downloads on the reply
+                conn.execute('INSERT OR REPLACE INTO settings VALUES(?,?)', (DELIVERED + execution_id, json.dumps(files)))
             if parallel:  # saved = shown (message badge) = dispatched (the delegated task's flag)
                 conn.execute('INSERT INTO settings VALUES(?,?)', (PARALLEL + execution_id, 'true'))
                 content += PARALLEL_NOTE
@@ -932,13 +951,19 @@ class Chat:
     @staticmethod
     def result_notice(result):
         merge = json.loads(result["merge"]) if result.get("merge") else None
+        if merge and merge.get("state") == "delivered":  # file names and sizes; the files themselves are attached
+            merge = {k: merge[k] for k in ("state", "count", "summary", "deployment") if k in merge} | {
+                "files": [{k: f.get(k) for k in ("name", "size", "copy", "error") if f.get(k) is not None}
+                          for f in merge.get("files", [])][:20]}
         return {
             "task_id": result["task_id"], "execution_id": result["id"],
             "project_id": result["project_id"], "status": result["task_status"],
             "reason": result["blocker"][:600], "reason_truncated": len(result["blocker"]) > 600,
             "repair_rounds": result.get("rounds"), "merge": merge,
             "output_characters": len(result["output"]),
-            "evidence_action": "read_result", "deployment": "unverified; consult deployment_status",
+            "evidence_action": "read_result",
+            "deployment": ("none: a files-delivery task never merges or deploys; its files are attached to your reply"
+                           if merge and merge.get("state") == "delivered" else "unverified; consult deployment_status"),
         }
 
     async def deliver_results(self):

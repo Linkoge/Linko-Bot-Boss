@@ -139,6 +139,17 @@ def test_outpath_never_reuses_an_existing_name(office, tmp_path):
         office.guard_new_output(source, tmp_path / "Book summary.md")
 
 
+def test_outpath_for_a_stored_attachment_lands_in_the_workspace_with_the_original_name(office, tmp_path):
+    stored = tmp_path / "attachments" / ("0" * 32 + ".pdf")  # a chat attachment outside the workspace
+    stored.parent.mkdir()
+    stored.write_text("x")
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    out = office.output_path(stored, "summary", ".md", workspace, "Annual report.pdf")
+    assert out == workspace.resolve() / "Annual report summary.md" and not out.exists()
+    assert sorted(p.name for p in stored.parent.iterdir()) == [stored.name]
+
+
 # ---- planner, estimate, budget, resume, loop guard -----------------------------------------------------------------
 def test_measure_and_small_documents_need_no_chunks(office, tmp_path):
     small = tmp_path / "memo.txt"

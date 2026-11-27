@@ -5,7 +5,9 @@ States: queued -> running -> done | failed. `held` is a flag on a queued task (s
 a project is the only dependency. A worker implements on an isolated branch, the application runs the permanent checks
 (the fixed smoke suite plus the test files the branch added or changed), repairs happen in durable rounds (at most 5,
 then the task stops and reports). A passing branch always merges into main; a saved project setup requests the shared deploy script,
-and a project without one gets a Create deploy setup task (deploy_auto.py).
+and a project without one gets a Create deploy setup task (deploy_auto.py). A task whose worker harness sets
+"delivery": "files" (Office, Humanizer) never merges or deploys: file checks, then its output files are delivered
+(delivery.py).
 """
 
 import asyncio
@@ -22,7 +24,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from . import fence, isolation, scratch, writing
+from . import delivery, fence, isolation, scratch, writing
 from .attachments import native_image
 from .codex import AppServer, CodexError, TurnUsage, process_start
 from .db import new_id
@@ -362,18 +364,30 @@ class Tasks:
     def request_merge(self, task_id):
         """Owner asked to deploy a finished task whose branch never reached main: it goes round again at the merge stage,
         without another AI turn."""
+        if self.delivers_files(task_id):
+            raise ValueError("This task delivers files; nothing of it is merged or deployed")
         with self.db.transaction() as conn:
             task = conn.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
             if not task or not task["workspace_branch"]:
                 raise ValueError("Task has no branch to merge")
-            if (json.loads(task["merge"]) if task["merge"] else {}).get("state") == "merged":
+            receipt = json.loads(task["merge"]) if task["merge"] else {}
+            if receipt.get("state") == "merged":
                 raise ValueError("Task is already merged")
+            if receipt.get("state") == "delivered":
+                raise ValueError("This task delivers files; nothing of it is merged or deployed")
             if task["state"] != "done":
                 raise ValueError("Only a finished task is merged on request; a failed task needs continue first")
             conn.execute("UPDATE tasks SET state='queued',stage='merge',queued_at=?,requeues=0,blocker='',"
                          "revision=revision+1,updated_at=? WHERE id=?", (time.time(), time.time(), task_id))
             self.db.event(conn, "task.merge_requested", {}, task["project_id"], task_id)
         return self.get(task_id)
+
+    def delivers_files(self, task_id):
+        choice = harnesses.task_choice(self.db, task_id)
+        try:
+            return bool(choice) and harnesses.get(self.db, "worker", choice["id"]).delivers_files
+        except ValueError:
+            return False
 
     def fail_queued(self, conn, task, reason):
         conn.execute("UPDATE tasks SET state='failed',blocker=?,revision=revision+1,updated_at=? WHERE id=?",
@@ -484,7 +498,7 @@ class Core:
         text = ""
         while True:
             task = self.tasks.get(task["id"])
-            if task["stage"] == "work":
+            if task["stage"] == "work" or harness.delivers_files:  # a files task never reaches the merge stage
                 kind = "repair" if task["history"] and not task["history"][-1].get("ok") else "work"
                 prompt = self.prompt(task, project, root, kind)
                 text = await self.turn(eid, server, thread_id, queue, prompt, route, task)
@@ -492,6 +506,18 @@ class Core:
                     return self.end(eid, "failed", "Worker could not finish: " + (mark.group(1).strip() or "no reason given")[:400], text)
                 if not isolated:
                     return self.end(eid, "done", "", text)  # no Git isolation or checks for this project
+                if harness.delivers_files:  # documents, not code: file checks, then deliver; never merge or deploy
+                    self.event(task, eid, "task.check_started", {"round": task["rounds"], "delivery": "files"})
+                    result = await asyncio.to_thread(delivery.check, root, task["workspace_base"])
+                    self.event(task, eid, "task.check", {k: result[k] for k in ("ok", "checks", "count", "failures")})
+                    if not result["ok"]:
+                        if stop := self.next_round(task["id"], result):
+                            return self.end(eid, "failed", stop, text + "\n\nFile checks failed:\n" + result["output"])
+                        continue
+                    done = await asyncio.to_thread(delivery.deliver, self.db, self.registry, task, project, root)
+                    self.event(task, eid, "task.delivered", {"count": done["count"],
+                                                             "files": [f["path"] for f in done["files"]][:20]})
+                    return self.end(eid, "done", done["summary"], text, done)
                 self.event(task, eid, "task.check_started", {"round": task["rounds"]})
                 result = await asyncio.to_thread(self.check, root, task["workspace_base"])
                 self.event(task, eid, "task.check", {k: result[k] for k in ("ok", "checks", "count", "failures")})
@@ -539,7 +565,19 @@ class Core:
     def prompt(self, task, project, root, kind):
         value = {"objective": task["description"],
                  "repair_rounds": {"used": task["rounds"], "limit": REPAIR_ROUNDS}}
-        if task["workspace_base"]:
+        files = self.tasks.delivers_files(task["id"])
+        if files:
+            value["delivery"] = {
+                "mode": "files",
+                "instruction": ("Nothing of this task is merged or deployed and the code checks do not run. Leave each "
+                                "finished output as a NEW file in your workspace and do not commit it. The application "
+                                "then checks the outputs (no secrets, originals unchanged, at most "
+                                f"{delivery.MAX_FILES} files) and delivers them: a download in the chat and, for a "
+                                "document from the project folder, a copy next to it. Keep scratch files in "
+                                ".linko-work/. For a source outside the workspace (a chat attachment) write the output "
+                                "into the workspace root (office.py outpath FILE KIND --dir WORKSPACE --name "
+                                "'ORIGINAL NAME').")}
+        if task["workspace_base"] and not files:
             value["self_check"] = {"command": self_check_command(root, task["workspace_base"]),
                                    "instruction": "Run it before finishing; it is the same check the application will run."}
         if kind == "repair":  # the retained thread already holds the project, context and workspace

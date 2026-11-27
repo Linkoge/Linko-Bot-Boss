@@ -9,6 +9,11 @@ enforces. It can never add an action, remove RULES.md rules 1, 3 and 10 from the
 restricted-instance rejections, owner-typed-only actions and the follow-up limits (orchestration/followups), the host
 agent's own confirmation rules (scripts/emergency_repair.py), and the worker flow (worktree, checks, repair rounds;
 the application merges and deploys, workers never do).
+
+A worker harness may set ``"delivery": "files"``: its tasks still run in their own worktree with repair rounds, but the
+application skips the code checks, merge and deploy and instead delivers the task's new output files to the owner
+(file checks, chat attachments, a no-overwrite copy next to the source; ai_manager/delivery.py). It can only narrow
+what a task does: nothing it produces ever reaches main.
 """
 
 import copy
@@ -38,11 +43,12 @@ AVAILABLE_AUTONOMY = ("ask", "finish_request")
 PRIVILEGED = frozenset({"deploy", "save_deploy_setup", "emergency_repair"})
 KEYS = {
     "manager": {"id", "name", "role", "description", "prompt", "rules", "architecture_guide", "actions", "autonomy"},
-    "worker": {"id", "name", "role", "description", "prompt", "rules"},
+    "worker": {"id", "name", "role", "description", "prompt", "rules", "delivery"},
 }
 REQUIRED = {"manager": {"id", "name", "role", "description", "prompt", "actions", "autonomy"},
             "worker": {"id", "name", "role", "description", "prompt"}}
 WORKER_FORBIDDEN = {"deploy", "push", "merge", "actions", "autonomy", "tools", "checks", "gate"}
+DELIVERY = ("merge", "files")  # merge: checks, merge into main, deploy; files: deliver output files, nothing merges
 ID = re.compile(r"[a-z0-9][a-z0-9_-]{0,39}")
 MANIFEST_LIMIT, PROMPT_LIMIT, EXTERNAL_LIMIT = 20000, 60000, 50
 SELECTION = "harness_selection:"  # + project id or "global"
@@ -66,7 +72,12 @@ class Harness:
     architecture_guide: bool = False
     actions: str | tuple = "all"
     autonomy: str | None = None
+    delivery: str = "merge"
     source: str = "builtin"
+
+    @property
+    def delivers_files(self):
+        return self.delivery == "files"
 
     def instructions(self, restricted=False):
         """The thread's developer instructions: rules, then the harness prompt (and the architecture guide)."""
@@ -81,6 +92,8 @@ class Harness:
     def public(self):
         value = {"id": self.id, "name": self.name, "role": self.role, "description": self.description,
                  "source": self.source, "rules": self.rules if self.rules == "all" else list(self.rules)}
+        if self.role == "worker":
+            value["delivery"] = self.delivery
         if self.role == "manager":
             value |= {"actions": self.actions if self.actions == "all" else list(self.actions),
                       "autonomy": self.autonomy}
@@ -177,6 +190,11 @@ def load(folder, source="external"):
         if not isinstance(guide, bool):
             raise ValueError("architecture_guide must be true or false")
         fields = {"actions": actions, "autonomy": autonomy, "architecture_guide": guide}
+    else:
+        delivery = data.get("delivery", "merge")
+        if delivery not in DELIVERY:
+            raise ValueError("delivery must be 'merge' (checks, merge and deploy) or 'files' (deliver output files)")
+        fields = {"delivery": delivery}
     return Harness(id=data["id"], name=data["name"].strip(), role=role, description=data["description"].strip(),
                    prompt=prompt, rules=rules, source=source, **fields)
 

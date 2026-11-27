@@ -79,7 +79,8 @@ rules 8–9; worker-only: rule 11). The manager and worker prompts themselves li
    normal result notice. Only the application's own receipt triggers this, never worker or notice text. Withdrawal, a busy
    or dirty checkout, lock/idle timeouts, backup or setup problems and deploys without a task are reported, not re-queued.
 4. **Merge and deploy.** A passing branch always merges into `main` under the checkout fence (one merge at a time across projects, the
-   deploy request is made under the same fence hold); there is no per-project switch. Clean merges of main into the
+   deploy request is made under the same fence hold); there is no per-project switch; only a task of a file-delivery worker harness (Office, Humanizer) never
+   merges or deploys, see [File delivery](#harnesses). Clean merges of main into the
    branch are checked again before delivery. Before merging into the project folder, tracked local edits, deletions
    and renames are saved on main with the bot identity and the commit message
    `Save local changes in project folder before merging task`.
@@ -274,18 +275,18 @@ autonomy. Each harness is a folder with `harness.json` and a prompt file. Built-
 - **Coding** (`coding`, the default worker harness): today's worker: worktree, permanent checks, repair rounds,
   then merge and deploy by the application. Prompt: the worker view of RULES.md plus `harnesses/coding/prompt.md`.
 - **Office** (`office`, worker): summaries, translations, extracts and writing from large documents (books, long PDFs,
-  email threads). Prompt: RULES.md rules 1, 2, 3, 5, 6, 10 and 11 plus `harnesses/office/prompt.md` (the large-input
+  email threads). Prompt: RULES.md rules 1, 2, 3, 5, 10 and 11 plus `harnesses/office/prompt.md` (the large-input
   procedure and the English/Georgian writing style). It ships `harnesses/office/tools/office.py` (standard library,
   no AI calls): `measure` (pages, characters, estimated tokens, scanned-PDF check; PDFs need `pdftotext` or `pypdf`),
   `plan` (extract and chunk into the git-ignored work folder `.linko-work/<doc>/` of the task workspace, print the
   estimate as a rough % of the 5-hour limit; above 10% it stops for the owner's confirmation), `next`/`done`/`fail`
   (chunk N/M handout with a per-task budget cap, default 20%, and a loop guard of 2 retries per chunk), `confirm`,
   `status`, `search` (keyword ranking for Q&A), `combine` (final-pass input, hierarchical if large), `assemble`,
-  `outpath` (a new file name next to the original, never an existing one) and `dashfix` (em/en dashes to keyboard
+  `outpath` (a new file name next to the original, never an existing one; `--dir`/`--name` for a chat attachment
+  outside the workspace) and `dashfix` (em/en dashes to keyboard
   punctuation, skipping code, URLs and tables; it rewrites only new outputs). The estimate's calibration can be set
-  with `OFFICE_LIMIT_UNITS`, `OFFICE_CONFIRM_PERCENT` and `OFFICE_CAP_PERCENT`. Office results are committed as files
-  and still go through the normal checks, merge and deploy: a worker harness has no no-merge/no-deploy option.
-  Permanent coverage: `tests/test_office_harness.py`.
+  with `OFFICE_LIMIT_UNITS`, `OFFICE_CONFIRM_PERCENT` and `OFFICE_CAP_PERCENT`. Office uses file delivery (below):
+  nothing is committed, merged or deployed. Permanent coverage: `tests/test_office_harness.py`.
 - **Humanizer** (`humanizer`, worker): makes the owner's document read as written by a person, as its own function:
   attach any document in the chat and ask to humanize it, optionally with rates ("typos 0.5%", "punctuation 3%"); the
   manager delegates it with this harness. Level 1 is the AI rewrite in the owner's style (the Writing samples below),
@@ -298,7 +299,23 @@ autonomy. Each harness is a folder with `harness.json` and a prompt file. Built-
   kept). Never touched: tokens with a digit, words of 1-2 letters, capitalised words (names, and sentence-initial
   words too), URLs, emails, paths and identifiers, inline and fenced code, text inside quotes, markdown table rows.
   `humanize.py measure FILE` prints a sample's statistics. "Humanize" runs both levels; "only typos" just the script.
+  Humanizer uses file delivery (below).
   Permanent coverage: `tests/test_humanizer.py`, `tests/test_writing_browser.py`.
+
+**File delivery** (`"delivery": "files"` in a worker's `harness.json`; Office and Humanizer; default `"merge"`). The
+task still runs in its own worktree with repair rounds, but after the worker's turn the application skips the code
+checks, the merge and the deploy (a merge request for it is refused). It runs the file checks instead, which fail like
+a check and go back to the worker as a repair round: no original (a file present at the task's base) changed or
+deleted, outputs are regular files (no symlinks), at most 20 files of at most 50 MiB, and no key-shaped literal in any
+output (.docx scanned as text). Outputs are the files the task added since its base, committed or not; the git-ignored
+work folder `.linko-work/` never counts. Each output is stored in the chat attachment store and attached, downloadable,
+to the manager's reply that reports the result. An output next to a project document it is named after (`Book
+summary.md` beside `Book.pdf`) is also copied to the same place in the project folder as an untracked file, never
+overwriting: a taken name becomes `Book summary 2.md`. A retried delivery reuses the same attachment and copy. The task
+ends `done` with “Delivered N files” (task card and result) and a `merge` record of state `delivered` with the files.
+The prompt carries `delivery` instead of `self_check`, and the Office and Humanizer prompts tell the worker to leave
+outputs uncommitted. Code: `ai_manager/delivery.py`, `ai_manager/core.py`. Permanent coverage:
+`tests/test_file_delivery.py`.
 
 **Writing settings.** Settings > Writing (on Main and on every instance; per profile, since each instance keeps its
 own in its database and Main does not push it) holds an English and a Georgian style sample (2-3 paragraphs of the
@@ -364,14 +381,16 @@ absolute path, so a harness can name the tools it ships. Optional `rules` is `"a
 rule numbers. Rules 1, 3 and 10 are always added. A manager also needs `actions` (`"all"` or a subset of the
 manager tool's actions; a harness cannot add any) and `autonomy`, and may set `architecture_guide`. Enabling `deploy`,
 `save_deploy_setup` or `emergency_repair` (or `"all"`) requires `rules: "all"`. A worker harness may not set `deploy`,
-`push`, `merge`, `actions`, `autonomy`, `tools`, `checks` or `gate`. The picker lists invalid folders with the reason,
+`push`, `merge`, `actions`, `autonomy`, `tools`, `checks` or `gate`; it may set `delivery` (`"merge"` or
+`"files"`, see File delivery). The picker lists invalid folders with the reason,
 and they are never used.
 
 **What no harness can change.** The checks happen in code no matter what the prompt says. Actions outside a harness's
 list are rejected. Restricted-instance rejections still apply. Notice turns cannot do anything that needs an
 owner-typed message. Follow-up and auto-mode limits stay in place. The host agent keeps its own confirmation rules for
 irreversible or security-weakening work (`scripts/emergency_repair.py`). Workers keep the fixed flow: the application
-runs the checks, merges and deploys, and workers never push or deploy (RULES.md rule 3). Code:
+runs the checks, merges and deploys (or, for file delivery, runs the file checks and delivers the files), and workers
+never push or deploy (RULES.md rule 3). Code:
 `ai_manager/harness.py`, `ai_manager/static/harness.js`. `harnesses/` is a runtime path, so an instance behind a
 host adapter's bind list must have it mounted (see [Multiple instances](#multiple-instances-and-the-restricted-work-instance)).
 Permanent coverage: `tests/test_harness.py`, `tests/test_harness_browser.py`.
