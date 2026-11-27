@@ -99,6 +99,8 @@ def test_deferred_note_migrates_once_preserving_original_assignment_and_audit(cl
     _, app, settings = client
     project = app.state.registry.add(settings.project_roots[0] / "one")["id"]
     db = app.state.db
+    # The live scheduler must not claim the queued task before it is renamed below (FOREIGN KEY failure otherwise).
+    db.run("UPDATE projects SET status='paused' WHERE id=?", (project,))
     task = app.state.scheduler.tasks.add(
         project, "Original deferred objective; preserve architectural review and audit"
     )

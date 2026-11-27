@@ -37,10 +37,10 @@ Cause: `inner_text()` / `page.evaluate()` right after `click()` runs before the 
 Do: `page.wait_for_function(...)` for the expected state before asserting; reproduce with `python scripts/full_suite.py`, not just the single file.
 
 ### Fake unfinished executions race the app's scheduler (2026-11-21, task bdc5d3)
-When: a test using a live `create_app` app (the `client`/`pair` fixtures; the scheduler runs) inserts an `executions` row with `finished_at IS NULL` by hand.
+When: a test using a live `create_app` app (the `client`/`pair` fixtures; the scheduler runs) inserts an `executions` row with `finished_at IS NULL` by hand, or edits a task it just queued (the runner may claim it first).
 Symptom: passes alone and in a serial run, fails only in the parallel full suite (`scripts/full_suite.py`), e.g. a guard expected 409 but got 200.
 Cause: `Chat.recover()` on the scheduler loop finishes unowned unfinished manager rows (status `running`, no live pid) between the test's requests.
-Do: insert a state recovery leaves alone, e.g. status `recovering` with `retry_at` an hour ahead (what `recovery.defer()` writes); reproduce with a `time.sleep(3)` before the assertion.
+Do: insert a state recovery leaves alone, e.g. status `recovering` with `retry_at` an hour ahead (what `recovery.defer()` writes); for a queued task, pause its project first (`_claim` skips non-active projects); reproduce with a `time.sleep(3)` before the assertion.
 
 ### New built-in harness breaks exact-list tests (2026-11-27, task 21af98)
 When: you add a folder to `BUILTIN_FOLDERS` in `ai_manager/harness.py`.
