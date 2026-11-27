@@ -300,7 +300,7 @@ def save_state(work, state):
 
 def spent_percent(state):
     units = sum(c["units"] * c["attempts"] for c in state["chunks"])
-    return round(100 * units / LIMIT_UNITS, 1)
+    return 100 * units / LIMIT_UNITS
 
 
 def progress(state):
@@ -421,7 +421,7 @@ def mark_done(source, chunk_id):
     chunk["status"], chunk["sha256"] = "done", digest
     save_state(work, state)
     return [f"chunk {chunk_id}/{len(state['chunks'])} done; progress {progress(state)}, "
-            f"spent about {spent_percent(state)}% of the 5-hour limit"]
+            f"spent about {spent_percent(state):.1f}% of the 5-hour limit"]
 
 
 def mark_failed(source, chunk_id, reason):
@@ -462,7 +462,7 @@ def status(source):
     work = work_dir(source)
     state = load_state(work)
     lines = [f"job {state['job']}: {progress(state)} chunks done, status {state['status']}, spent about "
-             f"{spent_percent(state)}% of {state['cap_percent']:g}% cap (estimate {state['estimate']['percent']}%)"]
+             f"{spent_percent(state):.1f}% of {state['cap_percent']:g}% cap (estimate {state['estimate']['percent']}%)"]
     if state.get("reason"):
         lines.append("reason: " + state["reason"])
     return lines
