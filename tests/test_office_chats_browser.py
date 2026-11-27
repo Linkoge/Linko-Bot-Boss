@@ -163,8 +163,10 @@ def test_office_chat_list_desktop_and_mobile(tmp_path, width):
         page.locator(f'#chat-list .chat-item[data-chat="{first}"] .chat-delete').click()
         assert page.locator('#office-confirm').is_visible()
         page.locator('#office-confirm-submit').click()
-        page.wait_for_function('id=>state.history&&state.history.conversation.id===id', arg=second)
+        # The switch closes the mobile list only after the new chat loaded: wait for it to finish before toggling.
+        page.wait_for_function('id=>state.history&&state.history.conversation.id===id&&!officeChats.switching', arg=second)
         if mobile:
+            page.wait_for_function('()=>document.querySelector("#chat-sidebar").hidden')
             page.locator('#chat-list-button').click()
         page.wait_for_function('()=>document.querySelectorAll("#chat-list .chat-item").length===1')
         # Chat controls, voice and attachments stay in every chat.
