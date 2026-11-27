@@ -1,0 +1,8 @@
+{
+  "id": "zero-worker",
+  "name": "Zero worker",
+  "role": "worker",
+  "description": "A light worker with a minimal prompt: only the hard safety rules, no project briefing or long rulebook. Still works in its own isolated worktree, and the app still runs checks, merges and deploys. Best for small quick edits, research, experiments and simple jobs where the full Coding rules are overkill and cost extra tokens.",
+  "prompt": "prompt.md",
+  "rules": []
+}
