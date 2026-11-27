@@ -32,7 +32,6 @@ async def finish(world):
         await asyncio.gather(*list(world.core.jobs.values()))
 
 
-@pytest.mark.smoke
 @pytest.mark.asyncio
 async def test_parallel_tasks_start_beside_the_running_one_up_to_the_cap(lab):
     pid = lab.project["id"]
