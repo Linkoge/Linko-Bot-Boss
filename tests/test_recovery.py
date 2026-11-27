@@ -591,8 +591,8 @@ async def test_close_reaps_owned_group_children_after_app_server_parent_death(sy
     )
     server.process_identity = process_start(server.process.pid)
     try:
-        for _ in range(200):
-            if ready.exists():
+        for _ in range(1000):  # the file exists before its pid is written: wait for the content (loaded hosts are slow)
+            if ready.exists() and ready.read_text().strip():
                 break
             await asyncio.sleep(0.01)
         child_pid = int(ready.read_text())
