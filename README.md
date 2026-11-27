@@ -269,8 +269,21 @@ autonomy. Each harness is a folder with `harness.json` and a prompt file. Built-
 - **Zero** (`zero`): a plain agent for brainstorming. Its prompt has only RULES.md rules 1, 3 and 10 and a short
   `harnesses/zero/prompt.md`. It keeps the delegate, task-control, read/inspect and To-Do actions, but has no deploy,
   host repair, pause/resume or auto-mode actions. Its default autonomy is Ask.
-- **Coding** (`coding`, the only worker harness so far): today's worker: worktree, permanent checks, repair rounds,
+- **Coding** (`coding`, the default worker harness): today's worker: worktree, permanent checks, repair rounds,
   then merge and deploy by the application. Prompt: the worker view of RULES.md plus `harnesses/coding/prompt.md`.
+- **Office** (`office`, worker): summaries, translations, extracts and writing from large documents (books, long PDFs,
+  email threads). Prompt: RULES.md rules 1, 2, 3, 5, 6, 10 and 11 plus `harnesses/office/prompt.md` (the large-input
+  procedure and the English/Georgian writing style). It ships `harnesses/office/tools/office.py` (standard library,
+  no AI calls): `measure` (pages, characters, estimated tokens, scanned-PDF check; PDFs need `pdftotext` or `pypdf`),
+  `plan` (extract and chunk into the git-ignored work folder `.linko-work/<doc>/` of the task workspace, print the
+  estimate as a rough % of the 5-hour limit; above 10% it stops for the owner's confirmation), `next`/`done`/`fail`
+  (chunk N/M handout with a per-task budget cap, default 20%, and a loop guard of 2 retries per chunk), `confirm`,
+  `status`, `search` (keyword ranking for Q&A), `combine` (final-pass input, hierarchical if large), `assemble`,
+  `outpath` (a new file name next to the original, never an existing one) and `dashfix` (em/en dashes to keyboard
+  punctuation, skipping code, URLs and tables; it rewrites only new outputs). The estimate's calibration can be set
+  with `OFFICE_LIMIT_UNITS`, `OFFICE_CONFIRM_PERCENT` and `OFFICE_CAP_PERCENT`. Office results are committed as files
+  and still go through the normal checks, merge and deploy: a worker harness has no no-merge/no-deploy option.
+  Permanent coverage: `tests/test_office_harness.py`.
 
 **Choosing.** The round ☼ button left of the chat menu (▾) opens the harness picker for the current chat. It has the
 manager harness, its autonomy and, for a project, the default worker harness, each with a short description. Every
@@ -321,7 +334,8 @@ default autonomy per chat scope. The existing follow-up limits and auto-mode bou
 
 **Extra harnesses.** Put folders in `AI_MANAGER_HARNESS_DIR` (default `<data>/harnesses`). Each folder needs
 `harness.json` with `id` (lowercase, unique, not a built-in id), `name`, `role` (`manager` or `worker`), `description`
-and `prompt` (a file name inside the folder; no symlinks or paths). Optional `rules` is `"all"` or a list of RULES.md
+and `prompt` (a file name inside the folder; no symlinks or paths). In the prompt, `{{HARNESS_DIR}}` is replaced by the harness folder's
+absolute path, so a harness can name the tools it ships. Optional `rules` is `"all"` or a list of RULES.md
 rule numbers. Rules 1, 3 and 10 are always added. A manager also needs `actions` (`"all"` or a subset of the
 manager tool's actions; a harness cannot add any) and `autonomy`, and may set `architecture_guide`. Enabling `deploy`,
 `save_deploy_setup` or `emergency_repair` (or `"all"`) requires `rules: "all"`. A worker harness may not set `deploy`,
