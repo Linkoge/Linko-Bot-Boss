@@ -380,16 +380,15 @@ body:not(.office) .office-only{display:none!important}
 .host-agent-line{margin:10px 0 0!important;padding-top:8px;border-top:1px solid var(--border);overflow-wrap:anywhere}.host-agent-line[data-state=stuck],.host-agent-line[data-state=login_expired]{color:#e4a0a0}.host-agent-line[data-state=running]{color:#8fd6b4}#harness-button[data-host-agent=bad]::before{content:"";position:absolute;top:6px;left:6px;width:7px;height:7px;border-radius:50%;background:#e06c6c}
 
 /* Instances (.restricted): Humanizer replaces Clear chat in the chat menu; Writing lives in its sheet; Language is a setting. */
-#chat-menu #humanizer-chat,#language-panel{display:none}
-.restricted #chat-menu #humanizer-chat{display:flex!important;align-items:center;gap:10px}
+#language-panel,#humanizer-button{display:none}
+.restricted #humanizer-button{display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;min-height:44px;flex:none;padding:4px;border-radius:50%}
+.restricted #chat-menu-button,.restricted #chat-menu{display:none!important}
 .restricted #clear-chat{display:none!important}
 .restricted #language-panel:not([hidden]){display:block}
-#humanizer-chat .menu-icon{display:inline-flex;flex:none;width:20px;height:20px}
 #humanizer-dialog{max-width:520px;width:calc(100% - 16px);max-height:calc(var(--app-height,100dvh) - 16px);overflow:auto;padding:12px 14px}
 #humanizer-dialog .panel{display:block!important;border:0;padding:0;margin:0;background:transparent}
 
 /* Instance chat menu holds only Humanizer; the Humanizer sheet has an X, a Save/Close row and a rules section. */
-.restricted #chat-menu button:not(#humanizer-chat),.restricted #chat-menu .chat-trash-controls{display:none!important}
 #humanizer-x{display:none}
 .humanizer-head{display:none}
 .restricted .humanizer-head{display:flex;justify-content:flex-end;position:sticky;top:0;margin:-12px -14px 0;padding:6px 8px;background:var(--panel,#161c28);z-index:1}
@@ -398,3 +397,13 @@ body:not(.office) .office-only{display:none!important}
 .humanizer-actions button{flex:1 1 0;width:auto}
 #humanizer-rules{margin-top:18px;padding-top:12px;border-top:1px solid var(--border)}
 #humanizer-rules h3{margin:0 0 8px;font-size:16px}#humanizer-rules ul{margin:0;padding-left:18px}#humanizer-rules li{margin:0 0 6px;font-size:13px;line-height:1.45}
+
+/* Humanize a file (instances): the script only, with a spinner while it runs and the recent results below. */
+#humanize-file{margin-bottom:14px;padding-bottom:12px;border-bottom:1px solid var(--border)}
+#humanize-file h3{margin:0 0 6px;font-size:16px}#humanize-file form{display:grid;gap:8px}
+#humanize-file-busy{display:flex;align-items:center;gap:8px}#humanize-file-busy[hidden]{display:none}
+.spinner{width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+#humanize-file-results{list-style:none;margin:8px 0 0;padding:0;display:grid;gap:6px}
+#humanize-file-results li{display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:13px;overflow-wrap:anywhere}
+#humanize-file-results a{flex:none}

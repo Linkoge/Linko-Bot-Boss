@@ -33,6 +33,7 @@ from .config import CODE_ROOT, Settings
 from .core import Core, Tasks
 from .db import Database
 from .execution_ui import event_page, execution_page, execution_summary
+from .humanize_files import HumanizedFiles
 from .github_projects import GitHubError, GitHubProjects
 from .enrollment import in_tailnet
 from .onboarding import NeedsAuthKey, Onboarding, Unknown
@@ -1027,6 +1028,25 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             value.pop("samples")
         writing.save(db, value)
         return writing.view(db)
+
+    humanized = HumanizedFiles(settings.data_dir)
+
+    @app.post("/api/humanize/file", dependencies=[Depends(require_owner)])
+    async def humanize_upload(request: Request, name: str, typos: float, punct: float):
+        # The raw file is the request body (like /api/attachments): no multipart dependency.
+        return await humanized.run(request, name, typos, punct)
+
+    @app.get("/api/humanize/files", dependencies=[Depends(require_owner)])
+    def humanize_results():
+        return {"results": humanized.list()}
+
+    @app.get("/api/humanize/files/{identifier}", dependencies=[Depends(require_owner)])
+    def humanize_download(identifier: str):
+        meta, path = humanized.get(identifier)
+        if not path.is_file():
+            raise HTTPException(404, "This result is no longer available.")
+        return FileResponse(path, media_type="application/octet-stream", filename=meta["name"],
+                            headers={"X-Content-Type-Options": "nosniff"})
 
     @app.get("/")
     def index():

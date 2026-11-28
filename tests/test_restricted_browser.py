@@ -61,15 +61,12 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             assert page.evaluate("()=>document.body.classList.contains('office')") is True
             for hidden in ('.project-row', '.tabs', '#harness-button', '#harness-menu', '#usage-button'):
                 assert not page.locator(hidden).is_visible(), hidden
-            for visible in ('#message-input', '#microphone', '#attach', '#chat-menu-button'):
+            for visible in ('#message-input', '#microphone', '#attach', '#humanizer-button'):
                 assert page.locator(visible).is_visible(), visible
-            page.locator('#chat-menu-button').click()
-            assert page.locator('#chat-menu').is_visible()
-            for hidden in ('#compact-chat', '#archive-chat', '#archive-part-chat', '#clear-chat', '#copy-all',
-                           '#copy-five', '#restore-trash', '#empty-trash'):
+            # No chat menu at all on an instance: the round H button replaces it.
+            for hidden in ('#chat-menu-button', '#chat-menu', '#compact-chat', '#archive-chat', '#archive-part-chat',
+                           '#clear-chat', '#copy-all', '#copy-five', '#restore-trash', '#empty-trash'):
                 assert not page.locator(hidden).is_visible(), hidden
-            assert page.locator('#chat-menu button:visible').evaluate_all('els=>els.map(e=>e.id)') == ['humanizer-chat']
-            page.keyboard.press('Escape')
             # UI hiding only: no new server-side refusal of the chat-scoped endpoints.
             assert page.evaluate("async()=>(await fetch('/api/harnesses')).status") == 200
             assert page.evaluate("async()=>(await fetch('/api/environments')).status") == 403  # Main's picker only

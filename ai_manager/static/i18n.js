@@ -43,6 +43,17 @@ const KA={
   "Never touched: numbers, short words (1-2 letters), capitalised words and names, URLs, emails, code, quoted text and tables.":"არასოდეს იცვლება: რიცხვები, მოკლე სიტყვები (1-2 ასო), დიდი ასოთი დაწყებული სიტყვები და სახელები, ბმულები, ელფოსტები, კოდი, ციტატები და ცხრილები.",
   "The typo rate and the punctuation rate can be adjusted.":"შეცდომების და პუნქტუაციის მაჩვენებელი რეგულირდება.",
   "The result is always a new file. Your original is kept.":"შედეგი ყოველთვის ახალი ფაილია. თქვენი ორიგინალი ინახება.",
+  "Humanize a file":"ფაილის გაადამიანურება",
+  "Script only, no AI. Choose a .txt, .md or .docx file (up to 20 MB). Your original is not changed.":"მხოლოდ სკრიპტი, ხელოვნური ინტელექტის გარეშე. აირჩიეთ .txt, .md ან .docx ფაილი (20 MB-მდე). თქვენი ორიგინალი არ იცვლება.",
+  "File":"ფაილი",
+  "Humanize":"გაადამიანურება",
+  "Humanizing… keep this window open":"მიმდინარეობს გაადამიანურება… დატოვეთ ეს ფანჯარა ღია",
+  "typos":"ბეჭდვითი შეცდომა",
+  "punctuation marks dropped":"პუნქტუაციის ნიშანი წაშლილია",
+  "Choose a file to humanize.":"აირჩიეთ გასაადამიანურებელი ფაილი.",
+  "Only .txt, .md and .docx files can be humanized. Convert other formats to one of these first.":"გაადამიანურდება მხოლოდ .txt, .md და .docx ფაილები. სხვა ფორმატები ჯერ გადაიყვანეთ ერთ-ერთ მათგანში.",
+  "The file must be at most 20 MB.":"ფაილი არ უნდა აღემატებოდეს 20 MB-ს.",
+  "Humanize a file at the top of this sheet runs the script only (level 2, no AI rewrite). For a rewrite in your style, ask in the chat.":"ფაილის გაადამიანურება ამ ფანჯრის თავში მხოლოდ სკრიპტს უშვებს (დონე 2, ხელოვნური ინტელექტით გადაწერის გარეშე). თქვენს სტილში გადასაწერად სთხოვეთ ჩატში.",
 };
 function currentLanguage(){try{return localStorage.getItem(LANGUAGE_KEY)==='ka'?'ka':'en';}catch{return 'en';}}
 let i18nActive=false;

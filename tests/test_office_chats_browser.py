@@ -171,11 +171,11 @@ def test_office_chat_list_desktop_and_mobile(tmp_path, width):
             page.locator('#chat-list-button').click()
         page.wait_for_function('()=>document.querySelectorAll("#chat-list .chat-item").length===1')
         # Chat controls, voice and attachments stay in every chat.
-        for visible in ('#message-input', '#microphone', '#attach', '#chat-menu-button'):
+        for visible in ('#message-input', '#microphone', '#attach', '#humanizer-button'):
             assert page.locator(visible).is_visible() or mobile, visible
         if mobile:
             page.locator('#chat-list-button').click()
-        for visible in ('#message-input', '#microphone', '#attach', '#chat-menu-button'):
+        for visible in ('#message-input', '#microphone', '#attach', '#humanizer-button'):
             assert page.locator(visible).is_visible(), visible
         # Settings in office mode: only Instructions and Sign out; chat memory numbers follow Main.
         if mobile:

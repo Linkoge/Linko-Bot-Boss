@@ -15,8 +15,7 @@ def test_writing_panel_saves_and_reloads(tmp_path, office):
         page.on('pageerror', lambda error: errors.append(str(error)))
         sign_in(page, url, tmp_path)
         if office:
-            page.locator('#chat-menu-button').click()
-            page.locator('#humanizer-chat').click()
+            page.locator('#humanizer-button').click()
         else:
             page.locator('.tabs [data-view=settings]').click()
         page.wait_for_function("()=>writingSettings!==null&&$('writing-typo-rate').value==='0.2'")

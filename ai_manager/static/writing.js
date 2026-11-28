@@ -30,16 +30,49 @@ $('office-settings')?.addEventListener('click',loadWriting);
 function setupHumanizerSheet(restricted){
   humanizerSheet=!!restricted;
   if(!restricted)return;
-  $('humanizer-chat').disabled=false;
   $('humanizer-body').append($('writing-panel'));
   $('writing-heading').textContent='Humanizer';
   $('writing-intro').textContent='Paste a few paragraphs you wrote yourself, in English and in Georgian. Humanizer writes like them. To use it, attach a document in the chat and ask, for example, "humanize this, typos 0.5%".';
   $('writing-label-en').textContent='Style copy — English';$('writing-label-ka').textContent='Style copy — Georgian';
   $('writing-typo-rate').closest('label').firstChild.data='Typos (% of words)';
   $('writing-punct-rate').closest('label').firstChild.data='Punctuation removed (% of marks)';
-  $('humanizer-chat').onclick=()=>{closeChatMenu();$('writing-status').textContent='';loadWriting();$('humanizer-dialog').showModal();};
+  $('humanizer-button').onclick=()=>{$('writing-status').textContent='';loadWriting().then(()=>{$('humanize-file-typos').value=$('writing-typo-rate').value;$('humanize-file-punct').value=$('writing-punct-rate').value;});loadHumanizedFiles();$('humanizer-dialog').showModal();};
+  setupHumanizeFile();
   const close=()=>$('humanizer-dialog').close();
   $('humanizer-close').onclick=close;$('humanizer-x').onclick=close;
   const actions=document.createElement('div');actions.className='humanizer-actions';  // Save and Close side by side
   const save=$('writing-form').querySelector('button.primary');save.after(actions);actions.append(save,$('humanizer-close'));
+}
+
+// Humanize a file: the script only (POST /api/humanize/file sends the raw file as the body). Results stay on the server.
+const HUMANIZE_SUFFIXES=['.txt','.md','.markdown','.docx'];
+function humanizeSummary(item){return `${item.typos} ${tw('typos')}, ${item.dropped} ${tw('punctuation marks dropped')}`;}
+function renderHumanizedFiles(results){
+  const list=$('humanize-file-results');list.replaceChildren();
+  for(const item of results){
+    const row=document.createElement('li'),text=document.createElement('span'),link=document.createElement('a');
+    text.textContent=`${item.name} · ${humanizeSummary(item)}`;
+    link.href='/api/humanize/files/'+item.id;link.download=item.name;link.textContent=tw('Download');link.className='button';
+    row.append(text,link);list.append(row);
+  }
+}
+async function loadHumanizedFiles(){
+  try{renderHumanizedFiles((await api('/api/humanize/files')).results);}catch(error){$('humanize-file-status').textContent=error.message;}
+}
+function setupHumanizeFile(){
+  $('humanize-file-form').onsubmit=async event=>{
+    event.preventDefault();
+    const file=$('humanize-file-input').files[0],status=$('humanize-file-status');status.textContent='';
+    if(!file){status.textContent=tw('Choose a file to humanize.');return;}
+    if(!HUMANIZE_SUFFIXES.some(suffix=>file.name.toLowerCase().endsWith(suffix))){status.textContent=tw('Only .txt, .md and .docx files can be humanized. Convert other formats to one of these first.');return;}
+    if(file.size>20*1024*1024){status.textContent=tw('The file must be at most 20 MB.');return;}
+    const query=new URLSearchParams({name:file.name,typos:$('humanize-file-typos').value,punct:$('humanize-file-punct').value});
+    $('humanize-file-run').disabled=true;$('humanize-file-busy').hidden=false;
+    try{
+      const item=await api('/api/humanize/file?'+query,{method:'POST',headers:{'Content-Type':'application/octet-stream'},body:file});
+      status.textContent=humanizeSummary(item);$('humanize-file-input').value='';
+      await loadHumanizedFiles();
+    }catch(error){status.textContent=error.message;}
+    finally{$('humanize-file-run').disabled=false;$('humanize-file-busy').hidden=true;}
+  };
 }
