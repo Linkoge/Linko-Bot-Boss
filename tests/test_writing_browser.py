@@ -15,18 +15,20 @@ def test_writing_panel_saves_and_reloads(tmp_path, office):
         page.on('pageerror', lambda error: errors.append(str(error)))
         sign_in(page, url, tmp_path)
         if office:
-            page.locator('#office-settings').click()
+            page.locator('#chat-menu-button').click()
+            page.locator('#humanizer-chat').click()
         else:
             page.locator('.tabs [data-view=settings]').click()
         page.wait_for_function("()=>writingSettings!==null&&$('writing-typo-rate').value==='0.2'")
-        assert page.locator('#writing-panel').is_visible() and page.locator('#writing-panel h2').inner_text() == 'Writing'
+        assert page.locator('#writing-panel').is_visible() and page.locator('#writing-panel h2').inner_text() == ('Humanizer' if office else 'Writing')
         assert page.locator('#writing-stats-en').inner_text() == 'No sample saved.'
         page.locator('#writing-sample-en').fill(SAMPLE)
         page.locator('#writing-sample-ka').fill(GEORGIAN)
         page.locator('#writing-typo-rate').fill('0.5')
         page.locator('#writing-punct-rate').fill('3')
         page.locator('#writing-form button.primary').click()
-        page.wait_for_function("()=>$('writing-status').textContent==='Writing settings saved.'")
+        saved = 'Humanizer settings saved.' if office else 'Writing settings saved.'
+        page.wait_for_function("text=>$('writing-status').textContent===text", arg=saved)
         assert page.locator('#writing-stats-en').inner_text().startswith('Measured: 4 sentences')
         assert page.locator('#writing-stats-ka').inner_text().startswith('Measured: 2 sentences')
         page.reload()

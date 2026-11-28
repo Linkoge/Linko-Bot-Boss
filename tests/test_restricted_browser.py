@@ -65,9 +65,9 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
                 assert page.locator(visible).is_visible(), visible
             page.locator('#chat-menu-button').click()
             assert page.locator('#chat-menu').is_visible()
-            for hidden in ('#compact-chat', '#archive-chat', '#archive-part-chat'):
+            for hidden in ('#compact-chat', '#archive-chat', '#archive-part-chat', '#clear-chat'):
                 assert not page.locator(hidden).is_visible(), hidden
-            for visible in ('#clear-chat', '#copy-all'):
+            for visible in ('#humanizer-chat', '#copy-all'):
                 assert page.locator(visible).is_visible(), visible
             page.keyboard.press('Escape')
             # UI hiding only: no new server-side refusal of the chat-scoped endpoints.
@@ -95,8 +95,8 @@ def test_restricted_ui_selects_the_one_project_and_hides_rejected_controls(tmp_p
             page.evaluate("()=>showView('ideas')")
             assert not page.locator('#view-ideas').is_visible()
             assert page.locator('#project-menu').is_hidden()
-            # Settings of an instance: Instructions, its own Writing samples and Sign out (everything else follows Main).
-            assert [t.strip() for t in page.locator('#view-settings > article:visible h2').all_inner_texts()] == ['Version', 'Writing', 'Instructions', 'Session']
+            # Settings of an instance: Instructions, Language and Sign out (Humanizer samples live in the chat menu) (everything else follows Main).
+            assert [t.strip() for t in page.locator('#view-settings > article:visible h2').all_inner_texts()] == ['Version', 'Language', 'Instructions', 'Session']
             for shown in ('#global-instructions', '#logout'):
                 assert page.locator(shown).is_visible(), shown
             for hidden in ('#rename-project', '#project-settings', '#chat-memory-panel', '#chat-memory-model',

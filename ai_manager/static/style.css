@@ -314,7 +314,7 @@ input,textarea,select{accent-color:var(--accent-solid)}
 .restricted #all-projects,.restricted #project-menu-button,.restricted #discover,.restricted #add-project,.restricted #deployment-panel,.restricted #model-settings-button,.restricted #models-panel,.restricted #model-dialog{display:none}
 .restricted #github-panel,.restricted #onboarding-dialog{display:none}
 /* Instances show only Instructions and Sign out in Settings; every other setting follows Main (instance_sync.py). */
-.restricted #view-settings>article:not(#version-panel):not(#instructions-panel):not(#writing-panel):not(#session-panel),.restricted #revoke-sessions{display:none!important}
+.restricted #view-settings>article:not(#version-panel):not(#instructions-panel):not(#language-panel):not(#session-panel),.restricted #revoke-sessions{display:none!important}
 /* Office mode (every instance but Main): one clean chat screen. Cosmetic only, the elements stay in the DOM. */
 .office .project-row,.office #project-menu,.office .tabs,.office #harness-button,.office #harness-menu,.office #usage-button,.office #usage-dialog,.office #compact-chat,.office #archive-chat,.office #archive-part-chat{display:none!important}
 #onboarding-dialog{max-width:560px;width:calc(100% - 16px);max-height:calc(var(--app-height,100dvh) - 16px);overflow:auto;padding:12px 14px}#onboarding-dialog h3{margin:12px 0 6px;color:var(--muted);font-size:13px}#onboarding-dialog label{display:block;margin:8px 0}#onboarding-dialog input:not([type=checkbox]),#onboarding-dialog textarea{display:block;width:100%}#onboarding-dialog textarea{font:12px monospace}.onboarding-head{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.onboarding-state.failed,.onboarding-problem{color:var(--accent)}.onboarding-state.done,.onboarding-ok{color:#7ad99b}.onboarding-steps{list-style:none;padding:0;margin:0}.onboarding-step{padding:4px 0;overflow-wrap:anywhere}.onboarding-step.failed,.onboarding-step.refused{color:var(--accent)}.onboarding-hint{color:var(--muted);font-size:12px}.onboarding-login{user-select:all;overflow-wrap:anywhere;white-space:pre-wrap}.onboarding-list{display:flex;gap:6px;flex-wrap:wrap}
@@ -378,3 +378,12 @@ body:not(.office) .office-only{display:none!important}
 .machine-version{padding:0 8px;font-size:12px;white-space:nowrap}.machine-version.latest{color:#5fd38d}.machine-version.behind{color:#f0a14a}.machine-version.offline{color:var(--muted)}
 
 .host-agent-line{margin:10px 0 0!important;padding-top:8px;border-top:1px solid var(--border);overflow-wrap:anywhere}.host-agent-line[data-state=stuck],.host-agent-line[data-state=login_expired]{color:#e4a0a0}.host-agent-line[data-state=running]{color:#8fd6b4}#harness-button[data-host-agent=bad]::before{content:"";position:absolute;top:6px;left:6px;width:7px;height:7px;border-radius:50%;background:#e06c6c}
+
+/* Instances (.restricted): Humanizer replaces Clear chat in the chat menu; Writing lives in its sheet; Language is a setting. */
+#chat-menu #humanizer-chat,#language-panel{display:none}
+.restricted #chat-menu #humanizer-chat{display:flex!important;align-items:center;gap:10px}
+.restricted #clear-chat{display:none!important}
+.restricted #language-panel:not([hidden]){display:block}
+#humanizer-chat .menu-icon{display:inline-flex;flex:none;width:20px;height:20px}
+#humanizer-dialog{max-width:520px;width:calc(100% - 16px);max-height:calc(var(--app-height,100dvh) - 16px);overflow:auto;padding:12px 14px}
+#humanizer-dialog .panel{display:block!important;border:0;padding:0;margin:0;background:transparent}
