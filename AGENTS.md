@@ -77,3 +77,9 @@ When: a Playwright test opens `#project-menu` on a fresh page and then reads or 
 Symptom: passes alone, fails ~half the full-file runs and the deploy suite: `nextElementSibling` null / "Element is not attached to the DOM".
 Cause: the first open fetches `/api/machines`, `loadVersion()` and `loadMachineVersions()`, and each re-renders the open menu when it arrives, replacing the elements under the test.
 Do: preload them in the `page` fixture (`await loadVersion(); await loadMachineVersions(true)`, `machinesLoaded=true`); any new async fetch that re-renders the menu needs the same.
+
+### Typing into a settings field races its status reload   (2026-11-28, task 27af6c)
+When: a Playwright test opens a Settings panel through the project menu (`openGithubSettings`) and `fill()`s a field it loads from the server.
+Symptom: the saved value is the OLD one (`Actual value: acme`) although the "saved" text appeared; only under load.
+Cause: the status GET fired by opening the panel replies after `fill()` and rewrites the field before the click submits it.
+Do: wait for that response (`page.expect_response(...)`) and for the field to equal it before filling.

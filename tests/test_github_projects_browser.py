@@ -348,7 +348,11 @@ def test_settings_menu_entry_opens_the_existing_github_token_forms(page, browser
 
 
 def test_org_setting_is_saved_shown_after_reload_and_used_for_company(page):
-    menu_action(page, 'github-settings')
+    # Opening GitHub settings reloads the status and then overwrites the field; a late reply would erase the typed
+    # value before it is saved, so fill only once that reply has arrived.
+    with page.expect_response(lambda r: r.url.endswith('/api/github') and r.request.method == 'GET'):
+        menu_action(page, 'github-settings')
+    page.wait_for_function("()=>!!state.githubStatus&&$('github-company-org').value===state.githubStatus.company_org")
     field = page.locator('#github-company-org')
     expect(field).to_have_value('acme')
     field.fill('Example-Co')
