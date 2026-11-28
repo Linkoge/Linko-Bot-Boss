@@ -92,7 +92,12 @@ def page(browser_app):
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto(url)
     page.wait_for_function('()=>state.ready&&!!state.history&&!pollRunning')
-    page.evaluate("async()=>{clearTimeout(pollTimer);await selectProject(state.portfolio.projects.find(p=>p.name==='alpha').id)}")
+    # Stop polling for good: a poll that started after the wait above would re-arm its timer and re-render the menus
+    # mid-test (the project menu detaches under the test). Replace it, then let any in-flight poll finish.
+    page.evaluate("async()=>{pollUpdates=async()=>{};clearTimeout(pollTimer);while(pollRunning)await new Promise(r=>setTimeout(r,20));clearTimeout(pollTimer);await selectProject(state.portfolio.projects.find(p=>p.name==='alpha').id)}")
+    # Opening the project menu the first time fetches the machine list, the version and the machines' versions, and each
+    # re-renders the open menu when it arrives, which detaches elements mid-test; load them now so no test races that.
+    page.evaluate("async()=>{const r=await api('/api/machines');state.machines=r.machines;machinesLoaded=true;await loadVersion();await loadMachineVersions(true);}")
     # Count calls directly, so unrelated background reads cannot conceal a cancellation refresh.
     page.evaluate("""()=>{
       window.editorChecks={submit:0,invalid:0,refresh:0,select:0};

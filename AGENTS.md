@@ -71,3 +71,9 @@ When: a deploy repair round arrives and the last main commit is "Merge task; pre
 Symptom: the deploy's full suite fails (the receipt names no test) although your branch passed: main kept the other task's version of a file you both changed and saved yours as `<name> (AI version).<ext>`, so your tests run against code without your change.
 Cause: `merge_into_main` (`ai_manager/pipeline.py`) never overwrites on a conflict; it keeps main's file and adds a copy.
 Do: `git log -1 --format=%B <base>` lists the copies; reconcile each into the real file (one implementation, keep both tasks' tests) and delete the copy in the same commit.
+
+### Project-menu browser tests flake on late async re-renders   (2026-11-28, task 27af6c)
+When: a Playwright test opens `#project-menu` on a fresh page and then reads or clicks its entries (`tests/test_github_projects_browser.py`).
+Symptom: passes alone, fails ~half the full-file runs and the deploy suite: `nextElementSibling` null / "Element is not attached to the DOM".
+Cause: the first open fetches `/api/machines`, `loadVersion()` and `loadMachineVersions()`, and each re-renders the open menu when it arrives, replacing the elements under the test.
+Do: preload them in the `page` fixture (`await loadVersion(); await loadMachineVersions(true)`, `machinesLoaded=true`); any new async fetch that re-renders the menu needs the same.
