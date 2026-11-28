@@ -180,11 +180,43 @@ def deliver(db, registry, task, project, root):
             "deploy": False, "deployment": "files delivered; nothing merged or deployed"}
 
 
+EVIDENCE_DIR = ".linko-work/evidence"  # screenshots a Visual worker leaves for the result (git-ignored)
+EVIDENCE_TYPES = (".png", ".jpg", ".jpeg", ".webp")
+MAX_EVIDENCE = 12
+MAX_EVIDENCE_BYTES = 8 * 1024 * 1024
+
+
+def collect_evidence(db, task, root):
+    """Attach the images of the work folder's evidence folder (never committed); returns the entries for the result."""
+    folder = Path(root) / EVIDENCE_DIR
+    if folder.is_symlink() or not folder.is_dir():
+        return []
+    entries = []
+    for path in sorted(folder.iterdir()):
+        if len(entries) >= MAX_EVIDENCE:
+            break
+        if (path.suffix.lower() not in EVIDENCE_TYPES or path.is_symlink() or not path.is_file()
+                or path.stat().st_size > MAX_EVIDENCE_BYTES):
+            continue
+        data = path.read_bytes()
+        try:
+            rel = EVIDENCE_DIR + "/" + path.name
+            entries.append({"name": path.name, "size": len(data), "id": attach(db, data, path.name, task, rel)})
+        except (OSError, ValueError):
+            continue
+    return entries
+
+
 def references(merge):
     """The chat attachment references of a delivered result (for the reply that reports it)."""
-    if not isinstance(merge, dict) or merge.get("state") != "delivered":
+    if not isinstance(merge, dict):
         return []
-    return [{"id": f["id"], "name": f["name"], "size": f["size"],
+    shots = [{"id": f["id"], "name": f["name"], "size": f["size"],
+              "mime": mimetypes.guess_type(f["name"])[0] or "image/png",
+              "handling": "Screenshot evidence from the worker"} for f in merge.get("evidence", []) if f.get("id")]
+    if merge.get("state") != "delivered":
+        return shots
+    return shots + [{"id": f["id"], "name": f["name"], "size": f["size"],
              "mime": mimetypes.guess_type(f["name"])[0] or "application/octet-stream",
              "handling": "Delivered output file" + (f"; also saved as {f['copy']} in the project" if f.get("copy") else "")}
             for f in merge.get("files", []) if f.get("id")]
