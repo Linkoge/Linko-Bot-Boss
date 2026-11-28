@@ -9,9 +9,11 @@ the input and writes a NEW file next to it ("<name> humanized.<ext>"); the origi
   (also: python -m ai_manager.humanize humanize FILE ...)
 
 --typos is the share of eligible words that get one typo (default 0.2%); --punct is the share of eligible punctuation
-marks (, ; : . ! ?) that are deleted (default 2%). A typo is exactly one of: insert a letter (a keyboard neighbour on
-the English QWERTY or the Georgian standard layout), delete a letter, or swap two adjacent letters; a word gets at
-most one. Punctuation is only ever deleted, never inserted, and the last mark of a line or paragraph is kept.
+marks (, ; : . ! ?) that are deleted (default 2%). A word gets at most one typo, of a kind drawn by share:
+substitution (a neighbour key hit instead of the right one) 45%, insertion of a neighbour key 20%, omission 20%,
+transposition of two adjacent letters 13%, a random letter of the word's script 2%. Neighbours follow real keyboard
+geometry (rows offset 0, 0.25, 0.75 key; same-row and nearest above/below keys weigh 1.0, the farther diagonal 0.3,
+anything farther is excluded) on English QWERTY and the Georgian standard layout. Punctuation is only ever deleted, never inserted, and the last mark of a line or paragraph is kept.
 
 Never touched: any token containing a digit, words of 1-2 letters, capitalised words (names; sentence-initial words
 are skipped too, since a name can open a sentence), URLs, emails, paths and other code-like tokens, inline code and
@@ -48,30 +50,64 @@ GEORGIAN = {"q": "ქ", "w": "წ", "e": "ე", "r": "რ", "t": "ტ", "y": "�
 GEORGIAN_SHIFT = {"W": "ჭ", "R": "ღ", "T": "თ", "S": "შ", "J": "ჟ", "Z": "ძ", "C": "ჩ"}
 
 
-def _latin_neighbours():
-    where = {key: (r, c) for r, row in enumerate(ROWS) for c, key in enumerate(row)}
-    near = {}
-    for key, (r, c) in where.items():
-        found = []
-        for other, (r2, c2) in where.items():
-            # Rows are staggered by about half a key: the row below sits half a key to the right.
-            if other != key and abs(r - r2) <= 1 and abs((c + 0.5 * r) - (c2 + 0.5 * r2)) <= 1.0:
-                found.append(other)
-        near[key] = "".join(sorted(found))
-    return near
+# Real keyboard geometry: the home row sits 0.25 key right of the top row and the bottom row 0.75 key right of it.
+ROW_OFFSET = (0.0, 0.25, 0.75)
+NEAR_WEIGHT, FAR_WEIGHT = 1.0, 0.3   # finger slip: same-row neighbour or nearest key above/below; farther diagonal
 
 
-LATIN_NEAR = _latin_neighbours()
+def _latin_weights():
+    """{key: {neighbour: weight}}. Same row, adjacent: 1.0. Row above/below: a key within half a key sideways 1.0,
+    a key between half and one key sideways (the farther diagonal) 0.3; anything farther is not a neighbour."""
+    where = {key: (r, c + ROW_OFFSET[r]) for r, row in enumerate(ROWS) for c, key in enumerate(row)}
+    weights = {}
+    for key, (r, x) in where.items():
+        found = {}
+        for other, (r2, x2) in where.items():
+            dx = abs(x - x2)
+            if other == key or abs(r - r2) > 1:
+                continue
+            if r == r2:
+                if dx < 1.5:
+                    found[other] = NEAR_WEIGHT
+            elif dx <= 0.5 + 1e-9:
+                found[other] = NEAR_WEIGHT
+            elif dx < 1.0 - 1e-9:
+                found[other] = FAR_WEIGHT
+        weights[key] = found
+    return weights
+
+
+LATIN_WEIGHTS = _latin_weights()
+LATIN_NEAR = {key: "".join(sorted(found)) for key, found in LATIN_WEIGHTS.items()}
 GEORGIAN_KEY = {v: k for k, v in GEORGIAN.items()} | {v: k.lower() for k, v in GEORGIAN_SHIFT.items()}
 GEORGIAN_NEAR = {letter: "".join(GEORGIAN[n] for n in LATIN_NEAR[key]) for letter, key in GEORGIAN_KEY.items()}
 GEORGIAN_LETTERS = "".join(sorted(set(GEORGIAN.values()) | set(GEORGIAN_SHIFT.values())))
 
+# One typo per word; the shares (percent) of the kinds. A kind that does not fit the word (a swap needs two different
+# adjacent letters) is skipped and the others keep their relative shares.
+KIND_SHARES = (("substitute", 45), ("insert", 20), ("delete", 20), ("swap", 13), ("random", 2))
+
+
+def weighted_neighbours(letter):
+    """{neighbour: weight} of a letter on its keyboard (English QWERTY or Georgian standard), in that script."""
+    key = GEORGIAN_KEY.get(letter) or letter
+    found = LATIN_WEIGHTS.get(key, {})
+    if letter in GEORGIAN_KEY:
+        return {GEORGIAN[n]: w for n, w in found.items()}
+    return dict(found)
+
 
 def neighbours(letter):
-    """Keys next to this letter on its keyboard (English QWERTY or Georgian standard), in that script."""
-    if letter in GEORGIAN_NEAR:
-        return GEORGIAN_NEAR[letter]
-    return LATIN_NEAR.get(letter, "")
+    """Keys that can be hit instead of / next to this letter, in its script (see weighted_neighbours for weights)."""
+    return "".join(weighted_neighbours(letter))
+
+
+def shares_text():
+    """The typo kinds and shares as plain text, generated from KIND_SHARES so documentation cannot drift."""
+    names = {"substitute": "hitting a neighbouring key instead of the right one", "insert": "an extra neighbouring key",
+             "delete": "a missing letter", "swap": "two adjacent letters swapped",
+             "random": "a completely random letter of the word's script (very rare)"}
+    return "; ".join(f"{names[k]} {n}%" for k, n in KIND_SHARES)
 
 
 def is_georgian(letter):
@@ -176,29 +212,40 @@ def eligible_marks(text, mask):
     return found
 
 
+def _random_letter(word, i, rng):
+    pool = GEORGIAN_LETTERS if is_georgian(word[i]) else "abcdefghijklmnopqrstuvwxyz"
+    return rng.choice([c for c in pool if c != word[i]])
+
+
+def _slip(base, rng):
+    """A neighbour key of `base`, chosen by finger-slip weight; a letter off the keyboard gets a random one."""
+    found = weighted_neighbours(base)
+    if not found:
+        return _random_letter(base, 0, rng)
+    keys = sorted(found)
+    return rng.choices(keys, [found[k] for k in keys])[0]
+
+
 def typo(word, rng):
-    """Exactly one error: insert a neighbouring key, delete a letter or swap two adjacent different letters."""
-    kinds = ["insert", "delete"]
+    """Exactly one error: substitute a neighbour key (45%), insert one (20%), omit a letter (20%), swap two adjacent
+    different letters (13%) or substitute a random letter of the script (2%)."""
     swaps = [i for i in range(len(word) - 1) if word[i] != word[i + 1]]
-    if swaps:
-        kinds.append("swap")
-    kind = rng.choice(kinds)
+    kinds = [(k, n) for k, n in KIND_SHARES if k != "swap" or swaps]
+    kind = rng.choices([k for k, _ in kinds], [n for _, n in kinds])[0]
     if kind == "delete":
         i = rng.randrange(len(word))
         return kind, word[:i] + word[i + 1:]
     if kind == "swap":
         i = rng.choice(swaps)
         return kind, word[:i] + word[i + 1] + word[i] + word[i + 2:]
+    if kind == "substitute":
+        i = rng.randrange(len(word))
+        return kind, word[:i] + _slip(word[i], rng) + word[i + 1:]
+    if kind == "random":
+        i = rng.randrange(len(word))
+        return kind, word[:i] + _random_letter(word, i, rng) + word[i + 1:]
     i = rng.randrange(1, len(word) + 1)  # after letter i-1: a finger slipping onto the next key
-    base = word[i - 1]
-    near = neighbours(base)
-    if near:
-        letter = rng.choice(near)
-    elif is_georgian(base):
-        letter = rng.choice(GEORGIAN_LETTERS)
-    else:
-        letter = rng.choice("abcdefghijklmnopqrstuvwxyz")
-    return kind, word[:i] + letter + word[i:]
+    return kind, word[:i] + _slip(word[i - 1], rng) + word[i:]
 
 
 def plan(text, typos=DEFAULT_TYPOS, punct=DEFAULT_PUNCT, seed=None, markdown=True, mask=None):

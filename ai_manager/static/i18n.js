@@ -34,6 +34,15 @@ const KA={
   'No sample saved.':'ნიმუში არ არის შენახული.','Humanizer settings saved.':'ჰიუმანაიზერის პარამეტრები შენახულია.',
   'Measured':'გაზომილია','sentences':'წინადადება','words per sentence':'სიტყვა წინადადებაში','commas per sentence':'მძიმე წინადადებაში',
   'sentences per paragraph':'წინადადება აბზაცში','per 1000 words':'1000 სიტყვაზე',
+  "Humanizer rules":"ჰიუმანაიზერის წესები",
+  "Level 1 rewrites your text in your own style, learned from the Style copy samples above.":"დონე 1 გადაწერს თქვენს ტექსტს თქვენსავე სტილში, რომელსაც სწავლობს ზემოთ მოცემული სტილის ნიმუშებიდან.",
+  "It never uses long dashes, double dashes or semicolons.":"ის არასოდეს იყენებს გრძელ ტირეებს, ორმაგ ტირეებს და წერტილმძიმეებს.",
+  "Level 2 adds one human typo to a small share of words. The kinds and their shares: hitting a neighbouring key instead of the right one 45%; an extra neighbouring key next to the intended one 20%; a missing letter 20%; two adjacent letters swapped 13%; a completely random letter of the word's script 2% (very rare).":"დონე 2 სიტყვების მცირე ნაწილს უმატებს თითო ადამიანურ შეცდომას. სახეობები და მათი წილები: სწორი კლავიშის ნაცვლად მეზობელი კლავიშის დაჭერა 45%; დამატებითი მეზობელი კლავიშის ასო ჩასაწერი ასოს გვერდით 20%; გამოტოვებული ასო 20%; ორი მეზობელი ასოს გადაბმა ადგილების შენაცვლებით 13%; სიტყვის დამწერლობის სრულიად შემთხვევითი ასო 2% (ძალიან იშვიათად).",
+  "Neighbouring keys follow the real keyboard layout, for English and for Georgian: keys beside the letter and the nearest keys above and below count fully, the farther diagonal key counts little, and keys farther away are never used.":"მეზობელი კლავიშები რეალურ კლავიატურას მიჰყვება, ინგლისურისთვისაც და ქართულისთვისაც: ასოს გვერდითი და ზემოთ/ქვემოთ უახლოესი კლავიშები სრულად ითვლება, უფრო შორეული დიაგონალური კლავიში ცოტას ნიშნავს, ხოლო უფრო შორეული კლავიშები არასოდეს გამოიყენება.",
+  "Punctuation is only ever deleted, never added, and the last mark of a line is kept.":"პუნქტუაცია მხოლოდ იშლება და არასოდეს ემატება; სტრიქონის ბოლო ნიშანი რჩება.",
+  "Never touched: numbers, short words (1-2 letters), capitalised words and names, URLs, emails, code, quoted text and tables.":"არასოდეს იცვლება: რიცხვები, მოკლე სიტყვები (1-2 ასო), დიდი ასოთი დაწყებული სიტყვები და სახელები, ბმულები, ელფოსტები, კოდი, ციტატები და ცხრილები.",
+  "The typo rate and the punctuation rate can be adjusted.":"შეცდომების და პუნქტუაციის მაჩვენებელი რეგულირდება.",
+  "The result is always a new file. Your original is kept.":"შედეგი ყოველთვის ახალი ფაილია. თქვენი ორიგინალი ინახება.",
 };
 function currentLanguage(){try{return localStorage.getItem(LANGUAGE_KEY)==='ka'?'ka':'en';}catch{return 'en';}}
 let i18nActive=false;

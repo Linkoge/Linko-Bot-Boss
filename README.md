@@ -294,9 +294,10 @@ autonomy. Each harness is a folder with `harness.json` and a prompt file. Built-
   level 2 the script `harnesses/humanizer/tools/humanize.py` (also `python -m ai_manager.humanize humanize FILE
   --typos 0.2 --punct 2 [--seed N] [--out NEW]`): standard library only, no AI, deterministic for a seed, reads .txt,
   .md and .docx (the text runs of `word/document.xml`; tables untouched) and always writes a NEW file
-  (`<name> humanized.<ext>`). Two separate rates: typos in that % of eligible words (exactly one of insert a keyboard
-  neighbour on English QWERTY or the Georgian standard layout, delete a letter, swap two adjacent letters; at most one
-  per word) and deletion of that % of eligible `, ; : . ! ?` (never insertion; the last mark of a line or paragraph is
+  (`<name> humanized.<ext>`). Two separate rates: typos in that % of eligible words (at most one per word: substitution with a neighbour
+  key 45%, insertion of one 20%, omission 20%, swap of two adjacent letters 13%, a random letter of the script 2%;
+  neighbours by real keyboard geometry, rows offset 0/0.25/0.75 key, same-row and nearest above/below weight 1.0, farther
+  diagonal 0.3, anything farther excluded; English QWERTY and the Georgian layout) and deletion of that % of eligible `, ; : . ! ?` (never insertion; the last mark of a line or paragraph is
   kept). Never touched: tokens with a digit, words of 1-2 letters, capitalised words (names, and sentence-initial
   words too), URLs, emails, paths and identifiers, inline and fenced code, text inside quotes, markdown table rows.
   `humanize.py measure FILE` prints a sample's statistics. "Humanize" runs both levels; "only typos" just the script.

@@ -42,13 +42,15 @@ def letters(chunk):
 
 
 def one_edit(a, b):
-    """b is a with exactly one insert, delete or adjacent swap."""
+    """b is a with exactly one insert, delete, substitution or adjacent swap."""
     if len(b) == len(a) + 1:
         return any(b[:i] + b[i + 1:] == a for i in range(len(b)))
     if len(b) == len(a) - 1:
         return any(a[:i] + a[i + 1:] == b for i in range(len(a)))
     if len(a) == len(b):
         diff = [i for i in range(len(a)) if a[i] != b[i]]
+        if len(diff) == 1:
+            return True  # a substitution
         return len(diff) == 2 and diff[1] == diff[0] + 1 and a[diff[0]] == b[diff[1]] and a[diff[1]] == b[diff[0]]
     return False
 
@@ -74,6 +76,8 @@ def check_edits(before, after):
         else:
             assert one_edit(letters(old), letters(new)), (old, new)
             typos += 1
+            # a chunk can hold a typo and a dropped mark at once: the marks may only have been removed
+            drops += len(re.findall(f"[{re.escape(tool.PUNCT)}]", old)) - len(re.findall(f"[{re.escape(tool.PUNCT)}]", new))
     return typos, drops
 
 
@@ -129,6 +133,41 @@ def test_georgian_typos_use_georgian_keyboard_neighbours():
     assert inserted
     assert set(tool.neighbours("ა")) == {"ქ", "წ", "ს", "ზ"}  # a: q w s z on the standard layout
     assert set(tool.neighbours("g")) >= {"f", "h", "t", "y", "v", "b"}
+
+
+def test_keyboard_geometry_neighbours_and_weights():
+    h = tool.weighted_neighbours("h")
+    assert set(h) == set("gjybnu") and "t" not in h
+    assert {k: h[k] for k in "gjybn"} == {k: 1.0 for k in "gjybn"} and h["u"] == 0.3
+    georgian = tool.weighted_neighbours("ჰ")  # the H key
+    assert georgian == {tool.GEORGIAN[k]: w for k, w in h.items()}
+    assert "ტ" not in georgian and georgian[tool.GEORGIAN["u"]] == 0.3
+    for key, found in tool.LATIN_WEIGHTS.items():
+        assert found and all(key in tool.LATIN_WEIGHTS[n] for n in found) or key in "pq"  # roughly symmetric
+
+
+def test_kind_shares_over_a_large_seeded_run():
+    import random
+    from collections import Counter
+    counts = Counter(tool.typo("planet", random.Random(i))[0] for i in range(20000))
+    for kind, share in tool.KIND_SHARES:
+        assert abs(counts[kind] / 200 - share) < 1.5, (kind, counts)
+    assert dict(tool.KIND_SHARES) == {"substitute": 45, "insert": 20, "delete": 20, "swap": 13, "random": 2}
+    again = Counter(tool.typo("planet", random.Random(i))[0] for i in range(20000))
+    assert again == counts  # deterministic per seed
+
+
+def test_substitution_uses_neighbour_keys_in_both_scripts():
+    import random
+    for word, near in (("hhhh", tool.neighbours("h")), ("ჰჰჰჰ", tool.neighbours("ჰ"))):
+        seen = set()
+        for i in range(400):
+            kind, new = tool.typo(word, random.Random(i))
+            if kind == "substitute":
+                (changed,) = [c for c in new if c != word[0]]
+                assert changed in near
+                seen.add(changed)
+        assert len(seen) >= 4
 
 
 # ---- exclusions ----------------------------------------------------------------------------------------------------

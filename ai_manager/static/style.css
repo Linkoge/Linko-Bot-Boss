@@ -387,3 +387,14 @@ body:not(.office) .office-only{display:none!important}
 #humanizer-chat .menu-icon{display:inline-flex;flex:none;width:20px;height:20px}
 #humanizer-dialog{max-width:520px;width:calc(100% - 16px);max-height:calc(var(--app-height,100dvh) - 16px);overflow:auto;padding:12px 14px}
 #humanizer-dialog .panel{display:block!important;border:0;padding:0;margin:0;background:transparent}
+
+/* Instance chat menu holds only Humanizer; the Humanizer sheet has an X, a Save/Close row and a rules section. */
+.restricted #chat-menu button:not(#humanizer-chat),.restricted #chat-menu .chat-trash-controls{display:none!important}
+#humanizer-x{display:none}
+.humanizer-head{display:none}
+.restricted .humanizer-head{display:flex;justify-content:flex-end;position:sticky;top:0;margin:-12px -14px 0;padding:6px 8px;background:var(--panel,#161c28);z-index:1}
+.restricted #humanizer-x{display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;padding:0;font-size:22px;line-height:1}
+.humanizer-actions{display:flex;flex-direction:row;gap:8px;margin-top:10px}
+.humanizer-actions button{flex:1 1 0;width:auto}
+#humanizer-rules{margin-top:18px;padding-top:12px;border-top:1px solid var(--border)}
+#humanizer-rules h3{margin:0 0 8px;font-size:16px}#humanizer-rules ul{margin:0;padding-left:18px}#humanizer-rules li{margin:0 0 6px;font-size:13px;line-height:1.45}

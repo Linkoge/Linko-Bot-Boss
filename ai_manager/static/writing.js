@@ -38,5 +38,8 @@ function setupHumanizerSheet(restricted){
   $('writing-typo-rate').closest('label').firstChild.data='Typos (% of words)';
   $('writing-punct-rate').closest('label').firstChild.data='Punctuation removed (% of marks)';
   $('humanizer-chat').onclick=()=>{closeChatMenu();$('writing-status').textContent='';loadWriting();$('humanizer-dialog').showModal();};
-  $('humanizer-close').onclick=()=>$('humanizer-dialog').close();
+  const close=()=>$('humanizer-dialog').close();
+  $('humanizer-close').onclick=close;$('humanizer-x').onclick=close;
+  const actions=document.createElement('div');actions.className='humanizer-actions';  // Save and Close side by side
+  const save=$('writing-form').querySelector('button.primary');save.after(actions);actions.append(save,$('humanizer-close'));
 }
