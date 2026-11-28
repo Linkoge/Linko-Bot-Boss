@@ -393,7 +393,7 @@ body:not(.office) .office-only{display:none!important}
 .humanizer-head{display:none}
 .restricted .humanizer-head{display:block;position:absolute;top:8px;right:8px;margin:0;padding:0;background:none;z-index:1}
 .restricted #humanizer-x{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;min-height:30px;padding:0;border-radius:50%;font-size:20px;font-weight:300;line-height:1}
-#humanizer-dialog h2,#humanizer-dialog h3{padding-right:40px}
+.restricted #humanizer-dialog h2,.restricted #humanizer-dialog h3{padding-right:40px}
 .humanizer-actions{display:flex;flex-direction:row;gap:8px;margin-top:10px}
 .humanizer-actions button{flex:1 1 0;width:auto}
 #humanizer-rules{margin-top:18px;padding-top:12px;border-top:1px solid var(--border)}
