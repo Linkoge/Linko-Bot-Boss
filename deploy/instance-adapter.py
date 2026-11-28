@@ -34,6 +34,10 @@ MASK = ['.git', '.env', '.data', 'secrets', '.linko-runtime']
 mounts = [('/home/owner/projects/Linko-Bot-Manager', '/opt/linko-example/code')]
 # --- end settings ---
 
+# Root resolves every command here, never from the unit's PATH: an instance unit may set PATH without /usr/sbin
+# (runuser) and with a non-root-writable directory such as the codex bind first.
+SYSTEM_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+
 
 def run(*argv):
     subprocess.run([str(a) for a in argv], check=True)
@@ -60,8 +64,9 @@ def fake_git():
         (git / folder).mkdir(parents=True, exist_ok=True)
     if not (git / 'config').exists():
         (git / 'config').write_text('[core]\n\trepositoryformatversion = 0\n\tbare = false\n')
+    env = {**os.environ, 'PATH': SYSTEM_PATH, 'HOME': pwd.getpwnam(OWNER).pw_dir}
     commit = subprocess.check_output(['runuser', '-u', OWNER, '--', 'git', '-C', CHECKOUT, 'rev-parse', 'HEAD'],
-                                     text=True).strip()
+                                     text=True, env=env).strip()
     (git / 'HEAD').write_text(commit + '\n')
     run('chown', '-R', f'{USER}:{USER}', git)
     return git
@@ -152,6 +157,7 @@ def data_access():
 
 
 if __name__ == '__main__':
+    os.environ['PATH'] = SYSTEM_PATH
     os.chdir('/')
     step = sys.argv[1] if len(sys.argv) > 1 else 'pre'
     if step == 'pre':

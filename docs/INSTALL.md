@@ -396,8 +396,12 @@ Layout (“whole-checkout”, adapter template `deploy/instance-adapter.py`):
   owns them) before any restart. The instance database's chmod (`fsmode.private`) only
   touches the data directory, never the checkout.
 - **apply** is idempotent. It keeps the old adapter as `linko-NAME-instance.legacy`. It
-  restarts a running instance, and when the restart fails it restores the old adapter
-  and restarts again. A second run changes nothing and does not restart.
+  restarts a running instance. When the restart fails it prints the unit's last 30
+  journal lines, restores the old adapter and the unit drop-in as they were (a drop-in
+  that this run wrote is removed), and restarts again. Group, membership and ACLs stay;
+  they are harmless to the old adapter. A second run changes nothing and does not
+  restart. The adapter runs commands from its own fixed system PATH (with `/usr/sbin`
+  for `runuser`), never from the unit's `Environment=PATH`.
   **add** needs the Linux user to exist and a port. It writes the adapter and, when
   missing, a system unit. Then finish steps 1–4 above.
 

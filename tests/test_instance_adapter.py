@@ -23,6 +23,7 @@ import instance_adapter  # noqa: E402
 ME = getpass.getuser()
 MY_GROUP = grp.getgrgid(os.getgid()).gr_name  # exists and I am in it: stands in for linko-code
 COMMIT = "a" * 40
+SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
 FAKE = r'''#!{python}
 import json, os, sys
@@ -37,6 +38,8 @@ if name == "mountpoint":
     sys.exit(1)
 if name == "runuser":
     print("{commit}")
+if name == "journalctl":
+    print("Nov 28 13:15:23 host linko-work-instance[1]: FileNotFoundError: [Errno 2] No such file or directory: 'runuser'")
 '''
 
 
@@ -49,7 +52,7 @@ def fake(tmp_path, monkeypatch):
     script.write_text(FAKE.replace("{python}", sys.executable).replace("{commit}", COMMIT))
     script.chmod(0o755)
     for name in ("groupadd", "usermod", "chgrp", "chmod", "setfacl", "systemctl", "mount", "umount", "mountpoint",
-                 "runuser", "chown"):
+                 "runuser", "chown", "journalctl"):
         (bin_dir / name).symlink_to(script)
     log = tmp_path / "commands.log"
     log.write_text("")
@@ -59,7 +62,16 @@ def fake(tmp_path, monkeypatch):
     def calls():
         return [json.loads(line) for line in log.read_text().splitlines()]
     calls.log = log
+    calls.bin = bin_dir
     return calls
+
+
+def rendered(config, bin_dir):
+    """The adapter as apply writes it, except that its fixed command PATH is the fake bin directory."""
+    text = instance_adapter.render(config)
+    line = f"SYSTEM_PATH = {SYSTEM_PATH!r}\n"
+    assert line in text
+    return text.replace(line, f"SYSTEM_PATH = {str(bin_dir)!r}\n")
 
 
 def checkout(tmp_path):
@@ -178,7 +190,52 @@ def test_a_failed_restart_restores_the_old_adapter(tmp_path, fake, monkeypatch):
     assert ["umount", "-R", "/opt/linko-bot-manager"] in calls
     assert [c for c in calls if c[:2] == ["systemctl", "restart"]] == [["systemctl", "restart",
                                                                        "linko-bot-manager@work.service"]] * 2
-    assert "restoring" in "\n".join(out)
+    text = "\n".join(out)
+    assert "restoring" in text
+    # The cause is printed right away: the unit's last journal lines, read once after the failed restart.
+    assert ["journalctl", "-u", "linko-bot-manager@work.service", "-n", "30", "--no-pager", "-o", "short-iso"] in calls
+    assert "--- last 30 journal lines of linko-bot-manager@work.service ---" in text
+    assert "No such file or directory: 'runuser'" in text
+    # The drop-in this apply wrote is gone again: the rollback leaves the unit as it was.
+    assert not layout.dropin("work").exists() and "remove " + str(layout.dropin("work")) in text
+
+
+def test_a_failed_restart_keeps_a_drop_in_that_was_there_before(tmp_path, fake, monkeypatch):
+    repo = checkout(tmp_path)
+    layout = instance_adapter.Layout(tmp_path / "root")
+    legacy_adapter(layout.adapter("work"), repo, ME)
+    layout.dropin("work").parent.mkdir(parents=True)
+    layout.dropin("work").write_text("[Service]\nSupplementaryGroups=old\n")
+    monkeypatch.setenv("FAKE_ACTIVE", "1")
+    monkeypatch.setenv("FAKE_RESTART_FAILS", "1")
+    assert instance_adapter.main(["apply", "work", *args(tmp_path, repo)], [].append) == 1
+    assert layout.dropin("work").read_text() == "[Service]\nSupplementaryGroups=old\n"
+
+
+def test_adapter_finds_runuser_although_the_unit_path_lacks_sbin(tmp_path, fake):
+    """The kaxa unit runs ExecStartPre with PATH=/opt/linko-codex/bin:/usr/local/bin:/usr/bin:/bin: runuser
+    (/usr/sbin) is missing and a non-root-writable directory comes first. The adapter must use its own PATH."""
+    repo = checkout(tmp_path)
+    data = tmp_path / "instance-data"
+    data.mkdir()
+    config = instance_adapter.Config(
+        name="work", user=ME, owner=ME, checkout=str(repo), code=str(tmp_path / "opt/code"),
+        state=str(tmp_path / "state"), data=str(data), port=1, group=MY_GROUP)
+    unit_path = tmp_path / "unit-path"  # every command but runuser, each one a trap that must never run
+    unit_path.mkdir()
+    trap = unit_path / "trap"
+    trap.write_text(f"#!{sys.executable}\nimport sys\nsys.exit(99)\n")
+    trap.chmod(0o755)
+    for name in ("mount", "umount", "mountpoint", "chown", "setfacl", "git"):
+        (unit_path / name).symlink_to(trap)
+    adapter = tmp_path / "adapter.py"
+    adapter.write_text(rendered(config, fake.bin))
+    env = {**os.environ, "PATH": str(unit_path)}
+    result = subprocess.run([sys.executable, str(adapter), "pre"], capture_output=True, text=True, timeout=60, env=env)
+    assert result.returncode == 0, result.stderr
+    assert "runuser" not in result.stderr
+    assert ["runuser", "-u", ME, "--", "git", "-C", str(repo), "rev-parse", "HEAD"] in fake()
+    assert (tmp_path / "state/.git/HEAD").read_text() == COMMIT + "\n"
 
 
 def test_apply_needs_root_and_names_the_command(tmp_path, fake, monkeypatch):
@@ -232,7 +289,7 @@ def test_rendered_adapter_mounts_the_whole_checkout_and_masks_secrets(tmp_path, 
         runtime=[(str(repo / ".venv/lib/python3.12/site-packages"), str(tmp_path / "opt/site-packages"))],
         group=MY_GROUP)
     adapter = tmp_path / "adapter.py"
-    adapter.write_text(instance_adapter.render(config))
+    adapter.write_text(rendered(config, fake.bin))
     result = subprocess.run([sys.executable, str(adapter), "pre"], capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr
     calls = [c for c in fake() if c[0] in ("mount", "umount")]

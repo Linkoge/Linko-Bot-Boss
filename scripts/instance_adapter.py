@@ -347,8 +347,23 @@ def service(name):
     return f'linko-bot-manager@{name}.service'
 
 
-def restart(config, layout, kind, output):
-    """Restart a running instance on the new adapter; when it fails, put the old adapter back and restart again."""
+def journal(unit, output, lines=30):
+    """The unit's last journal lines, so a failed restart shows its cause without another command."""
+    command = ['journalctl', '-u', unit, '-n', str(lines), '--no-pager', '-o', 'short-iso']
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, timeout=30)
+        text = (result.stdout or result.stderr).rstrip()
+    except (OSError, subprocess.TimeoutExpired) as error:
+        text = f'({" ".join(command)} failed: {error})'
+    output(f'--- last {lines} journal lines of {unit} ---')
+    for line in text.splitlines()[-lines:] or ['(empty)']:
+        output(line)
+    output('--- end of journal ---')
+
+
+def restart(config, layout, kind, output, dropin_before=None):
+    """Restart a running instance on the new adapter; when it fails, show the journal, put the old adapter (and the
+    unit drop-in as it was before this apply) back and restart again."""
     unit = service(config.name)
     if subprocess.run(['systemctl', 'is-active', '--quiet', unit]).returncode:
         output(f'{unit} is not running: the new layout applies at its next start')
@@ -357,6 +372,7 @@ def restart(config, layout, kind, output):
     if not subprocess.run(['systemctl', 'restart', unit]).returncode:
         output(f'{unit} restarted healthy on the whole-checkout code view')
         return 0
+    journal(unit, output)
     legacy = Path(str(layout.adapter(config.name)) + '.legacy')
     if kind != 'legacy' or not legacy.exists():
         output(f'{unit} failed to restart; see journalctl -u {unit}')
@@ -364,9 +380,20 @@ def restart(config, layout, kind, output):
     output(f'{unit} failed to restart: restoring {legacy}')
     subprocess.run(['umount', '-R', config.code])
     write(layout.adapter(config.name), legacy.read_text(), 0o755)
+    dropin = layout.dropin(config.name)
+    if current(dropin) != dropin_before:
+        if dropin_before is None:
+            output(f'- remove {dropin} (written by this apply; the old adapter does not need it)')
+            dropin.unlink(missing_ok=True)
+        else:
+            output(f'- restore {dropin}')
+            write(dropin, dropin_before, 0o644)
     subprocess.run(['systemctl', 'daemon-reload'], check=True)
-    subprocess.run(['systemctl', 'restart', unit])
-    output(f'restored the old adapter; see journalctl -u {unit}')
+    if subprocess.run(['systemctl', 'restart', unit]).returncode:
+        output(f'{unit} also failed on the restored adapter')
+        journal(unit, output)
+        return 1
+    output(f'restored the old adapter ({unit} running); see journalctl -u {unit}')
     return 1
 
 
@@ -442,6 +469,7 @@ def main(argv=None, output=print):
         if layout.root == SYSTEM and os.geteuid() != 0:
             raise Failed(f'{args.command} needs root: sudo python3 {REPO}/scripts/instance_adapter.py '
                          f'{args.command} {args.name}')
+        dropin_before = current(layout.dropin(config.name))
         execute(plan, output)
         if args.command == 'add':
             output(f'next: env file, setup-owner, then systemctl enable --now {service(config.name)} and '
@@ -450,7 +478,7 @@ def main(argv=None, output=print):
         if not any(s.changes for s in plan):
             output('nothing changed: no restart')
             return 0
-        return restart(config, layout, kind, output)
+        return restart(config, layout, kind, output, dropin_before)
     except subprocess.CalledProcessError as error:
         output(f'failed: {" ".join(map(str, error.cmd[:6]))} exited {error.returncode}')
         return 1
