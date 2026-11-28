@@ -49,6 +49,7 @@ from .proxy import client_allowed, client_ip, enrollment_address, is_https, pars
 from .registry import Registry, release_head
 from . import self_update
 from .self_update import SelfUpdate
+from . import flaky
 from .todos import Todos
 
 
@@ -511,6 +512,11 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
             "autopilot": (autopilot_locks.level() if session else None),
             "autopilot_on": (autopilot.on(db) if session and not restricted else None),
         }
+
+    @app.get("/api/flaky", dependencies=[Depends(require_owner), Depends(unrestricted)])
+    def flaky_tests():
+        """Main's Settings > Flaky tests panel: the five most often flaky deploy-suite tests (journal in the data directory)."""
+        return {"top": flaky.top(flaky.read(settings.data_dir / flaky.JOURNAL_NAME))}
 
     @app.get("/api/version")
     def version():

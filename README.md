@@ -1520,6 +1520,14 @@ browser races: a test's `refresh()` may be superseded by the app's own poll and 
 `tests/test_core_deploy.py`, whose real gate runs a nested smoke suite against `SMOKE_BUDGET_SECONDS`. The smoke suite
 itself is always run single-process. Extra arguments go to both phases, e.g. `scripts/full_suite.py -k deploy`.
 
+**Failed tests and flakes.** The suite lists every failed test (node id and one-line error, from junitxml) before its last
+line, and the deploy receipt and the repair rounds carry that list. After a failed parallel phase only the failed tests are
+rerun once, serially: those that pass are *flaky*, are recorded and do not fail the deploy (the success receipt names them);
+any that fail again, and every serial-phase failure, are *real* and fail it as before. With the deploy's
+`AI_MANAGER_FLAKY_JOURNAL` set, each failure is appended to `<data dir>/flaky-journal.jsonl` (JSON lines: time, commit, test,
+error, `flaky`|`real`; a later green run appends `fixed` lines with the fix commit). A test flaky twice in 14 days becomes one
+ready To-Do "Fix flaky test <id>" (never again, even if archived). Main's Settings > Flaky tests lists the top 5.
+
 Fresh-machine setup, service environment, audio prerequisites, provider login, host repair,
 extra instances, updates and troubleshooting: [Installation guide](docs/INSTALL.md).
 Verify an installation with `uv run python -m ai_manager.cli doctor`, including after reboot.

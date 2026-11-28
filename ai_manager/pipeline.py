@@ -377,7 +377,7 @@ class Pipeline:
                     'rolled_back': 'Deploy failed and was rolled back',
                     'rollback_failed': 'Deploy failed and could not be rolled back; the service needs attention',
                     'cancelled': 'Deploy cancelled'}.get(result['status'], 'Deploy ' + result['status'])
-            self.post(conn, result.get('conversation_id'), key, f"{text}: {result['reason']}"[:600])
+            self.post(conn, result.get('conversation_id'), key, f"{text}: {result['reason']}"[:1600])
             if result['status'] == 'success' and result.get('commit') and result.get('project_id'):
                 self.backups.request(result['project_id'], result['commit'], conn=conn)
             conn.execute('INSERT INTO settings VALUES(?,?)', (key, json.dumps(payload)))

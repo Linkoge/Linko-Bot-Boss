@@ -23,7 +23,7 @@ from contextlib import ExitStack, closing
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from ai_manager import code_view, fence  # noqa: E402
+from ai_manager import code_view, fence, flaky  # noqa: E402
 from ai_manager.deploy_setup import validate_setup  # noqa: E402
 
 IDLE = {
@@ -49,6 +49,18 @@ def test_command(saved):
     if saved and list(saved[1:3]) == ['-m', 'pytest']:
         return suite_command(saved[0])
     return saved
+
+
+def suite_report(output, limit=1400):
+    """The receipt text of a finished suite run: the failed tests and the last line, or the flaky tests it recorded."""
+    lines = output.strip().splitlines()
+    last = next((i for i in range(len(lines) - 1, -1, -1) if lines[i].startswith(('Full suite failed', 'Full suite passed'))), None)
+    if last is None:
+        return output.strip()[-300:]
+    start = last
+    while start > 0 and lines[start - 1].startswith(('  ', 'Failed tests', 'Flaky tests')):  # the test lists above it
+        start -= 1
+    return '\n'.join(lines[start:])[-limit:]
 
 
 def atomic(path, value):
@@ -114,6 +126,7 @@ class Deploy:
             action: [*systemctl, action, i['service']] for action in ('stop', 'start')}}
             for i in config.get('instances', [])]
         self.id = None
+        self.flaky_note = ''
         self.setup = None  # installed runtime adapter until a project request selects its saved setup
 
     def select_setup(self, request):
@@ -216,7 +229,7 @@ class Deploy:
         return value if value and value.get('id') == self.id else None
 
     def finish(self, request, status, reason, **extra):
-        result = {'id': self.id, 'status': status, 'reason': reason[:500], 'finished_at': time.time(),
+        result = {'id': self.id, 'status': status, 'reason': reason[:1500], 'finished_at': time.time(),
                   'requested_at': request.get('requested_at'), 'project_id': request.get('project_id'),
                   'task_id': request.get('task_id'), 'source': request.get('source'), 'conversation_id': request.get('conversation_id'), **extra}
         atomic(self.root / 'results' / (self.id + '.json'), result)
@@ -493,9 +506,13 @@ class Deploy:
                 raise Stop('success', f'{target[:10]} is already live; nothing to deploy')
             tests = None if self.setup else test_command(self.config.get('test_cmd'))
             if tests and not request.get('skip_tests'):
-                result = run(tests, cwd=self.repo, timeout=self.config.get('test_seconds', 3600), check=False)
+                env = {**os.environ, flaky.JOURNAL_ENV: str(self.data / flaky.JOURNAL_NAME), flaky.COMMIT_ENV: target}
+                result = run(tests, cwd=self.repo, timeout=self.config.get('test_seconds', 3600), check=False, env=env)
+                report = suite_report(result.stdout + result.stderr)
                 if result.returncode:
-                    raise Stop('failed', 'full backend suite failed: ' + (result.stdout + result.stderr).strip()[-300:], repairable=True)
+                    raise Stop('failed', 'full backend suite failed: ' + report, repairable=True)
+                if 'Full suite passed with' in report:
+                    self.flaky_note = report  # deployed anyway; the receipt records the flaky tests that passed on rerun
             self.code_views()
             if request.get('emergency'):
                 emergency_stop()
@@ -554,7 +571,8 @@ class Deploy:
             self.wait_health(target)
             atomic(self.last_good, {'commit': target, 'at': time.time()})
             self.prune()
-            return self.finish(request, 'success', f'deployed {target[:10]}; health check passed',
+            note = ('; ' + self.flaky_note.replace('\n', ' | ')) if self.flaky_note else ''
+            return self.finish(request, 'success', f'deployed {target[:10]}; health check passed{note}',
                                commit=target, previous=previous, backup=str(backups))
         except Stop as stop:
             if stopped:

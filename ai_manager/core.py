@@ -711,7 +711,10 @@ class Core:
         project = self.registry.get(task["project_id"])
         shared = Path(self.registry.allowed_path(project["path"]))
         reason = f"Deploy {receipt['status'].replace('_', ' ')} after merge: {receipt['reason']}"
-        failure = {"ok": False, "checks": ["deploy"], "count": 1, "failures": [reason[:600]], "output": reason[-2500:]}
+        # One failure per line of the receipt: the failed test ids with their one-line errors reach the worker one by one.
+        lines = [line.strip()[:300] for line in reason.splitlines() if line.strip()]
+        failure = {"ok": False, "checks": ["deploy"], "count": len(lines), "failures": lines[:20] or [reason[:600]],
+                   "output": reason[-2500:]}
         base = None
         if root := task["workspace"]:
             try:  # the repair starts from the current main: the merged branch is brought up to it and diffed against it
@@ -723,7 +726,7 @@ class Core:
         stop = self.next_round(task["id"], failure)
         now = time.time()
         with self.db.transaction() as conn:
-            self.db.event(conn, "task.deploy_repair", {"deploy": receipt["id"], "reason": reason[:600], "stop": stop},
+            self.db.event(conn, "task.deploy_repair", {"deploy": receipt["id"], "reason": reason[:1500], "stop": stop},
                           task["project_id"], task["id"])
             if stop:
                 stop = "Deploy failed and could not be fixed: " + stop

@@ -67,3 +67,14 @@ $('version-update').onclick=updateNow;
 $('project-menu-button').addEventListener('click',()=>{if(!$('project-menu').hidden){loadVersion();loadMachineVersions();}});
 document.querySelector('.tabs [data-view=settings]')?.addEventListener('click',loadVersion);
 renderVersionPanel();
+// Settings > Flaky tests (Main only; the server rejects instances and style.css hides the panel there).
+async function loadFlaky(){
+  if(state.restricted)return;
+  const list=$('flaky-list');
+  try{
+    const top=(await api('/api/flaky')).top;list.replaceChildren();
+    $('flaky-status').textContent=top.length?'':'No flaky tests recorded.';
+    for(const item of top)list.append(element('li',`${item.test} · ${item.count}× · last ${new Date(item.last_seen*1000).toISOString().slice(0,10)}`));
+  }catch(error){$('flaky-status').textContent=error.message;}
+}
+document.querySelector('.tabs [data-view=settings]')?.addEventListener('click',loadFlaky);

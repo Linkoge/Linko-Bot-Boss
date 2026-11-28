@@ -5,9 +5,12 @@ import copy
 import hashlib
 import json
 import logging
+import sqlite3
 import time
 
-from . import chat_memory, scratch
+from pathlib import Path
+
+from . import chat_memory, flaky, scratch
 from . import harness as harnesses
 from .chat import internal_result
 from .chat_memory import NAMES as CHAT_MEMORY
@@ -417,9 +420,28 @@ class Scheduler:
         active = [row["id"] for row in self.db.all("SELECT id FROM executions WHERE finished_at IS NULL")]
         return scratch.cleanup(active, now=now)
 
+    def flaky_todos(self):
+        """Main only: a test recorded flaky twice in 14 days becomes one ready To-Do in this application's own project."""
+        journal = self.db.path.parent / flaky.JOURNAL_NAME
+        try:
+            stamp = journal.stat().st_mtime_ns
+        except OSError:
+            return []
+        if self.restricted or stamp == getattr(self, "flaky_stamp", None):
+            return []
+        self.flaky_stamp = stamp
+        project = self.db.one("SELECT id FROM projects WHERE path=? AND status!='removed'",
+                              (str(Path(__file__).resolve().parents[1]),))
+        try:
+            return flaky.sync_todos(self.db, Todos(self.db), project["id"]) if project else []
+        except (ValueError, OSError, sqlite3.Error) as error:
+            log.warning("flaky To-Do sync failed: %s", error)
+            return []
+
     async def tick(self):
         async with self.lock:
             await asyncio.to_thread(self.clean_scratch)
+            await asyncio.to_thread(self.flaky_todos)
             if receipt := self.pipeline.report():
                 await asyncio.to_thread(self.core.repair_deploy, receipt)
             await self.core.runner.tick()  # first: no chat state can keep queued work from starting
