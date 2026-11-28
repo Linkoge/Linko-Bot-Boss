@@ -363,19 +363,54 @@ registered HTTP releases and warns to run doctor as the other service user for
 that user's unit/environment checks.
 
 **Instances as other users (code view).** An instance running as another Linux user
-(for example `kaxa`) may not read this checkout directly. A root-owned host adapter,
-`/usr/local/libexec/linko-NAME-instance`, bind-mounts a fixed `mounts` list of
-checkout paths read-only into that instance's code directory. That list must contain
-every path in `RUNTIME_PATHS` (`ai_manager/code_view.py`): `ai_manager/`, `harnesses/`,
-`README.md` and `RULES.md`. Before anything stops, the deploy compares each registered
-instance's adapter list with it. It fails with “instance NAME cannot see …” instead of
-restarting into a broken instance and rolling back. Doctor reports the same check. The
-adapter is host configuration outside the repository: add a missing path as root
-(Emergency host repair). An optional `adapter` key in an instance's entry in
-`DATA/deploy/installed.json` overrides the path. When code starts reading a new
-top-level path at runtime, add it to `RUNTIME_PATHS` and to every adapter before the
-deploy. `tests/test_code_view.py` fails until it is in `RUNTIME_PATHS` (it starts the app from
-a copy holding only those paths).
+(for example `kaxa`) does not read this checkout directly. Its root-owned host adapter,
+`/usr/local/libexec/linko-NAME-instance`, runs as the unit's `ExecStartPre=+… pre` and
+mounts the code read-only at the instance's code directory. Manage it with
+`scripts/instance_adapter.py` (standard library only):
+
+```bash
+python3 scripts/instance_adapter.py plan kaxa         # what apply would change; writes nothing, no root
+sudo python3 scripts/instance_adapter.py apply kaxa   # migrate (or re-apply) an existing instance
+sudo python3 scripts/instance_adapter.py add anna --port 24567 [--like kaxa]   # a new profile
+python3 scripts/instance_adapter.py check             # what the deploy checks; --repair re-grants owned files
+```
+
+Layout (“whole-checkout”, adapter template `deploy/instance-adapter.py`):
+
+- **One mount.** The WHOLE checkout is bind-mounted read-only (`ro,nosuid,nodev`) at the
+  code directory, so a new top-level runtime path needs no host change. The instance
+  writes only in its own data directory (`AI_MANAGER_DATA`); the adapter keeps giving
+  Main's user its narrow ACLs on that database for deploys.
+- **Masked.** `.git` is replaced by a per-instance fake git dir holding only `HEAD` (the
+  release commit; the app reads it with `safe.directory` for its own code directory).
+  `.env`, any `*.env`/`.env*` file, `.data/`, `secrets/` and `.linko-runtime/` get
+  `/dev/null` (files) or an empty read-only tmpfs (directories). Symlinks are never
+  mounted over. The runtime outside the checkout (interpreter, venv packages, codex)
+  keeps its separate read-only mounts.
+- **Read access that survives git rewrites.** Instance users are in the system group
+  `linko-code` (`usermod -aG` plus a `SupplementaryGroups=` drop-in). The checkout's
+  directories are group `linko-code` with setgid and carry `g:linko-code:rX` plus the
+  default ACL `d:g:linko-code:rX`, so files git, uv or a deploy create inherit it; no
+  per-file or per-user ACL is written at start. A tool that rewrites a tracked file with
+  mode 600 drops the ACL mask: the deploy re-grants `g:linko-code:rX` on such files (it
+  owns them) before any restart. The instance database's chmod (`fsmode.private`) only
+  touches the data directory, never the checkout.
+- **apply** is idempotent. It keeps the old adapter as `linko-NAME-instance.legacy`. It
+  restarts a running instance, and when the restart fails it restores the old adapter
+  and restarts again. A second run changes nothing and does not restart.
+  **add** needs the Linux user to exist and a port. It writes the adapter and, when
+  missing, a system unit. Then finish steps 1–4 above.
+
+Before anything stops, the deploy checks every registered instance's adapter
+(`code_view.inspect`). A whole-checkout adapter must mount this checkout, its user must
+be in the group, and every tracked file must be group-readable. Otherwise it fails with
+“instance NAME …” and the fix, instead of restarting into a broken instance and rolling
+back. Doctor reports the same. Until an adapter is migrated, its old per-path `mounts`
+list must still contain every path in `RUNTIME_PATHS` (`ai_manager/code_view.py`). The
+deploy and doctor name the `apply` command for it. `tests/test_code_view.py` keeps
+`RUNTIME_PATHS` complete. `tests/test_instance_adapter.py` covers the script, the
+adapter and the check with fake root commands. An optional `adapter` key in an
+instance's entry in `DATA/deploy/installed.json` overrides the adapter path.
 
 ## 7. Optional KVM/libvirt access
 

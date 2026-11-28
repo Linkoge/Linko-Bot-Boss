@@ -401,8 +401,8 @@ owner-typed message. Follow-up and auto-mode limits stay in place. The host agen
 irreversible or security-weakening work (`scripts/emergency_repair.py`). Workers keep the fixed flow: the application
 runs the checks, merges and deploys (or, for file delivery, runs the file checks and delivers the files), and workers
 never push or deploy (RULES.md rule 3). Code:
-`ai_manager/harness.py`, `ai_manager/static/harness.js`. `harnesses/` is a runtime path, so an instance behind a
-host adapter's bind list must have it mounted (see [Multiple instances](#multiple-instances-and-the-restricted-work-instance)).
+`ai_manager/harness.py`, `ai_manager/static/harness.js`. `harnesses/` is a runtime path: a whole-checkout adapter
+sees it, an old per-path adapter must have it mounted (see [Multiple instances](#multiple-instances-and-the-restricted-work-instance)).
 Permanent coverage: `tests/test_harness.py`, `tests/test_harness_browser.py`.
 
 ## Manager screenshots
@@ -855,10 +855,13 @@ instance has one owner login (`python -m ai_manager.cli setup-owner` with that i
 other hard-coded port, path or hostname: the Tailscale name above is documentation, and `scripts/install_service.py`
 only asks Tailscale for a hostname when `--hostname` is not given.
 
-An instance that runs as another Linux user sees the code through a root host adapter's bind list. That list must
-contain every top-level path the app reads at runtime (`RUNTIME_PATHS` in `ai_manager/code_view.py`). The deploy and
-doctor check it before a restart. See [INSTALL.md](docs/INSTALL.md#6-optional-extra-instances), “Instances as other
-users”. Permanent coverage: `tests/test_code_view.py`.
+An instance that runs as another Linux user sees the code through its root host adapter. The permanent layout
+(`scripts/instance_adapter.py plan|apply|add NAME`, `check`) bind-mounts the whole checkout read-only with `.git` and
+secrets masked. Read access comes from the shared group `linko-code` with setgid directories and a default ACL that
+git rewrites inherit. The deploy and doctor check every adapter before a restart (`code_view.inspect`). An adapter not
+yet migrated must still list every top-level runtime path (`RUNTIME_PATHS` in `ai_manager/code_view.py`). See
+[INSTALL.md](docs/INSTALL.md#6-optional-extra-instances), “Instances as other users”. Permanent coverage:
+`tests/test_code_view.py`, `tests/test_instance_adapter.py`.
 
 ### Machines switcher
 

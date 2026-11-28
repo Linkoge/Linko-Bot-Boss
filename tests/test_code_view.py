@@ -138,6 +138,7 @@ def test_deploy_stops_before_anything_restarts_when_an_instance_cannot_see_a_run
     config = {"repo": str(ROOT), "data": str(tmp_path / "data"),
               "instances": [{"name": "work", "data": str(tmp_path / "work"), "url": "http://127.0.0.1:1",
                              "service": "linko-bot-manager@work.service", "adapter": str(path)}]}
+    (tmp_path / "data" / "deploy").mkdir(parents=True)  # the deploy logs the not-yet-migrated note there
     deploy = deploy_module.Deploy(config)
     with pytest.raises(deploy_module.Stop) as stopped:
         deploy.code_views()
@@ -153,9 +154,12 @@ def test_doctor_reports_an_instance_code_view_gap(tmp_path):
     check = doctor.Doctor(home=tmp_path, repo=ROOT, output=lines.append,
                           adapter_template=str(tmp_path / "linko-{name}-instance"))
     check.code_view("work")
-    assert lines == ["PASS instance work code view has ai_manager, harnesses, README.md, RULES.md"]
+    assert lines[0] == "PASS instance work code view has ai_manager, harnesses, README.md, RULES.md"
+    assert lines[1].startswith("WARN instance work code view migrated") and "instance_adapter.py apply work" in lines[1]
+    assert len(lines) == 2
     path.write_text(path.read_text().replace(json.dumps(str(ROOT / "harnesses"))[1:-1], "/elsewhere"))
     check.code_view("work")
     assert lines[-1].startswith("FAIL instance work code view") and "add harnesses to the mounts list" in lines[-1]
+    assert "instance_adapter.py apply work" in lines[-1]  # the permanent fix is named too
     check.code_view("missing")  # no adapter: the instance reads the checkout itself, nothing to report
-    assert len(lines) == 2
+    assert len(lines) == 3

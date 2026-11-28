@@ -37,6 +37,14 @@ def git(path: Path, *args: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def release_head(code: Path) -> str:
+    """HEAD of the app's own code directory. An instance running as another user sees the checkout through a
+    read-only bind owned by the checkout's owner (scripts/instance_adapter.py), whose .git is a root-written fake
+    holding only HEAD; git would refuse that directory for "dubious ownership", so it is trusted for this one
+    read-only call (hooks and fsmonitor stay off). For Main the code directory is its own and this changes nothing."""
+    return git(code, "-c", f"safe.directory={code}", "rev-parse", "HEAD")
+
+
 def safe_remote(value: str) -> str:
     if "://" in value:
         parsed = urlsplit(value)

@@ -298,15 +298,16 @@ class Deploy:
             return None
 
     def code_views(self):
-        """Before anything stops: every instance that sees the checkout through a host adapter's bind list must see
-        every runtime path of this commit (ai_manager/code_view.py), or its restart fails and the deploy rolls back."""
+        """Before anything stops: every instance behind a host adapter must be able to start this commit
+        (ai_manager/code_view.py inspect). A whole-checkout adapter must mount this checkout and its user must read
+        every tracked file through the shared group (a file this user owns that lost the group's read, e.g. rewritten
+        with mode 600, is granted g:GROUP:rX again); a legacy per-path adapter must list every runtime path."""
         for instance in self.instances:
-            gaps, adapter, readable = code_view.check(self.repo, instance['name'], instance.get('adapter'))
-            if gaps:
-                raise Stop('failed', f"instance {instance['name']} cannot see {', '.join(gaps)}: "
-                           + code_view.fix(instance['name'], gaps, adapter))
-            if Path(adapter).exists() and not readable:
-                self.log(f"instance {instance['name']}: cannot read the mounts list in {adapter}; code view unchecked")
+            report = code_view.inspect(self.repo, instance['name'], instance.get('adapter'), repair=True)
+            if report.problems:
+                raise Stop('failed', f"instance {instance['name']} " + '; '.join(report.problems))
+            for note in report.notes:
+                self.log(f"instance {instance['name']}: {note}")
 
     def instances_current(self, commit):
         for instance in self.instances:

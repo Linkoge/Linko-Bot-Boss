@@ -46,7 +46,7 @@ from .project_ideas import ProjectIdeas
 from .provision import DEVICE_RE, ProvisionError
 from .project_memory import MemoryReviews, ProjectMemory
 from .proxy import client_allowed, client_ip, enrollment_address, is_https, parse_clients, parse_trusted
-from .registry import Registry, git
+from .registry import Registry, release_head
 from . import self_update
 from .self_update import SelfUpdate
 from .todos import Todos
@@ -311,7 +311,7 @@ def create_app(settings: Settings | None = None, server=None, worker_factory=Non
     pipeline.backups.credentials = github.push_credentials
     memory = ProjectMemory(db, registry)
     reviews = MemoryReviews(memory, settings)
-    release_commit = git(Path(__file__).resolve().parents[1], "rev-parse", "HEAD")
+    release_commit = release_head(Path(__file__).resolve().parents[1])
     # Bot Boss's own version (self_update.py): derived from git once at startup, like release_commit.
     updater = SelfUpdate(db, registry, pipeline, restricted)
     pipeline.self_update = updater

@@ -226,15 +226,22 @@ class Doctor:
         return int(self.failed)
 
     def code_view(self, name, adapter=None):
-        """An instance behind a host adapter's bind list sees every runtime path of this checkout (ai_manager/code_view.py)."""
-        gaps, adapter, readable = code_view.check(self.repo, name, adapter or self.adapter_template.format(name=name))
-        if not Path(adapter).exists():
+        """An instance behind a host adapter can start this checkout (ai_manager/code_view.py inspect; read-only)."""
+        adapter = adapter or self.adapter_template.format(name=name)
+        report = code_view.inspect(self.repo, name, adapter)
+        if report.layout is None:
             return
-        if not readable:
+        if report.layout == code_view.WHOLE:
+            self.report(not report.problems, f'instance {name} code view: whole checkout, group-readable',
+                        '; '.join(report.problems))
+        elif not code_view.adapter_mounts(adapter):
             self.report(False, f'instance {name} code view readable', f'make {adapter} readable (root 755)', warning=True)
             return
-        self.report(not gaps, f'instance {name} code view has {", ".join(code_view.RUNTIME_PATHS)}',
-                    code_view.fix(name, gaps, adapter))
+        else:
+            self.report(not report.problems, f'instance {name} code view has {", ".join(code_view.RUNTIME_PATHS)}',
+                        '; '.join(report.problems))
+        for note in report.notes:
+            self.report(False, f'instance {name} code view migrated', note, warning=True)
 
     def worker_isolation(self, data):
         """Worker user present and actually isolated; only the repair launcher reaches root; no blanket NOPASSWD."""

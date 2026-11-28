@@ -20,9 +20,9 @@ Do: lock it (`uv lock`, a minimal diff), verify with `uv run python -m pytest` i
 
 ### New top-level runtime dir breaks other-user instances (2026-11-21, task 8cd3c2)
 When: the app starts reading a new top-level checkout path at runtime (like `harnesses/`).
-Symptom: every test passes, but the deploy rolls back: `linko-bot-manager@kaxa.service` fails to start because the path is missing in its namespace.
-Cause: an instance running as another user only sees the checkout paths in its root host adapter's `mounts` bind list (`/usr/local/libexec/linko-NAME-instance`, outside the repo). ACLs cannot fix a path that is not mounted.
-Do: add the path to `RUNTIME_PATHS` in `ai_manager/code_view.py` (`tests/test_code_view.py` fails until you do), and report that the host adapter list needs it too. The deploy now stops before restarting when an adapter lacks a runtime path.
+Symptom: every test passes, but the deploy stops ("instance NAME cannot see …") or, before that check, rolled back.
+Cause: an instance whose root adapter is still the old per-path `mounts` bind list only sees the listed paths.
+Do: add the path to `RUNTIME_PATHS` in `ai_manager/code_view.py` (`tests/test_code_view.py` fails until you do). Adapters migrated with `scripts/instance_adapter.py apply NAME` (whole-checkout mount) need nothing more; for a legacy one, report the owner must run that apply once (as root).
 
 ### New schema version breaks two migration tests (2026-11-21, task 155c8a)
 When: you add a `schema_version` step in `ai_manager/db.py`.
