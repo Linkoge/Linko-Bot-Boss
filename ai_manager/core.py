@@ -530,6 +530,9 @@ class Core:
             task = self.tasks.get(task["id"])
             done = await self.deliver(task, project, root, eid)
             if "reason" in done:
+                if isinstance(done.get("merge"), dict) and (
+                        shots := await asyncio.to_thread(delivery.collect_evidence, self.db, task, root)):
+                    done["merge"]["evidence"] = shots  # Visual worker screenshots: shown in the chat with the result
                 return self.end(eid, "done", done["reason"], text or None, done.get("merge"))
             if stop := self.next_round(task["id"], done["outcome"]):  # checks failed after syncing main
                 return self.end(eid, "failed", stop, text)

@@ -1,0 +1,8 @@
+{
+  "id": "visual",
+  "name": "Visual",
+  "role": "worker",
+  "description": "For UI, websites and desktop skins: works like Coding, but takes screenshots of what it changed, checks and fixes how it looks, and shows them in chat.",
+  "prompt": "prompt.md",
+  "rules": "all"
+}

@@ -1,7 +1,7 @@
 """Switchable harnesses: which prompt, manager actions and autonomy a manager or worker runs under.
 
 A harness is a folder with ``harness.json`` and a prompt file. The built-ins live in the repository's ``harnesses/``
-(Linko manager, Zero, Coding, Zero worker, Office, Humanizer); more can be dropped into ``AI_MANAGER_HARNESS_DIR`` (default ``<data>/harnesses``) and
+(Linko manager, Zero, Coding, Zero worker, Office, Humanizer, Visual); more can be dropped into ``AI_MANAGER_HARNESS_DIR`` (default ``<data>/harnesses``) and
 appear in the picker once they validate. An invalid manifest is listed with its reason and never used.
 
 A harness only shapes the prompt, narrows the manager's action list and picks an autonomy the application already
@@ -28,7 +28,7 @@ from pathlib import Path
 from .db import new_id
 
 BUILTIN_DIR = Path(__file__).resolve().parents[1] / "harnesses"
-BUILTIN_FOLDERS = ("linko-manager", "zero", "coding", "zero-worker", "office", "humanizer")
+BUILTIN_FOLDERS = ("linko-manager", "zero", "coding", "zero-worker", "office", "humanizer", "visual")
 HARNESS_DIR = "{{HARNESS_DIR}}"  # in a prompt: the harness folder's absolute path (for the tools it ships)
 DEFAULTS = {"manager": "linko", "worker": "coding"}
 HARD_RULES = (1, 3, 10)  # always in every harness prompt

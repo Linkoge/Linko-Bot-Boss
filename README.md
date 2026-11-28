@@ -303,6 +303,14 @@ autonomy. Each harness is a folder with `harness.json` and a prompt file. Built-
   `humanize.py measure FILE` prints a sample's statistics. "Humanize" runs both levels; "only typos" just the script.
   Humanizer uses file delivery (below).
   Permanent coverage: `tests/test_humanizer.py`, `tests/test_writing_browser.py`.
+- **Visual** (`visual`, worker): Coding (same prompt, rules, worktree, checks, merge and deploy) plus a visual check
+  before finishing: screenshots of only what changed (Playwright element or clip shots; for a Linux desktop
+  `harnesses/visual/tools/visual.py capture` crops one window found with xdotool/wmctrl, or a fixed strip, using
+  import/maim/scrot), one language and at most 3 shots by default (12 for a full check), crop-to-crop against attached
+  references, at most 2 visual fix rounds. The final shots are put in the git-ignored `.linko-work/evidence/`
+  (`visual.py evidence add`); after the merge `delivery.collect_evidence` stores them as chat attachments in the task's
+  merge record (`evidence`), and `delivery.references` shows them on the result reply. Never committed.
+  Permanent coverage: `tests/test_visual_harness.py`.
 
 **File delivery** (`"delivery": "files"` in a worker's `harness.json`; Office and Humanizer; default `"merge"`). The
 task still runs in its own worktree with repair rounds, but after the worker's turn the application skips the code
